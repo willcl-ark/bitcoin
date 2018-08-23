@@ -70,6 +70,7 @@ public:
         return MakeWalletLoader(chain, gArgs);
     }
     interfaces::Ipc* ipc() override { return m_ipc.get(); }
+    bool canConnectIpc() override { return true; }
     std::unique_ptr<interfaces::Ipc> m_ipc;
     std::optional<kernel::Context> m_kernel;
 };
