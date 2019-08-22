@@ -218,6 +218,438 @@ class PaymentChannel:
         return "PaymentChannel(spending_tx=%064x settled_refund_amount=%i settled_payment_amount=%i offered_payments=%i received_payments=%i)" % (self.spending_tx, self.settled_refund_amount, 
             self.settled_payment_amount, self.TotalOfferedPayments(), self.TotalReceivedPayments())
 
+class UpdateTx(CTransaction):
+    __slots__ = ("state", "witness", "other_witness")
+    
+    def __init__(self, payment_channel):
+        super().__init__(tx=None)
+
+        #   keep a copy of initialization parameters
+        self.state = payment_channel.state
+        self.witness = copy.copy(payment_channel.witness)
+        self.other_witness = copy.copy(payment_channel.other_witness)
+
+        #   set tx version 2 for BIP-68 outputs with relative timelocks
+        self.nVersion = 2
+
+        #   initialize channel state
+        self.nLockTime = CLTV_START_TIME + self.state
+
+        #   build witness program
+        witness_program = get_eltoo_update_script(self.state, self.witness, self.other_witness)
+        witness_hash = sha256(witness_program)
+        script_wsh = CScript([OP_0, witness_hash])
+
+        #   add channel output
+        self.vout = [ CTxOut(CHANNEL_AMOUNT, script_wsh) ] # channel balance
+
+    def Sign(self, keys):
+
+        # add dummy vin, digest only serializes the nSequence value
+        prevscript = CScript()
+        self.vin.append( CTxIn(outpoint = COutPoint(prevscript, 0), scriptSig = b"", nSequence=0xFFFFFFFE) )
+
+        tx_hash = SegwitVersion1SignatureHash(prevscript, self, 0, SIGHASH_ANYPREVOUT | SIGHASH_SINGLE, CHANNEL_AMOUNT)
+        signature = keys.update_key.sign_ecdsa(tx_hash) + chr(SIGHASH_ANYPREVOUT | SIGHASH_SINGLE).encode('latin-1')
+        
+        # remove dummy vin
+        self.vin.pop()
+
+        return signature
+
+    def Verify(self):
+        verified = True
+        witnesses = [ self.witness, self.other_witness ]
+
+        # add dummy vin, digest only serializes the nSequence value
+        prevscript = CScript()
+        self.vin.append( CTxIn(outpoint = COutPoint(prevscript, 0), scriptSig = b"", nSequence=0xFFFFFFFE) )
+
+        for witness in witnesses:
+            pk = ECPubKey()
+            pk.set( witness.update_pk )
+            sig = witness.update_sig[0:-1]
+            sighash = witness.update_sig[-1]
+            assert(sighash == (SIGHASH_ANYPREVOUT | SIGHASH_SINGLE))
+            tx_hash = SegwitVersion1SignatureHash(prevscript, self, 0, sighash, CHANNEL_AMOUNT)
+            v = pk.verify_ecdsa( sig, tx_hash )
+            if v == False:
+                verified = False
+
+        # remove dummy vin
+        self.vin.pop()
+        
+        return verified
+
+    def AddWitness(self, spend_tx):
+        # witness script to spend update tx to update tx
+        self.wit.vtxinwit = [ CTxInWitness() ]
+        witness_program = get_eltoo_update_script(spend_tx.state, spend_tx.witness, spend_tx.other_witness)
+        sig1 = self.witness.update_sig
+        sig2 = self.other_witness.update_sig
+        self.wit.vtxinwit[0].scriptWitness = CScriptWitness()
+        self.wit.vtxinwit[0].scriptWitness.stack = [b'', sig1, sig2, witness_program]
+        assert(len(self.vin) == 0)
+        self.vin = [ CTxIn(outpoint = COutPoint(spend_tx.sha256, 0), scriptSig = b"", nSequence=0xFFFFFFFE) ]
+
+class SettleTx(CTransaction):
+    __slots__ = ("payment_channel")
+
+    def __init__(self, payment_channel):
+        super().__init__(tx=None)
+
+        self.payment_channel = copy.deepcopy(payment_channel)
+
+        #   set tx version 2 for BIP-68 outputs with relative timelocks
+        self.nVersion = 2
+
+        #   initialize channel state
+        self.nLockTime = CLTV_START_TIME + self.payment_channel.state
+
+        #   build witness program
+        witness_program = get_eltoo_update_script(self.payment_channel.state, self.payment_channel.witness, self.payment_channel.other_witness)
+        witness_hash = sha256(witness_program)
+        script_wsh = CScript([OP_0, witness_hash])
+
+        assert self.payment_channel.settled_refund_amount + self.payment_channel.settled_payment_amount + self.payment_channel.TotalOfferedPayments() - CHANNEL_AMOUNT == 0
+        settled_amounts = [ self.payment_channel.settled_refund_amount, self.payment_channel.settled_payment_amount ]
+        signers = [ self.payment_channel.witness.payment_pk, self.payment_channel.other_witness.payment_pk ]
+        signer_index = 0
+        outputs = []
+        for amount in settled_amounts:
+            if amount > DUST_LIMIT:
+                #   pay to new p2pkh outputs, TODO: should use p2wpkh
+                payment_pk = signers[signer_index]
+                script_pkh = CScript([OP_0, hash160(payment_pk)])
+                #self.log.debug("add_settle_outputs: state=%s, signer_index=%d, witness hash160(%s)\n", state, signer_index, ToHex(settlement_pubkey))
+                outputs.append(CTxOut(amount, script_pkh))
+            signer_index+=1
+
+        for htlc_hash, htlc in self.payment_channel.offered_payments.items():
+            if htlc.amount > DUST_LIMIT:
+                #   refund and pay to p2pkh outputs, TODO: should use p2wpkh
+                refund_pubkey = self.payment_channel.witness.payment_pk
+                payment_pubkey = self.payment_channel.other_witness.payment_pk
+                preimage_hash = self.payment_channel.offered_payments[htlc_hash].preimage_hash
+                expiry = self.payment_channel.offered_payments[htlc_hash].expiry
+                
+                #   build witness program
+                witness_program = get_eltoo_htlc_script(refund_pubkey, payment_pubkey, preimage_hash, expiry)
+                witness_hash = sha256(witness_program)
+                script_wsh = CScript([OP_0, witness_hash])
+                #self.log.debug("add_settle_outputs: state=%s, signer_index=%d\n\twitness sha256(%s)=%s\n\twsh sha256(%s)=%s\n", state, signer_index, ToHex(witness_program),
+                #    ToHex(witness_hash), ToHex(script_wsh), ToHex(sha256(script_wsh)))
+                outputs.append(CTxOut(htlc.amount, script_wsh))
+
+        #   add settlement outputs to settlement transaction
+        self.vout = outputs
+
+    def Sign(self, keys):
+        # TODO: spending from a SetupTx (first UpdateTx) should not use the NOINPUT sighash 
+
+        # add dummy vin, digest only serializes the nSequence value
+        prevscript = CScript()
+        self.vin.append( CTxIn(outpoint = COutPoint(prevscript, 0), scriptSig = b"", nSequence=CSV_DELAY) )
+
+        tx_hash = SegwitVersion1SignatureHash(prevscript, self, 0, SIGHASH_ANYPREVOUT | SIGHASH_SINGLE, CHANNEL_AMOUNT)
+        signature = keys.settle_key.sign_ecdsa(tx_hash) + chr(SIGHASH_ANYPREVOUT | SIGHASH_SINGLE).encode('latin-1')
+
+        # remove dummy vin
+        self.vin.pop()
+
+        return signature
+
+    def Verify(self):
+        verified = True
+        witnesses = [ self.payment_channel.witness, self.payment_channel.other_witness ]
+        
+        # add dummy vin, digest only serializes the nSequence value
+        prevscript = CScript()
+        self.vin.append( CTxIn(outpoint = COutPoint(prevscript, 0), scriptSig = b"", nSequence=CSV_DELAY) )
+
+        for witness in witnesses:
+            pk = ECPubKey()
+            pk.set( witness.settle_pk )
+            sig = witness.settle_sig[0:-1]
+            sighash = witness.settle_sig[-1]
+            assert(sighash == (SIGHASH_ANYPREVOUT | SIGHASH_SINGLE))
+            tx_hash = SegwitVersion1SignatureHash(prevscript, self, 0, sighash, CHANNEL_AMOUNT)
+            v = pk.verify_ecdsa( sig, tx_hash )
+            verified = verified and pk.verify_ecdsa( sig, tx_hash )
+
+        # remove dummy vin
+        self.vin.pop()
+        
+        return verified
+
+    def AddWitness(self, spend_tx):
+        # witness script to spend update tx to settle tx
+        assert spend_tx.state == self.payment_channel.state
+        self.wit.vtxinwit = [ CTxInWitness() ]
+        witness_program = get_eltoo_update_script(spend_tx.state, spend_tx.witness, spend_tx.other_witness)
+        sig1 = self.payment_channel.witness.settle_sig
+        sig2 = self.payment_channel.other_witness.settle_sig
+        self.wit.vtxinwit[0].scriptWitness = CScriptWitness()
+        self.wit.vtxinwit[0].scriptWitness.stack = [b'', sig1, sig2, b'', b'', b'', witness_program]
+        assert(len(self.vin) == 0)
+        self.vin = [ CTxIn(outpoint = COutPoint(spend_tx.sha256, 0), scriptSig = b"", nSequence=CSV_DELAY) ]
+
+class RedeemTx(CTransaction):
+    __slots__ = ("payment_channel", "secrets", "is_funder", "settled_only", "include_invalid", "block_time")
+
+    def __init__(self, payment_channel, secrets, is_funder, settled_only, include_invalid, block_time):
+        super().__init__(tx=None)
+
+        self.payment_channel = copy.deepcopy(payment_channel)
+        self.secrets = secrets
+        self.is_funder = is_funder
+        self.settled_only = settled_only
+        self.include_invalid = include_invalid
+        self.block_time = block_time
+
+        # add settled amount (refund or payment)
+        settled_amount = 0
+        if self.is_funder:
+            amount = self.payment_channel.settled_refund_amount
+        else:
+            amount = self.payment_channel.settled_payment_amount
+
+        if amount > DUST_LIMIT:
+            settled_amount = amount
+
+        # add htlc amounts that are greater than dust and timeout has expired
+        if not settled_only:
+            for htlc_hash, htlc in self.payment_channel.offered_payments.items():
+                if not self.include_invalid and self.is_funder and htlc.expiry > self.block_time:
+                    continue
+                if not self.include_invalid and not self.is_funder and htlc.preimage_hash not in self.secrets:
+                    continue
+                if htlc.amount > DUST_LIMIT:
+                    settled_amount += htlc.amount
+        
+        # remove transaction fee from output amount
+        settled_amount -= FEE_AMOUNT
+        assert(settled_amount > FEE_AMOUNT)
+
+        # no csv outputs, so nVersion can be 1 or 2
+        self.nVersion = 2
+
+        # refund outputs to channel funder are only spendable after a specified clock time, all others are unrestricted
+        if not self.is_funder or settled_only:
+            self.nLockTime = 0           
+        else:
+            self.nLockTime = self.block_time
+
+        #   build witness program for settled output (p2wpkh)
+        pubkey = self.payment_channel.witness.payment_pk
+        script_pkh = CScript([OP_0, hash160(pubkey)])
+
+        #   add channel output
+        self.vout = [ CTxOut(settled_amount, script_pkh) ] # channel balance
+
+    def Sign(self, keys, htlc_index, htlc_hash):
+        
+        if htlc_hash is not None:
+            # use witness program for a htlc input (p2wsh)
+            assert htlc_index < len(self.payment_channel.offered_payments)
+            invoice = self.payment_channel.offered_payments[htlc_hash]
+            refund_pubkey = self.payment_channel.witness.payment
+            payment_pubkey = self.payment_channel.other_witness.payment
+            witness_program = self.get_eltoo_htlc_script(refund_pubkey, payment_pubkey, invoice.preimage_hash, invoice.expiry)
+            amount = invoice.amount
+        else:
+            # use witness program for a settled input (p2wpkh)
+            if self.is_funder == True:
+                amount = self.payment_channel.settled_refund_amount
+            else:
+                amount = self.payment_channel.settled_payment_amount
+
+        privkey = keys.payment_key     
+        tx_hash = SegwitVersion1SignatureHash(witness_program, self, input_index, SIGHASH_SINGLE, amount)
+        signature = privkey.sign_ecdsa(tx_hash) + chr(SIGHASH_SINGLE).encode('latin-1')
+
+        pk = ECPubKey()
+        pk.set(privkey.get_pubkey().get_bytes())
+        assert pk.verify_ecdsa(signature[0:-1], tx_hash)
+
+        return signature
+
+    def AddWitness(self, keys, spend_tx, settled_only):
+        if self.is_funder:
+            signer_index=0
+        else:
+            signer_index=1
+        settled_amounts = [ self.payment_channel.settled_refund_amount, self.payment_channel.settled_payment_amount ]
+
+        # add settled input from htlc sender (after a timeout) or htlc receiver (with preimage)
+        input_index = 0
+        for amount_index in range(len(settled_amounts)) :
+            if settled_amounts[amount_index] > DUST_LIMIT:
+                # add input from signer
+                if amount_index is signer_index:
+                    self.vin.append( CTxIn(outpoint = COutPoint(spend_tx.sha256, input_index), scriptSig = b"", nSequence=0xfffffffe) )
+                input_index += 1
+            
+        if not settled_only:
+            # add htlc inputs, one per htlc
+            for htlc_hash, htlc in self.payment_channel.offered_payments.items():
+                if not self.include_invalid and self.is_funder and htlc.expiry > self.block_time:
+                    continue
+                if not self.include_invalid and not self.is_funder and htlc.preimage_hash not in self.secrets:
+                    continue
+                if htlc.amount > DUST_LIMIT:
+                    self.vin.append( CTxIn(outpoint = COutPoint(spend_tx.sha256, input_index), scriptSig = b"", nSequence=0xfffffffe) )
+                    input_index += 1
+
+        self.wit.vtxinwit = []
+        #   add the p2wpkh witness scripts to spend the settled channel amounts
+        input_index = 0
+        for amount_index in range(len(settled_amounts)) :
+            if settled_amounts[amount_index] > DUST_LIMIT:
+                # add input witness from signer
+                if amount_index is signer_index:
+                    privkey = keys.payment_key
+                    pubkey = keys.payment_key.get_pubkey().get_bytes()
+                    witness_program = get_p2pkh_script(pubkey=pubkey)
+                    amount = settled_amounts[amount_index]
+                    # sig = self.Sign(keys=keys, htlc_index=-1, input_index=input_index)
+                    tx_hash = SegwitVersion1SignatureHash(witness_program, self, input_index, SIGHASH_SINGLE, amount)
+                    sig = privkey.sign_ecdsa(tx_hash) + chr(SIGHASH_SINGLE).encode('latin-1')
+                    self.wit.vtxinwit.append(CTxInWitness())
+                    self.wit.vtxinwit[-1].scriptWitness = CScriptWitness()
+                    self.wit.vtxinwit[-1].scriptWitness.stack = [sig, pubkey]
+                    input_index += 1
+
+        if not settled_only:
+            #   add the p2wsh witness scripts to spend the settled channel amounts
+            for htlc_hash, htlc in self.payment_channel.offered_payments.items():
+                    if not self.include_invalid and self.is_funder and htlc.expiry > self.block_time:
+                        continue
+                    if not self.include_invalid and not self.is_funder and htlc.preimage_hash not in self.secrets:
+                        continue
+                    if  htlc.amount > DUST_LIMIT:
+                        #   generate signature for current state 
+                        privkey = keys.payment_key
+                        refund_pubkey = self.payment_channel.witness.payment_pk
+                        payment_pubkey = self.payment_channel.other_witness.payment_pk
+                        witness_program = get_eltoo_htlc_script(refund_pubkey, payment_pubkey, htlc.preimage_hash, htlc.expiry)
+                        amount = htlc.amount
+                        # sig = self.Sign(keys=keys, htlc_index=htlc_index, input_index=input_index)
+                        tx_hash = SegwitVersion1SignatureHash(witness_program, self, input_index, SIGHASH_SINGLE, amount)
+                        sig = privkey.sign_ecdsa(tx_hash) + chr(SIGHASH_SINGLE).encode('latin-1')
+                        self.wit.vtxinwit.append(CTxInWitness())
+                        if self.is_funder:
+                            preimage = None
+                        else:
+                            preimage = self.secrets[htlc.preimage_hash]
+                        self.wit.vtxinwit[-1].scriptWitness = get_eltoo_htlc_script_witness(witness_program, preimage, sig)
+                        witness_hash = sha256(witness_program)
+                        script_wsh = CScript([OP_0, witness_hash])
+                        input_index += 1
+
+class CloseTx(CTransaction):
+    __slots__ = ("payment_channel", "setup_tx")
+
+    def __init__(self, payment_channel, setup_tx):
+        super().__init__(tx=None)
+
+        self.payment_channel = copy.deepcopy(payment_channel)
+        self.setup_tx = setup_tx
+
+        for htlc_hash, htlc in self.payment_channel.offered_payments.items():
+            # assume payer sweeps all unfulfilled HTLCs
+            self.payment_channel.refund_amount += htlc.amount
+
+        # sanity check
+        assert self.payment_channel.settled_refund_amount + self.payment_channel.settled_payment_amount == CHANNEL_AMOUNT
+        self.payment_channel.offered_payments.clear()
+        
+        # remove transaction fee from output amounts
+        if self.payment_channel.settled_refund_amount > self.payment_channel.settled_payment_amount:
+            self.payment_channel.settled_payment_amount -= min(int(FEE_AMOUNT/2), self.payment_channel.settled_payment_amount)
+            self.payment_channel.settled_refund_amount = CHANNEL_AMOUNT - self.payment_channel.settled_payment_amount - FEE_AMOUNT
+        else:
+            self.payment_channel.settled_refund_amount -= min(int(FEE_AMOUNT/2), self.payment_channel.settled_refund_amount)
+            self.payment_channel.settled_payment_amount = CHANNEL_AMOUNT - self.payment_channel.settled_refund_amount - FEE_AMOUNT
+        assert self.payment_channel.settled_refund_amount + self.payment_channel.settled_payment_amount + FEE_AMOUNT == CHANNEL_AMOUNT
+
+        # no csv outputs, so nVersion can be 1 or 2
+        self.nVersion = 2
+
+        # refund outputs to channel partners immediately
+        self.nLockTime = CLTV_START_TIME + self.payment_channel.state+1   
+
+        # add setup_tx vin
+        self.vin = [ CTxIn(outpoint = COutPoint(setup_tx.sha256, 0), scriptSig = b"", nSequence=0xFFFFFFFE) ]
+
+        #   build witness program for settled refund output (p2wpkh)
+        pubkey = self.payment_channel.witness.payment_pk
+        script_pkh = CScript([OP_0, hash160(pubkey)])
+
+        outputs = []
+
+        #   refund output
+        if self.payment_channel.settled_refund_amount > DUST_LIMIT:
+            outputs.append( CTxOut(self.payment_channel.settled_refund_amount, script_pkh) )
+
+        #   build witness program for settled payment output (p2wpkh)
+        pubkey = self.payment_channel.other_witness.payment_pk
+        script_pkh = CScript([OP_0, hash160(pubkey)])
+
+        #   settled output
+        if self.payment_channel.settled_payment_amount > DUST_LIMIT:
+            outputs.append( CTxOut(self.payment_channel.settled_payment_amount, script_pkh) )
+
+        self.vout = outputs
+
+    def IsChannelFunder(self, keys):
+        pubkey = keys.update_key.get_pubkey().get_bytes()
+        if pubkey == self.payment_channel.witness.update_pk:
+            return True
+        else:
+            return False
+
+    def Sign(self, keys, setup_tx):
+        
+        # spending from a SetupTx (first UpdateTx) should not use the NOINPUT sighash 
+
+        witness_program = get_eltoo_update_script(setup_tx.state, setup_tx.witness, setup_tx.other_witness)
+        tx_hash = SegwitVersion1SignatureHash(witness_program, self, 0, SIGHASH_SINGLE, CHANNEL_AMOUNT)
+        signature = keys.update_key.sign_ecdsa(tx_hash) + chr(SIGHASH_SINGLE).encode('latin-1')
+
+        if self.IsChannelFunder(keys):
+            self.payment_channel.witness.update_sig = signature
+        else:
+            self.payment_channel.other_witness.update_sig = signature
+
+        return signature
+
+    def Verify(self, setup_tx):
+        verified = True
+        witnesses = [ self.payment_channel.witness, self.payment_channel.other_witness ]
+
+        for witness in witnesses:
+            pk = ECPubKey()
+            pk.set( witness.update_pk )
+            sig = witness.update_sig[0:-1]
+            sighash = witness.update_sig[-1]
+            assert(sighash == (SIGHASH_SINGLE))
+            witness_program = get_eltoo_update_script(setup_tx.state, setup_tx.witness, setup_tx.other_witness)
+            tx_hash = SegwitVersion1SignatureHash(witness_program, self, 0, sighash, CHANNEL_AMOUNT)
+            v = pk.verify_ecdsa( sig, tx_hash )
+            verified = verified and pk.verify_ecdsa( sig, tx_hash )
+        
+        return verified
+
+    def AddWitness(self, spend_tx):
+        # witness script to spend update tx to close tx
+        self.wit.vtxinwit = [ CTxInWitness() ]
+        witness_program = get_eltoo_update_script(spend_tx.state, spend_tx.witness, spend_tx.other_witness)
+        sig1 = self.payment_channel.witness.update_sig
+        sig2 = self.payment_channel.other_witness.update_sig
+        self.wit.vtxinwit[0].scriptWitness = CScriptWitness()
+        self.wit.vtxinwit[0].scriptWitness.stack = [b'', sig1, sig2, witness_program]
+
 class SimulateL2Tests(BitcoinTestFramework):
 
     def next_block(self, number, spend=None, additional_coinbase_value=0, script=CScript([OP_TRUE]), solve=True, *, version=1):
