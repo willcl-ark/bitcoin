@@ -82,6 +82,58 @@ BLOCK_TIME = 600 # 10 minutes
 def int_to_bytes(x) -> bytes:
     return x.to_bytes((x.bit_length() + 7) // 8, 'big')
 
+def get_eltoo_update_script(state, witness, other_witness):
+    """Get the script associated with a P2PKH."""
+    # or(1@and(older(100),thresh(2,pk(C),pk(C))),
+    # 9@and(after(1000),thresh(2,pk(C),pk(C)))),
+    return CScript([
+        OP_2, witness.update_pk, other_witness.update_pk, OP_2, OP_CHECKMULTISIG,
+        OP_NOTIF,
+            OP_2, witness.settle_pk, other_witness.settle_pk, OP_2, OP_CHECKMULTISIGVERIFY,
+            CScriptNum(CSV_DELAY), OP_CHECKSEQUENCEVERIFY,
+        OP_ELSE,
+            CScriptNum(CLTV_START_TIME+state), OP_CHECKLOCKTIMEVERIFY,
+        OP_ENDIF,
+    ])
+
+def get_eltoo_update_script_witness(witness_program, is_update, witness, other_witness):
+    script_witness = CScriptWitness()
+    if (is_update):
+        sig1 = witness.update_sig
+        sig2 = other_witness.update_sig
+        script_witness.stack = [b'', sig1, sig2, witness_program]
+    else:
+        sig1 = witness.settle_sig
+        sig2 = other_witness.settle_sig
+        script_witness.stack = [b'', sig1, sig2, b'', b'', b'', witness_program]
+    return script_witness
+
+def get_eltoo_htlc_script(refund_pubkey, payment_pubkey, preimage_hash, expiry):
+        return CScript([
+            OP_IF,
+                OP_HASH160, preimage_hash, OP_EQUALVERIFY, 
+                payment_pubkey, 
+            OP_ELSE,
+                CScriptNum(expiry), OP_CHECKLOCKTIMEVERIFY, OP_DROP, 
+                refund_pubkey,
+            OP_ENDIF,
+            OP_CHECKSIG,
+        ])
+
+def get_eltoo_htlc_script_witness(witness_program, preimage, sig):
+    script_witness = CScriptWitness()
+    
+    # minimal IF requires empty vector or exactly '0x01' value to prevent maleability
+    if preimage != None:
+        script_witness.stack = [sig, preimage, int_to_bytes(1), witness_program]
+    else:
+        script_witness.stack = [sig, b'', witness_program]
+    return script_witness
+
+def get_p2pkh_script(pubkey):
+    """Get the script associated with a P2PKH."""
+    return CScript([OP_DUP, OP_HASH160, hash160(pubkey), OP_EQUALVERIFY, OP_CHECKSIG])
+
 class SimulateL2Tests(BitcoinTestFramework):
 
     def next_block(self, number, spend=None, additional_coinbase_value=0, script=CScript([OP_TRUE]), solve=True, *, version=1):
