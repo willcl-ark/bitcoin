@@ -134,6 +134,90 @@ def get_p2pkh_script(pubkey):
     """Get the script associated with a P2PKH."""
     return CScript([OP_DUP, OP_HASH160, hash160(pubkey), OP_EQUALVERIFY, OP_CHECKSIG])
 
+class Invoice:
+    __slots__ = ("id", "preimage_hash", "amount", "expiry")
+
+    def __init__(self, id, preimage_hash, amount, expiry):
+        self.id = id
+        self.preimage_hash = preimage_hash
+        self.amount = amount
+        self.expiry = expiry
+
+    def deserialize(self, f):
+       pass
+
+    def serialize(self):
+        pass
+
+    def __repr__(self):
+        return "Invoice(id=%i hash=%064x amount=%i expiry=%i)" % (self.id, self.preimage_hash, self.amount, self.expiry)
+
+class Witness:
+    __slots__ = "update_pk", "update_sig", "settle_pk", "settle_sig", "payment_pk"
+
+    def __init__(self):
+        self.update_pk = None
+        self.update_sig = None
+        self.settle_pk = None
+        self.settle_sig = None
+        self.payment_pk = None
+    
+    def __eq__(self, other):
+        match = True
+        match &= self.update_pk == other.update_pk
+        match &= self.settle_pk == other.settle_pk
+        match &= self.payment_pk == other.payment_pk
+        # do not compare signatures, only public keys
+        return match
+
+    def SetPK(self, keys):
+        self.update_pk = keys.update_key.get_pubkey().get_bytes()
+        self.settle_pk = keys.settle_key.get_pubkey().get_bytes()
+        self.payment_pk = keys.payment_key.get_pubkey().get_bytes()
+
+    def __repr__(self):
+        return "Witness(update_pk=%064x settle_pk=%064x payment_pk=%064x)" % (self.update_pk, self.settle_pk, self.payment_pk)
+
+class Keys:
+    __slots__ = "update_key", "settle_key", "payment_key"
+
+    def __init__(self):
+            self.update_key = ECKey()
+            self.settle_key = ECKey()
+            self.payment_key = ECKey()
+            self.update_key.generate()
+            self.settle_key.generate()
+            self.payment_key.generate()
+
+class PaymentChannel:
+    __slots__ = "state", "witness", "other_witness", "spending_tx", "refund_pk", "payment_pk", "settled_refund_amount", "settled_payment_amount", "received_payments", "offered_payments"
+
+    def __init__(self, witness, other_witness):
+        self.state = 0
+        self.witness = copy.copy(witness)
+        self.other_witness = copy.copy(other_witness)
+        self.spending_tx = None
+        self.settled_refund_amount = CHANNEL_AMOUNT
+        self.settled_payment_amount = 0
+        self.offered_payments = {}
+        self.received_payments = {}
+    
+    def TotalOfferedPayments(self):
+        total = 0
+        for key, value in self.offered_payments.items():
+            total += value.amount
+        return total
+
+    def TotalReceivedPayments(self):
+        total = 0
+        for key, value in self.received_payments.items():
+            total += value.amount
+        return total
+
+    def __repr__(self):
+        return "PaymentChannel(spending_tx=%064x settled_refund_amount=%i settled_payment_amount=%i offered_payments=%i received_payments=%i)" % (self.spending_tx, self.settled_refund_amount, 
+            self.settled_payment_amount, self.TotalOfferedPayments(), self.TotalReceivedPayments())
+
 class SimulateL2Tests(BitcoinTestFramework):
 
     def next_block(self, number, spend=None, additional_coinbase_value=0, script=CScript([OP_TRUE]), solve=True, *, version=1):
