@@ -649,7 +649,7 @@ class CloseTx(CTransaction):
         sig2 = self.payment_channel.other_witness.update_sig
         self.wit.vtxinwit[0].scriptWitness = CScriptWitness()
         self.wit.vtxinwit[0].scriptWitness.stack = [b'', sig1, sig2, witness_program]
-        
+
 class L2Node:
     __slots__ = "gid","issued_invoices", "secrets", "payment_channels", "keychain", "complete_payment_channels"
 
@@ -1124,9 +1124,417 @@ class SimulateL2Tests(BitcoinTestFramework):
         self.setup_clean_chain = True
         self.extra_args = [[]]
 
+    def test1(self, payer_sweeps_utxo):
+        # topology: node1 opens a channel with node 2
+        A = L2Node(1)
+        B = L2Node(2)
+
+        # create the set of keys needed to open a new payment channel
+        keys, witness = A.ProposeChannel()
+
+        # create a new channel and sign the initial refund of a new payment channel
+        other_witness = B.JoinChannel(channel_partner=A, witness=witness)
+
+        # create a new channel
+        setup_tx, refund_tx = A.CreateChannel(channel_partner=B, keys=keys, witness=witness, other_witness=other_witness)
+
+        # fund and commit the setup tx to create the new channel
+        self.fund(tx=setup_tx, spend_tx=None, amount=CHANNEL_AMOUNT+FEE_AMOUNT)
+        txid = self.commit(setup_tx)
+
+        # mine the setup tx into a new block
+        self.nodes[0].setmocktime=(self.start_time)
+        self.nodes[0].generate(1)
+
+        # A tries to commit the refund tx before the CSV delay has expired
+        self.fund(tx=refund_tx, spend_tx=setup_tx, amount=FEE_AMOUNT)
+        txid = self.commit(refund_tx, error_code=-26, error_message="non-BIP68-final")
+
+        # B creates first invoice
+        invoice = B.CreateInvoice('test1a', amount=10000, expiry=self.start_time + INVOICE_TIMEOUT)
+
+        # A creates partially signed transactions to pay the invoice from B
+        (update1_tx, settle1_tx, other_settle1_key) = A.ProposePayment(B, invoice, setup_tx)
+
+        # B receives payment from A and returns corresponding secret and fully signed transactions
+        (update1_tx, settle1_tx, secret) = B.ReceivePayment(A, update1_tx, settle1_tx, other_settle1_key)
+
+        # mine the setup tx into a new block, increment time by 10 minutes
+        self.nodes[0].generate(1)
+
+        # B creates second invoice
+        invoice = B.CreateInvoice('test1b', amount=10000, expiry=self.start_time + INVOICE_TIMEOUT + BLOCK_TIME)
+
+        # A creates a new partially signed transactions with higher state to pay the second invoice from B
+        (update2_tx, settle2_tx, other_settle2_key) = A.ProposePayment(B, invoice, setup_tx)
+
+        # B receives payment from A and returns corresponding secret and fully signed transactions
+        (update2_tx, settle2_tx, secret) = B.ReceivePayment(A, update2_tx, settle2_tx, other_settle2_key)
+
+        # fund the transaction fees for the update tx before committing it
+        self.fund(tx=update2_tx, spend_tx=setup_tx, amount=FEE_AMOUNT)
+
+        # B commits the update tx to start the uncooperative close of the channel
+        txid = self.commit(update2_tx)
+
+        # fund the transaction fees for the settle tx before committing it
+        self.fund(tx=settle2_tx, spend_tx=update2_tx, amount=FEE_AMOUNT)
+
+        # B tries to commits the settle tx before the CSV timeout
+        txid = self.commit(settle2_tx, error_code=-26, error_message="non-BIP68-final")
+
+        # A tries to commit an update tx that spends the commited update to an earlier state (encoded by nLocktime)
+        self.fund(tx=update1_tx, spend_tx=update2_tx, amount=FEE_AMOUNT)
+        txid = self.commit(update1_tx, error_code=-26, error_message="non-mandatory-script-verify-flag") # Locktime requirement not satisfied
+
+        # mine the update tx into a new block, and advance blocks until settle tx can be spent
+        self.nodes[0].generate(CSV_DELAY+1)
+
+        # A or B commits the settle tx to finalize the uncooperative close of the channel after the CSV timeout
+        txid = self.commit(settle2_tx)
+
+        if payer_sweeps_utxo:
+            # A collects the settled amount and tries to sweep even invalid/unexpired htlcs
+            redeem_tx = A.UncooperativelyClose(B, settle2_tx, include_invalid=True, block_time=self.start_time + INVOICE_TIMEOUT)
+
+            # wait for invoice to expire
+            self.nodes[0].setmocktime=(self.start_time + INVOICE_TIMEOUT)
+            self.nodes[0].generate(1)
+
+            # A attempts to commits the redeem tx to complete the uncooperative close of the channel before the invoice has timed out
+            txid = self.commit(redeem_tx, error_code=-26, error_message="non-mandatory-script-verify-flag") #  (Locktime requirement not satisfied)
+
+            # advance locktime on redeem tx to past expiry of the invoices
+            redeem_tx = A.UncooperativelyClose(B, settle2_tx, include_invalid=False, block_time=self.start_time + INVOICE_TIMEOUT + BLOCK_TIME)
+
+            # wait for invoice to expire
+            self.nodes[0].setmocktime=(self.start_time + INVOICE_TIMEOUT + BLOCK_TIME+1)
+            self.nodes[0].generate(10)
+
+            # A commits the redeem tx to complete the uncooperative close of the channel and sweep the htlc
+            txid = self.commit(redeem_tx)
+            
+        else:
+            # B collects the settled amount and uses the secret to sweep an unsettled htlc
+            redeem_tx = B.UncooperativelyClose(A, settle2_tx)
+
+            # B commits the redeem tx to complete the uncooperative close of the channel
+            txid = self.commit(redeem_tx)
+
+            # A collects the settled amount, and has no unsettled htlcs to collect
+            redeem_tx = A.UncooperativelyClose(B, settle2_tx, settled_only=True)
+
+            # A commits the redeem tx to complete the uncooperative close of the channel
+            txid = self.commit(redeem_tx)
+
+    def test2(self):
+
+        # topology: node1 opens a channel with node 2
+        A = L2Node(1)
+        B = L2Node(2)
+        C = L2Node(3)
+
+        keys = {}
+        witness = {}
+        other_witness = {}
+        setup_tx = {}
+        refund_tx = {}
+
+        '-------------------------'
+
+        # create the set of keys needed to open a new payment channel
+        keys[A], witness[A] = A.ProposeChannel()
+
+        # create a new channel and sign the initial refund of a new payment channel
+        other_witness[B] = B.JoinChannel(channel_partner=A, witness=witness[A])
+
+        # create a new channel
+        setup_tx[A], refund_tx[A] = A.CreateChannel(channel_partner=B, keys=keys[A], witness=witness[A], other_witness=other_witness[B])
+
+        # fund and commit the setup tx to create the new channel
+        self.fund(tx=setup_tx[A], spend_tx=None, amount=CHANNEL_AMOUNT+FEE_AMOUNT)
+        txid = self.commit(setup_tx[A])
+
+        '-------------------------'
+
+        # create the set of keys needed to open a new payment channel
+        keys[B], witness[B] = B.ProposeChannel()
+
+        # create a new channel and sign the initial refund of a new payment channel
+        other_witness[C] = C.JoinChannel(channel_partner=B, witness=witness[B])
+
+        # create a new channel
+        setup_tx[B], refund_tx[B] = B.CreateChannel(channel_partner=C, keys=keys[B], witness=witness[B], other_witness=other_witness[C])
+
+        # fund and commit the setup tx to create the new channel
+        self.fund(tx=setup_tx[B], spend_tx=None, amount=CHANNEL_AMOUNT+FEE_AMOUNT)
+        txid = self.commit(setup_tx[B])
+
+        # mine the setup tx into a new block
+        self.nodes[0].generate(1)
+        '-------------------------'
+
+        invoice = {}
+
+        # A offers to pay B the amount C requested in exchange for the secret that proves C has been paid
+        invoice[A] = C.CreateInvoice('test2', amount=5000, expiry=self.start_time + INVOICE_TIMEOUT)
+
+        # B offers to pay C the amount A offers (less relay fee) in exchange for the secret that proves that C has been paid
+        invoice[B] = invoice[A]
+        invoice[B].amount -= RELAY_FEE
+        '-------------------------'
+
+        update_tx = {}
+        settle_tx = {}
+        redeem_tx = {}
+        other_settle_key = {}
+        secret = {}
+
+        # A creates partially signed transactions for B to pay the invoice from C
+        update_tx[A], settle_tx[A], other_settle_key[A] = A.ProposePayment(B, invoice[A], setup_tx[A])
+
+        # B receives a payment commitment from A and returns the corresponding signed transactions, but not the secret needed to redeem the payment
+        update_tx[B], settle_tx[B], secret[B] = B.ReceivePayment(A, update_tx[A], settle_tx[A], other_settle_key[A])
+        assert secret[B] == None
+
+        # B creates partially signed transactions to pay the invoice from C
+        tmp_update_tx, tmp_settle_tx, tmp_other_settle_key = B.ProposePayment(C, invoice[B], setup_tx[B])
+
+        # C receives a payment commitment from B and returns the corresponding fully signed transactions and secret needed to redeem the payment
+        update_tx[C], settle_tx[C], secret[C] = C.ReceivePayment(B, tmp_update_tx, tmp_settle_tx, tmp_other_settle_key)
+        assert secret[C] != None
+
+        # fund the transaction fees for the update tx before committing it
+        self.fund(tx=update_tx[B], spend_tx=setup_tx[A], amount=FEE_AMOUNT)
+
+        # B commits the update tx to start the uncooperative close of the channel
+        txid = self.commit(update_tx[B])
+
+        # fund the transaction fees for the update tx before committing it 
+
+        # mine the update tx into a new block, and advance blocks until settle tx can be spent
+        self.nodes[0].generate(CSV_DELAY+10)
+        '-------------------------'
+
+        # fund the transaction fees for the settle tx before committing it
+        self.fund(tx=settle_tx[B], spend_tx=update_tx[B], amount=FEE_AMOUNT)
+
+        # B commits the settle tx to finalize the uncooperative close of the channel 
+        txid = self.commit(settle_tx[B])
+        '-------------------------'
+
+        # B associates the wrong preimage secret with the preimage hash
+        B.secrets[invoice[B].preimage_hash] = b''
+
+        # B tries to collect the settled htlc amount without the correct secret
+        redeem_tx[B] = B.UncooperativelyClose(A, settle_tx[B], settled_only=False, include_invalid=True, block_time=self.start_time + INVOICE_TIMEOUT)
+
+        # B commits the redeem tx to complete the uncooperative close of the channel and collect settled and confirmed utxos (less transaction fees)
+        txid = self.commit(redeem_tx[B], error_code=-26, error_message="non-mandatory-script-verify-flag")
+
+        # B learns the secret from C
+        assert hash160(secret[C]) == invoice[B].preimage_hash
+        B.LearnSecret(secret[C])
+        '-------------------------'
+
+        # B collects the settled amount and uses the secret to sweep an unsettled htlc
+        redeem_tx[B] = B.UncooperativelyClose(A, settle_tx[B])
+
+        # B commits the redeem tx to complete the uncooperative close of the channel and collect settled and confirmed utxos (less transaction fees)
+        txid = self.commit(redeem_tx[B])
+
+        # A collects the settled amount, and has no unsettled htlcs to collect
+        redeem_tx[A] = A.UncooperativelyClose(B, settle_tx[B], settled_only=True, include_invalid=True, block_time=self.start_time + INVOICE_TIMEOUT)
+
+        # A commits the redeem tx to complete the uncooperative close of the channel
+        txid = self.commit(redeem_tx[A])
+
+    def uncooperative_close(self, payment_sender, payment_receiver, spend_tx, update_tx, settle_tx, block_time):
+        # do an uncooperative close using secrets to settle htlcs directly on the blockchain with last signed payment from B
+
+        # fund the transaction fees for the update tx before committing it
+        self.fund(tx=update_tx, spend_tx=spend_tx, amount=FEE_AMOUNT)
+
+        # either side commits a signed update tx to start the uncooperative close of the channel
+        txid = self.commit(update_tx)
+
+        # mine the update tx into a new block, and advance blocks until settle tx can be spent
+        self.nodes[0].setmocktime=(block_time)
+        self.nodes[0].generate(CSV_DELAY+10)
+        '-------------------------'
+
+        # fund the transaction fees for the settle tx before committing it
+        self.fund(tx=settle_tx, spend_tx=update_tx, amount=FEE_AMOUNT)
+
+        # either side commits a signed settle tx to finalize the uncooperative close of the channel 
+        txid = self.commit(settle_tx)
+        '-------------------------'
+
+        # payment receiver collects their settled payments and uses their secrets to sweep any unsettled htlcs
+        redeem_tx = payment_receiver.UncooperativelyClose(payment_sender, settle_tx)
+
+        # payment receiver commits the redeem tx to complete the uncooperative close of the channel and collect settled and confirmed utxos (less transaction fees)
+        txid = self.commit(redeem_tx)
+
+        # payment sender collects the settled refund amount, and any unsettled htlcs that have expired
+        redeem_tx = payment_sender.UncooperativelyClose(payment_receiver, settle_tx, settled_only=False, include_invalid=False, block_time=block_time + INVOICE_TIMEOUT)
+
+        # A commits the redeem tx to complete the uncooperative close of the channel
+        self.nodes[0].setmocktime=(block_time + INVOICE_TIMEOUT)
+        txid = self.commit(redeem_tx)
+
+        return block_time
+
+    def test3(self):
+
+        block_time = self.start_time
+
+        # topology: node1 opens a channel with node 2
+        A = L2Node(1)
+        B = L2Node(2)
+        C = L2Node(3)
+
+        keys = {}
+        witness = {}
+        other_witness = {}
+        setup_tx = {}
+        refund_tx = {}
+        '-------------------------'
+
+        # create the set of keys needed to open a new payment channel
+        keys[A], witness[A] = A.ProposeChannel()
+
+        # create a new channel and sign the initial refund of a new payment channel
+        other_witness[B] = B.JoinChannel(channel_partner=A, witness=witness[A])
+
+        # create a new channel
+        setup_tx[A], refund_tx[A] = A.CreateChannel(channel_partner=B, keys=keys[A], witness=witness[A], other_witness=other_witness[B])
+
+        # fund and commit the setup tx to create the new channel
+        self.fund(tx=setup_tx[A], spend_tx=None, amount=CHANNEL_AMOUNT+FEE_AMOUNT)
+        txid = self.commit(setup_tx[A])
+        '-------------------------'
+
+        # create the set of keys needed to open a new payment channel
+        keys[B], witness[B] = B.ProposeChannel()
+
+        # create a new channel and sign the initial refund of a new payment channel
+        other_witness[C] = C.JoinChannel(channel_partner=B, witness=witness[B])
+
+        # create a new channel
+        setup_tx[B], refund_tx[B] = B.CreateChannel(channel_partner=C, keys=keys[B], witness=witness[B], other_witness=other_witness[C])
+
+        # fund and commit the setup tx to create the new channel
+        self.fund(tx=setup_tx[B], spend_tx=None, amount=CHANNEL_AMOUNT+FEE_AMOUNT)
+        txid = self.commit(setup_tx[B])
+
+        # mine the setup tx into a new block
+        self.nodes[0].generate(1)
+        '-------------------------'
+
+        for loop in range(5):
+            invoice = {}
+
+            # A offers to pay B the amount C requested in exchange for the secret that proves C has been paid
+            invoice[A] = C.CreateInvoice('test2', amount=5000, expiry= block_time + INVOICE_TIMEOUT)
+
+            # B offers to pay C the amount A offers (less relay fee) in exchange for the secret that proves that C has been paid
+            invoice[B] = invoice[A]
+            invoice[B].amount -= RELAY_FEE
+            '-------------------------'
+
+            update1_tx = {}
+            settle1_tx = {}
+            update2_tx = {}
+            settle2_tx = {}
+            redeem_tx = {}
+            other_settle_key = {}
+            secret = {}
+
+            # A creates partially signed transactions for B to pay the invoice from C
+            update1_tx[A], settle1_tx[A], other_settle_key[A] = A.ProposePayment(B, invoice[A], setup_tx[A])
+
+            # B receives a payment commitment from A and returns the corresponding signed transactions, but not the secret needed to redeem the payment
+            update2_tx[B], settle2_tx[B], secret[B] = B.ReceivePayment(A, update1_tx[A], settle1_tx[A], other_settle_key[A])
+            assert secret[B] == None
+
+            # B creates partially signed transactions to pay the invoice from C (less their relay fee)
+            update1_tx[B], settle1_tx[B], other_settle_key[B] = B.ProposePayment(C, invoice[B], setup_tx[B])
+
+            # C receives a payment commitment from B and returns the corresponding fully signed transactions and secret needed to redeem the payment
+            update2_tx[C], settle2_tx[C], secret[C] = C.ReceivePayment(B, update1_tx[B], settle1_tx[B], other_settle_key[B])
+            assert hash160(secret[C]) == invoice[B].preimage_hash
+
+            # C proposes to B to update their settled balance instead of doing an uncooperative close
+            tmp_update_tx, tmp_settle_tx, settle_key, secrets = C.ProposeUpdate(B, block_time=block_time)
+            
+            # B accepts the secrets as proof of C's new settled payments balance
+            tmp_update_tx, tmp_settle_tx = B.AcceptUpdate(C, tmp_update_tx, tmp_settle_tx, settle_key, secrets, block_time)
+
+            if C.ConfirmUpdate(B, tmp_update_tx, tmp_settle_tx):
+                # after C confirms that B signed the new update tx and settle tx, C does not need to uncooperatively close the channel
+                update2_tx[C] = tmp_update_tx
+                settle2_tx[C] = tmp_settle_tx
+                block_time += 1
+
+            else:
+                # assumes atleast one payment succeeded
+                assert update_tx.get(C) != None and settle_tx(C) != None
+
+                # otherwise, C can uncooperatively close the channel from the last signed state
+                block_time = self.uncooperative_close(B, C, setup_tx[B], update_tx[C], settle_tx[C], block_time)
+
+            # B proposes to A to update their settled balance instead of doing an uncooperative close
+            tmp_update_tx, tmp_settle_tx, settle_key, secrets = B.ProposeUpdate(A, block_time=block_time)
+            
+            # A accepts the secrets as proof of B's new settled payments balance
+            tmp_update_tx, tmp_settle_tx = A.AcceptUpdate(B, tmp_update_tx, tmp_settle_tx, settle_key, secrets, block_time)
+
+            if B.ConfirmUpdate(A, tmp_update_tx, tmp_settle_tx):
+                # confirmed that A signed the new update tx and settle tx, no need to uncooperatively close the channel
+                update2_tx[B] = tmp_update_tx
+                settle2_tx[B] = tmp_settle_tx
+                block_time += 1
+
+            else:
+                block_time = self.uncooperative_close(A, B, setup_tx[A], update2_tx[B], settle2_tx[B], block_time)
+            
+        close_tx = A.ProposeClose(B, setup_tx[A])
+        close_tx = B.AcceptClose(A, close_tx, setup_tx[A])
+
+        # if B does not sign and submit close_tx, then A should do an uncooperative close
+        txid = self.commit(close_tx)
+
+        close_tx = B.ProposeClose(C, setup_tx[B])
+        close_tx = C.AcceptClose(B, close_tx, setup_tx[B])
+
+        # if C does not sign and submit close_tx, then B should do an uncooperative close
+        txid = self.commit(close_tx)
+
     def run_test(self):
         # create some coinbase txs to spend
         self.init_coinbase()
+
+        # test two nodes performing an uncooperative close with one htlc pending, tested cheats:
+        # - payer tries to commit a refund tx before the CSV delay expires
+        # - payer tries to commit spend an update tx to an update tx with an earlier state
+        # - payer tries to redeem HTLC before invoice expires
+        self.test1(payer_sweeps_utxo=True)
+
+        # test two nodes performing an uncooperative close with one htlc pending, tested cheats:
+        # - payee tries to settle last state before the CSV timeout
+        # - payee tries to redeem HTLC with wrong secret
+        self.test1(payer_sweeps_utxo=False)
+        
+        # test node A paying node C via node B, node B uses secret passed by C to uncooperatively close the channel with C
+        # - test cheat of node A using old update
+        # - test cheat of B replacing with a newer one
+        self.test2()
+
+        # test node A paying node C via node B, node B uses secret passed by C to cooperative update their channels
+        # - test cooperative channel updating
+        # - test cooperative channel closing
+        self.test3()
 
 if __name__ == '__main__':
     SimulateL2Tests().main()
