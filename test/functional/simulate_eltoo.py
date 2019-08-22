@@ -649,6 +649,322 @@ class CloseTx(CTransaction):
         sig2 = self.payment_channel.other_witness.update_sig
         self.wit.vtxinwit[0].scriptWitness = CScriptWitness()
         self.wit.vtxinwit[0].scriptWitness.stack = [b'', sig1, sig2, witness_program]
+        
+class L2Node:
+    __slots__ = "gid","issued_invoices", "secrets", "payment_channels", "keychain", "complete_payment_channels"
+
+    def __init__(self, gid):
+        self.gid = gid
+        self.issued_invoices = []
+        self.secrets = {}
+        self.payment_channels = {}
+        self.keychain = {}
+        self.complete_payment_channels = {}
+
+    def __hash__(self):
+        return hash(self.gid)
+
+    def __eq__(self, other):
+        return (self.gid == other.gid)
+
+    def __ne__(self, other):
+        # Not strictly necessary, but to avoid having both x==y and x!=y
+        # True at the same time
+        return not(self == other)
+
+    def IsChannelFunder(self, channel_partner):
+        pubkey = self.keychain[channel_partner].update_key.get_pubkey().get_bytes()
+        if pubkey == self.payment_channels[channel_partner].witness.update_pk:
+            return True
+        else:
+            return False
+
+    def ProposeChannel(self):
+        keys = Keys()
+        witness = Witness()
+        witness.SetPK(keys)
+
+        return (keys, witness)
+
+    def JoinChannel(self, channel_partner, witness):
+        # generate local keys for proposed channel
+        self.keychain[channel_partner] = Keys()
+        other_witness = Witness()
+        other_witness.SetPK(self.keychain[channel_partner])
+
+        # initialize a new payment channel
+        self.payment_channels[channel_partner] = PaymentChannel(witness, other_witness)
+
+        # no need to sign an Update Tx transaction, only need to sign a SettleTx that refunds the first Setup Tx
+
+        # sign settle transaction
+        assert self.payment_channels[channel_partner].state == 0
+        settle_tx = SettleTx(payment_channel=self.payment_channels[channel_partner])
+        self.payment_channels[channel_partner].other_witness.settle_sig = settle_tx.Sign(self.keychain[channel_partner])
+
+        # create the first Update Tx (aka Setup Tx)
+        self.payment_channels[channel_partner].spending_tx = UpdateTx(self.payment_channels[channel_partner])
+
+        # return witness updated with valid signatures for the refund settle transaction
+        return self.payment_channels[channel_partner].other_witness
+
+    def CreateChannel(self, channel_partner, keys, witness, other_witness):
+        # use keys created for this payment channel by ProposeChannel
+        self.keychain[channel_partner] = keys
+
+        # initialize a new payment channel
+        self.payment_channels[channel_partner] = PaymentChannel(witness, other_witness)
+        assert len(self.keychain) == len(self.payment_channels)
+
+        # no need to sign an Update Tx transaction, only need to sign a SettleTx that refunds the first Setup Tx
+
+        # sign settle transaction
+        assert self.payment_channels[channel_partner].state == 0
+        settle_tx = SettleTx(payment_channel=self.payment_channels[channel_partner])
+        signature = settle_tx.Sign(keys)
+
+        # save signature to payment channel and settle tx
+        self.payment_channels[channel_partner].witness.settle_sig = signature
+        settle_tx.payment_channel.witness.settle_sig = signature
+
+        # check that we can create a valid refund/settle transaction to use if we need to close the channel
+        assert(settle_tx.Verify())
+
+        # create the first Update Tx (aka Setup Tx)
+        setup_tx = UpdateTx(self.payment_channels[channel_partner])
+
+        # save the most recent co-signed payment_channel state that can be used to uncooperatively close the channel
+        self.complete_payment_channels[channel_partner] = (copy.deepcopy(self.payment_channels[channel_partner]), copy.deepcopy(self.keychain[channel_partner]))
+
+        return setup_tx, settle_tx
+
+    def CreateInvoice(self, id, amount, expiry):
+        secret = random.randrange(1, SECP256K1_ORDER).to_bytes(32, 'big')
+        self.secrets[hash160(secret)] = secret
+        invoice = Invoice(id=id, preimage_hash=hash160(secret), amount=amount, expiry=expiry)
+        return invoice
+
+    def LearnSecret(self, secret):
+        self.secrets[hash160(secret)] = secret
+
+    def ProposePayment(self, channel_partner, invoice, prev_update_tx):
+
+        # generate new keys for the settle transaction unique to the next state
+        keys = self.keychain[channel_partner]
+        keys.settle_key = ECKey()
+        keys.settle_key.generate()
+
+        # assume we have xpub from channel partner we can use to generate a new settle pubkey for them
+        other_settle_key = ECKey() 
+        other_settle_key.generate()
+
+        # create updated payment channel information for the next proposed payment channel state
+        payment_channel = self.payment_channels[channel_partner]
+        payment_channel.state += 1
+        payment_channel.witness.settle_pk = keys.settle_key.get_pubkey().get_bytes()
+        payment_channel.other_witness.settle_pk = other_settle_key.get_pubkey().get_bytes()
+        payment_channel.settled_refund_amount -= invoice.amount
+        payment_channel.offered_payments[invoice.preimage_hash] = invoice
+
+        # save updated payment channel state
+        self.payment_channels[channel_partner] = payment_channel
+
+        # save updated keys
+        self.keychain[channel_partner] = keys
+        
+        # create an update tx that spends any update tx with an earlier state
+        update_tx = UpdateTx(payment_channel)
+
+        # sign with new update key
+        update_sig = update_tx.Sign(self.keychain[channel_partner])
+        update_tx.witness.update_sig = update_sig
+
+        # create a settle tx that spends the new update tx
+        settle_tx = SettleTx(payment_channel)
+
+        # sign with new update key for this state
+        settle_sig = settle_tx.Sign(self.keychain[channel_partner])
+        settle_tx.payment_channel.witness.settle_sig = settle_sig
+
+        return (update_tx, settle_tx, other_settle_key)
+
+    def ReceivePayment(self, channel_partner, update_tx, settle_tx, other_settle_key):
+
+        # assume we generated same new settle key from xpub as channel partner
+        self.keychain[channel_partner].settle_key = other_settle_key
+
+        # check that new payment channel state passes sanity checks
+        payment_channel = settle_tx.payment_channel
+        assert payment_channel.witness == update_tx.witness
+        assert payment_channel.other_witness == update_tx.other_witness
+        assert payment_channel.state == update_tx.state
+        assert payment_channel.state > self.payment_channels[channel_partner].state
+        assert payment_channel.settled_refund_amount + payment_channel.settled_payment_amount + payment_channel.TotalOfferedPayments() - CHANNEL_AMOUNT == 0
+        assert payment_channel.settled_payment_amount >= self.payment_channels[channel_partner].settled_payment_amount
+        assert payment_channel.TotalOfferedPayments() > self.payment_channels[channel_partner].TotalOfferedPayments()
+
+        # sign update tx with my key
+        update_sig = update_tx.Sign(self.keychain[channel_partner])
+        update_tx.other_witness.update_sig = update_sig
+
+        # sign settle tx with new settle key
+        settle_sig = settle_tx.Sign(self.keychain[channel_partner])
+        settle_tx.payment_channel.other_witness.settle_sig = settle_sig
+
+        # verify both channel partners signed the txs
+        assert update_tx.Verify()
+        assert settle_tx.Verify()
+
+        # accept new channl state
+        self.payment_channels[channel_partner] = payment_channel
+
+        # check if we know the secret
+        found_htlc = None
+        secret = None
+        for hashed_secret, tmp_secret in self.secrets.items():
+            found_htlc = payment_channel.offered_payments.get(hashed_secret, None)
+            if found_htlc != None:
+                secret = tmp_secret
+                break
+
+        return (update_tx, settle_tx, secret)
+
+    def UncooperativelyClose(self, channel_partner, settle_tx, settled_only=False, include_invalid=True, block_time=0):
+        
+        # create an redeem tx that spends a commited settle tx
+        is_funder = self.IsChannelFunder(channel_partner)
+        redeem_tx = RedeemTx(payment_channel=settle_tx.payment_channel, secrets=self.secrets, is_funder=is_funder, settled_only=settled_only, include_invalid=include_invalid, block_time=block_time)
+        redeem_tx.AddWitness(keys=self.keychain[channel_partner], spend_tx=settle_tx, settled_only=settled_only)
+
+        return redeem_tx
+
+    def ProposeUpdate(self, channel_partner, block_time):
+        # payment receiver creates new update tx and settle tx with new settled balances based on invoices that can be redeemed or expired
+        assert not self.IsChannelFunder(channel_partner)
+
+        # most recent co-signed payment_channel state that can be used to uncooperatively close the channel
+        self.complete_payment_channels[channel_partner] = (copy.deepcopy(self.payment_channels[channel_partner]), copy.deepcopy(self.keychain[channel_partner]))
+
+        redeemed_secrets = {}
+        removed_invoices = []
+        for htlc_hash, invoice in self.payment_channels[channel_partner].offered_payments.items():
+            if invoice.expiry < block_time:
+                # remove expired invoices, credit back as settled refund
+                removed_invoices.append(htlc_hash)
+                self.payment_channels[channel_partner].settled_refund_amount += invoice.amount
+            elif self.secrets.get(htlc_hash, None) != None:
+                # remove redeemed invoices, credit as settled payments
+                removed_invoices.append(htlc_hash)
+                redeemed_secrets[htlc_hash] = self.secrets.get(htlc_hash)
+                self.payment_channels[channel_partner].settled_payment_amount += invoice.amount
+
+        for htlc_hash in removed_invoices:
+            self.payment_channels[channel_partner].offered_payments.pop(htlc_hash, None)
+
+        # generate new keys for the settle transaction unique to the next state, do not replace
+        self.keychain[channel_partner].settle_key = ECKey()
+        self.keychain[channel_partner].settle_key.generate()
+
+        # assume we have xpub from channel partner we can use to generate a new settle pubkey for them
+        settle_key = ECKey() 
+        settle_key.generate()
+
+        # create updated payment channel information for the next proposed payment channel state
+        self.payment_channels[channel_partner].state += 1
+        self.payment_channels[channel_partner].witness.settle_pk = settle_key.get_pubkey().get_bytes()
+        self.payment_channels[channel_partner].other_witness.settle_pk = self.keychain[channel_partner].settle_key.get_pubkey().get_bytes()
+
+        # create an update tx that spends any update tx with an earlier state
+        update_tx = UpdateTx(self.payment_channels[channel_partner])
+
+        # sign with new update keys
+        update_sig = update_tx.Sign(self.keychain[channel_partner])
+        update_tx.other_witness.update_sig = update_sig
+
+        # create a settle tx that spends the new update tx
+        settle_tx = SettleTx(self.payment_channels[channel_partner])
+
+        # sign with new pending settle key for this state
+        settle_sig = settle_tx.Sign(self.keychain[channel_partner])
+        settle_tx.payment_channel.other_witness.settle_sig = settle_sig
+
+        return update_tx, settle_tx, settle_key, redeemed_secrets     
+
+    def AcceptUpdate(self, channel_partner, update_tx, settle_tx, settle_key, redeemed_secrets, block_time):
+        # payment sender confirms the new update tx and settle tx with new settled balances based on invoices that can be redeemed or expired
+        assert self.IsChannelFunder(channel_partner)
+        
+        updated_payment_channel = copy.deepcopy(self.payment_channels[channel_partner])
+        updated_payment_channel.state += 1
+        removed_invoices = []
+        for htlc_hash, invoice in updated_payment_channel.offered_payments.items():
+            if invoice.expiry < block_time:
+                # remove expired invoices, credit back as settled refund
+                removed_invoices.append(htlc_hash)
+                updated_payment_channel.settled_refund_amount += invoice.amount
+            elif redeemed_secrets.get(htlc_hash, None) != None:
+                removed_invoices.append(htlc_hash)
+                updated_payment_channel.settled_payment_amount += invoice.amount
+
+        for htlc_hash in removed_invoices:
+            updated_payment_channel.offered_payments.pop(htlc_hash, None)
+
+        is_valid = updated_payment_channel.settled_payment_amount == settle_tx.payment_channel.settled_payment_amount
+        is_valid &= updated_payment_channel.settled_refund_amount == settle_tx.payment_channel.settled_refund_amount
+        is_valid &= updated_payment_channel.offered_payments == settle_tx.payment_channel.offered_payments
+
+        if is_valid:
+            self.payment_channels[channel_partner] = updated_payment_channel
+            self.keychain[channel_partner].settle_key = settle_key
+                    
+            # learn new secrets 
+            for hashed_secret, secret in redeemed_secrets.items():
+                self.LearnSecret(secret)
+
+            # sign with update key
+            update_sig = update_tx.Sign(self.keychain[channel_partner])
+            update_tx.witness.update_sig = update_sig
+
+            # sign with new settle key for this state
+            settle_sig = settle_tx.Sign(self.keychain[channel_partner])
+            settle_tx.payment_channel.witness.settle_sig = settle_sig
+        else:
+            return None, None
+
+        return update_tx, settle_tx
+
+    def ConfirmUpdate(self, channel_partner, update_tx, settle_tx):
+        # payment receiver confirms the new update tx and settle tx with new settled balances was signed by payment sender
+        assert not self.IsChannelFunder(channel_partner)
+
+        # if both channel partners signed the new update tx and settle tx, then update to the new payment_channel state
+        if update_tx.Verify() and settle_tx.Verify():
+            return True
+        else:
+            # should now do a noncooperative close from the last completed state signed by the payer
+            self.payment_channels[channel_partner], self.keychain[channel_partner] = copy.deepcopy(self.complete_payment_channels[channel_partner])
+            return False
+
+    def ProposeClose(self, channel_partner, setup_tx):
+        # create an clase tx that spends a commited setup tx immediately with the settled balances
+        close_tx = CloseTx(payment_channel=self.payment_channels[channel_partner], setup_tx=setup_tx)
+        close_tx.Sign(keys=self.keychain[channel_partner], setup_tx=setup_tx)
+        return close_tx
+
+    def AcceptClose(self, channel_partner, close_tx, setup_tx):
+        # confirm settled amounts are as expected
+        tmp_close_tx = CloseTx(payment_channel=self.payment_channels[channel_partner], setup_tx=setup_tx)
+        is_valid = close_tx.payment_channel.settled_payment_amount == tmp_close_tx.payment_channel.settled_payment_amount
+        is_valid &= close_tx.payment_channel.settled_refund_amount == tmp_close_tx.payment_channel.settled_refund_amount
+        
+        if is_valid:
+            close_tx.Sign(keys=self.keychain[channel_partner], setup_tx=setup_tx)
+            if close_tx.Verify(setup_tx):
+                # add witness information to close tx so it can be committed
+                close_tx.AddWitness(setup_tx)
+                return close_tx
+
+        return None
 
 class SimulateL2Tests(BitcoinTestFramework):
 
@@ -690,6 +1006,7 @@ class SimulateL2Tests(BitcoinTestFramework):
 
         if reconnect:
             self.reconnect_p2p(timeout=timeout)
+
     # save the current tip so it can be spent by a later block
     def save_spendable_output(self):
         self.log.debug("saving spendable output %s" % self.tip.vtx[0])
