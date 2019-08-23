@@ -134,6 +134,7 @@ private:
     // Configuration parameters for the block size
     unsigned int nBlockMaxWeight;
     CFeeRate blockMinFeeRate;
+    const std::chrono::microseconds m_skip_inclusion_until;
 
     // Information on the current status of the block
     uint64_t nBlockWeight;
@@ -155,6 +156,7 @@ public:
         Options();
         size_t nBlockMaxWeight;
         CFeeRate blockMinFeeRate;
+        std::chrono::microseconds m_skip_inclusion_until{std::chrono::microseconds::max()};
     };
 
     explicit BlockAssembler(Chainstate& chainstate, const CTxMemPool* mempool);

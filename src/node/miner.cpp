@@ -63,7 +63,8 @@ BlockAssembler::Options::Options()
 }
 
 BlockAssembler::BlockAssembler(Chainstate& chainstate, const CTxMemPool* mempool, const Options& options)
-    : chainparams{chainstate.m_chainman.GetParams()},
+    : m_skip_inclusion_until(options.m_skip_inclusion_until),
+      chainparams{chainstate.m_chainman.GetParams()},
       m_mempool(mempool),
       m_chainstate(chainstate)
 {
@@ -321,11 +322,13 @@ void BlockAssembler::addPackageTxs(const CTxMemPool& mempool, int& nPackagesSele
         // guaranteed to fail again, but as a belt-and-suspenders check we put it in
         // failedTx and avoid re-evaluation, since the re-evaluation would be using
         // cached size/sigops/fee values that are not actually correct.
-        /** Return true if given transaction from mapTx has already been evaluated,
-         * or if the transaction's cached data in mapTx is incorrect. */
+        // Finally, we have a check for transaction recency. The default case will not
+        // skip any transactions for being too recent. This filter is used for
+        // identifying transactions to rebroadcast.
         if (mi != mempool.mapTx.get<ancestor_score>().end()) {
             auto it = mempool.mapTx.project<0>(mi);
             assert(it != mempool.mapTx.end());
+            if (it->GetTime() > m_skip_inclusion_until) continue; // transaction is too recent
             if (mapModifiedTx.count(it) || inBlock.count(it) || failedTx.count(it)) {
                 ++mi;
                 continue;
