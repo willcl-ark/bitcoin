@@ -5,6 +5,7 @@
 #include <chainparams.h>
 #include <chainparamsbase.h>
 #include <key.h>
+#include <optional.h>
 #include <pubkey.h>
 #include <script/keyorigin.h>
 #include <script/sign.h>
@@ -18,7 +19,6 @@
 #include <cstdint>
 #include <iostream>
 #include <map>
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -48,11 +48,11 @@ void test_one_input(const std::vector<uint8_t>& buffer)
     {
         std::map<CPubKey, KeyOriginInfo> hd_keypaths;
         while (fuzzed_data_provider.ConsumeBool()) {
-            const std::optional<CPubKey> pub_key = ConsumeDeserializable<CPubKey>(fuzzed_data_provider);
+            const Optional<CPubKey> pub_key = ConsumeDeserializable<CPubKey>(fuzzed_data_provider);
             if (!pub_key) {
                 break;
             }
-            const std::optional<KeyOriginInfo> key_origin_info = ConsumeDeserializable<KeyOriginInfo>(fuzzed_data_provider);
+            const Optional<KeyOriginInfo> key_origin_info = ConsumeDeserializable<KeyOriginInfo>(fuzzed_data_provider);
             if (!key_origin_info) {
                 break;
             }
@@ -86,8 +86,8 @@ void test_one_input(const std::vector<uint8_t>& buffer)
     }
 
     {
-        const std::optional<CMutableTransaction> mutable_transaction = ConsumeDeserializable<CMutableTransaction>(fuzzed_data_provider);
-        const std::optional<CTxOut> tx_out = ConsumeDeserializable<CTxOut>(fuzzed_data_provider);
+        const Optional<CMutableTransaction> mutable_transaction = ConsumeDeserializable<CMutableTransaction>(fuzzed_data_provider);
+        const Optional<CTxOut> tx_out = ConsumeDeserializable<CTxOut>(fuzzed_data_provider);
         const unsigned int n_in = fuzzed_data_provider.ConsumeIntegral<unsigned int>();
         if (mutable_transaction && tx_out && mutable_transaction->vin.size() > n_in) {
             SignatureData signature_data_1 = DataFromTransaction(*mutable_transaction, n_in, *tx_out);
@@ -100,7 +100,7 @@ void test_one_input(const std::vector<uint8_t>& buffer)
         if (mutable_transaction) {
             CTransaction tx_from{*mutable_transaction};
             CMutableTransaction tx_to;
-            const std::optional<CMutableTransaction> opt_tx_to = ConsumeDeserializable<CMutableTransaction>(fuzzed_data_provider);
+            const Optional<CMutableTransaction> opt_tx_to = ConsumeDeserializable<CMutableTransaction>(fuzzed_data_provider);
             if (opt_tx_to) {
                 tx_to = *opt_tx_to;
             }
@@ -125,11 +125,11 @@ void test_one_input(const std::vector<uint8_t>& buffer)
             }
             std::map<COutPoint, Coin> coins;
             while (fuzzed_data_provider.ConsumeBool()) {
-                const std::optional<COutPoint> outpoint = ConsumeDeserializable<COutPoint>(fuzzed_data_provider);
+                const Optional<COutPoint> outpoint = ConsumeDeserializable<COutPoint>(fuzzed_data_provider);
                 if (!outpoint) {
                     break;
                 }
-                const std::optional<Coin> coin = ConsumeDeserializable<Coin>(fuzzed_data_provider);
+                const Optional<Coin> coin = ConsumeDeserializable<Coin>(fuzzed_data_provider);
                 if (!coin) {
                     break;
                 }

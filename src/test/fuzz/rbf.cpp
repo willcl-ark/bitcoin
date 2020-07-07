@@ -2,6 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <optional.h>
 #include <policy/rbf.h>
 #include <primitives/transaction.h>
 #include <sync.h>
@@ -11,20 +12,19 @@
 #include <txmempool.h>
 
 #include <cstdint>
-#include <optional>
 #include <string>
 #include <vector>
 
 void test_one_input(const std::vector<uint8_t>& buffer)
 {
     FuzzedDataProvider fuzzed_data_provider(buffer.data(), buffer.size());
-    std::optional<CMutableTransaction> mtx = ConsumeDeserializable<CMutableTransaction>(fuzzed_data_provider);
+    Optional<CMutableTransaction> mtx = ConsumeDeserializable<CMutableTransaction>(fuzzed_data_provider);
     if (!mtx) {
         return;
     }
     CTxMemPool pool;
     while (fuzzed_data_provider.ConsumeBool()) {
-        const std::optional<CMutableTransaction> another_mtx = ConsumeDeserializable<CMutableTransaction>(fuzzed_data_provider);
+        const Optional<CMutableTransaction> another_mtx = ConsumeDeserializable<CMutableTransaction>(fuzzed_data_provider);
         if (!another_mtx) {
             break;
         }

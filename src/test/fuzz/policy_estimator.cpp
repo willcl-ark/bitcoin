@@ -2,6 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <optional.h>
 #include <policy/fees.h>
 #include <primitives/transaction.h>
 #include <test/fuzz/FuzzedDataProvider.h>
@@ -10,7 +11,6 @@
 #include <txmempool.h>
 
 #include <cstdint>
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -26,7 +26,7 @@ void test_one_input(const std::vector<uint8_t>& buffer)
     while (fuzzed_data_provider.ConsumeBool()) {
         switch (fuzzed_data_provider.ConsumeIntegralInRange<int>(0, 3)) {
         case 0: {
-            const std::optional<CMutableTransaction> mtx = ConsumeDeserializable<CMutableTransaction>(fuzzed_data_provider);
+            const Optional<CMutableTransaction> mtx = ConsumeDeserializable<CMutableTransaction>(fuzzed_data_provider);
             if (!mtx) {
                 break;
             }
@@ -40,7 +40,7 @@ void test_one_input(const std::vector<uint8_t>& buffer)
         case 1: {
             std::vector<CTxMemPoolEntry> mempool_entries;
             while (fuzzed_data_provider.ConsumeBool()) {
-                const std::optional<CMutableTransaction> mtx = ConsumeDeserializable<CMutableTransaction>(fuzzed_data_provider);
+                const Optional<CMutableTransaction> mtx = ConsumeDeserializable<CMutableTransaction>(fuzzed_data_provider);
                 if (!mtx) {
                     break;
                 }

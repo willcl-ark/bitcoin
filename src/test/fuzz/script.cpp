@@ -6,6 +6,7 @@
 #include <compressor.h>
 #include <core_io.h>
 #include <core_memusage.h>
+#include <optional.h>
 #include <policy/policy.h>
 #include <pubkey.h>
 #include <script/descriptor.h>
@@ -25,7 +26,6 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -40,7 +40,7 @@ void initialize()
 void test_one_input(const std::vector<uint8_t>& buffer)
 {
     FuzzedDataProvider fuzzed_data_provider(buffer.data(), buffer.size());
-    const std::optional<CScript> script_opt = ConsumeDeserializable<CScript>(fuzzed_data_provider);
+    const Optional<CScript> script_opt = ConsumeDeserializable<CScript>(fuzzed_data_provider);
     if (!script_opt) return;
     const CScript script{*script_opt};
 
@@ -107,7 +107,7 @@ void test_one_input(const std::vector<uint8_t>& buffer)
         }
     }
 
-    const std::optional<CScript> other_script = ConsumeDeserializable<CScript>(fuzzed_data_provider);
+    const Optional<CScript> other_script = ConsumeDeserializable<CScript>(fuzzed_data_provider);
     if (other_script) {
         {
             CScript script_mut{script};

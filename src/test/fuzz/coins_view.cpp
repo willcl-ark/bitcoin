@@ -10,6 +10,7 @@
 #include <consensus/validation.h>
 #include <key.h>
 #include <node/coinstats.h>
+#include <optional.h>
 #include <policy/policy.h>
 #include <primitives/transaction.h>
 #include <pubkey.h>
@@ -20,7 +21,6 @@
 
 #include <cstdint>
 #include <limits>
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -95,7 +95,7 @@ void test_one_input(const std::vector<uint8_t>& buffer)
             break;
         }
         case 6: {
-            const std::optional<COutPoint> opt_out_point = ConsumeDeserializable<COutPoint>(fuzzed_data_provider);
+            const Optional<COutPoint> opt_out_point = ConsumeDeserializable<COutPoint>(fuzzed_data_provider);
             if (!opt_out_point) {
                 break;
             }
@@ -103,7 +103,7 @@ void test_one_input(const std::vector<uint8_t>& buffer)
             break;
         }
         case 7: {
-            const std::optional<Coin> opt_coin = ConsumeDeserializable<Coin>(fuzzed_data_provider);
+            const Optional<Coin> opt_coin = ConsumeDeserializable<Coin>(fuzzed_data_provider);
             if (!opt_coin) {
                 break;
             }
@@ -111,7 +111,7 @@ void test_one_input(const std::vector<uint8_t>& buffer)
             break;
         }
         case 8: {
-            const std::optional<CMutableTransaction> opt_mutable_transaction = ConsumeDeserializable<CMutableTransaction>(fuzzed_data_provider);
+            const Optional<CMutableTransaction> opt_mutable_transaction = ConsumeDeserializable<CMutableTransaction>(fuzzed_data_provider);
             if (!opt_mutable_transaction) {
                 break;
             }
@@ -126,7 +126,7 @@ void test_one_input(const std::vector<uint8_t>& buffer)
                 if (fuzzed_data_provider.ConsumeBool()) {
                     coins_cache_entry.coin = random_coin;
                 } else {
-                    const std::optional<Coin> opt_coin = ConsumeDeserializable<Coin>(fuzzed_data_provider);
+                    const Optional<Coin> opt_coin = ConsumeDeserializable<Coin>(fuzzed_data_provider);
                     if (!opt_coin) {
                         break;
                     }

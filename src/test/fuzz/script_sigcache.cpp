@@ -5,6 +5,7 @@
 #include <chainparams.h>
 #include <chainparamsbase.h>
 #include <key.h>
+#include <optional.h>
 #include <pubkey.h>
 #include <script/sigcache.h>
 #include <test/fuzz/FuzzedDataProvider.h>
@@ -12,7 +13,6 @@
 #include <test/fuzz/util.h>
 
 #include <cstdint>
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -28,14 +28,14 @@ void test_one_input(const std::vector<uint8_t>& buffer)
 {
     FuzzedDataProvider fuzzed_data_provider(buffer.data(), buffer.size());
 
-    const std::optional<CMutableTransaction> mutable_transaction = ConsumeDeserializable<CMutableTransaction>(fuzzed_data_provider);
+    const Optional<CMutableTransaction> mutable_transaction = ConsumeDeserializable<CMutableTransaction>(fuzzed_data_provider);
     const CTransaction tx = mutable_transaction ? CTransaction{*mutable_transaction} : CTransaction{};
     const unsigned int n_in = fuzzed_data_provider.ConsumeIntegral<unsigned int>();
     const CAmount amount = ConsumeMoney(fuzzed_data_provider);
     const bool store = fuzzed_data_provider.ConsumeBool();
     PrecomputedTransactionData tx_data;
     CachingTransactionSignatureChecker caching_transaction_signature_checker{mutable_transaction ? &tx : nullptr, n_in, amount, store, tx_data};
-    const std::optional<CPubKey> pub_key = ConsumeDeserializable<CPubKey>(fuzzed_data_provider);
+    const Optional<CPubKey> pub_key = ConsumeDeserializable<CPubKey>(fuzzed_data_provider);
     if (pub_key) {
         const std::vector<uint8_t> random_bytes = ConsumeRandomLengthByteVector(fuzzed_data_provider);
         if (!random_bytes.empty()) {

@@ -11,7 +11,6 @@
 #include <array>
 #include <cstdint>
 #include <iostream>
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -19,7 +18,7 @@ void test_one_input(const std::vector<uint8_t>& buffer)
 {
     FuzzedDataProvider fuzzed_data_provider{buffer.data(), buffer.size()};
     FuzzedFileProvider fuzzed_file_provider = ConsumeFile(fuzzed_data_provider);
-    std::optional<CBufferedFile> opt_buffered_file;
+    Optional<CBufferedFile> opt_buffered_file;
     FILE* fuzzed_file = fuzzed_file_provider.open();
     try {
         opt_buffered_file.emplace(fuzzed_file, fuzzed_data_provider.ConsumeIntegralInRange<uint64_t>(0, 4096), fuzzed_data_provider.ConsumeIntegralInRange<uint64_t>(0, 4096), fuzzed_data_provider.ConsumeIntegral<int>(), fuzzed_data_provider.ConsumeIntegral<int>());

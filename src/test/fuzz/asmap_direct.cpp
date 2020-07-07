@@ -2,11 +2,11 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <optional.h>
 #include <test/fuzz/fuzz.h>
 #include <util/asmap.h>
 
 #include <cstdint>
-#include <optional>
 #include <vector>
 
 #include <assert.h>
@@ -14,7 +14,7 @@
 void test_one_input(const std::vector<uint8_t>& buffer)
 {
     // Encoding: [asmap using 1 bit / byte] 0xFF [addr using 1 bit / byte]
-    std::optional<size_t> sep_pos_opt;
+    Optional<size_t> sep_pos_opt;
     for (size_t pos = 0; pos < buffer.size(); ++pos) {
         uint8_t x = buffer[pos];
         if ((x & 0xFE) == 0) continue;
