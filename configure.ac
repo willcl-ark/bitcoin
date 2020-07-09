@@ -161,10 +161,10 @@ AC_ARG_ENABLE([extended-functional-tests],
     [use_extended_functional_tests=no])
 
 AC_ARG_ENABLE([fuzz],
-    AS_HELP_STRING([--enable-fuzz],
-    [enable building of fuzz targets (default no). enabling this will disable all other targets]),
+    AS_HELP_STRING([--disable-fuzz],
+    [disable building of fuzz targets (default no).]),
     [enable_fuzz=$enableval],
-    [enable_fuzz=no])
+    [enable_fuzz=yes])
 
 AC_ARG_WITH([qrencode],
   [AS_HELP_STRING([--with-qrencode],
