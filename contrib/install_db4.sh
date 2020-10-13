@@ -89,6 +89,29 @@ http_get "${CONFIG_SUB_URL}" dist/config.sub "${CONFIG_SUB_HASH}"
 
 cd build_unix/
 
+# Check if we are on MacOS Big Sur, currently compiling with default toolchain (Xcode 12) is broken
+if [ "$(uname -s)" = "Darwin" ]; then
+  os_ver=$(sw_vers -productVersion)
+  case $os_ver in "11."*)
+      echo "Detected macOS Big Sur v$os_ver..."
+      if brew list llvm | grep "No such keg"; then
+        echo "ERROR: Building BDB4.8 on MacOS Big Sur currently requires brew-installed llvm which is not installed."
+        echo "Run \`brew install llvm\` then re-run this script"
+        exit 1
+      else 
+        echo "Found brew-installed LLVM, using for compilation:"
+        BREW_PREFIX=$(brew --prefix llvm)
+        export CC="$BREW_PREFIX/bin/clang"
+        export CPPFLAGS="-I$BREW_PREFIX/include"
+        export LDFLAGS="-L$BREW_PREFIX/lib -W1,-rpath,$BREW_PREFIX/lib"
+        echo "Using CC:"
+        CC -v
+      fi
+  esac
+fi
+
+cd ../build_unix
+
 "${BDB_PREFIX}/${BDB_VERSION}/dist/configure" \
   --enable-cxx --disable-shared --disable-replication --with-pic --prefix="${BDB_PREFIX}" \
   "${@}"
