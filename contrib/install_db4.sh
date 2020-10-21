@@ -89,6 +89,20 @@ http_get "${CONFIG_SUB_URL}" dist/config.sub "${CONFIG_SUB_HASH}"
 
 cd build_unix/
 
+# Starting with the Apple Clang shipped with Xcode 12, Apple has enabled
+# -Werror=implicit-function-declaration by default. Disable that.
+if [ "$(uname -s)" = "Darwin" ]; then
+  if [ -n "$CC" ]; then compiler=$CC; else compiler="$(which clang)"; fi
+  if ( $compiler --version | grep -q clang) ; then
+    MAJOR=$(echo __clang_major__ | cc -E -x c - | tail -n 1)
+    case "$MAJOR" in
+      "12"*)
+        export CFLAGS="-Wno-error=implicit-function-declaration";;
+      *);;
+    esac
+  fi
+fi
+
 "${BDB_PREFIX}/${BDB_VERSION}/dist/configure" \
   --enable-cxx --disable-shared --disable-replication --with-pic --prefix="${BDB_PREFIX}" \
   "${@}"
