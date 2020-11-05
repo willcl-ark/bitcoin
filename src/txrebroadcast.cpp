@@ -11,6 +11,7 @@
 #include <txrebroadcast.h>
 
 using node::BlockAssembler;
+using node::ReadBlockFromDisk;
 
 /** We rebroadcast up to 3/4 of max block weight to reduce noise due to
  * circumstances such as miners mining priority transactions. */
@@ -27,7 +28,7 @@ std::vector<TxIds> TxRebroadcastHandler::GetRebroadcastTransactions(const std::s
         rebroadcast_block_weight = REBROADCAST_WEIGHT_RATIO * GetBlockWeight(*recent_block.get());
     } else {
         // Otherwise, use the block index to retrieve the relevant block.
-        const Consensus::Params& consensus_params = m_chainparams.GetConsensus();
+        const Consensus::Params& consensus_params = m_chainman.GetConsensus();
         CBlock block;
 
         if (ReadBlockFromDisk(block, &recent_block_index, consensus_params)) {

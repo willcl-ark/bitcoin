@@ -498,7 +498,7 @@ class PeerManagerImpl final : public PeerManager
 public:
     PeerManagerImpl(CConnman& connman, AddrMan& addrman,
                     BanMan* banman, ChainstateManager& chainman,
-                    CTxMemPool& pool, bool ignore_incoming_txs);
+                    CTxMemPool& pool, bool ignore_incoming_txs, bool enable_rebroadcast);
 
     /** Overridden from CValidationInterface. */
     void BlockConnected(const std::shared_ptr<const CBlock>& pblock, const CBlockIndex* pindexConnected) override
@@ -1764,21 +1764,21 @@ std::optional<std::string> PeerManagerImpl::FetchBlock(NodeId peer_id, const CBl
 
 std::unique_ptr<PeerManager> PeerManager::make(CConnman& connman, AddrMan& addrman,
                                                BanMan* banman, ChainstateManager& chainman,
-                                               CTxMemPool& pool, bool ignore_incoming_txs)
+                                               CTxMemPool& pool, bool ignore_incoming_txs, bool enable_rebroadcast)
 {
-    return std::make_unique<PeerManagerImpl>(connman, addrman, banman, chainman, pool, ignore_incoming_txs);
+    return std::make_unique<PeerManagerImpl>(connman, addrman, banman, chainman, pool, ignore_incoming_txs, enable_rebroadcast);
 }
 
 PeerManagerImpl::PeerManagerImpl(CConnman& connman, AddrMan& addrman,
                                  BanMan* banman, ChainstateManager& chainman,
-                                 CTxMemPool& pool, bool ignore_incoming_txs)
+                                 CTxMemPool& pool, bool ignore_incoming_txs, bool enable_rebroadcast)
     : m_chainparams(chainman.GetParams()),
       m_connman(connman),
       m_addrman(addrman),
       m_banman(banman),
       m_chainman(chainman),
       m_mempool(pool),
-      m_txrebroadcast{std::make_unique<TxRebroadcastHandler>(m_mempool, m_chainman)},
+      m_txrebroadcast{enable_rebroadcast ? std::make_unique<TxRebroadcastHandler>(m_mempool, m_chainman) : nullptr},
       m_ignore_incoming_txs(ignore_incoming_txs)
 {
 }
@@ -1926,12 +1926,12 @@ void PeerManagerImpl::UpdatedBlockTip(const std::shared_ptr<const CBlock>& block
     }
 
     // Rebroadcast selected mempool transactions
-    const std::vector<TxIds> rebroadcast_txs = m_txrebroadcast->GetRebroadcastTransactions(block, *pindexNew);
-    {
-        LOCK(cs_main);
+    if (m_txrebroadcast) {
+        const std::vector<TxIds> rebroadcast_txs = m_txrebroadcast->GetRebroadcastTransactions(block, *pindexNew);
 
+        LOCK(cs_main);
         for (auto ids : rebroadcast_txs) {
-            _RelayTransaction(ids.m_txid, ids.m_wtxid);
+            RelayTransaction(ids.m_txid, ids.m_wtxid);
         }
     }
 
