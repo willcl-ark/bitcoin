@@ -349,7 +349,10 @@ void BlockAssembler::addPackageTxs(const CTxMemPool& mempool, int& nPackagesSele
         if (mi != mempool.mapTx.get<ancestor_score>().end()) {
             auto it = mempool.mapTx.project<0>(mi);
             assert(it != mempool.mapTx.end());
-            if (it->GetTime() > m_skip_inclusion_until) continue; // transaction is too recent
+            if (it->GetTime() > m_skip_inclusion_until) {
+                ++mi;
+                continue; // transaction is too recent
+            }
             if (mapModifiedTx.count(it) || inBlock.count(it) || failedTx.count(it)) {
                 ++mi;
                 continue;
