@@ -136,6 +136,9 @@ private:
     CFeeRate blockMinFeeRate;
     const std::chrono::microseconds m_skip_inclusion_until;
 
+    // To permit disabling block validity check
+    const bool m_check_block_validity;
+
     // Information on the current status of the block
     uint64_t nBlockWeight;
     uint64_t nBlockTx;
@@ -157,6 +160,7 @@ public:
         size_t nBlockMaxWeight;
         CFeeRate blockMinFeeRate;
         std::chrono::microseconds m_skip_inclusion_until{std::chrono::microseconds::max()};
+        bool m_check_block_validity{true};
     };
 
     explicit BlockAssembler(Chainstate& chainstate, const CTxMemPool* mempool);
