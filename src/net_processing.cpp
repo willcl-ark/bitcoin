@@ -1785,6 +1785,10 @@ PeerManagerImpl::PeerManagerImpl(CConnman& connman, AddrMan& addrman,
 
 void PeerManagerImpl::StartScheduledTasks(CScheduler& scheduler)
 {
+    if (m_txrebroadcast != nullptr) {
+        scheduler.scheduleEvery([this] { m_txrebroadcast->CacheMinRebroadcastFee(); }, REBROADCAST_CACHE_FREQUENCY);
+    }
+
     // Stale tip checking and peer eviction are on two different timers, but we
     // don't want them to get out of sync due to drift in the scheduler, so we
     // combine them in one function and schedule at the quicker (peer-eviction)
@@ -1792,7 +1796,7 @@ void PeerManagerImpl::StartScheduledTasks(CScheduler& scheduler)
     static_assert(EXTRA_PEER_CHECK_INTERVAL < STALE_CHECK_INTERVAL, "peer eviction timer should be less than stale tip check timer");
     scheduler.scheduleEvery([this] { this->CheckForStaleTipAndEvictPeers(); }, std::chrono::seconds{EXTRA_PEER_CHECK_INTERVAL});
 
-    // schedule next run for 10-15 minutes in the future
+    // Attempt initial broadcast of locally submitted transactions in 10-15 minutes
     const std::chrono::milliseconds delta = 10min + GetRandMillis(5min);
     scheduler.scheduleFromNow([&] { ReattemptInitialBroadcast(scheduler); }, delta);
 }
