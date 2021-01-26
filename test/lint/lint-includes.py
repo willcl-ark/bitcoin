@@ -23,6 +23,7 @@ EXCLUDED_DIRS = ["src/leveldb/",
 
 EXPECTED_BOOST_INCLUDES = ["boost/date_time/posix_time/posix_time.hpp",
                            "boost/multi_index/hashed_index.hpp",
+                           "boost/multi_index/member.hpp",
                            "boost/multi_index/ordered_index.hpp",
                            "boost/multi_index/sequenced_index.hpp",
                            "boost/multi_index_container.hpp",
