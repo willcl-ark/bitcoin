@@ -125,6 +125,7 @@ BASE_SCRIPTS = [
     'wallet_abandonconflict.py --legacy-wallet',
     'p2p_dns_seeds.py',
     'wallet_abandonconflict.py --descriptors',
+    'p2p_rebroadcast.py',
     'feature_csv_activation.py',
     'wallet_address_types.py --legacy-wallet',
     'wallet_address_types.py --descriptors',
