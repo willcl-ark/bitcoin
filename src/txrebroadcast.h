@@ -28,6 +28,9 @@ public:
     TxRebroadcastHandler(const CTxMemPool& mempool, const ChainstateManager& chainman);
     ~TxRebroadcastHandler();
 
+    TxRebroadcastHandler(const TxRebroadcastHandler& other) = delete;
+    TxRebroadcastHandler& operator=(const TxRebroadcastHandler& other) = delete;
+
     /**
      * Identify transaction candidates to be rebroadcast.
      * Calculates the top of the mempool by fee rate, limits the size based on
