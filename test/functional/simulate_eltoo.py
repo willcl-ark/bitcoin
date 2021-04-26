@@ -6,13 +6,28 @@
 Simulation tests for eltoo payment channel update scheme
 """
 
+from collections import OrderedDict, namedtuple
 import copy
+from io import BytesIO
+import json
+from test_framework.address import program_to_witness
 from test_framework.blocktools import (
     create_block,
-    create_coinbase
+    create_coinbase,
+    WITNESS_SCALE_FACTOR
 )
-from test_framework.key import ECKey, ECPubKey, SECP256K1_ORDER
+from test_framework.key import (
+    compute_xonly_pubkey, 
+    generate_privkey, 
+    sign_schnorr, 
+    tweak_add_pubkey,
+    ECKey, 
+    ECPubKey,
+    SECP256K1_ORDER
+)
 from test_framework.messages import (
+    ser_string, 
+    sha256,
     COutPoint,
     CScriptWitness,
     CTransaction,
@@ -23,8 +38,16 @@ from test_framework.messages import (
 )
 from test_framework.p2p import P2PDataStore
 from test_framework.script import (
+    hash160,
+    hash256,
+    sha256, 
+    taproot_construct,
+    taproot_tree_helper,
     CScript,
     CScriptNum,
+    KEY_VERSION_TAPROOT,
+    KEY_VERSION_ANYPREVOUT,
+    LEAF_VERSION_TAPSCRIPT,
     OP_0,
     OP_1, 
     OP_2,
@@ -36,6 +59,7 @@ from test_framework.script import (
     OP_CHECKMULTISIGVERIFY,
     OP_CHECKSEQUENCEVERIFY,
     OP_CHECKSIG,
+    OP_CHECKSIGADD,
     OP_CHECKSIGVERIFY,
     OP_DROP,
     OP_DUP,
@@ -48,8 +72,11 @@ from test_framework.script import (
     OP_IF,
     OP_INVALIDOPCODE,
     OP_NOTIF,
+    OP_NUMEQUAL,
     OP_RETURN,
     OP_TRUE,
+    OP_VERIFY,
+    SIGHASH_DEFAULT,
     SIGHASH_ALL,
     SIGHASH_ANYPREVOUT,
     SIGHASH_NONE,
@@ -57,20 +84,20 @@ from test_framework.script import (
     SIGHASH_ANYONECANPAY,
     SIGHASH_ANYPREVOUT,
     SIGHASH_ANYPREVOUTANYSCRIPT,
-    hash160,
-    hash256,
-    sha256
+    
+    TaprootSignatureHash
 )
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
     assert_raises_rpc_error
 )
+
 import time
 import random
 
 NUM_OUTPUTS_TO_COLLECT = 33
 CSV_DELAY = 20
-DUST_LIMIT = 800
+DUST_LIMIT = 600
 FEE_AMOUNT = 1000
 CHANNEL_AMOUNT = 1000000
 RELAY_FEE = 100
@@ -78,6 +105,123 @@ NUM_SIGNERS = 2
 CLTV_START_TIME = 500000000
 INVOICE_TIMEOUT = 3600 # 60 minute
 BLOCK_TIME = 600 # 10 minutes
+MIN_FEE = 50000
+
+# from bitcoinops script.py
+def GetVersionTaggedPubKey(pubkey, version):
+    assert pubkey.is_compressed
+    assert pubkey.is_valid
+    # When the version 0xfe is used, the control block may become indistinguishable from annex.
+    # In such case, use of annex becomes mandatory.
+    assert version >= 0 and version < 0xff and not (version & 1)
+    data = pubkey.get_bytes()
+    return bytes([data[0] & 1 | version]) + data[1:]
+
+# from bitcoinops util.py
+def create_spending_transaction(node, txid, version=1, nSequence=0):
+    """Construct a CTransaction object that spends the first ouput from txid."""
+    # Construct transaction
+    spending_tx = CTransaction()
+
+    # Populate the transaction version
+    spending_tx.nVersion = version
+
+    # Populate the locktime
+    spending_tx.nLockTime = 0
+
+    # Populate the transaction inputs
+    outpoint = COutPoint(int(txid, 16), 0)
+    spending_tx_in = CTxIn(outpoint=outpoint, nSequence=nSequence)
+    spending_tx.vin = [spending_tx_in]
+
+    # Generate new Bitcoin Core wallet address
+    dest_addr = node.getnewaddress(address_type="bech32")
+    scriptpubkey = bytes.fromhex(node.getaddressinfo(dest_addr)['scriptPubKey'])
+
+    # Complete output which returns 0.5 BTC to Bitcoin Core wallet
+    amount_sat = int(0.5 * 100_000_000)
+    dest_output = CTxOut(nValue=amount_sat, scriptPubKey=scriptpubkey)
+    spending_tx.vout = [dest_output]
+
+    return spending_tx
+
+# from bitcoinops util.py
+def generate_and_send_coins(node, address):
+    """Generate blocks on node and then send 1 BTC to address.
+    No change output is added to the transaction.
+    Return a CTransaction object."""
+    version = node.getnetworkinfo()['subversion']
+    print("\nClient version is {}\n".format(version))
+
+    # Generate 101 blocks and send reward to bech32 address
+    reward_address = node.getnewaddress(address_type="bech32")
+    node.generatetoaddress(101, reward_address)
+    balance = node.getbalance()
+    print("Balance: {}\n".format(balance))
+
+    assert balance > 1
+
+    unspent_txid = node.listunspent(1)[-1]["txid"]
+    inputs = [{"txid": unspent_txid, "vout": 0}]
+
+    # Create a raw transaction sending 1 BTC to the address, then sign and send it.
+    # We won't create a change output, so maxfeerate must be set to 0
+    # to allow any fee rate.
+    tx_hex = node.createrawtransaction(inputs=inputs, outputs=[{address: 1}])
+
+    res = node.signrawtransactionwithwallet(hexstring=tx_hex)
+
+    tx_hex = res["hex"]
+    assert res["complete"]
+    assert 'errors' not in res
+
+    txid = node.sendrawtransaction(hexstring=tx_hex, maxfeerate=0)
+
+    tx_hex = node.getrawtransaction(txid)
+
+    # Reconstruct wallet transaction locally
+    tx = CTransaction()
+    tx.deserialize(BytesIO(bytes.fromhex(tx_hex)))
+    tx.rehash()
+
+    return tx
+
+# from bitcoinops util.py
+def test_transaction(node, tx):
+    tx_str = tx.serialize().hex()
+    ret = node.testmempoolaccept(rawtxs=[tx_str], maxfeerate=0)[0]
+    print(ret)
+    return ret['allowed']
+
+def flatten(lst):
+    ret = []
+    for elem in lst:
+        if isinstance(elem, list):
+            ret += flatten(elem)
+        else:
+            ret.append(elem)
+    return ret
+
+def dump_json_test(tx, input_utxos, idx, success, failure):
+    spender = input_utxos[idx].spender
+    
+    fields = [
+        ("tx", tx.serialize().hex()),
+        ("prevouts", [x.output.serialize().hex() for x in input_utxos]),
+        ("index", idx)
+    ]
+
+    def dump_witness(wit):
+        return OrderedDict([("scriptSig", wit[0].hex()), ("witness", [x.hex() for x in wit[1]])])
+    if success is not None:
+        fields.append(("success", dump_witness(success)))
+    if failure is not None:
+        fields.append(("failure", dump_witness(failure)))
+
+    # Write the dump to $TEST_DUMP_DIR/x/xyz... where x,y,z,... are the SHA1 sum of the dump (which makes the
+    # file naming scheme compatible with fuzzing infrastructure).
+    dump = json.dumps(OrderedDict(fields)) + ",\n"
+    print(dump)
 
 def int_to_bytes(x) -> bytes:
     return x.to_bytes((x.bit_length() + 7) // 8, 'big')
@@ -352,6 +496,7 @@ class SettleTx(CTransaction):
         self.vin.append( CTxIn(outpoint = COutPoint(prevscript, 0), scriptSig = b"", nSequence=CSV_DELAY) )
 
         tx_hash = SegwitVersion1SignatureHash(prevscript, self, 0, SIGHASH_ANYPREVOUT | SIGHASH_SINGLE, CHANNEL_AMOUNT)
+
         signature = keys.settle_key.sign_ecdsa(tx_hash) + chr(SIGHASH_ANYPREVOUT | SIGHASH_SINGLE).encode('latin-1')
 
         # remove dummy vin
@@ -1124,6 +1269,100 @@ class SimulateL2Tests(BitcoinTestFramework):
         self.setup_clean_chain = True
         self.extra_args = [[]]
 
+    def test_bitcoinops_workshop_tapscript(self):
+
+        # create schnorr privkey and x only pubkey keys
+        privkey1 = generate_privkey()
+        pubkey1,_ = compute_xonly_pubkey(privkey1)
+        privkey2 = generate_privkey()
+        pubkey2,_ = compute_xonly_pubkey(privkey2)
+        print("pubkey1: {}".format(pubkey1.hex()))
+        print("pubkey2: {}\n".format(pubkey2.hex()))
+
+        # Method: 32B preimage - sha256(bytes)
+        # Method: 20B digest - hash160(bytes)
+        secret = b'secret'
+        preimage =  sha256(secret)
+        digest =  hash160(preimage)
+        delay =  20
+
+        # Construct tapscript
+        csa_delay_tapscript = CScript([
+            pubkey1, 
+            OP_CHECKSIG, 
+            pubkey2, 
+            OP_CHECKSIGADD, 
+            2, 
+            OP_NUMEQUAL, 
+            OP_VERIFY, 
+            14, 
+            OP_CHECKSEQUENCEVERIFY
+        ])
+
+        print("csa_delay_tapscript operations:")
+        for op in csa_delay_tapscript:
+            print(op.hex()) if isinstance(op, bytes) else print(op)
+
+        privkey_internal = generate_privkey()
+        pubkey_internal,_ = compute_xonly_pubkey(privkey_internal)
+
+        # create taptree from internal public key and list of (name, script) tuples
+        taptree = taproot_construct(pubkey_internal, [("csa_delay",csa_delay_tapscript)])
+
+        # Tweak the internal key to obtain the Segwit program
+        tweaked,_ = tweak_add_pubkey(pubkey_internal, taptree.tweak)
+
+        # Create (regtest) bech32 address from 32-byte tweaked public key
+        address = program_to_witness(version=0x01, program=tweaked, main=False)
+        print("bech32 address is {}".format(address))
+        print("Taproot witness program, len={} is {}\n".format(len(tweaked), tweaked.hex()))
+
+        print("scriptPubKey operations:\n")
+        for op in taptree.scriptPubKey:
+            print(op.hex()) if isinstance(op, bytes) else print(op)
+
+        # Generate coins and create an output
+        tx = generate_and_send_coins(self.nodes[0], address)
+        print("Transaction {}, output 0\nsent to {}\n".format(tx.hash, address))
+
+        # Create a spending transaction
+        spending_tx = create_spending_transaction(self.nodes[0], tx.hash, version=2, nSequence=delay)
+        print("Spending transaction:\n{}".format(spending_tx))
+
+        # Generate the Taproot Signature Hash for signing
+        sighash = TaprootSignatureHash(spending_tx,
+                                    [tx.vout[0]],
+                                    SIGHASH_DEFAULT,
+                                    input_index=0,
+                                    scriptpath=True,
+                                    script=csa_delay_tapscript) 
+
+        # Sign with both privkeys
+        signature1 =  sign_schnorr(privkey1, sighash)
+        signature2 =  sign_schnorr(privkey2, sighash)
+
+        print("Signature1: {}".format(signature1.hex()))
+        print("Signature2: {}".format(signature2.hex()))
+
+        # Control block created from leaf version and merkle branch information and common inner pubkey and it's negative flag
+        leaf = taptree.leaves["csa_delay"]
+        control_block = bytes([leaf.version + taptree.negflag]) + taptree.inner_pubkey + leaf.merklebranch
+
+        # Add witness to transaction
+        inputs = [signature2, signature1]
+        witness_elements = [csa_delay_tapscript, control_block]
+        spending_tx.wit.vtxinwit.append(CTxInWitness())
+        spending_tx.wit.vtxinwit[0].scriptWitness.stack = inputs + witness_elements
+
+        print("Spending transaction:\n{}\n".format(spending_tx))
+
+        # Test mempool acceptance with and without delay
+        assert not test_transaction(self.nodes[0], spending_tx)
+        self.nodes[0].generate(delay)
+        assert test_transaction(self.nodes[0], spending_tx)
+
+        print("Success!")
+
     def test1(self, payer_sweeps_utxo):
         # topology: node1 opens a channel with node 2
         A = L2Node(1)
@@ -1514,6 +1753,9 @@ class SimulateL2Tests(BitcoinTestFramework):
     def run_test(self):
         # create some coinbase txs to spend
         self.init_coinbase()
+
+        # test bitcoinops workshop 2-of-2 csa tapscript tx
+        self.test_bitcoinops_workshop_tapscript()
 
         # test two nodes performing an uncooperative close with one htlc pending, tested cheats:
         # - payer tries to commit a refund tx before the CSV delay expires
