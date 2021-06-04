@@ -607,6 +607,7 @@ SIGHASH_ANYONECANPAY = 0x80
 SIGHASH_ANYPREVOUT = 0x40
 SIGHASH_ANYPREVOUTANYSCRIPT = 0xc0
 
+SIGHASH_INMASK = 0x03
 SIGHASH_OUTMASK = 0xc0
 
 def FindAndDelete(script, sig):
@@ -752,10 +753,9 @@ class TestFrameworkScript(unittest.TestCase):
 def TaprootSignatureHash(txTo, spent_utxos, hash_type, input_index = 0, scriptpath = False, script = CScript(), codeseparator_pos = -1, annex = None, leaf_ver = LEAF_VERSION_TAPSCRIPT, key_ver = KEY_VERSION_TAPROOT):
     assert (len(txTo.vin) == len(spent_utxos))
     assert key_ver == KEY_VERSION_TAPROOT or key_ver == KEY_VERSION_ANYPREVOUT
-    if key_ver == KEY_VERSION_ANYPREVOUT:
-        assert False # not tested yet
+    assert key_ver != KEY_VERSION_ANYPREVOUT or scriptpath
     assert (input_index < len(txTo.vin))
-    out_type = SIGHASH_ALL if hash_type == 0 else hash_type & 3
+    out_type = SIGHASH_ALL if hash_type == SIGHASH_DEFAULT else hash_type & SIGHASH_INMASK
     in_type = hash_type & SIGHASH_OUTMASK
     spk = spent_utxos[input_index].scriptPubKey
     ss = bytes([0, hash_type]) # epoch, hash_type
