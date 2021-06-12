@@ -115,7 +115,7 @@ def GetVersionTaggedPubKey(pubkey, version):
     assert pubkey.is_valid
     # When the version 0xfe is used, the control block may become indistinguishable from annex.
     # In such case, use of annex becomes mandatory.
-    assert version >= 0 and version < 0xff and not (version & 1)
+    assert 0 <= version < 0xff and not (version & 1)
     data = pubkey.get_bytes()
     return bytes([data[0] & 1 | version]) + data[1:]
 
