@@ -110,7 +110,7 @@ DEFAULT_NSEQUENCE = 0xFFFFFFFE  # disable nSequence lock
 
 
 # from bitcoinops script.py
-def GetVersionTaggedPubKey(pubkey, version):
+def get_version_tagged_pubkey(pubkey, version):
     assert pubkey.is_compressed
     assert pubkey.is_valid
     # When the version 0xfe is used, the control block may become indistinguishable from annex.
@@ -512,7 +512,7 @@ class Witness:
         # do not compare signatures, only public keys
         return match
 
-    def SetPK(self, keys):
+    def set_pk(self, keys):
         self.update_pk = keys.update_key.get_pubkey().get_bytes()
         self.settle_pk = keys.settle_key.get_pubkey().get_bytes()
         self.payment_pk = keys.payment_key.get_pubkey().get_bytes()
@@ -548,13 +548,13 @@ class PaymentChannel:
         self.offered_payments = {}
         self.received_payments = {}
 
-    def TotalOfferedPayments(self):
+    def total_offered_payments(self):
         total = 0
         for key, value in self.offered_payments.items():
             total += value.amount
         return total
 
-    def TotalReceivedPayments(self):
+    def total_received_payments(self):
         total = 0
         for key, value in self.received_payments.items():
             total += value.amount
@@ -562,8 +562,8 @@ class PaymentChannel:
 
     def __repr__(self):
         return "PaymentChannel(spending_tx=%064x settled_refund_amount=%i settled_payment_amount=%i offered_payments=%i received_payments=%i)" % \
-               (self.spending_tx, self.settled_refund_amount, self.settled_payment_amount, self.TotalOfferedPayments(),
-                self.TotalReceivedPayments())
+               (self.spending_tx, self.settled_refund_amount, self.settled_payment_amount, self.total_offered_payments(),
+                self.total_received_payments())
 
 
 class UpdateTx(CTransaction):
@@ -591,7 +591,7 @@ class UpdateTx(CTransaction):
         # add channel output
         self.vout = [CTxOut(CHANNEL_AMOUNT, script_wsh)]  # channel balance
 
-    def Sign(self, keys):
+    def sign(self, keys):
 
         # add dummy vin, digest only serializes the nSequence value
         prevscript = CScript()
@@ -605,7 +605,7 @@ class UpdateTx(CTransaction):
 
         return signature
 
-    def Verify(self):
+    def verify(self):
         verified = True
         witnesses = [self.witness, self.other_witness]
 
@@ -629,7 +629,7 @@ class UpdateTx(CTransaction):
 
         return verified
 
-    def AddWitness(self, spend_tx):
+    def add_witness(self, spend_tx):
         # witness script to spend update tx to update tx
         self.wit.vtxinwit = [CTxInWitness()]
         witness_program = get_eltoo_update_script(spend_tx.state, spend_tx.witness, spend_tx.other_witness)
@@ -661,7 +661,7 @@ class SettleTx(CTransaction):
         witness_hash = sha256(witness_program)
         script_wsh = CScript([OP_0, witness_hash])
 
-        assert self.payment_channel.settled_refund_amount + self.payment_channel.settled_payment_amount + self.payment_channel.TotalOfferedPayments() - CHANNEL_AMOUNT == 0
+        assert self.payment_channel.settled_refund_amount + self.payment_channel.settled_payment_amount + self.payment_channel.total_offered_payments() - CHANNEL_AMOUNT == 0
         settled_amounts = [self.payment_channel.settled_refund_amount, self.payment_channel.settled_payment_amount]
         signers = [self.payment_channel.witness.payment_pk, self.payment_channel.other_witness.payment_pk]
         signer_index = 0
@@ -694,7 +694,7 @@ class SettleTx(CTransaction):
         #   add settlement outputs to settlement transaction
         self.vout = outputs
 
-    def Sign(self, keys):
+    def sign(self, keys):
         # TODO: spending from a SetupTx (first UpdateTx) should not use the NOINPUT sighash 
 
         # add dummy vin, digest only serializes the nSequence value
@@ -710,7 +710,7 @@ class SettleTx(CTransaction):
 
         return signature
 
-    def Verify(self):
+    def verify(self):
         verified = True
         witnesses = [self.payment_channel.witness, self.payment_channel.other_witness]
 
@@ -733,7 +733,7 @@ class SettleTx(CTransaction):
 
         return verified
 
-    def AddWitness(self, spend_tx):
+    def add_witness(self, spend_tx):
         # witness script to spend update tx to settle tx
         assert spend_tx.state == self.payment_channel.state
         self.wit.vtxinwit = [CTxInWitness()]
@@ -799,7 +799,7 @@ class RedeemTx(CTransaction):
         #   add channel output
         self.vout = [CTxOut(settled_amount, script_pkh)]  # channel balance
 
-    def Sign(self, keys, htlc_index, htlc_hash):
+    def sign(self, keys, htlc_index, htlc_hash):
 
         if htlc_hash is not None:
             # use witness program for a htlc input (p2wsh)
@@ -826,7 +826,7 @@ class RedeemTx(CTransaction):
 
         return signature
 
-    def AddWitness(self, keys, spend_tx, settled_only):
+    def add_witness(self, keys, spend_tx, settled_only):
         if self.is_funder:
             signer_index = 0
         else:
@@ -955,28 +955,28 @@ class CloseTx(CTransaction):
 
         self.vout = outputs
 
-    def IsChannelFunder(self, keys):
+    def is_channel_funder(self, keys):
         pubkey = keys.update_key.get_pubkey().get_bytes()
         if pubkey == self.payment_channel.witness.update_pk:
             return True
         else:
             return False
 
-    def Sign(self, keys, setup_tx):
+    def sign(self, keys, setup_tx):
 
         # spending from a SetupTx (first UpdateTx) should not use the NOINPUT sighash 
         witness_program = get_eltoo_update_script(setup_tx.state, setup_tx.witness, setup_tx.other_witness)
         tx_hash = SegwitVersion1SignatureHash(witness_program, self, 0, SIGHASH_SINGLE, CHANNEL_AMOUNT)
         signature = keys.update_key.sign_ecdsa(tx_hash) + chr(SIGHASH_SINGLE).encode('latin-1')
 
-        if self.IsChannelFunder(keys):
+        if self.is_channel_funder(keys):
             self.payment_channel.witness.update_sig = signature
         else:
             self.payment_channel.other_witness.update_sig = signature
 
         return signature
 
-    def Verify(self, setup_tx):
+    def verify(self, setup_tx):
         verified = True
         witnesses = [self.payment_channel.witness, self.payment_channel.other_witness]
 
@@ -993,7 +993,7 @@ class CloseTx(CTransaction):
 
         return verified
 
-    def AddWitness(self, spend_tx):
+    def add_witness(self, spend_tx):
         # witness script to spend update tx to close tx
         self.wit.vtxinwit = [CTxInWitness()]
         witness_program = get_eltoo_update_script(spend_tx.state, spend_tx.witness, spend_tx.other_witness)
@@ -1025,17 +1025,17 @@ class L2Node:
         # True at the same time
         return not (self == other)
 
-    def IsChannelFunder(self, channel_partner):
+    def is_channel_funder(self, channel_partner):
         pubkey = self.keychain[channel_partner].update_key.get_pubkey().get_bytes()
         if pubkey == self.payment_channels[channel_partner].witness.update_pk:
             return True
         else:
             return False
 
-    def ProposeChannel(self):
+    def propose_channel(self):
         keys = Keys()
         witness = Witness()
-        witness.SetPK(keys)
+        witness.set_pk(keys)
 
         return keys, witness
 
@@ -1043,7 +1043,7 @@ class L2Node:
         # generate local keys for proposed channel
         self.keychain[channel_partner] = Keys()
         other_witness = Witness()
-        other_witness.SetPK(self.keychain[channel_partner])
+        other_witness.set_pk(self.keychain[channel_partner])
 
         # initialize a new payment channel
         self.payment_channels[channel_partner] = PaymentChannel(witness, other_witness)
@@ -1053,7 +1053,7 @@ class L2Node:
         # sign settle transaction
         assert self.payment_channels[channel_partner].state == 0
         settle_tx = SettleTx(payment_channel=self.payment_channels[channel_partner])
-        self.payment_channels[channel_partner].other_witness.settle_sig = settle_tx.Sign(self.keychain[channel_partner])
+        self.payment_channels[channel_partner].other_witness.settle_sig = settle_tx.sign(self.keychain[channel_partner])
 
         # create the first Update Tx (aka Setup Tx)
         self.payment_channels[channel_partner].spending_tx = UpdateTx(self.payment_channels[channel_partner])
@@ -1061,7 +1061,7 @@ class L2Node:
         # return witness updated with valid signatures for the refund settle transaction
         return self.payment_channels[channel_partner].other_witness
 
-    def CreateChannel(self, channel_partner, keys, witness, other_witness):
+    def create_channel(self, channel_partner, keys, witness, other_witness):
         # use keys created for this payment channel by ProposeChannel
         self.keychain[channel_partner] = keys
 
@@ -1074,14 +1074,14 @@ class L2Node:
         # sign settle transaction
         assert self.payment_channels[channel_partner].state == 0
         settle_tx = SettleTx(payment_channel=self.payment_channels[channel_partner])
-        signature = settle_tx.Sign(keys)
+        signature = settle_tx.sign(keys)
 
         # save signature to payment channel and settle tx
         self.payment_channels[channel_partner].witness.settle_sig = signature
         settle_tx.payment_channel.witness.settle_sig = signature
 
         # check that we can create a valid refund/settle transaction to use if we need to close the channel
-        assert settle_tx.Verify()
+        assert settle_tx.verify()
 
         # create the first Update Tx (aka Setup Tx)
         setup_tx = UpdateTx(self.payment_channels[channel_partner])
@@ -1091,16 +1091,16 @@ class L2Node:
 
         return setup_tx, settle_tx
 
-    def CreateInvoice(self, id, amount, expiry):
+    def create_invoice(self, id, amount, expiry):
         secret = random.randrange(1, SECP256K1_ORDER).to_bytes(32, 'big')
         self.secrets[hash160(secret)] = secret
         invoice = Invoice(id=id, preimage_hash=hash160(secret), amount=amount, expiry=expiry)
         return invoice
 
-    def LearnSecret(self, secret):
+    def learn_secret(self, secret):
         self.secrets[hash160(secret)] = secret
 
-    def ProposePayment(self, channel_partner, invoice, prev_update_tx):
+    def propose_payment(self, channel_partner, invoice, prev_update_tx):
 
         # generate new keys for the settle transaction unique to the next state
         keys = self.keychain[channel_partner]
@@ -1129,19 +1129,19 @@ class L2Node:
         update_tx = UpdateTx(payment_channel)
 
         # sign with new update key
-        update_sig = update_tx.Sign(self.keychain[channel_partner])
+        update_sig = update_tx.sign(self.keychain[channel_partner])
         update_tx.witness.update_sig = update_sig
 
         # create a settle tx that spends the new update tx
         settle_tx = SettleTx(payment_channel)
 
         # sign with new update key for this state
-        settle_sig = settle_tx.Sign(self.keychain[channel_partner])
+        settle_sig = settle_tx.sign(self.keychain[channel_partner])
         settle_tx.payment_channel.witness.settle_sig = settle_sig
 
         return update_tx, settle_tx, other_settle_key
 
-    def ReceivePayment(self, channel_partner, update_tx, settle_tx, other_settle_key):
+    def receive_payment(self, channel_partner, update_tx, settle_tx, other_settle_key):
 
         # assume we generated same new settle key from xpub as channel partner
         self.keychain[channel_partner].settle_key = other_settle_key
@@ -1152,21 +1152,21 @@ class L2Node:
         assert payment_channel.other_witness == update_tx.other_witness
         assert payment_channel.state == update_tx.state
         assert payment_channel.state > self.payment_channels[channel_partner].state
-        assert payment_channel.settled_refund_amount + payment_channel.settled_payment_amount + payment_channel.TotalOfferedPayments() - CHANNEL_AMOUNT == 0
+        assert payment_channel.settled_refund_amount + payment_channel.settled_payment_amount + payment_channel.total_offered_payments() - CHANNEL_AMOUNT == 0
         assert payment_channel.settled_payment_amount >= self.payment_channels[channel_partner].settled_payment_amount
-        assert payment_channel.TotalOfferedPayments() > self.payment_channels[channel_partner].TotalOfferedPayments()
+        assert payment_channel.total_offered_payments() > self.payment_channels[channel_partner].total_offered_payments()
 
         # sign update tx with my key
-        update_sig = update_tx.Sign(self.keychain[channel_partner])
+        update_sig = update_tx.sign(self.keychain[channel_partner])
         update_tx.other_witness.update_sig = update_sig
 
         # sign settle tx with new settle key
-        settle_sig = settle_tx.Sign(self.keychain[channel_partner])
+        settle_sig = settle_tx.sign(self.keychain[channel_partner])
         settle_tx.payment_channel.other_witness.settle_sig = settle_sig
 
         # verify both channel partners signed the txs
-        assert update_tx.Verify()
-        assert settle_tx.Verify()
+        assert update_tx.verify()
+        assert settle_tx.verify()
 
         # accept new channel state
         self.payment_channels[channel_partner] = payment_channel
@@ -1182,18 +1182,18 @@ class L2Node:
 
         return update_tx, settle_tx, secret
 
-    def UncooperativelyClose(self, channel_partner, settle_tx, settled_only=False, include_invalid=True, block_time=0):
+    def uncooperatively_close(self, channel_partner, settle_tx, settled_only=False, include_invalid=True, block_time=0):
 
         # create an redeem tx that spends a committed settle tx
-        is_funder = self.IsChannelFunder(channel_partner)
+        is_funder = self.is_channel_funder(channel_partner)
         redeem_tx = RedeemTx(payment_channel=settle_tx.payment_channel, secrets=self.secrets, is_funder=is_funder, settled_only=settled_only, include_invalid=include_invalid, block_time=block_time)
-        redeem_tx.AddWitness(keys=self.keychain[channel_partner], spend_tx=settle_tx, settled_only=settled_only)
+        redeem_tx.add_witness(keys=self.keychain[channel_partner], spend_tx=settle_tx, settled_only=settled_only)
 
         return redeem_tx
 
-    def ProposeUpdate(self, channel_partner, block_time):
+    def propose_update(self, channel_partner, block_time):
         # payment receiver creates new update tx and settle tx with new settled balances based on invoices that can be redeemed or expired
-        assert not self.IsChannelFunder(channel_partner)
+        assert not self.is_channel_funder(channel_partner)
 
         # most recent co-signed payment_channel state that can be used to uncooperatively close the channel
         self.complete_payment_channels[channel_partner] = (copy.deepcopy(self.payment_channels[channel_partner]), copy.deepcopy(self.keychain[channel_partner]))
@@ -1231,21 +1231,21 @@ class L2Node:
         update_tx = UpdateTx(self.payment_channels[channel_partner])
 
         # sign with new update keys
-        update_sig = update_tx.Sign(self.keychain[channel_partner])
+        update_sig = update_tx.sign(self.keychain[channel_partner])
         update_tx.other_witness.update_sig = update_sig
 
         # create a settle tx that spends the new update tx
         settle_tx = SettleTx(self.payment_channels[channel_partner])
 
         # sign with new pending settle key for this state
-        settle_sig = settle_tx.Sign(self.keychain[channel_partner])
+        settle_sig = settle_tx.sign(self.keychain[channel_partner])
         settle_tx.payment_channel.other_witness.settle_sig = settle_sig
 
         return update_tx, settle_tx, settle_key, redeemed_secrets
 
-    def AcceptUpdate(self, channel_partner, update_tx, settle_tx, settle_key, redeemed_secrets, block_time):
+    def accept_update(self, channel_partner, update_tx, settle_tx, settle_key, redeemed_secrets, block_time):
         # payment sender confirms the new update tx and settle tx with new settled balances based on invoices that can be redeemed or expired
-        assert self.IsChannelFunder(channel_partner)
+        assert self.is_channel_funder(channel_partner)
 
         updated_payment_channel = copy.deepcopy(self.payment_channels[channel_partner])
         updated_payment_channel.state += 1
@@ -1272,49 +1272,49 @@ class L2Node:
 
             # learn new secrets 
             for hashed_secret, secret in redeemed_secrets.items():
-                self.LearnSecret(secret)
+                self.learn_secret(secret)
 
             # sign with update key
-            update_sig = update_tx.Sign(self.keychain[channel_partner])
+            update_sig = update_tx.sign(self.keychain[channel_partner])
             update_tx.witness.update_sig = update_sig
 
             # sign with new settle key for this state
-            settle_sig = settle_tx.Sign(self.keychain[channel_partner])
+            settle_sig = settle_tx.sign(self.keychain[channel_partner])
             settle_tx.payment_channel.witness.settle_sig = settle_sig
         else:
             return None, None
 
         return update_tx, settle_tx
 
-    def ConfirmUpdate(self, channel_partner, update_tx, settle_tx):
+    def confirm_update(self, channel_partner, update_tx, settle_tx):
         # payment receiver confirms the new update tx and settle tx with new settled balances was signed by payment sender
-        assert not self.IsChannelFunder(channel_partner)
+        assert not self.is_channel_funder(channel_partner)
 
         # if both channel partners signed the new update tx and settle tx, then update to the new payment_channel state
-        if update_tx.Verify() and settle_tx.Verify():
+        if update_tx.verify() and settle_tx.verify():
             return True
         else:
             # should now do a noncooperative close from the last completed state signed by the payer
             self.payment_channels[channel_partner], self.keychain[channel_partner] = copy.deepcopy(self.complete_payment_channels[channel_partner])
             return False
 
-    def ProposeClose(self, channel_partner, setup_tx):
+    def propose_close(self, channel_partner, setup_tx):
         # create a clise tx that spends a committed setup tx immediately with the settled balances
         close_tx = CloseTx(payment_channel=self.payment_channels[channel_partner], setup_tx=setup_tx)
-        close_tx.Sign(keys=self.keychain[channel_partner], setup_tx=setup_tx)
+        close_tx.sign(keys=self.keychain[channel_partner], setup_tx=setup_tx)
         return close_tx
 
-    def AcceptClose(self, channel_partner, close_tx, setup_tx):
+    def accept_close(self, channel_partner, close_tx, setup_tx):
         # confirm settled amounts are as expected
         tmp_close_tx = CloseTx(payment_channel=self.payment_channels[channel_partner], setup_tx=setup_tx)
         is_valid = close_tx.payment_channel.settled_payment_amount == tmp_close_tx.payment_channel.settled_payment_amount
         is_valid &= close_tx.payment_channel.settled_refund_amount == tmp_close_tx.payment_channel.settled_refund_amount
 
         if is_valid:
-            close_tx.Sign(keys=self.keychain[channel_partner], setup_tx=setup_tx)
-            if close_tx.Verify(setup_tx):
+            close_tx.sign(keys=self.keychain[channel_partner], setup_tx=setup_tx)
+            if close_tx.verify(setup_tx):
                 # add witness information to close tx so it can be committed
-                close_tx.AddWitness(setup_tx)
+                close_tx.add_witness(setup_tx)
                 return close_tx
 
         return None
@@ -1433,7 +1433,7 @@ class SimulateL2Tests(BitcoinTestFramework):
 
         # update vin and witness to spend a specific update tx (skipped for setup tx)
         if spend_tx is not None:
-            tx.AddWitness(spend_tx)
+            tx.add_witness(spend_tx)
 
         # pay change to new p2pkh output, TODO: should use p2wpkh
         change_key = ECKey()
@@ -1656,13 +1656,13 @@ class SimulateL2Tests(BitcoinTestFramework):
         B = L2Node(2)
 
         # create the set of keys needed to open a new payment channel
-        keys, witness = A.ProposeChannel()
+        keys, witness = A.propose_channel()
 
         # create a new channel and sign the initial refund of a new payment channel
         other_witness = B.JoinChannel(channel_partner=A, witness=witness)
 
         # create a new channel
-        setup_tx, refund_tx = A.CreateChannel(
+        setup_tx, refund_tx = A.create_channel(
             channel_partner=B,
             keys=keys,
             witness=witness,
@@ -1682,25 +1682,25 @@ class SimulateL2Tests(BitcoinTestFramework):
         txid = self.commit(refund_tx, error_code=-26, error_message="non-BIP68-final")
 
         # B creates first invoice
-        invoice = B.CreateInvoice('test1a', amount=10000, expiry=self.start_time + INVOICE_TIMEOUT)
+        invoice = B.create_invoice('test1a', amount=10000, expiry=self.start_time + INVOICE_TIMEOUT)
 
         # A creates partially signed transactions to pay the invoice from B
-        (update1_tx, settle1_tx, other_settle1_key) = A.ProposePayment(B, invoice, setup_tx)
+        (update1_tx, settle1_tx, other_settle1_key) = A.propose_payment(B, invoice, setup_tx)
 
         # B receives payment from A and returns corresponding secret and fully signed transactions
-        (update1_tx, settle1_tx, secret) = B.ReceivePayment(A, update1_tx, settle1_tx, other_settle1_key)
+        (update1_tx, settle1_tx, secret) = B.receive_payment(A, update1_tx, settle1_tx, other_settle1_key)
 
         # mine the setup tx into a new block, increment time by 10 minutes
         self.nodes[0].generate(1)
 
         # B creates second invoice
-        invoice = B.CreateInvoice('test1b', amount=10000, expiry=self.start_time + INVOICE_TIMEOUT + BLOCK_TIME)
+        invoice = B.create_invoice('test1b', amount=10000, expiry=self.start_time + INVOICE_TIMEOUT + BLOCK_TIME)
 
         # A creates a new partially signed transactions with higher state to pay the second invoice from B
-        (update2_tx, settle2_tx, other_settle2_key) = A.ProposePayment(B, invoice, setup_tx)
+        (update2_tx, settle2_tx, other_settle2_key) = A.propose_payment(B, invoice, setup_tx)
 
         # B receives payment from A and returns corresponding secret and fully signed transactions
-        (update2_tx, settle2_tx, secret) = B.ReceivePayment(A, update2_tx, settle2_tx, other_settle2_key)
+        (update2_tx, settle2_tx, secret) = B.receive_payment(A, update2_tx, settle2_tx, other_settle2_key)
 
         # fund the transaction fees for the update tx before committing it
         self.fund(tx=update2_tx, spend_tx=setup_tx, amount=FEE_AMOUNT)
@@ -1726,7 +1726,7 @@ class SimulateL2Tests(BitcoinTestFramework):
 
         if payer_sweeps_utxo:
             # A collects the settled amount and tries to sweep even invalid/unexpired htlcs
-            redeem_tx = A.UncooperativelyClose(B, settle2_tx, include_invalid=True, block_time=self.start_time + INVOICE_TIMEOUT)
+            redeem_tx = A.uncooperatively_close(B, settle2_tx, include_invalid=True, block_time=self.start_time + INVOICE_TIMEOUT)
 
             # wait for invoice to expire
             self.nodes[0].setmocktime = (self.start_time + INVOICE_TIMEOUT)
@@ -1736,7 +1736,7 @@ class SimulateL2Tests(BitcoinTestFramework):
             txid = self.commit(redeem_tx, error_code=-26, error_message="non-mandatory-script-verify-flag")  # (Locktime requirement not satisfied)
 
             # advance locktime on redeem tx to past expiry of the invoices
-            redeem_tx = A.UncooperativelyClose(B, settle2_tx, include_invalid=False, block_time=self.start_time + INVOICE_TIMEOUT + BLOCK_TIME)
+            redeem_tx = A.uncooperatively_close(B, settle2_tx, include_invalid=False, block_time=self.start_time + INVOICE_TIMEOUT + BLOCK_TIME)
 
             # wait for invoice to expire
             self.nodes[0].setmocktime = (self.start_time + INVOICE_TIMEOUT + BLOCK_TIME + 1)
@@ -1747,13 +1747,13 @@ class SimulateL2Tests(BitcoinTestFramework):
 
         else:
             # B collects the settled amount and uses the secret to sweep an unsettled htlc
-            redeem_tx = B.UncooperativelyClose(A, settle2_tx)
+            redeem_tx = B.uncooperatively_close(A, settle2_tx)
 
             # B commits the redeem tx to complete the uncooperative close of the channel
             txid = self.commit(redeem_tx)
 
             # A collects the settled amount, and has no unsettled htlcs to collect
-            redeem_tx = A.UncooperativelyClose(B, settle2_tx, settled_only=True)
+            redeem_tx = A.uncooperatively_close(B, settle2_tx, settled_only=True)
 
             # A commits the redeem tx to complete the uncooperative close of the channel
             txid = self.commit(redeem_tx)
@@ -1774,13 +1774,13 @@ class SimulateL2Tests(BitcoinTestFramework):
         '-------------------------'
 
         # create the set of keys needed to open a new payment channel
-        keys[A], witness[A] = A.ProposeChannel()
+        keys[A], witness[A] = A.propose_channel()
 
         # create a new channel and sign the initial refund of a new payment channel
         other_witness[B] = B.JoinChannel(channel_partner=A, witness=witness[A])
 
         # create a new channel
-        setup_tx[A], refund_tx[A] = A.CreateChannel(channel_partner=B, keys=keys[A], witness=witness[A], other_witness=other_witness[B])
+        setup_tx[A], refund_tx[A] = A.create_channel(channel_partner=B, keys=keys[A], witness=witness[A], other_witness=other_witness[B])
 
         # fund and commit the setup tx to create the new channel
         self.fund(tx=setup_tx[A], spend_tx=None, amount=CHANNEL_AMOUNT + FEE_AMOUNT)
@@ -1789,13 +1789,13 @@ class SimulateL2Tests(BitcoinTestFramework):
         '-------------------------'
 
         # create the set of keys needed to open a new payment channel
-        keys[B], witness[B] = B.ProposeChannel()
+        keys[B], witness[B] = B.propose_channel()
 
         # create a new channel and sign the initial refund of a new payment channel
         other_witness[C] = C.JoinChannel(channel_partner=B, witness=witness[B])
 
         # create a new channel
-        setup_tx[B], refund_tx[B] = B.CreateChannel(channel_partner=C, keys=keys[B], witness=witness[B], other_witness=other_witness[C])
+        setup_tx[B], refund_tx[B] = B.create_channel(channel_partner=C, keys=keys[B], witness=witness[B], other_witness=other_witness[C])
 
         # fund and commit the setup tx to create the new channel
         self.fund(tx=setup_tx[B], spend_tx=None, amount=CHANNEL_AMOUNT + FEE_AMOUNT)
@@ -1808,7 +1808,7 @@ class SimulateL2Tests(BitcoinTestFramework):
         invoice = {}
 
         # A offers to pay B the amount C requested in exchange for the secret that proves C has been paid
-        invoice[A] = C.CreateInvoice('test2', amount=5000, expiry=self.start_time + INVOICE_TIMEOUT)
+        invoice[A] = C.create_invoice('test2', amount=5000, expiry=self.start_time + INVOICE_TIMEOUT)
 
         # B offers to pay C the amount A offers (less relay fee) in exchange for the secret that proves that C has been paid
         invoice[B] = invoice[A]
@@ -1822,17 +1822,17 @@ class SimulateL2Tests(BitcoinTestFramework):
         secret = {}
 
         # A creates partially signed transactions for B to pay the invoice from C
-        update_tx[A], settle_tx[A], other_settle_key[A] = A.ProposePayment(B, invoice[A], setup_tx[A])
+        update_tx[A], settle_tx[A], other_settle_key[A] = A.propose_payment(B, invoice[A], setup_tx[A])
 
         # B receives a payment commitment from A and returns the corresponding signed transactions, but not the secret needed to redeem the payment
-        update_tx[B], settle_tx[B], secret[B] = B.ReceivePayment(A, update_tx[A], settle_tx[A], other_settle_key[A])
+        update_tx[B], settle_tx[B], secret[B] = B.receive_payment(A, update_tx[A], settle_tx[A], other_settle_key[A])
         assert secret[B] == None
 
         # B creates partially signed transactions to pay the invoice from C
-        tmp_update_tx, tmp_settle_tx, tmp_other_settle_key = B.ProposePayment(C, invoice[B], setup_tx[B])
+        tmp_update_tx, tmp_settle_tx, tmp_other_settle_key = B.propose_payment(C, invoice[B], setup_tx[B])
 
         # C receives a payment commitment from B and returns the corresponding fully signed transactions and secret needed to redeem the payment
-        update_tx[C], settle_tx[C], secret[C] = C.ReceivePayment(B, tmp_update_tx, tmp_settle_tx, tmp_other_settle_key)
+        update_tx[C], settle_tx[C], secret[C] = C.receive_payment(B, tmp_update_tx, tmp_settle_tx, tmp_other_settle_key)
         assert secret[C] != None
 
         # fund the transaction fees for the update tx before committing it
@@ -1856,24 +1856,24 @@ class SimulateL2Tests(BitcoinTestFramework):
         B.secrets[invoice[B].preimage_hash] = b''
 
         # B tries to collect the settled htlc amount without the correct secret
-        redeem_tx[B] = B.UncooperativelyClose(A, settle_tx[B], settled_only=False, include_invalid=True, block_time=self.start_time + INVOICE_TIMEOUT)
+        redeem_tx[B] = B.uncooperatively_close(A, settle_tx[B], settled_only=False, include_invalid=True, block_time=self.start_time + INVOICE_TIMEOUT)
 
         # B commits the redeem tx to complete the uncooperative close of the channel and collect settled and confirmed utxos (less transaction fees)
         txid = self.commit(redeem_tx[B], error_code=-26, error_message="non-mandatory-script-verify-flag")
 
         # B learns the secret from C
         assert hash160(secret[C]) == invoice[B].preimage_hash
-        B.LearnSecret(secret[C])
+        B.learn_secret(secret[C])
         '-------------------------'
 
         # B collects the settled amount and uses the secret to sweep an unsettled htlc
-        redeem_tx[B] = B.UncooperativelyClose(A, settle_tx[B])
+        redeem_tx[B] = B.uncooperatively_close(A, settle_tx[B])
 
         # B commits the redeem tx to complete the uncooperative close of the channel and collect settled and confirmed utxos (less transaction fees)
         txid = self.commit(redeem_tx[B])
 
         # A collects the settled amount, and has no unsettled htlcs to collect
-        redeem_tx[A] = A.UncooperativelyClose(B, settle_tx[B], settled_only=True, include_invalid=True, block_time=self.start_time + INVOICE_TIMEOUT)
+        redeem_tx[A] = A.uncooperatively_close(B, settle_tx[B], settled_only=True, include_invalid=True, block_time=self.start_time + INVOICE_TIMEOUT)
 
         # A commits the redeem tx to complete the uncooperative close of the channel
         txid = self.commit(redeem_tx[A])
@@ -1900,13 +1900,13 @@ class SimulateL2Tests(BitcoinTestFramework):
         '-------------------------'
 
         # payment receiver collects their settled payments and uses their secrets to sweep any unsettled htlcs
-        redeem_tx = payment_receiver.UncooperativelyClose(payment_sender, settle_tx)
+        redeem_tx = payment_receiver.uncooperatively_close(payment_sender, settle_tx)
 
         # payment receiver commits the redeem tx to complete the uncooperative close of the channel and collect settled and confirmed utxos (less transaction fees)
         txid = self.commit(redeem_tx)
 
         # payment sender collects the settled refund amount, and any unsettled htlcs that have expired
-        redeem_tx = payment_sender.UncooperativelyClose(payment_receiver, settle_tx, settled_only=False, include_invalid=False, block_time=block_time + INVOICE_TIMEOUT)
+        redeem_tx = payment_sender.uncooperatively_close(payment_receiver, settle_tx, settled_only=False, include_invalid=False, block_time=block_time + INVOICE_TIMEOUT)
 
         # A commits the redeem tx to complete the uncooperative close of the channel
         self.nodes[0].setmocktime = (block_time + INVOICE_TIMEOUT)
@@ -1931,13 +1931,13 @@ class SimulateL2Tests(BitcoinTestFramework):
         '-------------------------'
 
         # create the set of keys needed to open a new payment channel
-        keys[A], witness[A] = A.ProposeChannel()
+        keys[A], witness[A] = A.propose_channel()
 
         # create a new channel and sign the initial refund of a new payment channel
         other_witness[B] = B.JoinChannel(channel_partner=A, witness=witness[A])
 
         # create a new channel
-        setup_tx[A], refund_tx[A] = A.CreateChannel(channel_partner=B, keys=keys[A], witness=witness[A], other_witness=other_witness[B])
+        setup_tx[A], refund_tx[A] = A.create_channel(channel_partner=B, keys=keys[A], witness=witness[A], other_witness=other_witness[B])
 
         # fund and commit the setup tx to create the new channel
         self.fund(tx=setup_tx[A], spend_tx=None, amount=CHANNEL_AMOUNT + FEE_AMOUNT)
@@ -1945,13 +1945,13 @@ class SimulateL2Tests(BitcoinTestFramework):
         '-------------------------'
 
         # create the set of keys needed to open a new payment channel
-        keys[B], witness[B] = B.ProposeChannel()
+        keys[B], witness[B] = B.propose_channel()
 
         # create a new channel and sign the initial refund of a new payment channel
         other_witness[C] = C.JoinChannel(channel_partner=B, witness=witness[B])
 
         # create a new channel
-        setup_tx[B], refund_tx[B] = B.CreateChannel(channel_partner=C, keys=keys[B], witness=witness[B], other_witness=other_witness[C])
+        setup_tx[B], refund_tx[B] = B.create_channel(channel_partner=C, keys=keys[B], witness=witness[B], other_witness=other_witness[C])
 
         # fund and commit the setup tx to create the new channel
         self.fund(tx=setup_tx[B], spend_tx=None, amount=CHANNEL_AMOUNT + FEE_AMOUNT)
@@ -1965,7 +1965,7 @@ class SimulateL2Tests(BitcoinTestFramework):
             invoice = {}
 
             # A offers to pay B the amount C requested in exchange for the secret that proves C has been paid
-            invoice[A] = C.CreateInvoice('test2', amount=5000, expiry=block_time + INVOICE_TIMEOUT)
+            invoice[A] = C.create_invoice('test2', amount=5000, expiry=block_time + INVOICE_TIMEOUT)
 
             # B offers to pay C the amount A offers (less relay fee) in exchange for the secret that proves that C has been paid
             invoice[B] = invoice[A]
@@ -1981,26 +1981,26 @@ class SimulateL2Tests(BitcoinTestFramework):
             secret = {}
 
             # A creates partially signed transactions for B to pay the invoice from C
-            update1_tx[A], settle1_tx[A], other_settle_key[A] = A.ProposePayment(B, invoice[A], setup_tx[A])
+            update1_tx[A], settle1_tx[A], other_settle_key[A] = A.propose_payment(B, invoice[A], setup_tx[A])
 
             # B receives a payment commitment from A and returns the corresponding signed transactions, but not the secret needed to redeem the payment
-            update2_tx[B], settle2_tx[B], secret[B] = B.ReceivePayment(A, update1_tx[A], settle1_tx[A], other_settle_key[A])
+            update2_tx[B], settle2_tx[B], secret[B] = B.receive_payment(A, update1_tx[A], settle1_tx[A], other_settle_key[A])
             assert secret[B] is None
 
             # B creates partially signed transactions to pay the invoice from C (less their relay fee)
-            update1_tx[B], settle1_tx[B], other_settle_key[B] = B.ProposePayment(C, invoice[B], setup_tx[B])
+            update1_tx[B], settle1_tx[B], other_settle_key[B] = B.propose_payment(C, invoice[B], setup_tx[B])
 
             # C receives a payment commitment from B and returns the corresponding fully signed transactions and secret needed to redeem the payment
-            update2_tx[C], settle2_tx[C], secret[C] = C.ReceivePayment(B, update1_tx[B], settle1_tx[B], other_settle_key[B])
+            update2_tx[C], settle2_tx[C], secret[C] = C.receive_payment(B, update1_tx[B], settle1_tx[B], other_settle_key[B])
             assert hash160(secret[C]) == invoice[B].preimage_hash
 
             # C proposes to B to update their settled balance instead of doing an uncooperative close
-            tmp_update_tx, tmp_settle_tx, settle_key, secrets = C.ProposeUpdate(B, block_time=block_time)
+            tmp_update_tx, tmp_settle_tx, settle_key, secrets = C.propose_update(B, block_time=block_time)
 
             # B accepts the secrets as proof of C's new settled payments balance
-            tmp_update_tx, tmp_settle_tx = B.AcceptUpdate(C, tmp_update_tx, tmp_settle_tx, settle_key, secrets, block_time)
+            tmp_update_tx, tmp_settle_tx = B.accept_update(C, tmp_update_tx, tmp_settle_tx, settle_key, secrets, block_time)
 
-            if C.ConfirmUpdate(B, tmp_update_tx, tmp_settle_tx):
+            if C.confirm_update(B, tmp_update_tx, tmp_settle_tx):
                 # after C confirms that B signed the new update tx and settle tx, C does not need to uncooperatively close the channel
                 update2_tx[C] = tmp_update_tx
                 settle2_tx[C] = tmp_settle_tx
@@ -2014,12 +2014,12 @@ class SimulateL2Tests(BitcoinTestFramework):
                 block_time = self.uncooperative_close(B, C, setup_tx[B], update_tx[C], settle_tx[C], block_time)
 
             # B proposes to A to update their settled balance instead of doing an uncooperative close
-            tmp_update_tx, tmp_settle_tx, settle_key, secrets = B.ProposeUpdate(A, block_time=block_time)
+            tmp_update_tx, tmp_settle_tx, settle_key, secrets = B.propose_update(A, block_time=block_time)
 
             # A accepts the secrets as proof of B's new settled payments balance
-            tmp_update_tx, tmp_settle_tx = A.AcceptUpdate(B, tmp_update_tx, tmp_settle_tx, settle_key, secrets, block_time)
+            tmp_update_tx, tmp_settle_tx = A.accept_update(B, tmp_update_tx, tmp_settle_tx, settle_key, secrets, block_time)
 
-            if B.ConfirmUpdate(A, tmp_update_tx, tmp_settle_tx):
+            if B.confirm_update(A, tmp_update_tx, tmp_settle_tx):
                 # confirmed that A signed the new update tx and settle tx, no need to uncooperatively close the channel
                 update2_tx[B] = tmp_update_tx
                 settle2_tx[B] = tmp_settle_tx
@@ -2028,14 +2028,14 @@ class SimulateL2Tests(BitcoinTestFramework):
             else:
                 block_time = self.uncooperative_close(A, B, setup_tx[A], update2_tx[B], settle2_tx[B], block_time)
 
-        close_tx = A.ProposeClose(B, setup_tx[A])
-        close_tx = B.AcceptClose(A, close_tx, setup_tx[A])
+        close_tx = A.propose_close(B, setup_tx[A])
+        close_tx = B.accept_close(A, close_tx, setup_tx[A])
 
         # if B does not sign and submit close_tx, then A should do an uncooperative close
         txid = self.commit(close_tx)
 
-        close_tx = B.ProposeClose(C, setup_tx[B])
-        close_tx = C.AcceptClose(B, close_tx, setup_tx[B])
+        close_tx = B.propose_close(C, setup_tx[B])
+        close_tx = C.accept_close(B, close_tx, setup_tx[B])
 
         # if C does not sign and submit close_tx, then B should do an uncooperative close
         txid = self.commit(close_tx)
