@@ -656,8 +656,11 @@ class SettleTx(CTransaction):
         self.nLockTime = CLTV_START_TIME + self.payment_channel.state
 
         # build witness program
-        witness_program = get_eltoo_update_script(self.payment_channel.state, self.payment_channel.witness,
-                                                  self.payment_channel.other_witness)
+        witness_program = get_eltoo_update_script(
+            self.payment_channel.state,
+            self.payment_channel.witness,
+            self.payment_channel.other_witness
+        )
         witness_hash = sha256(witness_program)
         script_wsh = CScript([OP_0, witness_hash])
 
@@ -807,7 +810,12 @@ class RedeemTx(CTransaction):
             invoice = self.payment_channel.offered_payments[htlc_hash]
             refund_pubkey = self.payment_channel.witness.payment
             payment_pubkey = self.payment_channel.other_witness.payment
-            witness_program = self.get_eltoo_htlc_script(refund_pubkey, payment_pubkey, invoice.preimage_hash, invoice.expiry)
+            witness_program = self.get_eltoo_htlc_script(
+                refund_pubkey,
+                payment_pubkey,
+                invoice.preimage_hash,
+                invoice.expiry
+            )
             amount = invoice.amount
         else:
             # use witness program for a settled input (p2wpkh)
@@ -839,7 +847,13 @@ class RedeemTx(CTransaction):
             if settled_amounts[amount_index] > DUST_LIMIT:
                 # add input from signer
                 if amount_index is signer_index:
-                    self.vin.append(CTxIn(outpoint=COutPoint(spend_tx.sha256, input_index), scriptSig=b"", nSequence=DEFAULT_NSEQUENCE))
+                    self.vin.append(
+                        CTxIn(
+                            outpoint=COutPoint(spend_tx.sha256, input_index),
+                            scriptSig=b"",
+                            nSequence=DEFAULT_NSEQUENCE,
+                        )
+                    )
                 input_index += 1
 
         if not settled_only:
@@ -850,7 +864,13 @@ class RedeemTx(CTransaction):
                 if not self.include_invalid and not self.is_funder and htlc.preimage_hash not in self.secrets:
                     continue
                 if htlc.amount > DUST_LIMIT:
-                    self.vin.append(CTxIn(outpoint=COutPoint(spend_tx.sha256, input_index), scriptSig=b"", nSequence=DEFAULT_NSEQUENCE))
+                    self.vin.append(
+                        CTxIn(
+                            outpoint=COutPoint(spend_tx.sha256, input_index),
+                            scriptSig=b"",
+                            nSequence=DEFAULT_NSEQUENCE,
+                        )
+                    )
                     input_index += 1
 
         self.wit.vtxinwit = []
@@ -884,7 +904,12 @@ class RedeemTx(CTransaction):
                     privkey = keys.payment_key
                     refund_pubkey = self.payment_channel.witness.payment_pk
                     payment_pubkey = self.payment_channel.other_witness.payment_pk
-                    witness_program = get_eltoo_htlc_script(refund_pubkey, payment_pubkey, htlc.preimage_hash, htlc.expiry)
+                    witness_program = get_eltoo_htlc_script(
+                        refund_pubkey,
+                        payment_pubkey,
+                        htlc.preimage_hash,
+                        htlc.expiry,
+                    )
                     amount = htlc.amount
                     # sig = self.Sign(keys=keys, htlc_index=htlc_index, input_index=input_index)
                     tx_hash = SegwitVersion1SignatureHash(witness_program, self, input_index, SIGHASH_SINGLE, amount)
@@ -1184,9 +1209,16 @@ class L2Node:
 
     def uncooperatively_close(self, channel_partner, settle_tx, settled_only=False, include_invalid=True, block_time=0):
 
-        # create an redeem tx that spends a committed settle tx
+        # create a redeem tx that spends a committed settle tx
         is_funder = self.is_channel_funder(channel_partner)
-        redeem_tx = RedeemTx(payment_channel=settle_tx.payment_channel, secrets=self.secrets, is_funder=is_funder, settled_only=settled_only, include_invalid=include_invalid, block_time=block_time)
+        redeem_tx = RedeemTx(
+            payment_channel=settle_tx.payment_channel,
+            secrets=self.secrets,
+            is_funder=is_funder,
+            settled_only=settled_only,
+            include_invalid=include_invalid,
+            block_time=block_time,
+        )
         redeem_tx.add_witness(keys=self.keychain[channel_partner], spend_tx=settle_tx, settled_only=settled_only)
 
         return redeem_tx
@@ -1356,7 +1388,15 @@ class SimulateL2Tests(BitcoinTestFramework):
         """Sends blocks to test node. Syncs and verifies that tip has advanced to most recent block.
 
         Call with success = False if the tip shouldn't advance to the most recent block."""
-        self.helper_peer.send_blocks_and_test(blocks, self.nodes[0], success=success, reject_reason=reject_reason, force_send=force_send, timeout=timeout, expect_disconnect=reconnect)
+        self.helper_peer.send_blocks_and_test(
+            blocks,
+            self.nodes[0],
+            success=success,
+            reject_reason=reject_reason,
+            force_send=force_send,
+            timeout=timeout,
+            expect_disconnect=reconnect,
+        )
 
         if reconnect:
             self.reconnect_p2p(timeout=timeout)
@@ -1630,7 +1670,7 @@ class SimulateL2Tests(BitcoinTestFramework):
         self.fund(tx=settle1_apo_tx, spend_tx=None, amount=CHANNEL_AMOUNT + FEE_AMOUNT)
         self.fund(tx=settle1_apoas_tx, spend_tx=None, amount=CHANNEL_AMOUNT + FEE_AMOUNT)
 
-        # ---------------------------------------------------------------------
+        # ----------------------------------------
 
         # succeed: update0_tx -> update1_tx
         assert test_transaction(self.nodes[0], update1_tx)
@@ -1771,7 +1811,7 @@ class SimulateL2Tests(BitcoinTestFramework):
         setup_tx = {}
         refund_tx = {}
 
-        '-------------------------'
+        # ----------------------------------------
 
         # create the set of keys needed to open a new payment channel
         keys[A], witness[A] = A.propose_channel()
@@ -1786,7 +1826,7 @@ class SimulateL2Tests(BitcoinTestFramework):
         self.fund(tx=setup_tx[A], spend_tx=None, amount=CHANNEL_AMOUNT + FEE_AMOUNT)
         txid = self.commit(setup_tx[A])
 
-        '-------------------------'
+        # ----------------------------------------
 
         # create the set of keys needed to open a new payment channel
         keys[B], witness[B] = B.propose_channel()
@@ -1803,7 +1843,8 @@ class SimulateL2Tests(BitcoinTestFramework):
 
         # mine the setup tx into a new block
         self.nodes[0].generate(1)
-        '-------------------------'
+
+        # ----------------------------------------
 
         invoice = {}
 
@@ -1813,7 +1854,8 @@ class SimulateL2Tests(BitcoinTestFramework):
         # B offers to pay C the amount A offers (less relay fee) in exchange for the secret that proves that C has been paid
         invoice[B] = invoice[A]
         invoice[B].amount -= RELAY_FEE
-        '-------------------------'
+
+        # ----------------------------------------
 
         update_tx = {}
         settle_tx = {}
@@ -1843,14 +1885,16 @@ class SimulateL2Tests(BitcoinTestFramework):
 
         # mine the update tx into a new block, and advance blocks until settle tx can be spent
         self.nodes[0].generate(CSV_DELAY + 10)
-        '-------------------------'
+
+        # ----------------------------------------
 
         # fund the transaction fees for the settle tx before committing it
         self.fund(tx=settle_tx[B], spend_tx=update_tx[B], amount=FEE_AMOUNT)
 
         # B commits the settle tx to finalize the uncooperative close of the channel 
         txid = self.commit(settle_tx[B])
-        '-------------------------'
+
+        # ----------------------------------------
 
         # B associates the wrong preimage secret with the preimage hash
         B.secrets[invoice[B].preimage_hash] = b''
@@ -1864,7 +1908,8 @@ class SimulateL2Tests(BitcoinTestFramework):
         # B learns the secret from C
         assert hash160(secret[C]) == invoice[B].preimage_hash
         B.learn_secret(secret[C])
-        '-------------------------'
+
+        # ----------------------------------------
 
         # B collects the settled amount and uses the secret to sweep an unsettled htlc
         redeem_tx[B] = B.uncooperatively_close(A, settle_tx[B])
@@ -1890,14 +1935,16 @@ class SimulateL2Tests(BitcoinTestFramework):
         # mine the update tx into a new block, and advance blocks until settle tx can be spent
         self.nodes[0].setmocktime = block_time
         self.nodes[0].generate(CSV_DELAY + 10)
-        '-------------------------'
+
+        # ----------------------------------------
 
         # fund the transaction fees for the settle tx before committing it
         self.fund(tx=settle_tx, spend_tx=update_tx, amount=FEE_AMOUNT)
 
         # either side commits a signed settle tx to finalize the uncooperative close of the channel 
         txid = self.commit(settle_tx)
-        '-------------------------'
+
+        # ----------------------------------------
 
         # payment receiver collects their settled payments and uses their secrets to sweep any unsettled htlcs
         redeem_tx = payment_receiver.uncooperatively_close(payment_sender, settle_tx)
@@ -1928,7 +1975,8 @@ class SimulateL2Tests(BitcoinTestFramework):
         other_witness = {}
         setup_tx = {}
         refund_tx = {}
-        '-------------------------'
+
+        # ----------------------------------------
 
         # create the set of keys needed to open a new payment channel
         keys[A], witness[A] = A.propose_channel()
@@ -1942,7 +1990,8 @@ class SimulateL2Tests(BitcoinTestFramework):
         # fund and commit the setup tx to create the new channel
         self.fund(tx=setup_tx[A], spend_tx=None, amount=CHANNEL_AMOUNT + FEE_AMOUNT)
         txid = self.commit(setup_tx[A])
-        '-------------------------'
+
+        # ----------------------------------------
 
         # create the set of keys needed to open a new payment channel
         keys[B], witness[B] = B.propose_channel()
@@ -1959,7 +2008,8 @@ class SimulateL2Tests(BitcoinTestFramework):
 
         # mine the setup tx into a new block
         self.nodes[0].generate(1)
-        '-------------------------'
+
+        # ----------------------------------------
 
         for loop in range(5):
             invoice = {}
@@ -1970,7 +2020,8 @@ class SimulateL2Tests(BitcoinTestFramework):
             # B offers to pay C the amount A offers (less relay fee) in exchange for the secret that proves that C has been paid
             invoice[B] = invoice[A]
             invoice[B].amount -= RELAY_FEE
-            '-------------------------'
+
+            # ----------------------------------------
 
             update1_tx = {}
             settle1_tx = {}
