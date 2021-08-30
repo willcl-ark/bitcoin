@@ -174,11 +174,11 @@ class CreateWalletTest(BitcoinTestFramework):
         version_message = f"Last client version = {client_version}"
 
         # Should not be logged when creating.
-        with node.assert_debug_log(expected_msgs=[], unexpected_msgs=[version_message]):
+        with node.assert_debug_log(expected_msgs=[], unexpected_msgs=[version_message], wallet=True):
             node.createwallet("version_check")
             node.unloadwallet("version_check")
         # Should be logged when loading.
-        with node.assert_debug_log(expected_msgs=[version_message]):
+        with node.assert_debug_log(expected_msgs=[version_message], wallet=True):
             node.loadwallet("version_check")
 
 
