@@ -1,0 +1,16 @@
+set args --datadir=/tmp/bitcoin
+set follow-fork-mode child
+break node::ThreadImport
+break StartScriptCheckWorkerThreads
+break ThreadHTTP
+break StartHTTPServer
+break ThreadSync
+break SingleThreadedSchedulerClient
+break TorControlThread
+break ThreadMessageHandler
+break ThreadDNSAddressSeed
+break ThreadMapPort
+break ThreadSocketHandler
+break ThreadOpenAddedConnections
+break ThreadOpenConnections
+break ThreadI2PAcceptIncoming
