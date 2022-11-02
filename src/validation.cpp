@@ -4388,7 +4388,7 @@ void Chainstate::LoadExternalBlockFile(
     int nLoaded = 0;
     try {
         // This takes over fileIn and calls fclose() on it in the CBufferedFile destructor
-        CBufferedFile blkdat(fileIn, 2*MAX_BLOCK_SERIALIZED_SIZE, MAX_BLOCK_SERIALIZED_SIZE+8, SER_DISK, CLIENT_VERSION);
+        CBufferedFile blkdat(fileIn, 2*node::MAX_BLOCK_SERIALIZED_SIZE, node::MAX_BLOCK_SERIALIZED_SIZE+8, SER_DISK, CLIENT_VERSION);
         uint64_t nRewind = blkdat.GetPos();
         while (!blkdat.eof()) {
             if (ShutdownRequested()) return;
@@ -4408,7 +4408,7 @@ void Chainstate::LoadExternalBlockFile(
                 }
                 // read size
                 blkdat >> nSize;
-                if (nSize < 80 || nSize > MAX_BLOCK_SERIALIZED_SIZE)
+                if (nSize < 80 || nSize > node::MAX_BLOCK_SERIALIZED_SIZE)
                     continue;
             } catch (const std::exception&) {
                 // no valid block header found; don't complain

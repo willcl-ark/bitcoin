@@ -37,6 +37,8 @@ struct Params;
 namespace node {
 static constexpr bool DEFAULT_STOPAFTERBLOCKIMPORT{false};
 
+/** The maximum allowed size for a serialized block, in bytes (only for buffer size limits) */
+static const unsigned int MAX_BLOCK_SERIALIZED_SIZE = 4000000;
 /** The pre-allocation chunk size for blk?????.dat files (since 0.8) */
 static const unsigned int BLOCKFILE_CHUNK_SIZE = 0x1000000; // 16 MiB
 /** The pre-allocation chunk size for rev?????.dat files (since 0.8) */

@@ -6,6 +6,7 @@
 #include <chainparams.h>
 #include <consensus/merkle.h>
 #include <consensus/validation.h>
+#include <node/blockstorage.h>
 #include <pow.h>
 #include <test/util/setup_common.h>
 #include <txmempool.h>
@@ -44,7 +45,7 @@ static void DuplicateInputs(benchmark::Bench& bench)
     naughtyTx.vout[0].nValue = 0;
     naughtyTx.vout[0].scriptPubKey = SCRIPT_PUB;
 
-    uint64_t n_inputs = (((MAX_BLOCK_SERIALIZED_SIZE / WITNESS_SCALE_FACTOR) - (CTransaction(coinbaseTx).GetTotalSize() + CTransaction(naughtyTx).GetTotalSize())) / 41) - 100;
+    uint64_t n_inputs = (((node::MAX_BLOCK_SERIALIZED_SIZE / WITNESS_SCALE_FACTOR) - (CTransaction(coinbaseTx).GetTotalSize() + CTransaction(naughtyTx).GetTotalSize())) / 41) - 100;
     for (uint64_t x = 0; x < (n_inputs - 1); ++x) {
         naughtyTx.vin.emplace_back(GetRandHash(), 0, CScript(), 0);
     }

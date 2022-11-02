@@ -17,6 +17,7 @@
 #include <consensus/consensus.h>
 #include <crypto/sha256.h>
 #include <node/eviction.h>
+#include <node/blockstorage.h>
 #include <fs.h>
 #include <i2p.h>
 #include <net_permissions.h>
@@ -2685,7 +2686,7 @@ bool CConnman::OutboundTargetReached(bool historicalBlockServingLimit) const
     {
         // keep a large enough buffer to at least relay each block once
         const std::chrono::seconds timeLeftInCycle = GetMaxOutboundTimeLeftInCycle_();
-        const uint64_t buffer = timeLeftInCycle / std::chrono::minutes{10} * MAX_BLOCK_SERIALIZED_SIZE;
+        const uint64_t buffer = timeLeftInCycle / std::chrono::minutes{10} * node::MAX_BLOCK_SERIALIZED_SIZE;
         if (buffer >= nMaxOutboundLimit || nMaxOutboundTotalBytesSentInCycle >= nMaxOutboundLimit - buffer)
             return true;
     }
