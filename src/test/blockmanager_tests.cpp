@@ -2,6 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <consensus/consensus.h>
 #include <chainparams.h>
 #include <node/blockstorage.h>
 #include <node/context.h>
@@ -12,6 +13,7 @@
 
 using node::BlockManager;
 using node::BLOCK_SERIALIZATION_HEADER_SIZE;
+using node::MAX_BLOCK_SERIALIZED_SIZE;
 
 // use BasicTestingSetup here for the data directory configuration, setup, and cleanup
 BOOST_FIXTURE_TEST_SUITE(blockmanager_tests, BasicTestingSetup)
@@ -39,4 +41,9 @@ BOOST_AUTO_TEST_CASE(blockmanager_find_block_pos)
     BOOST_CHECK_EQUAL(actual.nPos, BLOCK_SERIALIZATION_HEADER_SIZE + ::GetSerializeSize(params->GenesisBlock(), CLIENT_VERSION) + BLOCK_SERIALIZATION_HEADER_SIZE);
 }
 
+BOOST_AUTO_TEST_CASE(blockmanager_check_max_block_size)
+{
+    // If MAX_BLOCK_SERIALIZED_SIZE is set below MAX_BLOCK_WEIGHT then rescanning/network code might start failing
+    BOOST_CHECK_GE(MAX_BLOCK_SERIALIZED_SIZE, MAX_BLOCK_WEIGHT);
+}
 BOOST_AUTO_TEST_SUITE_END()
