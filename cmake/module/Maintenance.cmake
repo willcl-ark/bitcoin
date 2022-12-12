@@ -54,6 +54,12 @@ function(add_maintenance_targets)
     VERBATIM
   )
 
+  add_custom_target(check-special-instructions
+    COMMAND ${CMAKE_COMMAND} -E echo "Running special instruction checks..."
+    COMMAND ${PYTHON_COMMAND} ${PROJECT_SOURCE_DIR}/contrib/devtools/special-instruction-check.py ${executables}
+    VERBATIM
+  )
+
   if(ENABLE_HARDENING)
     add_custom_target(check-security
       COMMAND ${CMAKE_COMMAND} -E echo "Checking binary security..."
