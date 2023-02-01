@@ -1,0 +1,60 @@
+name: Bug report for Bitcoin Core
+description: This issue tracker is only for technical issues related to Bitcoin Core. General bitcoin questions and/or support requests are best directed to the Bitcoin StackExchange at https://bitcoin.stackexchange.com.
+labels: [bug]
+assignees: ''
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For reporting security issues, please read instructions at https://bitcoincore.org/en/contact/.
+
+        If the node is "stuck" during sync or giving "block checksum mismatch" errors, please ensure your hardware is stable by running memtest and observe CPU temperature with a load-test tool such as linpack before creating an issue! -->
+  - type: textarea
+    id: reproduction-steps
+    attributes:
+      label: Steps to reproduce
+      description: Please attach screenshots or logs if you can.
+      placeholder: Tell us what you see!
+      value: |
+        1. Where are you starting? What can you see?
+        2. What actions do you take?
+        3. More steps…
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Outcome
+      placeholder: Tell us what went wrong
+      value: |
+        #### What did you expect?
+
+        #### What happened instead?
+
+        #### Any extra information that might be useful in the debugging process.
+        #### This is normally the contents of a `debug.log` or `config.log` file. Raw text or a link to a pastebin type site are preferred.
+    validations:
+      required: true
+  - type: input
+    id: core-version
+    attributes:
+      label: What version of Bitcoin Core are you using?
+      placeholder: e.g. v24.0.1 or master@e1bf547
+    validations:
+      required: false
+  - type: input
+    id: os
+    attributes:
+      label: Host operating system and version
+      placeholder: e.g. "MacOS Ventura 13.2" or "Ubuntu 22.04 LTS"
+    validations:
+      required: false
+  - type: input
+    id: machine-specs
+    attributes:
+      label: Host machine specifications
+      description: What are the specifications of the host machine?
+      placeholder: e.g. OS/CPU and disk type, network connectivity
+    validations:
+      required: false
+
