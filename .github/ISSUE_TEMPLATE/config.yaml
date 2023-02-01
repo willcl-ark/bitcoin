@@ -1,0 +1,7 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Bitcoin Core Developers
+    url: "https:bitcoincore.org"
+    about: Bitcoin Core issues can be filed here.
+  - name: Bitcoin Core Security Policy
+    about: To report security issues: security@bitcoincore.org (not for support).
