@@ -412,7 +412,7 @@ const fs::path& ArgsManager::GetBlocksDirPath() const
     return path;
 }
 
-const fs::path& ArgsManager::GetDataDir(bool net_specific) const
+const fs::path& ArgsManager::GetDataDir(bool net_specific, bool create) const
 {
     LOCK(cs_args);
     fs::path& path = net_specific ? m_cached_network_datadir_path : m_cached_datadir_path;
@@ -432,13 +432,13 @@ const fs::path& ArgsManager::GetDataDir(bool net_specific) const
         path = GetDefaultDataDir();
     }
 
-    if (!fs::exists(path)) {
+    if (!fs::exists(path) && create) {
         fs::create_directories(path / "wallets");
     }
 
     if (net_specific && !BaseParams().DataDir().empty()) {
         path /= fs::PathFromString(BaseParams().DataDir());
-        if (!fs::exists(path)) {
+        if (!fs::exists(path) && create) {
             fs::create_directories(path / "wallets");
         }
     }
@@ -872,9 +872,9 @@ bool CheckDataDirOption()
     return datadir.empty() || fs::is_directory(fs::absolute(datadir));
 }
 
-fs::path GetConfigFile(const fs::path& configuration_file_path)
+fs::path GetConfigFile(const fs::path& configuration_file_path, bool create)
 {
-    return AbsPathForConfigVal(configuration_file_path, /*net_specific=*/false);
+    return AbsPathForConfigVal(configuration_file_path, /*net_specific=*/false, create);
 }
 
 static bool GetConfigOptions(std::istream& stream, const std::string& filepath, std::string& error, std::vector<std::pair<std::string, std::string>>& options, std::list<SectionInfo>& sections)
@@ -965,7 +965,7 @@ bool ArgsManager::ReadConfigStream(std::istream& stream, const std::string& file
     return true;
 }
 
-bool ArgsManager::ReadConfigFiles(std::string& error, bool ignore_invalid_keys)
+bool ArgsManager::ReadConfigFiles(std::string& error, bool ignore_invalid_keys, bool create)
 {
     {
         LOCK(cs_args);
@@ -974,7 +974,7 @@ bool ArgsManager::ReadConfigFiles(std::string& error, bool ignore_invalid_keys)
     }
 
     const fs::path conf_path = GetPathArg("-conf", BITCOIN_CONF_FILENAME);
-    std::ifstream stream{GetConfigFile(conf_path)};
+    std::ifstream stream{GetConfigFile(conf_path, create)};
 
     // not ok to have a config file specified that cannot be opened
     if (IsArgSet("-conf") && !stream.good()) {
@@ -1385,12 +1385,12 @@ int64_t GetStartupTime()
     return nStartupTime;
 }
 
-fs::path AbsPathForConfigVal(const fs::path& path, bool net_specific)
+fs::path AbsPathForConfigVal(const fs::path& path, bool net_specific, bool create)
 {
     if (path.is_absolute()) {
         return path;
     }
-    return fsbridge::AbsPathJoin(net_specific ? gArgs.GetDataDirNet() : gArgs.GetDataDirBase(), path);
+    return fsbridge::AbsPathJoin(net_specific ? gArgs.GetDataDirNet() : gArgs.GetDataDirBase(create), path);
 }
 
 void ScheduleBatchPriority()

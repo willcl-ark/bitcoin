@@ -97,7 +97,7 @@ bool TryCreateDirectories(const fs::path& p);
 fs::path GetDefaultDataDir();
 // Return true if -datadir option points to a valid directory or is not specified.
 bool CheckDataDirOption();
-fs::path GetConfigFile(const fs::path& configuration_file_path);
+fs::path GetConfigFile(const fs::path& configuration_file_path, bool create = true);
 #ifdef WIN32
 fs::path GetSpecialFolderPath(int nFolder, bool fCreate = true);
 #endif
@@ -116,7 +116,7 @@ void runCommand(const std::string& strCommand);
  * @param net_specific Use network specific datadir variant
  * @return The normalized path.
  */
-fs::path AbsPathForConfigVal(const fs::path& path, bool net_specific = true);
+fs::path AbsPathForConfigVal(const fs::path& path, bool net_specific = true, bool create = true);
 
 inline bool IsSwitchChar(char c)
 {
@@ -242,7 +242,7 @@ protected:
     void SelectConfigNetwork(const std::string& network);
 
     [[nodiscard]] bool ParseParameters(int argc, const char* const argv[], std::string& error);
-    [[nodiscard]] bool ReadConfigFiles(std::string& error, bool ignore_invalid_keys = false);
+    [[nodiscard]] bool ReadConfigFiles(std::string& error, bool ignore_invalid_keys = false, bool create = true);
 
     /**
      * Log warnings for options in m_section_only_args when
@@ -284,7 +284,7 @@ protected:
      * @return Absolute path on success, otherwise an empty path when a non-directory path would be returned
      * @post Returned directory path is created unless it is empty
      */
-    const fs::path& GetDataDirBase() const { return GetDataDir(false); }
+    const fs::path& GetDataDirBase(bool create = true) const { return GetDataDir(false, create); }
 
     /**
      * Get data directory path with appended network identifier
@@ -483,7 +483,7 @@ private:
      * @return Absolute path on success, otherwise an empty path when a non-directory path would be returned
      * @post Returned directory path is created unless it is empty
      */
-    const fs::path& GetDataDir(bool net_specific) const;
+    const fs::path& GetDataDir(bool net_specific, bool create = true) const;
 
     // Helper function for LogArgs().
     void logArgsPrefix(

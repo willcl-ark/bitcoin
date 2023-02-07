@@ -162,7 +162,7 @@ static int AppInitRPC(int argc, char* argv[])
         tfm::format(std::cerr, "Error: Specified data directory \"%s\" does not exist.\n", gArgs.GetArg("-datadir", ""));
         return EXIT_FAILURE;
     }
-    if (!gArgs.ReadConfigFiles(error, true)) {
+    if (!gArgs.ReadConfigFiles(error, /*ignore_invalid_keys=*/true, /*create=*/false)) {
         tfm::format(std::cerr, "Error reading configuration file: %s\n", error);
         return EXIT_FAILURE;
     }
