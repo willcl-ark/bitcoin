@@ -10,6 +10,7 @@
 #include <primitives/block.h>
 #include <txmempool.h>
 
+#include <functional>
 #include <memory>
 #include <optional>
 #include <stdint.h>
@@ -67,7 +68,7 @@ struct CTxMemPoolModifiedEntry {
 struct CompareCTxMemPoolIter {
     bool operator()(const CTxMemPool::txiter& a, const CTxMemPool::txiter& b) const
     {
-        return &(*a) < &(*b);
+        return std::less<const void*>{}(&(*a), &(*b));
     }
 };
 

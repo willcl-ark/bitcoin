@@ -10,6 +10,7 @@
 #include <primitives/transaction.h>
 #include <sync.h>
 
+#include <functional>
 #include <map>
 #include <set>
 
@@ -83,7 +84,7 @@ protected:
         template<typename I>
         bool operator()(const I& a, const I& b) const
         {
-            return &(*a) < &(*b);
+            return std::less<const void*>{}(&(*a), &(*b));
         }
     };
 
