@@ -567,6 +567,13 @@ UniValue RPCHelpMan::HandleRequest(const JSONRPCRequest& request) const
     if (!arg_mismatch.empty()) {
         throw JSONRPCError(RPC_TYPE_ERROR, strprintf("Wrong type passed:\n%s", arg_mismatch.write(4)));
     }
+
+    // Check the request has not expired
+    if (request.isExpired()) {
+        LogPrintf("WARNING: request rejected because it has expired using expiry time of: %s\n", request.expire_seconds);
+        throw JSONRPCError(RPC_MISC_ERROR, strprintf("Request expired.\n"));
+    }
+
     UniValue ret = m_fun(*this, request);
     if (gArgs.GetBoolArg("-rpcdoccheck", DEFAULT_RPC_DOC_CHECK)) {
         UniValue mismatch{UniValue::VARR};

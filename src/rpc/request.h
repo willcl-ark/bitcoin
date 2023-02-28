@@ -53,9 +53,8 @@ public:
     */
     void parse(const UniValue& valRequest);
     /**
-    * Determine whether the HTTP request has expired using the delta of
-    * current time and arrival time.
-    *
+    * Determine whether the HTTP request has expired based on its `arrival_time` and
+    * `expire_seconds`.
     * @return true if the RPC request has expired
     */
     bool isExpired() const;
