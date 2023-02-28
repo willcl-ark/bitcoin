@@ -5,6 +5,7 @@
 #ifndef BITCOIN_HTTPSERVER_H
 #define BITCOIN_HTTPSERVER_H
 
+#include <chrono>
 #include <functional>
 #include <optional>
 #include <string>
@@ -60,6 +61,7 @@ private:
     bool replySent;
 
 public:
+    std::chrono::system_clock::time_point arrival_time;
     explicit HTTPRequest(struct evhttp_request* req, bool replySent = false);
     ~HTTPRequest();
 
