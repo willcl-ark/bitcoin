@@ -7,6 +7,7 @@
 #define BITCOIN_RPC_REQUEST_H
 
 #include <any>
+#include <chrono>
 #include <string>
 
 #include <univalue.h>
@@ -24,10 +25,14 @@ bool GetAuthCookie(std::string *cookie_out);
 void DeleteAuthCookie();
 /** Parse JSON-RPC batch reply into a vector */
 std::vector<UniValue> JSONRPCProcessBatchReply(const UniValue& in);
+//! HTTP RPC request timeout. Default to 0 for no expiry
+static const unsigned int DEFAULT_HTTP_REQUEST_EXPIRY=0;
 
 class JSONRPCRequest
 {
 public:
+    std::chrono::system_clock::time_point arrival_time;
+    unsigned int expire_seconds;
     UniValue id;
     std::string strMethod;
     UniValue params;
@@ -37,6 +42,15 @@ public:
     std::string peerAddr;
     std::any context;
 
+    /**
+    * Default constructor which initializes `arrival_time` to now()
+    */
+    JSONRPCRequest();
+
+    /**
+    * Parse the id, method, params and expiry of a `JSONRPCRequest`.
+    * @param[in]  `valRequest` the request as a `UniValue`
+    */
     void parse(const UniValue& valRequest);
 };
 

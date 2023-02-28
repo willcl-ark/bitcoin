@@ -12,6 +12,7 @@
 #include <util/system.h>
 #include <util/strencodings.h>
 
+#include <chrono>
 #include <fstream>
 #include <stdexcept>
 #include <string>
@@ -154,6 +155,9 @@ std::vector<UniValue> JSONRPCProcessBatchReply(const UniValue& in)
     }
     return batch;
 }
+
+JSONRPCRequest::JSONRPCRequest() :
+        arrival_time{std::chrono::system_clock::now()} {}
 
 void JSONRPCRequest::parse(const UniValue& valRequest)
 {
