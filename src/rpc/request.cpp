@@ -157,7 +157,8 @@ std::vector<UniValue> JSONRPCProcessBatchReply(const UniValue& in)
 }
 
 JSONRPCRequest::JSONRPCRequest() :
-        arrival_time{std::chrono::system_clock::now()} {}
+        arrival_time{std::chrono::system_clock::now()},
+        expire_seconds{static_cast<unsigned int>(gArgs.GetIntArg("-rpcexpiry", DEFAULT_HTTP_REQUEST_EXPIRY))} {}
 
 void JSONRPCRequest::parse(const UniValue& valRequest)
 {

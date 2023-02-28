@@ -44,6 +44,7 @@ public:
 
     /**
     * Default constructor which initializes `arrival_time` to now()
+    * and `expire_seconds` to `DEFAULT_HTTP_REQUEST_EXPIRY` or `-rpcexpiry` option.
     */
     JSONRPCRequest();
 
