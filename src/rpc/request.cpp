@@ -190,4 +190,11 @@ void JSONRPCRequest::parse(const UniValue& valRequest)
         params = UniValue(UniValue::VARR);
     else
         throw JSONRPCError(RPC_INVALID_REQUEST, "Params must be an array or object");
+
+bool JSONRPCRequest::isExpired() const {
+    if (expire_seconds == 0)
+        return false;
+    std::chrono::system_clock::time_point currentTime = std::chrono::system_clock::now();
+    std::chrono::system_clock::time_point expireTime = arrival_time + std::chrono::seconds(expire_seconds);
+    return (currentTime > expireTime);
 }

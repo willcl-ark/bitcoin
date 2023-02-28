@@ -52,6 +52,13 @@ public:
     * @param[in]  `valRequest` the request as a `UniValue`
     */
     void parse(const UniValue& valRequest);
+    /**
+    * Determine whether the HTTP request has expired using the delta of
+    * current time and arrival time.
+    *
+    * @return true if the RPC request has expired
+    */
+    bool isExpired() const;
 };
 
 #endif // BITCOIN_RPC_REQUEST_H
