@@ -191,6 +191,14 @@ void JSONRPCRequest::parse(const UniValue& valRequest)
     else
         throw JSONRPCError(RPC_INVALID_REQUEST, "Params must be an array or object");
 
+    // Set expiry
+    UniValue expiry_param = find_value(params, "expiry");
+    if (!expiry_param.isNull())
+        // TODO: add santity check for large values?
+        expire_seconds = expiry_param.getInt<int>();
+    LogPrint(BCLog::RPC, "ThreadRPCServer method=%s user=%s expiry time=%s\n", SanitizeString(strMethod), this->authUser, expire_seconds);
+}
+
 bool JSONRPCRequest::isExpired() const {
     if (expire_seconds == 0)
         return false;

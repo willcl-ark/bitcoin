@@ -159,6 +159,10 @@ static bool HTTPReq_JSONRPC(const std::any& context, HTTPRequest* req)
     }
 
     JSONRPCRequest jreq;
+    // Set request expiry using `Request-Timeout` from header if available.
+    std::pair<bool, std::string> expiry = req->GetHeader("Request-Timeout");
+    if (expiry.first && !ParseUInt32(expiry.second, &jreq.expire_seconds))
+        req->WriteReply(HTTP_BAD_REQUEST, "Bad Request-Timeout header");
     jreq.arrival_time = req->arrival_time;
     jreq.context = context;
     jreq.peerAddr = req->GetPeer().ToStringAddrPort();
