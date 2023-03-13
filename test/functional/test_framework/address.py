@@ -20,8 +20,8 @@ from .script import (
     sha256,
     taproot_construct,
 )
-from .segwit_addr import encode_segwit_address
 from .util import assert_equal
+from test_framework.segwit_addr import (encode_segwit_address, bech32_decode, convertbits)
 
 ADDRESS_BCRT1_UNSPENDABLE = 'bcrt1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq3xueyj'
 ADDRESS_BCRT1_UNSPENDABLE_DESCRIPTOR = 'addr(bcrt1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq3xueyj)#juyq9d97'
@@ -159,6 +159,13 @@ def check_script(script):
     assert False
 
 
+def bech32_to_bytes(address):
+    encoding, hrp, data = bech32_decode(address)
+    payload = bytes(convertbits(data[1:], 5, 8, False))
+    version = data[0]
+    return version, payload
+
+
 class TestFrameworkScript(unittest.TestCase):
     def test_base58encodedecode(self):
         def check_base58(data, version):
@@ -176,3 +183,15 @@ class TestFrameworkScript(unittest.TestCase):
         check_base58(bytes.fromhex('0041c1eaf111802559bad61b60d62b1f897c63928a'), 0)
         check_base58(bytes.fromhex('000041c1eaf111802559bad61b60d62b1f897c63928a'), 0)
         check_base58(bytes.fromhex('00000041c1eaf111802559bad61b60d62b1f897c63928a'), 0)
+
+    def test_bech32_encode(self):
+        def check_bech32_encode(address, version, payload):
+            self.assertEqual(bech32_to_bytes(address), (version, payload))
+
+        check_bech32_encode('bc1qxm379gelx2x7ztjtg0z3tf6lhgnr9mxr9t8hky', 0, b'6\xe3\xe2\xa3?2\x8d\xe1.KC\xc5\x15\xa7_\xba&2\xec\xc3')
+        check_bech32_encode('bc1qsglf0y8ur5tcyvs3gr20f2np4274upzmggfkcm', 0, b'\x82>\x97\x90\xfc\x1d\x17\x822\x11@\xd4\xf4\xaaa\xaa\xbd^\x04[')
+        check_bech32_encode("tb1p888ca0v4zd85x8pemvpzqact6ynlthfucypunz9hmn2h0t35ud2qza9ls7", 1, b"9\xcf\x8e\xbd\x95\x13OC\x1c9\xdb\x02 w\x0b\xd1'\xf5\xdd<\xc1\x03\xc9\x88\xb7\xdc\xd5w\xae4\xe3T")
+        check_bech32_encode('tb1pwzpygqrdylr40ah3l3hc2wmwcf3x3de8sehhee3j3phrf66c8x3sewsjvn', 1, b"p\x82D\x00m'\xc7W\xf6\xf1\xfco\x85;n\xc2bh\xb7'\x86o|\xe62\x88n4\xebX9\xa3")
+        check_bech32_encode('tb1qv93pr2cqmllq4h9kecjc6mflmr9ajq0zyugk4z', 0, b'ab\x11\xab\x00\xdf\xfe\n\xdc\xb6\xce%\x8dm?\xd8\xcb\xd9\x01\xe2')
+        check_bech32_encode('tb1qk6nunz6g94lmy8yl4rn9dy4q3yzpplezw5hp6l', 0, b'\xb6\xa7\xc9\x8bH-\x7f\xb2\x1c\x9f\xa8\xe6V\x92\xa0\x89\x04\x10\xff"')
+        check_bech32_encode('tb1q7rppp893qzx05766p8x9daex0nvw2zffzuvy3m', 0, b'\xf0\xc2\x10\x9c\xb1\x00\x8c\xfa{Z\t\xccV\xf7&|\xd8\xe5\t)')
