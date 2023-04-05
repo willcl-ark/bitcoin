@@ -40,6 +40,7 @@
 #include <util/check.h> // For NDEBUG compile time check
 #include <util/strencodings.h>
 #include <util/system.h>
+#include <util/time.h>
 #include <util/trace.h>
 #include <validation.h>
 
@@ -184,6 +185,8 @@ static constexpr double MAX_ADDR_RATE_PER_SECOND{0.1};
 static constexpr size_t MAX_ADDR_PROCESSING_TOKEN_BUCKET{MAX_ADDR_TO_SEND};
 /** The compactblocks version we support. See BIP 152. */
 static constexpr uint64_t CMPCTBLOCKS_VERSION{2};
+/** Interval during which we will not reply to subsequent Mempool NetMessages */
+constexpr auto MEMPOOL_REPLY_INTERVAL{30s};
 
 // Internal stuff
 namespace {
@@ -1027,6 +1030,7 @@ private:
 
     void AddAddressKnown(Peer& peer, const CAddress& addr) EXCLUSIVE_LOCKS_REQUIRED(g_msgproc_mutex);
     void PushAddress(Peer& peer, const CAddress& addr, FastRandomContext& insecure_rand) EXCLUSIVE_LOCKS_REQUIRED(g_msgproc_mutex);
+    SteadyClock::time_point m_last_mempool_reply_time GUARDED_BY(g_msgproc_mutex) {}; // Initialise to the epoch
 };
 
 const CNodeState* PeerManagerImpl::State(NodeId pnode) const EXCLUSIVE_LOCKS_REQUIRED(cs_main)
@@ -4594,6 +4598,13 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
     }
 
     if (msg_type == NetMsgType::MEMPOOL) {
+        // Limit ourselves to one mempool response every MEMPOOL_REPLY_INTERVAL seconds
+        SteadyClock::time_point current_time = SteadyClock::now();
+        if (current_time - m_last_mempool_reply_time < MEMPOOL_REPLY_INTERVAL) {
+            LogPrint(BCLog::NET, "mempool request too soon since last\n");
+            return;
+        }
+
         if (!(peer->m_our_services & NODE_BLOOM) && !pfrom.HasPermission(NetPermissionFlags::Mempool))
         {
             if (!pfrom.HasPermission(NetPermissionFlags::NoBan))
@@ -4617,6 +4628,7 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
         if (auto tx_relay = peer->GetTxRelay(); tx_relay != nullptr) {
             LOCK(tx_relay->m_tx_inventory_mutex);
             tx_relay->m_send_mempool = true;
+            m_last_mempool_reply_time = current_time;
         }
         return;
     }
