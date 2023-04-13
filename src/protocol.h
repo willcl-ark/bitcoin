@@ -311,6 +311,12 @@ static const std::array<std::string, NUM_NET_MESSAGE_TYPES> g_all_net_message_ty
     NetMsgType::SENDTXRCNCL,
 };
 
+/* Get the index of a message type from the vector of all message types */
+int messageTypeToIndex(const std::string& msg_type);
+
+/* Get the string value of a message type from an index */
+const std::string& messageTypeFromIndex(size_t index);
+
 /** nServices flags */
 enum ServiceFlags : uint64_t {
     // NOTE: When adding here, be sure to update serviceFlagToStr too
