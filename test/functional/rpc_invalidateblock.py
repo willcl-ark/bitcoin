@@ -72,7 +72,7 @@ class InvalidateTest(BitcoinTestFramework):
         # Should be back at the tip by now
         assert_equal(self.nodes[1].getbestblockhash(), blocks[-1])
 
-        self.log.info("Verify that we reconsider all descendants")
+        self.log.info("Verify that we reconsider all descendants by default")
         blocks = self.generatetodescriptor(self.nodes[1], 10, ADDRESS_BCRT1_UNSPENDABLE_DESCRIPTOR, sync_fun=self.no_op)
         assert_equal(self.nodes[1].getbestblockhash(), blocks[-1])
         # Invalidate the two blocks at the tip
@@ -84,8 +84,20 @@ class InvalidateTest(BitcoinTestFramework):
         # Should be back at the tip by now
         assert_equal(self.nodes[1].getbestblockhash(), blocks[-1])
 
+        self.log.info("Verify that we don't reconsider all descendants when requested")
+        blocks = self.generatetodescriptor(self.nodes[1], 10, ADDRESS_BCRT1_UNSPENDABLE_DESCRIPTOR, sync_fun=self.no_op)
+        assert_equal(self.nodes[1].getbestblockhash(), blocks[-1])
+        # Invalidate a block from the tip
+        self.nodes[1].invalidateblock(blocks[-4])
+        assert_equal(self.nodes[1].getbestblockhash(), blocks[-5])
+        # Reconsider only the previous tip
+        self.nodes[1].reconsiderblock(blocks[-4], False)
+        # Should still be four blocks from the tip
+        assert_equal(self.nodes[1].getbestblockhash(), blocks[-4])
+
         self.log.info("Verify that invalidating an unknown block throws an error")
         assert_raises_rpc_error(-5, "Block not found", self.nodes[1].invalidateblock, "00" * 32)
+        self.nodes[1].reconsiderblock(blocks[-4])
         assert_equal(self.nodes[1].getbestblockhash(), blocks[-1])
 
 
