@@ -1563,41 +1563,48 @@ static RPCHelpMan invalidateblock()
 
 static RPCHelpMan reconsiderblock()
 {
-    return RPCHelpMan{"reconsiderblock",
-                "\nRemoves invalidity status of a block, its ancestors and its descendants, reconsider them for activation.\n"
-                "This can be used to undo the effects of invalidateblock.\n",
-                {
-                    {"blockhash", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "the hash of the block to reconsider"},
-                },
-                RPCResult{RPCResult::Type::NONE, "", ""},
-                RPCExamples{
-                    HelpExampleCli("reconsiderblock", "\"blockhash\"")
-            + HelpExampleRpc("reconsiderblock", "\"blockhash\"")
-                },
-        [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
-{
-    ChainstateManager& chainman = EnsureAnyChainman(request.context);
-    uint256 hash(ParseHashV(request.params[0], "blockhash"));
+    return RPCHelpMan{
+        "reconsiderblock",
+        "\nRemoves invalidity status of a block, its ancestors and its descendants, reconsider them for activation.\n"
+        "This can be used to undo the effects of invalidateblock.\n",
+        {
+            {"blockhash", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "the hash of the block to reconsider"},
+            {"include_descendants", RPCArg::Type::BOOL, RPCArg::Default{true}, "whether to remove the flag from all descendants"},
+        },
+        RPCResult{RPCResult::Type::NONE, "", ""},
+        RPCExamples{
+            HelpExampleCli("reconsiderblock", "\"blockhash\"") +
+            HelpExampleRpc("reconsiderblock", "\"blockhash\"") +
+            HelpExampleCli("reconsiderblock", "\"blockhash\", \"true\"") +
+            HelpExampleRpc("reconsiderblock", "\"blockhash\", \"true\"")},
+        [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue {
+            ChainstateManager& chainman = EnsureAnyChainman(request.context);
+            uint256 hash(ParseHashV(request.params[0], "blockhash"));
 
-    {
-        LOCK(cs_main);
-        CBlockIndex* pblockindex = chainman.m_blockman.LookupBlockIndex(hash);
-        if (!pblockindex) {
-            throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Block not found");
-        }
+            bool fIncludeDescendants = true;
+            if (!request.params[1].isNull()) {
+                fIncludeDescendants = request.params[1].get_bool();
+            }
 
-        chainman.ActiveChainstate().ResetBlockFailureFlags(pblockindex);
-    }
+            {
+                LOCK(cs_main);
+                CBlockIndex* pblockindex = chainman.m_blockman.LookupBlockIndex(hash);
+                if (!pblockindex) {
+                    throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Block not found");
+                }
 
-    BlockValidationState state;
-    chainman.ActiveChainstate().ActivateBestChain(state);
+                chainman.ActiveChainstate().ResetBlockFailureFlags(pblockindex, fIncludeDescendants);
+            }
 
-    if (!state.IsValid()) {
-        throw JSONRPCError(RPC_DATABASE_ERROR, state.ToString());
-    }
+            BlockValidationState state;
+            chainman.ActiveChainstate().ActivateBestChain(state);
 
-    return UniValue::VNULL;
-},
+            if (!state.IsValid()) {
+                throw JSONRPCError(RPC_DATABASE_ERROR, state.ToString());
+            }
+
+            return UniValue::VNULL;
+        },
     };
 }
 
