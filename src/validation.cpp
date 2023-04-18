@@ -3400,28 +3400,38 @@ bool Chainstate::InvalidateBlock(BlockValidationState& state, CBlockIndex* pinde
     return true;
 }
 
-void Chainstate::ResetBlockFailureFlags(CBlockIndex *pindex) {
+void Chainstate::ResetBlockFailureFlags(CBlockIndex* pindex, bool include_descendants)
+{
     AssertLockHeld(cs_main);
 
     int nHeight = pindex->nHeight;
 
-    // Remove the invalidity flag from this block and all its descendants.
-    for (auto& [_, block_index] : m_blockman.m_block_index) {
-        if (!block_index.IsValid() && block_index.GetAncestor(nHeight) == pindex) {
-            block_index.nStatus &= ~BLOCK_FAILED_MASK;
-            m_blockman.m_dirty_blockindex.insert(&block_index);
-            if (block_index.IsValid(BLOCK_VALID_TRANSACTIONS) && block_index.HaveTxsDownloaded() && setBlockIndexCandidates.value_comp()(m_chain.Tip(), &block_index)) {
-                setBlockIndexCandidates.insert(&block_index);
+    // Remove the invalidity flag from all descendants if required
+    if (include_descendants) {
+        for (auto& [_, block_index] : m_blockman.m_block_index) {
+            if (!block_index.IsValid() && block_index.GetAncestor(nHeight) == pindex) {
+                block_index.nStatus &= ~BLOCK_FAILED_MASK;
+                m_blockman.m_dirty_blockindex.insert(&block_index);
+                if (block_index.IsValid(BLOCK_VALID_TRANSACTIONS) && block_index.HaveTxsDownloaded() && setBlockIndexCandidates.value_comp()(m_chain.Tip(), &block_index)) {
+                    setBlockIndexCandidates.insert(&block_index);
+                }
+                if (&block_index == m_chainman.m_best_invalid) {
+                    // Reset invalid block marker if it was pointing to one of those.
+                    m_chainman.m_best_invalid = nullptr;
+                }
+                m_chainman.m_failed_blocks.erase(&block_index);
             }
-            if (&block_index == m_chainman.m_best_invalid) {
-                // Reset invalid block marker if it was pointing to one of those.
-                m_chainman.m_best_invalid = nullptr;
-            }
-            m_chainman.m_failed_blocks.erase(&block_index);
         }
     }
 
-    // Remove the invalidity flag from all ancestors too.
+    // Remove the invalidity flag from this block
+    pindex->nStatus &= ~BLOCK_FAILED_MASK;
+    // If this block was added during the descendant loop it will only appear in the sets once
+    m_blockman.m_dirty_blockindex.insert(pindex);
+    setBlockIndexCandidates.insert(pindex);
+    m_chainman.m_failed_blocks.erase(pindex);
+
+    // Remove the invalidity flag from all ancestors.
     while (pindex != nullptr) {
         if (pindex->nStatus & BLOCK_FAILED_MASK) {
             pindex->nStatus &= ~BLOCK_FAILED_MASK;
