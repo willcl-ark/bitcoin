@@ -4,7 +4,6 @@
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test Migrating a wallet from legacy to descriptor."""
 
-import os
 import random
 from test_framework.descriptors import descsum_create
 from test_framework.test_framework import BitcoinTestFramework
@@ -34,7 +33,7 @@ class WalletMigrationTest(BitcoinTestFramework):
         self.skip_if_no_bdb()
 
     def assert_is_sqlite(self, wallet_name):
-        wallet_file_path = os.path.join(self.nodes[0].datadir, "regtest/wallets", wallet_name, self.wallet_data_filename)
+        wallet_file_path = self.nodes[0].chain_path / "wallets" / wallet_name / self.wallet_data_filename
         with open(wallet_file_path, 'rb') as f:
             file_magic = f.read(16)
             assert_equal(file_magic, b'SQLite format 3\x00')
@@ -457,11 +456,11 @@ class WalletMigrationTest(BitcoinTestFramework):
 
         wallet.unloadwallet()
 
-        wallet_file_path = os.path.join(self.nodes[0].datadir, "regtest", "wallets", "notloaded2")
+        wallet_file_path = self.nodes[0].chain_path / "wallets" / "notloaded2"
         self.nodes[0].migratewallet(wallet_file_path)
 
         # Because we gave the name by full path, the loaded wallet's name is that path too.
-        wallet = self.nodes[0].get_wallet_rpc(wallet_file_path)
+        wallet = self.nodes[0].get_wallet_rpc(str(wallet_file_path))
 
         info = wallet.getwalletinfo()
         assert_equal(info["descriptors"], True)
