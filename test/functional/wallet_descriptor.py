@@ -3,7 +3,6 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test descriptor wallet function."""
-import os
 
 try:
     import sqlite3
@@ -234,7 +233,7 @@ class WalletDescriptorTest(BitcoinTestFramework):
         self.log.info("Test that loading descriptor wallet containing legacy key types throws error")
         self.nodes[0].createwallet(wallet_name="crashme", descriptors=True)
         self.nodes[0].unloadwallet("crashme")
-        wallet_db = os.path.join(self.nodes[0].chain_path, "wallets", "crashme", self.wallet_data_filename)
+        wallet_db = self.nodes[0].chain_path / "wallets" / "crashme" / self.wallet_data_filename
         with sqlite3.connect(wallet_db) as conn:
             # add "cscript" entry: key type is uint160 (20 bytes), value type is CScript (zero-length here)
             conn.execute('INSERT INTO main VALUES(?, ?)', (b'\x07cscript' + b'\x00'*20, b'\x00'))

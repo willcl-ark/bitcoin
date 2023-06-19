@@ -32,9 +32,9 @@ class LoadblockTest(BitcoinTestFramework):
         self.generate(self.nodes[0], COINBASE_MATURITY, sync_fun=self.no_op)
 
         # Parsing the url of our node to get settings for config file
-        data_dir = self.nodes[0].datadir
+        data_dir = self.nodes[0].datadir_path
         node_url = urllib.parse.urlparse(self.nodes[0].url)
-        cfg_file = os.path.join(data_dir, "linearize.cfg")
+        cfg_file = data_dir / "linearize.cfg"
         bootstrap_file = os.path.join(self.options.tmpdir, "bootstrap.dat")
         genesis_block = self.nodes[0].getblockhash(0)
         blocks_dir = self.nodes[0].chain_path / "blocks"

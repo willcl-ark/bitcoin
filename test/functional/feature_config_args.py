@@ -415,13 +415,13 @@ class ConfArgsTest(BitcoinTestFramework):
         os.mkdir(new_data_dir)
         self.start_node(0, [f'-conf={conf_file}'])
         self.stop_node(0)
-        assert os.path.exists(os.path.join(new_data_dir, self.chain, 'blocks'))
+        assert os.path.exists(self.nodes[0].chain_path / 'blocks')
 
         # Ensure command line argument overrides datadir in conf
         os.mkdir(new_data_dir_2)
         self.nodes[0].datadir = new_data_dir_2
         self.start_node(0, [f'-datadir={new_data_dir_2}', f'-conf={conf_file}'])
-        assert os.path.exists(os.path.join(new_data_dir_2, self.chain, 'blocks'))
+        assert os.path.exists(self.nodes[0].chain_path / 'blocks')
 
 
 if __name__ == '__main__':

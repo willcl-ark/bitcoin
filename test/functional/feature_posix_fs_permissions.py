@@ -33,9 +33,9 @@ class PosixFsPermissionsTest(BitcoinTestFramework):
         self.stop_node(0)
         datadir = self.nodes[0].chain_path
         self.check_directory_permissions(datadir)
-        walletsdir = os.path.join(datadir, "wallets")
+        walletsdir = datadir / "wallets"
         self.check_directory_permissions(walletsdir)
-        debuglog = os.path.join(datadir, "debug.log")
+        debuglog = datadir / "debug.log"
         self.check_file_permissions(debuglog)
 
 

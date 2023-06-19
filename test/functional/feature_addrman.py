@@ -53,11 +53,11 @@ class AddrmanTest(BitcoinTestFramework):
         self.num_nodes = 1
 
     def run_test(self):
-        peers_dat = os.path.join(self.nodes[0].chain_path, "peers.dat")
+        peers_dat = self.nodes[0].chain_path / "peers.dat"
         init_error = lambda reason: (
             f"Error: Invalid or corrupt peers.dat \\({reason}\\). If you believe this "
             f"is a bug, please report it to {self.config['environment']['PACKAGE_BUGREPORT']}. "
-            f'As a workaround, you can move the file \\("{re.escape(peers_dat)}"\\) out of the way \\(rename, '
+            f'As a workaround, you can move the file \\("{re.escape(str(peers_dat))}"\\) out of the way \\(rename, '
             "move, or delete\\) to have a new one created on the next start."
         )
 
@@ -81,14 +81,15 @@ class AddrmanTest(BitcoinTestFramework):
 
         self.log.info("Check that addrman from future is overwritten with new addrman")
         self.stop_node(0)
+        peers_dat_backup = self.nodes[0].chain_path / "peers.dat.bak"
         write_addrman(peers_dat, lowest_compatible=111)
-        assert_equal(os.path.exists(peers_dat + ".bak"), False)
+        assert_equal(os.path.exists(str(peers_dat_backup)), False)
         with self.nodes[0].assert_debug_log([
                 f'Creating new peers.dat because the file version was not compatible ("{peers_dat}"). Original backed up to peers.dat.bak',
         ]):
             self.start_node(0)
         assert_equal(self.nodes[0].getnodeaddresses(), [])
-        assert_equal(os.path.exists(peers_dat + ".bak"), True)
+        assert_equal(os.path.exists(str(peers_dat_backup)), True)
 
         self.log.info("Check that corrupt addrman cannot be read (EOF)")
         self.stop_node(0)
