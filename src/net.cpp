@@ -1098,6 +1098,35 @@ bool CConnman::AddConnection(const std::string& address, ConnectionType conn_typ
     return true;
 }
 
+void CConnman::DeleteDisconnectedNode(CNode* pnode)
+{
+    // Destroy the object only after other threads have stopped using it.
+    if (pnode->GetRefCount() <= 0) {
+        WITH_LOCK(m_nodes_disconnected_mutex, m_nodes_disconnected.remove(pnode));
+        DeleteNode(pnode);
+    }
+}
+
+void CConnman::DisconnectAndReleaseNode(CNode* pnode)
+{
+    // Disconnect node if marked for disconnection
+    if (pnode->fDisconnect)
+    {
+        // remove from m_nodes
+        WITH_LOCK(m_nodes_mutex, m_nodes.erase(remove(m_nodes.begin(), m_nodes.end(), pnode), m_nodes.end()));
+
+        // release outbound grant (if any)
+        pnode->grantOutbound.Release();
+
+        // close socket and cleanup
+        pnode->CloseSocketDisconnect();
+
+        // hold in disconnected pool until all refs are released
+        pnode->Release();
+        WITH_LOCK(m_nodes_disconnected_mutex, m_nodes_disconnected.push_back(pnode));
+    }
+}
+
 void CConnman::DisconnectNodes()
 {
     {
