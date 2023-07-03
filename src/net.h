@@ -1044,6 +1044,7 @@ private:
     mutable Mutex m_added_nodes_mutex;
     std::vector<CNode*> m_nodes GUARDED_BY(m_nodes_mutex);
     std::list<CNode*> m_nodes_disconnected;
+    std::vector<std::string> m_nodes_connecting GUARDED_BY(m_nodes_mutex);
     mutable RecursiveMutex m_nodes_mutex;
     std::atomic<NodeId> nLastNodeId{0};
     unsigned int nPrevNodeCount{0};
@@ -1220,6 +1221,30 @@ private:
     };
 
     friend struct ConnmanTestMsg;
+    friend class ConnListGuard;
+};
+
+/**
+ * RAII helper class to add/remove nodes to/from CConnman m_nodes_connecting on creation/destruction
+ * in a thread-safe way.
+ */
+class ConnListGuard
+{
+    CConnman& connman;
+    std::string connecting_node;
+
+public:
+    ConnListGuard(CConnman& _connman, const std::string& _connectingNode) EXCLUSIVE_LOCKS_REQUIRED(CConnman::m_nodes_mutex)
+        : connman(_connman), connecting_node(_connectingNode)
+    {
+        connman.m_nodes_connecting.push_back(connecting_node);
+    }
+
+    ~ConnListGuard()
+    {
+        LOCK(connman.m_nodes_mutex);
+        connman.m_nodes_connecting.erase(std::remove(connman.m_nodes_connecting.begin(), connman.m_nodes_connecting.end(), connecting_node), connman.m_nodes_connecting.end());
+    }
 };
 
 /** Dump binary message to file, with timestamp */

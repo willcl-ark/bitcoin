@@ -2006,6 +2006,18 @@ void CConnman::OpenNetworkConnection(const CAddress& addrConnect, bool fCountFai
     if (!fNetworkActive) {
         return;
     }
+
+    std::unique_ptr<ConnListGuard> connection_guard;
+    const std::string connecting_node{pszDest ? pszDest : addrConnect.ToStringAddr()};
+    // Check that we have not begun making the connection from another thread.
+    {
+        LOCK(m_nodes_mutex);
+        if (std::find(m_nodes_connecting.begin(), m_nodes_connecting.end(), connecting_node) != m_nodes_connecting.end()) {
+            return;
+        }
+        connection_guard = std::make_unique<ConnListGuard>(*this, connecting_node);
+    }
+
     if (!pszDest) {
         bool banned_or_discouraged = m_banman && (m_banman->IsDiscouraged(addrConnect) || m_banman->IsBanned(addrConnect));
         if (IsLocal(addrConnect) || banned_or_discouraged || AlreadyConnectedToAddress(addrConnect)) {
