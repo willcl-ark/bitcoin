@@ -71,6 +71,19 @@ class NetTest(BitcoinTestFramework):
         # After using `connect_nodes` to connect nodes 0 and 1 to each other.
         assert_equal(self.nodes[0].getconnectioncount(), 2)
 
+    def test_connection_count_add_connect(self):
+        self.log.info("Test connections after configuring with duplicate entries in -addnode and -connect")
+        self.stop_nodes()
+        p2p_port(self.node[0])
+        self.extra_args = [
+                ["-connect=node1_ip", "-addnode=node1_ip"],
+                ["-connect=node0_ip", "-addnode=node0_ip"],
+            ]
+
+        self.nodes[0].p2ps
+        # After using `connect_nodes` to connect nodes 0 and 1 to each other.
+        assert_equal(self.nodes[0].getconnectioncount(), 2)
+
     def test_getpeerinfo(self):
         self.log.info("Test getpeerinfo")
         # Create a few getpeerinfo last_block/last_transaction values.
