@@ -59,8 +59,10 @@ void RegenerateCommitments(CBlock& block, ChainstateManager& chainman)
 
 static BlockAssembler::Options ClampOptions(BlockAssembler::Options options)
 {
-    // Limit weight to between 4K and DEFAULT_BLOCK_MAX_WEIGHT for sanity:
-    options.nBlockMaxWeight = std::clamp<size_t>(options.nBlockMaxWeight, 4000, DEFAULT_BLOCK_MAX_WEIGHT);
+    if (options.sanity_check_block_weight) {
+        // Limit weight to between 4K and DEFAULT_BLOCK_MAX_WEIGHT for sanity:
+        options.nBlockMaxWeight = std::clamp<size_t>(options.nBlockMaxWeight, 4000, DEFAULT_BLOCK_MAX_WEIGHT);
+    }
     return options;
 }
 
@@ -423,9 +425,27 @@ void BlockAssembler::addPackageTxs(const CTxMemPool& mempool, int& nPackagesSele
         }
 
         ++nPackagesSelected;
+        size_per_feerate[CFeeRate{packageFees, packageSize}] += packageSize;
 
         // Update transactions that depend on each of these
         nDescendantsUpdated += UpdatePackagesForAdded(mempool, ancestors, mapModifiedTx);
     }
+}
+
+std::map<CFeeRate, uint64_t> BlockAssembler::GetFeeRateStats()
+{
+    return std::move(size_per_feerate);
+}
+
+std::map<CFeeRate, uint64_t> GetCustomBlockFeeRateHistogram(Chainstate& chainstate, const CTxMemPool* mempool, size_t block_weight)
+{
+    BlockAssembler::Options options = {
+        .nBlockMaxWeight = block_weight,
+        .test_block_validity = false,
+        .sanity_check_block_weight = false,
+    };
+    BlockAssembler assembler(chainstate, mempool, options);
+    assembler.CreateNewBlock(CScript{});
+    return assembler.GetFeeRateStats();
 }
 } // namespace node

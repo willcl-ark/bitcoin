@@ -27,11 +27,13 @@
 
 using node::BlockAssembler;
 using node::CBlockTemplate;
+using node::GetCustomBlockFeeRateHistogram;
 
 namespace miner_tests {
 struct MinerTestingSetup : public TestingSetup {
     void TestPackageSelection(const CScript& scriptPubKey, const std::vector<CTransactionRef>& txFirst) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
     void TestBasicMining(const CScript& scriptPubKey, const std::vector<CTransactionRef>& txFirst, int baseheight) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    void TestCustomBlockCreation(const CScript& scriptPubKey, const std::vector<CTransactionRef>& txFirst) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
     void TestPrioritisedMining(const CScript& scriptPubKey, const std::vector<CTransactionRef>& txFirst) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
     bool TestSequenceLocks(const CTransaction& tx, CTxMemPool& tx_mempool) EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
     {
@@ -118,25 +120,45 @@ void MinerTestingSetup::TestPackageSelection(const CScript& scriptPubKey, const 
     tx.vout[0].nValue = 5000000000LL - 1000;
     // This tx has a low fee: 1000 satoshis
     Txid hashParentTx = tx.GetHash(); // save this txid for later use
-    tx_mempool.addUnchecked(entry.Fee(1000).Time(Now<NodeSeconds>()).SpendsCoinbase(true).FromTx(tx));
+    const auto lowerFeeTx = entry.Fee(1000).Time(Now<NodeSeconds>()).SpendsCoinbase(true).FromTx(tx);
+    tx_mempool.addUnchecked(lowerFeeTx);
 
     // This tx has a medium fee: 10000 satoshis
     tx.vin[0].prevout.hash = txFirst[1]->GetHash();
     tx.vout[0].nValue = 5000000000LL - 10000;
     Txid hashMediumFeeTx = tx.GetHash();
-    tx_mempool.addUnchecked(entry.Fee(10000).Time(Now<NodeSeconds>()).SpendsCoinbase(true).FromTx(tx));
+    const auto mediumFeeTx = entry.Fee(10000).Time(Now<NodeSeconds>()).SpendsCoinbase(true).FromTx(tx);
+    tx_mempool.addUnchecked(mediumFeeTx);
 
     // This tx has a high fee, but depends on the first transaction
     tx.vin[0].prevout.hash = hashParentTx;
     tx.vout[0].nValue = 5000000000LL - 1000 - 50000; // 50k satoshi fee
     Txid hashHighFeeTx = tx.GetHash();
-    tx_mempool.addUnchecked(entry.Fee(50000).Time(Now<NodeSeconds>()).SpendsCoinbase(false).FromTx(tx));
+    const auto highFeeChildTx = entry.Fee(50000).Time(Now<NodeSeconds>()).SpendsCoinbase(false).FromTx(tx);
+    tx_mempool.addUnchecked(highFeeChildTx);
 
-    std::unique_ptr<CBlockTemplate> pblocktemplate = AssemblerForTest(tx_mempool).CreateNewBlock(scriptPubKey);
+    auto assembler = AssemblerForTest(tx_mempool);
+    std::unique_ptr<CBlockTemplate> pblocktemplate = assembler.CreateNewBlock(scriptPubKey);
+    const auto blockFeeHistogram = assembler.GetFeeRateStats();
     BOOST_REQUIRE_EQUAL(pblocktemplate->block.vtx.size(), 4U);
     BOOST_CHECK(pblocktemplate->block.vtx[1]->GetHash() == hashParentTx);
     BOOST_CHECK(pblocktemplate->block.vtx[2]->GetHash() == hashHighFeeTx);
     BOOST_CHECK(pblocktemplate->block.vtx[3]->GetHash() == hashMediumFeeTx);
+
+    BOOST_CHECK(blockFeeHistogram.size() == 2);
+
+    // lowerFeeTx and highFeeChildTx are added to the block as a package.
+    const auto packageFee = lowerFeeTx.GetFee() + highFeeChildTx.GetFee();
+    const auto packageSize = lowerFeeTx.GetTxSize() + highFeeChildTx.GetTxSize();
+
+    const auto packageFeeRateIter = blockFeeHistogram.find(CFeeRate(packageFee, packageSize));
+    const auto mediumTxFeeRateIter = blockFeeHistogram.find(CFeeRate(mediumFeeTx.GetFee(), mediumFeeTx.GetTxSize()));
+
+    BOOST_CHECK(packageFeeRateIter != blockFeeHistogram.end());
+    BOOST_CHECK(mediumTxFeeRateIter != blockFeeHistogram.end());
+
+    BOOST_CHECK(packageFeeRateIter->second == static_cast<uint64_t>(packageSize));
+    BOOST_CHECK(mediumTxFeeRateIter->second == static_cast<uint64_t>(mediumFeeTx.GetTxSize()));
 
     // Test that a package below the block min tx fee doesn't get included
     tx.vin[0].prevout.hash = hashHighFeeTx;
@@ -205,6 +227,46 @@ void MinerTestingSetup::TestPackageSelection(const CScript& scriptPubKey, const 
     pblocktemplate = AssemblerForTest(tx_mempool).CreateNewBlock(scriptPubKey);
     BOOST_REQUIRE_EQUAL(pblocktemplate->block.vtx.size(), 9U);
     BOOST_CHECK(pblocktemplate->block.vtx[8]->GetHash() == hashLowFeeTx2);
+}
+
+void MinerTestingSetup::TestCustomBlockCreation(const CScript& scriptPubKey, const std::vector<CTransactionRef>& txFirst)
+{
+    CTxMemPool& tx_mempool{MakeMempool()};
+    LOCK(tx_mempool.cs);
+
+    // CMutable transaction weight is 40 bytes.
+    CMutableTransaction tx;
+    TestMemPoolEntryHelper entry;
+
+    // 1 input with empty scriptSig
+    tx.vin.resize(1);
+    tx.vin[0].prevout.hash = txFirst[0]->GetHash();
+    tx.vin[0].prevout.n = 0;
+    tx.vin[0].scriptSig = CScript();
+
+    // Add dummy data in the scriptSig that that will make the tx weight > 4,000,000 bytes
+    std::vector<unsigned char> vchData(1000000);
+    tx.vin[0].scriptSig << vchData << OP_DROP;
+    tx.vin[0].scriptSig << OP_1;
+
+    const auto txRef = (MakeTransactionRef(tx));
+    BOOST_CHECK(GetTransactionWeight(*txRef) > 4000000);
+
+    tx_mempool.addUnchecked(entry.Fee(4000004).SpendsCoinbase(true).FromTx(tx));
+
+    const auto txiter = tx_mempool.GetIter(MakeTransactionRef(tx)->GetHash());
+
+    BOOST_CHECK(txiter != std::nullopt);
+
+    auto assembler = AssemblerForTest(tx_mempool);
+    const auto pblocktemplate = assembler.CreateNewBlock(scriptPubKey);
+    const size_t stats_size = assembler.GetFeeRateStats().size();
+    BOOST_CHECK(pblocktemplate->block.vtx.size() == 1);
+    BOOST_CHECK(stats_size == 0);
+    BOOST_CHECK(pblocktemplate->block.vtx[0]->GetHash() != txRef->GetHash());
+
+    const auto fee_rate_stats = node::GetCustomBlockFeeRateHistogram(m_node.chainman->ActiveChainstate(), &tx_mempool, MAX_BLOCK_WEIGHT * 2);
+    BOOST_CHECK_EQUAL(fee_rate_stats.size(), 1);
 }
 
 void MinerTestingSetup::TestBasicMining(const CScript& scriptPubKey, const std::vector<CTransactionRef>& txFirst, int baseheight)
@@ -647,6 +709,7 @@ BOOST_AUTO_TEST_CASE(CreateNewBlock_validity)
     SetMockTime(0);
 
     TestPackageSelection(scriptPubKey, txFirst);
+    TestCustomBlockCreation(scriptPubKey, txFirst);
 
     m_node.chainman->ActiveChain().Tip()->nHeight--;
     SetMockTime(0);
