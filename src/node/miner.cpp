@@ -424,9 +424,24 @@ void BlockAssembler::addPackageTxs(const CTxMemPool& mempool, int& nPackagesSele
         }
 
         ++nPackagesSelected;
+        size_per_feerate[CFeeRate{packageFees, packageSize}] += packageSize;
 
         // Update transactions that depend on each of these
         nDescendantsUpdated += UpdatePackagesForAdded(mempool, ancestors, mapModifiedTx);
     }
+}
+
+std::map<CFeeRate, uint64_t> BlockAssembler::GetFeeRateStats()
+{
+    return std::move(size_per_feerate);
+}
+
+std::map<CFeeRate, uint64_t> GetMempoolHistogram(Chainstate& chainstate, const CTxMemPool& mempool)
+{
+    BlockAssembler::Options options;
+    options.nBlockMaxWeight = std::nullopt;
+    BlockAssembler assembler(chainstate, &mempool, options);
+    assembler.CreateNewBlock(CScript{});
+    return assembler.GetFeeRateStats();
 }
 } // namespace node
