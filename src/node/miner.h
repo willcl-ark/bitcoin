@@ -13,6 +13,7 @@
 #include <memory>
 #include <optional>
 #include <stdint.h>
+#include <tuple>
 
 #include <boost/multi_index/identity.hpp>
 #include <boost/multi_index/indexed_by.hpp>
@@ -38,6 +39,7 @@ struct CBlockTemplate
     std::vector<CAmount> vTxFees;
     std::vector<int64_t> vTxSigOpsCost;
     std::vector<unsigned char> vchCoinbaseCommitment;
+    std::vector<std::tuple<CFeeRate, uint64_t>> vFeeratePerSize;
 };
 
 // Container for tracking updates to ancestor feerate as we include (parent)
@@ -143,6 +145,7 @@ private:
     uint64_t nBlockSigOpsCost;
     CAmount nFees;
     std::unordered_set<Txid, SaltedTxidHasher> inBlock;
+    std::vector<std::tuple<CFeeRate, uint64_t>> feerate_per_size;
 
     // Chain context for the block
     int nHeight;
@@ -169,6 +172,10 @@ public:
 
     inline static std::optional<int64_t> m_last_block_num_txs{};
     inline static std::optional<int64_t> m_last_block_weight{};
+
+    /** Return a vector of feerate's and vsize's of packages included in a block.
+     * This can only be called once. */
+    std::vector<std::tuple<CFeeRate, uint64_t>> GetFeeRateStats();
 
 private:
     const Options m_options;
