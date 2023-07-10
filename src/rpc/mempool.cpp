@@ -11,6 +11,7 @@
 #include <core_io.h>
 #include <kernel/mempool_entry.h>
 #include <node/mempool_persist_args.h>
+#include <node/miner.h>
 #include <policy/rbf.h>
 #include <policy/settings.h>
 #include <primitives/transaction.h>
@@ -910,6 +911,51 @@ static RPCHelpMan submitpackage()
     };
 }
 
+static RPCHelpMan getmempoolhistogram()
+{
+    return RPCHelpMan{"getmempoolhistogram",
+                "\nReturns mempool histogram statistics.\n",
+                {},
+                RPCResult{
+                    RPCResult::Type::ARR, "", "",
+                    {
+                        {
+                            RPCResult::Type::OBJ, "", "",
+                            {
+                                {RPCResult::Type::NUM, "feerate", "The feerate (in BTC/kvb)"},
+                                {RPCResult::Type::NUM, "vsize", "Number of vbytes at that feerate"},
+                            }
+                        },
+                    }
+                },
+                RPCExamples{
+                    HelpExampleCli("getmempoolhistogram", "")
+            + HelpExampleRpc("getmempoolhistogram", "")
+                },
+        [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
+{
+    std::map<CFeeRate, uint64_t> stats;
+
+    {
+        NodeContext& node = EnsureAnyNodeContext(request.context);
+        const CTxMemPool& mempool = EnsureMemPool(node);
+        ChainstateManager& chainman = EnsureChainman(node);
+        LOCK2(cs_main, mempool.cs);
+        stats = node::GetMempoolHistogram(chainman.ActiveChainstate(), mempool);
+    }
+
+    UniValue ret(UniValue::VARR);
+    for (const auto& item : stats) {
+        UniValue obj(UniValue::VOBJ);
+        obj.pushKV("feerate", ValueFromAmount(item.first.GetFee(1000)));
+        obj.pushKV("vsize", item.second);
+        ret.push_back(std::move(obj));
+    }
+    return ret;
+},
+    };
+}
+
 void RegisterMempoolRPCCommands(CRPCTable& t)
 {
     static const CRPCCommand commands[]{
@@ -920,6 +966,7 @@ void RegisterMempoolRPCCommands(CRPCTable& t)
         {"blockchain", &getmempoolentry},
         {"blockchain", &gettxspendingprevout},
         {"blockchain", &getmempoolinfo},
+        {"blockchain", &getmempoolhistogram},
         {"blockchain", &getrawmempool},
         {"blockchain", &savemempool},
         {"hidden", &submitpackage},
