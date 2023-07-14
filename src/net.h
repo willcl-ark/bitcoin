@@ -411,9 +411,12 @@ public:
     }
     /** fSuccessfullyConnected is set to true on receiving VERACK from the peer. */
     std::atomic_bool fSuccessfullyConnected{false};
-    // Setting fDisconnect to true will cause the node to be disconnected the
-    // next time DisconnectNodes() runs
+    /** Setting fDisconnect to true will cause the node to be disconnected the
+     * next time DisconnectNodes() runs. */
     std::atomic_bool fDisconnect{false};
+    /** Marks the node so that fDisconnect will be set after the next call to
+     * NetEventsInterface::ProcessMessages(). */
+    std::atomic_bool fDisconnectNext{false};
     CSemaphoreGrant grantOutbound;
     std::atomic<int> nRefCount{0};
 
@@ -607,7 +610,7 @@ public:
         nRefCount--;
     }
 
-    void CloseSocketDisconnect() EXCLUSIVE_LOCKS_REQUIRED(!m_sock_mutex);
+    void CloseSocketDisconnect(bool immediate = true) EXCLUSIVE_LOCKS_REQUIRED(!m_sock_mutex);
 
     void CopyStats(CNodeStats& stats) EXCLUSIVE_LOCKS_REQUIRED(!m_subver_mutex, !m_addr_local_mutex, !cs_vSend, !cs_vRecv);
 

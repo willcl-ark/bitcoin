@@ -584,9 +584,10 @@ CNode* CConnman::ConnectNode(CAddress addrConnect, const char *pszDest, bool fCo
     return pnode;
 }
 
-void CNode::CloseSocketDisconnect()
+void CNode::CloseSocketDisconnect(bool immediate)
 {
-    fDisconnect = true;
+    // fDisconnectNext allows ProcessMessages() to check for one final msg before disconnection
+    immediate ? fDisconnect = true : fDisconnectNext = true;
     LOCK(m_sock_mutex);
     if (m_sock) {
         LogPrint(BCLog::NET, "disconnecting peer=%d\n", id);
@@ -1341,7 +1342,7 @@ void CConnman::SocketHandlerConnected(const std::vector<CNode*>& nodes,
                 if (!pnode->fDisconnect) {
                     LogPrint(BCLog::NET, "socket closed for peer=%d\n", pnode->GetId());
                 }
-                pnode->CloseSocketDisconnect();
+                pnode->CloseSocketDisconnect(/*immediate=*/false);
             }
             else if (nBytes < 0)
             {
@@ -2063,6 +2064,11 @@ void CConnman::ThreadMessageHandler()
                 fMoreWork |= (fMoreNodeWork && !pnode->fPauseSend);
                 if (flagInterruptMsgProc)
                     return;
+                if (pnode->fDisconnectNext) {
+                    pnode->fDisconnect = true;
+                    // Skip sending messages to a disconnecting node, even if queued on vSendMsg
+                    continue;
+                }
                 // Send messages
                 m_msgproc->SendMessages(pnode);
 
