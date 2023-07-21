@@ -38,7 +38,7 @@ FUZZ_TARGET(connman, .init = initialize_connman)
                      *g_setup->m_node.netgroupman,
                      fuzzed_data_provider.ConsumeBool()};
     CNetAddr random_netaddr;
-    CNode random_node = ConsumeNode(fuzzed_data_provider);
+    CNodeRef random_node = ConsumeNode(fuzzed_data_provider);
     CSubNet random_subnet;
     std::string random_string;
     LIMITED_WHILE(fuzzed_data_provider.ConsumeBool(), 10000) {
@@ -85,7 +85,7 @@ FUZZ_TARGET(connman, .init = initialize_connman)
             },
             [&] {
                 (void)connman.GetAddresses(
-                    /*requestor=*/random_node,
+                    /*requestor=*/*random_node,
                     /*max_addresses=*/fuzzed_data_provider.ConsumeIntegral<size_t>(),
                     /*max_pct=*/fuzzed_data_provider.ConsumeIntegral<size_t>());
             },
@@ -102,7 +102,7 @@ FUZZ_TARGET(connman, .init = initialize_connman)
                 CSerializedNetMsg serialized_net_msg;
                 serialized_net_msg.m_type = fuzzed_data_provider.ConsumeRandomLengthString(CMessageHeader::COMMAND_SIZE);
                 serialized_net_msg.data = ConsumeRandomLengthByteVector(fuzzed_data_provider);
-                connman.PushMessage(&random_node, std::move(serialized_net_msg));
+                connman.PushMessage(random_node.get(), std::move(serialized_net_msg));
             },
             [&] {
                 connman.RemoveAddedNode(random_string);
