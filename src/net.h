@@ -920,6 +920,8 @@ private:
                                       const CAddress& addr_bind,
                                       const CAddress& addr);
 
+    void ReleaseAndCloseNode(CNodeRef pnode) EXCLUSIVE_LOCKS_REQUIRED(m_nodes_mutex);
+    void FinalizeAndDropNode(CNodeRef pnode);
     void DisconnectNodes();
     void NotifyNumConnectionsChanged();
     /** Return true if the peer is inactive and should be disconnected. */
