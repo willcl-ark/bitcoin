@@ -1106,6 +1106,28 @@ bool CConnman::AddConnection(const std::string& address, ConnectionType conn_typ
     return true;
 }
 
+void CConnman::ReleaseAndDisconnectNode(CNodeRef pnode)
+{
+    AssertLockHeld(m_nodes_mutex);
+    // release outbound grant (if any)
+    pnode->grantOutbound.Release();
+
+    // close socket and cleanup
+    pnode->CloseSocketDisconnect();
+
+    // move to m_nodes_disconnected to allow graceful termination
+    m_nodes_disconnected.push_back(pnode);
+    //
+    // remove from m_nodes
+    m_nodes.erase(remove(m_nodes.begin(), m_nodes.end(), pnode), m_nodes.end());
+}
+
+void CConnman::FinalizeAndDropNode(CNodeRef pnode)
+{
+    m_msgproc->FinalizeNode(*pnode);
+    m_nodes_disconnected.erase(remove(m_nodes_disconnected.begin(), m_nodes_disconnected.end(), pnode), m_nodes_disconnected.end());
+}
+
 void CConnman::DisconnectNodes()
 {
     {
@@ -1121,33 +1143,19 @@ void CConnman::DisconnectNodes()
             }
         }
 
-        // Disconnect unused nodes
         std::vector<CNodeRef> nodes_copy = m_nodes;
         for (auto& pnode : nodes_copy) {
-            if (pnode->fDisconnect)
-            {
-                // remove from m_nodes
-                m_nodes.erase(remove(m_nodes.begin(), m_nodes.end(), pnode), m_nodes.end());
-
-                // release outbound grant (if any)
-                pnode->grantOutbound.Release();
-
-                // close socket and cleanup
-                pnode->CloseSocketDisconnect();
-
-                // move to m_nodes_disconnected until all refs are released
-                m_nodes_disconnected.push_back(pnode);
+            if (pnode->fDisconnect) {
+                ReleaseAndDisconnectNode(pnode);
             }
         }
-    }
+    } // m_nodes_mutex
     {
-        // Delete disconnected nodes
         std::vector<CNodeRef> nodes_disconnected_copy = m_nodes_disconnected;
         for (auto& pnode : nodes_disconnected_copy) {
             // Finalize and drop when we have the final two references inside this block
             if (pnode.use_count() == 2) {
-                m_msgproc->FinalizeNode(*pnode);
-                m_nodes_disconnected.erase(remove(m_nodes_disconnected.begin(), m_nodes_disconnected.end(), pnode), m_nodes_disconnected.end());
+                FinalizeAndDropNode(pnode);
             }
         }
     }
