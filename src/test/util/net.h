@@ -25,17 +25,14 @@ struct ConnmanTestMsg : public CConnman {
         m_peer_connect_timeout = timeout;
     }
 
-    void AddTestNode(CNode& node)
+    void AddTestNode(const CNodeRef& node)
     {
         LOCK(m_nodes_mutex);
-        m_nodes.push_back(&node);
+        m_nodes.push_back(node);
     }
     void ClearTestNodes()
     {
         LOCK(m_nodes_mutex);
-        for (CNode* node : m_nodes) {
-            delete node;
-        }
         m_nodes.clear();
     }
 
