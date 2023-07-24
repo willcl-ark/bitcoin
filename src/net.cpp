@@ -1135,8 +1135,7 @@ void CConnman::DisconnectNodes()
                 // close socket and cleanup
                 pnode->CloseSocketDisconnect();
 
-                // hold in disconnected pool until all refs are released
-                pnode->Release();
+                // move to m_nodes_disconnected until all refs are released
                 m_nodes_disconnected.push_back(pnode);
             }
         }
@@ -1145,9 +1144,9 @@ void CConnman::DisconnectNodes()
         // Delete disconnected nodes
         std::vector<CNodeRef> nodes_disconnected_copy = m_nodes_disconnected;
         for (auto& pnode : nodes_disconnected_copy) {
-            // Destroy the object only after other threads have stopped using it.
-            if (pnode->GetRefCount() <= 0) {
-                DeleteNode(pnode);
+            // Finalize and drop when we have the final two references inside this block
+            if (pnode.use_count() == 2) {
+                m_msgproc->FinalizeNode(*pnode);
                 m_nodes_disconnected.erase(remove(m_nodes_disconnected.begin(), m_nodes_disconnected.end(), pnode), m_nodes_disconnected.end());
             }
         }
@@ -2484,23 +2483,16 @@ void CConnman::StopNodes()
     WITH_LOCK(m_nodes_mutex, nodes.swap(m_nodes));
     for (auto& pnode : nodes) {
         pnode->CloseSocketDisconnect();
-        DeleteNode(pnode);
+        m_msgproc->FinalizeNode(*pnode);
     }
     nodes.clear();
-
     for (auto& pnode : m_nodes_disconnected) {
-        DeleteNode(pnode);
+        m_msgproc->FinalizeNode(*pnode);
     }
     m_nodes_disconnected.clear();
     vhListenSocket.clear();
     semOutbound.reset();
     semAddnode.reset();
-}
-
-void CConnman::DeleteNode(CNodeRef pnode)
-{
-    assert(pnode.get());
-    m_msgproc->FinalizeNode(*pnode);
 }
 
 CConnman::~CConnman()
