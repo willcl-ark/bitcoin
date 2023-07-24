@@ -894,6 +894,7 @@ size_t CConnman::SocketSendData(CNode& node) const
  *   for each of several distinct characteristics which are difficult
  *   to forge.  In order to partition a node the attacker must be
  *   simultaneously better at all of them than honest peers.
+ *   If we find a candidate perform the disconnection.
  */
 bool CConnman::AttemptToEvictConnection()
 {
@@ -932,6 +933,7 @@ bool CConnman::AttemptToEvictConnection()
         if (pnode->GetId() == *node_id_to_evict) {
             LogPrint(BCLog::NET, "selected %s connection for eviction peer=%d; disconnecting\n", pnode->ConnectionTypeAsString(), pnode->GetId());
             pnode->fDisconnect = true;
+            ReleaseAndCloseNode(pnode);
             return true;
         }
     }
