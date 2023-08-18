@@ -93,6 +93,19 @@ CBlockPolicyEstimator& EnsureAnyFeeEstimator(const std::any& context)
     return EnsureFeeEstimator(EnsureAnyNodeContext(context));
 }
 
+MemPoolPolicyEstimator& EnsureMemPoolFeeEstimator(const NodeContext& node)
+{
+    if (!node.mempool_fee_estimator) {
+        throw JSONRPCError(RPC_INTERNAL_ERROR, "MemPool based Fee estimation disabled");
+    }
+    return *node.mempool_fee_estimator;
+}
+
+MemPoolPolicyEstimator& EnsureAnyMemPoolFeeEstimator(const std::any& context)
+{
+    return EnsureMemPoolFeeEstimator(EnsureAnyNodeContext(context));
+}
+
 CConnman& EnsureConnman(const NodeContext& node)
 {
     if (!node.connman) {

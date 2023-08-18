@@ -6,6 +6,7 @@
 #include <core_io.h>
 #include <policy/feerate.h>
 #include <policy/fees.h>
+#include <policy/mempool_fees.h>
 #include <rpc/protocol.h>
 #include <rpc/request.h>
 #include <rpc/server.h>
@@ -14,6 +15,7 @@
 #include <txmempool.h>
 #include <univalue.h>
 #include <util/fees.h>
+#include <validation.h>
 #include <validationinterface.h>
 
 #include <algorithm>
@@ -94,6 +96,55 @@ static RPCHelpMan estimatesmartfee()
                 result.pushKV("errors", errors);
             }
             result.pushKV("blocks", feeCalc.returnedTarget);
+            return result;
+        },
+    };
+}
+
+static RPCHelpMan estimatefeewithmempool()
+{
+    return RPCHelpMan{
+        "estimatefeewithmempool",
+        "\nEstimates the approximate fee per kilobyte needed for a transaction to begin\n"
+        "confirmation within conf_target blocks if possible Uses virtual transaction size as defined\n"
+        "in BIP 141 (witness data is discounted). By default caches values for 30 seconds to avoid\n"
+        "repeatedly running expensive block-building algorithm.\n",
+        {
+            {"conf_target", RPCArg::Type::NUM, RPCArg::Optional::NO, "Confirmation target in blocks"},
+            {"force", RPCArg::Type::BOOL, RPCArg::Optional::OMITTED, "Force run block-building algorithm, bypassing any cached values."},
+        },
+        RPCResult{
+            RPCResult::Type::OBJ, "", "",
+            {
+                {RPCResult::Type::NUM, "feerate", /*optional=*/true, "estimate fee rate in " + CURRENCY_UNIT + "/kvB (only present if no errors were encountered)"},
+                {RPCResult::Type::ARR, "errors", /*optional=*/true, "Errors encountered during processing (if there are any)",
+                    {{RPCResult::Type::STR, "", "error"},}
+                },
+            }},
+        RPCExamples{HelpExampleCli("estimatesfeewithmempool", "2") + HelpExampleRpc("estimatesfeewithmempool", "2")},
+        [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue {
+            MemPoolPolicyEstimator& fee_estimator = EnsureAnyMemPoolFeeEstimator(request.context);
+            const NodeContext& node = EnsureAnyNodeContext(request.context);
+            CTxMemPool& mempool = EnsureMemPool(node);
+            ChainstateManager& chainman = EnsureChainman(node);
+            Chainstate& chainstate = chainman.ActiveChainstate();
+            const unsigned int conf_target = request.params[0].getInt<unsigned int>();
+            bool force{false};
+            if (!request.params[1].isNull()) force = request.params[1].get_bool();
+            CFeeRate feeRate;
+            std::string err_message;
+            feeRate = fee_estimator.EstimateFeeWithMemPool(chainstate, mempool, conf_target, force, err_message);
+            UniValue result(UniValue::VOBJ);
+            UniValue errors(UniValue::VARR);
+            if (feeRate != CFeeRate(0)) {
+                CFeeRate min_mempool_feerate{mempool.GetMinFee()};
+                CFeeRate min_relay_feerate{mempool.m_min_relay_feerate};
+                feeRate = std::max({feeRate, min_mempool_feerate, min_relay_feerate});
+                result.pushKV("feerate", ValueFromAmount(feeRate.GetFeePerK()));
+            } else {
+                errors.push_back(err_message.c_str());
+                result.pushKV("errors", errors);
+            }
             return result;
         },
     };
@@ -222,6 +273,7 @@ void RegisterFeeRPCCommands(CRPCTable& t)
 {
     static const CRPCCommand commands[]{
         {"util", &estimatesmartfee},
+        {"util", &estimatefeewithmempool},
         {"hidden", &estimaterawfee},
     };
     for (const auto& c : commands) {
