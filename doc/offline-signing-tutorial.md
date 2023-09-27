@@ -25,6 +25,7 @@ We are going to first create an `offline_wallet` on the [offline] host. We will 
 
 ```sh
 [offline]$ ./src/bitcoin-cli -signet -named createwallet wallet_name="offline_wallet"
+
 {
   "name": "offline_wallet"
 }
@@ -33,7 +34,9 @@ We are going to first create an `offline_wallet` on the [offline] host. We will 
 2. Export the public key-only descriptors from [offline] to a JSON file named `descriptors.json`. We use `jq` here to extract the `.descriptors` field from the full RPC response.
 
 ```sh
-[offline]$ ./src/bitcoin-cli -signet -rpcwallet="offline_wallet" listdescriptors | jq -r '.descriptors' >> /path/to/descriptors.json
+[offline]$ ./src/bitcoin-cli -signet -rpcwallet="offline_wallet" listdescriptors \
+             | jq -r '.descriptors' \
+             >> /path/to/descriptors.json
 ```
 
 > [!NOTE]
@@ -48,7 +51,11 @@ We are going to first create an `offline_wallet` on the [offline] host. We will 
 > `blank` indicates that the wallet should not generate any new keys of its own. `disable_private_keys` indicates that the wallet should refuse to import private keys, i.e. will be a dedicated watch-only wallet.
 
 ```sh
-[online]$ ./src/bitcoin-cli -signet -named createwallet wallet_name="watch_only_wallet" disable_private_keys=true blank=true
+[online]$ ./src/bitcoin-cli -signet -named createwallet \
+              wallet_name="watch_only_wallet" \
+              disable_private_keys=true \
+              blank=true
+
 {
   "name": "watch_only_wallet"
 }
@@ -58,6 +65,7 @@ We are going to first create an `offline_wallet` on the [offline] host. We will 
 
 ```sh
 [online]$ ./src/bitcoin-cli -signet -rpcwallet="watch_only_wallet" importdescriptors "$(cat /path/to/descriptors.json)"
+
 [
   {
     "success": true
@@ -105,6 +113,7 @@ tb1qtu5qgc6ddhmqm5yqjvhg83qgk2t4ewajg0h6yh
 
 ```sh
 [online]$ ./src/bitcoin-cli -signet -rpcwallet="watch_only_wallet" listunspent
+
 [
   {
     "txid": "0f3953dfc3eb8e753cd1633151837c5b9953992914ff32b7de08c47f1f29c762",
@@ -132,7 +141,11 @@ tb1qtu5qgc6ddhmqm5yqjvhg83qgk2t4ewajg0h6yh
 2. Create a funded but unsigned PSBT to the destination address with the [online] `watch_only_wallet` by using `walletcreatefundedpsbt inputs[], outputs[address: amount]` and export the unsigned PSBT to a file `funded_psbt.txt` for easy portability to the `offline_wallet` for signing:
 
 ```sh
-[online]$ ./src/bitcoin-cli -signet -rpcwallet="watch_only_wallet" walletcreatefundedpsbt '[]' '[{"tb1q9k5w0nhnhyeh78snpxh0t5t7c3lxdeg3erez32": 0.009}]' | jq -r '.psbt' >> /path/to/funded_psbt.txt
+[online]$ ./src/bitcoin-cli -signet -rpcwallet="watch_only_wallet" walletcreatefundedpsbt \
+              '[]' '[{"tb1q9k5w0nhnhyeh78snpxh0t5t7c3lxdeg3erez32": 0.009}]' \
+              | jq -r '.psbt' \
+              >> /path/to/funded_psbt.txt
+
 [online]$ cat /path/to/funded_psbt.txt
 cHNidP8BAHECAAAAAWLHKR9/xAjetzL/FCmZU5lbfINRMWPRPHWO68PfUzkPAQAAAAD9////AoA4AQAAAAAAFgAULajnzvO5M38eEwmu9dF+xH5m5RGs0g0AAAAAABYAFMaT0f/Wp2DCZzL6dkJ3GhWj4Y9vAAAAAAABAHECAAAAAY+dRPEBrGopkw4ugSzS9npzJDEIrE/bq1XXI0KbYnYrAQAAAAD+////ArKaXgAAAAAAFgAUwEc4LdoxSjbWo/2Ue+HS+QjwfiBAQg8AAAAAABYAFF8oBGNNbfYN0ICTLoPECLKXXLuyYW8CAAEBH0BCDwAAAAAAFgAUXygEY01t9g3QgJMug8QIspdcu7IiBgJZMszudZAVj34IuzYpDRNdMKCwRRY9qJbhzXZF7EIjqRgwbHNPVAAAgAEAAIAAAACAAAAAAAAAAAAAACICA7BlBnyAR4F2UkKuSX9MFhYCsn6j//z9i7lHDm1O0CU0GDBsc09UAACAAQAAgAAAAIABAAAAAAAAAAA=
 ```
@@ -146,10 +159,13 @@ Decode and analyze the unsigned PSBT on the `offline_wallet` using the `funded_p
 
 ```sh
 [offline]$ ./src/bitcoin-cli -signet decodepsbt $(cat /path/to/funded_psbt.txt)
+
 {
     ...
 }
+
 [offline]$ ./src/bitcoin-cli -signet analyzepsbt $(cat /path/to/funded_psbt.txt)
+
 {
   "inputs": [
     {
@@ -177,7 +193,10 @@ Notice that the analysis of the PSBT shows that "signatures" are missing and sho
 Process, Sign and Finalize the PSBT on the `offline_wallet` using the `walletprocesspsbt` command.
 
 ```sh
-[offline]$ ./src/bitcoin-cli -signet -rpcwallet="offline_wallet" walletprocesspsbt $(cat /path/to/funded_psbt.txt) | jq -r .hex >> /path/to/final_psbt.txt
+[offline]$ ./src/bitcoin-cli -signet -rpcwallet="offline_wallet" walletprocesspsbt $(cat /path/to/funded_psbt.txt) \
+               | jq -r .hex \
+               >> /path/to/final_psbt.txt
+```
 
 Next save the final PSBT hex to a file `final_psbt.txt` so that it can be transferred back to the online wallet for broadcasting.
 
@@ -201,6 +220,7 @@ Confirm the updated balance of the offline wallet using the `watch_only_wallet`:
 
 ```sh
 [online]$ ./src/bitcoin-cli -signet -rpcwallet="watch_only_wallet" getbalances
+
 {
   "mine": {
     "trusted": 0.00085900,
