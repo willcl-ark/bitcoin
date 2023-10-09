@@ -20,6 +20,7 @@ from test_framework.wallet import MiniWallet
 
 utxocache_changes_program = """
 #include <uapi/linux/ptrace.h>
+#include </virtual/include/bcc/helpers.h>
 
 typedef signed long long i64;
 

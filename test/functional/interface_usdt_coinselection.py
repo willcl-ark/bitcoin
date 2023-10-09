@@ -21,6 +21,7 @@ from test_framework.util import (
 
 coinselection_tracepoints_program = """
 #include <uapi/linux/ptrace.h>
+#include </virtual/include/bcc/helpers.h>
 
 #define WALLET_NAME_LENGTH 16
 #define ALGO_NAME_LENGTH 16

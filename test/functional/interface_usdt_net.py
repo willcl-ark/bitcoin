@@ -29,6 +29,7 @@ MAX_MSG_DATA_LENGTH = 150
 
 net_tracepoints_program = """
 #include <uapi/linux/ptrace.h>
+#include </virtual/include/bcc/helpers.h>
 
 #define MAX_PEER_ADDR_LENGTH {}
 #define MAX_PEER_CONN_TYPE_LENGTH {}

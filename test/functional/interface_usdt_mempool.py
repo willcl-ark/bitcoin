@@ -23,7 +23,8 @@ from test_framework.util import assert_equal
 from test_framework.wallet import MiniWallet
 
 MEMPOOL_TRACEPOINTS_PROGRAM = """
-# include <uapi/linux/ptrace.h>
+#include <uapi/linux/ptrace.h>
+#include </virtual/include/bcc/helpers.h>
 
 // The longest rejection reason is 118 chars and is generated in case of SCRIPT_ERR_EVAL_FALSE by
 // strprintf("mandatory-script-verify-flag-failed (%s)", ScriptErrorString(check.GetScriptError()))

@@ -22,6 +22,7 @@ from test_framework.util import assert_equal
 
 validation_blockconnected_program = """
 #include <uapi/linux/ptrace.h>
+#include </virtual/include/bcc/helpers.h>
 
 typedef signed long long i64;
 
