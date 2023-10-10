@@ -5,15 +5,13 @@
 """Test successful startup with symlinked directories.
 """
 
-import os
-
 from test_framework.test_framework import BitcoinTestFramework
 
 
 def rename_and_link(*, from_name, to_name):
-    os.rename(from_name, to_name)
-    os.symlink(to_name, from_name)
-    assert os.path.islink(from_name) and os.path.isdir(from_name)
+    from_name.rename(to_name)
+    from_name.symlink_to(to_name)
+    assert from_name.is_symlink() and from_name.is_dir()
 
 
 class SymlinkTest(BitcoinTestFramework):

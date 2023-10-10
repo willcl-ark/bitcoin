@@ -23,8 +23,9 @@ Verify node behaviour and debug log when launching bitcoind in these cases:
 The tests are order-independent.
 
 """
-import os
 import shutil
+
+from pathlib import Path
 
 from test_framework.test_framework import BitcoinTestFramework
 
@@ -55,21 +56,21 @@ class AsmapTest(BitcoinTestFramework):
     def test_asmap_with_absolute_path(self):
         self.log.info('Test bitcoind -asmap=<absolute path>')
         self.stop_node(0)
-        filename = os.path.join(self.datadir, 'my-map-file.map')
+        filename = self.datadir / "my-map-file.map"
         shutil.copyfile(self.asmap_raw, filename)
         with self.node.assert_debug_log(expected_messages(filename)):
             self.start_node(0, [f'-asmap={filename}'])
-        os.remove(filename)
+        filename.unlink()
 
     def test_asmap_with_relative_path(self):
         self.log.info('Test bitcoind -asmap=<relative path>')
         self.stop_node(0)
         name = 'ASN_map'
-        filename = os.path.join(self.datadir, name)
+        filename = self.datadir / name
         shutil.copyfile(self.asmap_raw, filename)
         with self.node.assert_debug_log(expected_messages(filename)):
             self.start_node(0, [f'-asmap={name}'])
-        os.remove(filename)
+        filename.unlink()
 
     def test_default_asmap(self):
         shutil.copyfile(self.asmap_raw, self.default_asmap)
@@ -78,7 +79,7 @@ class AsmapTest(BitcoinTestFramework):
             self.stop_node(0)
             with self.node.assert_debug_log(expected_messages(self.default_asmap)):
                 self.start_node(0, [arg])
-        os.remove(self.default_asmap)
+        self.default_asmap.unlink()
 
     def test_asmap_interaction_with_addrman_containing_entries(self):
         self.log.info("Test bitcoind -asmap restart with addrman containing new and tried entries")
@@ -94,7 +95,7 @@ class AsmapTest(BitcoinTestFramework):
             ]
         ):
             self.node.getnodeaddresses()  # getnodeaddresses re-runs the addrman checks
-        os.remove(self.default_asmap)
+        self.default_asmap.unlink()
 
     def test_default_asmap_with_missing_file(self):
         self.log.info('Test bitcoind -asmap with missing default map file')
@@ -109,13 +110,13 @@ class AsmapTest(BitcoinTestFramework):
             f.write("")
         msg = f"Error: Could not parse asmap file \"{self.default_asmap}\""
         self.node.assert_start_raises_init_error(extra_args=['-asmap'], expected_msg=msg)
-        os.remove(self.default_asmap)
+        self.default_asmap.unlink()
 
     def run_test(self):
         self.node = self.nodes[0]
         self.datadir = self.node.chain_path
-        self.default_asmap = os.path.join(self.datadir, DEFAULT_ASMAP_FILENAME)
-        self.asmap_raw = os.path.join(os.path.dirname(os.path.realpath(__file__)), ASMAP)
+        self.default_asmap = self.datadir / DEFAULT_ASMAP_FILENAME
+        self.asmap_raw = Path(__file__).resolve().parent / ASMAP
 
         self.test_without_asmap_arg()
         self.test_asmap_with_absolute_path()

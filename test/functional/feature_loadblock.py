@@ -10,11 +10,12 @@ To generate that file this test uses the helper scripts available
 in contrib/linearize.
 """
 
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import urllib
+
+from pathlib import Path
 
 from test_framework.blocktools import COINBASE_MATURITY
 from test_framework.test_framework import BitcoinTestFramework

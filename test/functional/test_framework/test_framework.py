@@ -19,6 +19,7 @@ import sys
 import tempfile
 import time
 
+from pathlib import Path
 from typing import List
 from .address import create_deterministic_address_bcrt1_p2tr_op_true
 from .authproxy import JSONRPCException
@@ -155,13 +156,13 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
             sys.exit(exit_code)
 
     def parse_args(self):
-        previous_releases_path = os.getenv("PREVIOUS_RELEASES_DIR") or os.getcwd() + "/releases"
+        previous_releases_path = Path(os.getenv("PREVIOUS_RELEASES_DIR") or Path.cwd() / "releases")
         parser = argparse.ArgumentParser(usage="%(prog)s [options]")
         parser.add_argument("--nocleanup", dest="nocleanup", default=False, action="store_true",
                             help="Leave bitcoinds and test.* datadir on exit or error")
         parser.add_argument("--noshutdown", dest="noshutdown", default=False, action="store_true",
                             help="Don't stop bitcoinds after the test execution")
-        parser.add_argument("--cachedir", dest="cachedir", default=os.path.abspath(os.path.dirname(os.path.realpath(__file__)) + "/../../cache"),
+        parser.add_argument("--cachedir", dest="cachedir", default=Path(__file__).resolve().parent.parent / "cache",
                             help="Directory for caching pregenerated datadirs (default: %(default)s)")
         parser.add_argument("--tmpdir", dest="tmpdir", help="Root directory for datadirs")
         parser.add_argument("-l", "--loglevel", dest="loglevel", default="INFO",
@@ -171,12 +172,12 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         parser.add_argument("--portseed", dest="port_seed", default=os.getpid(), type=int,
                             help="The seed to use for assigning port numbers (default: current process id)")
         parser.add_argument("--previous-releases", dest="prev_releases", action="store_true",
-                            default=os.path.isdir(previous_releases_path) and bool(os.listdir(previous_releases_path)),
+                            default=previous_releases_path.is_dir() and bool(previous_releases_path.iterdir()),
                             help="Force test of previous releases (default: %(default)s)")
         parser.add_argument("--coveragedir", dest="coveragedir",
                             help="Write tested RPC commands into this directory")
         parser.add_argument("--configfile", dest="configfile",
-                            default=os.path.abspath(os.path.dirname(os.path.realpath(__file__)) + "/../../config.ini"),
+                            default=Path(__file__).resolve().parent.parent / "config.ini",
                             help="Location of the test framework config file (default: %(default)s)")
         parser.add_argument("--pdbonfailure", dest="pdbonfailure", default=False, action="store_true",
                             help="Attach a python debugger if test fails")
@@ -237,10 +238,10 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
             "bitcoin-wallet": ("bitcoinwallet", "BITCOINWALLET"),
         }
         for binary, [attribute_name, env_variable_name] in binaries.items():
-            default_filename = os.path.join(
-                self.config["environment"]["BUILDDIR"],
-                "src",
-                binary + self.config["environment"]["EXEEXT"],
+            default_filename = Path(
+                    self.config["environment"]["BUILDDIR"]) \
+                    / "src" \
+                    / (binary + self.config["environment"]["EXEEXT"]
             )
             setattr(self.options, attribute_name, os.getenv(env_variable_name, default=default_filename))
 
@@ -249,7 +250,7 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
 
         check_json_precision()
 
-        self.options.cachedir = os.path.abspath(self.options.cachedir)
+        self.options.cachedir = Path(self.options.cachedir).resolve()
 
         config = self.config
 
@@ -262,10 +263,10 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
 
         # Set up temp directory and start logging
         if self.options.tmpdir:
-            self.options.tmpdir = os.path.abspath(self.options.tmpdir)
-            os.makedirs(self.options.tmpdir, exist_ok=False)
+            self.options.tmpdir = Path(self.options.tmpdir).resolve()
+            self.options.tmpdir.mkdir(exist_ok=False)
         else:
-            self.options.tmpdir = tempfile.mkdtemp(prefix=TMPDIR_PREFIX)
+            self.options.tmpdir = Path(tempfile.mkdtemp(prefix=TMPDIR_PREFIX))
         self._start_logging()
 
         # Seed the PRNG. Note that test runs are reproducible if and only if
@@ -341,7 +342,8 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         else:
             self.log.error("Test failed. Test logging available at %s/test_framework.log", self.options.tmpdir)
             self.log.error("")
-            self.log.error("Hint: Call {} '{}' to consolidate all logs".format(os.path.normpath(os.path.dirname(os.path.realpath(__file__)) + "/../combine_logs.py"), self.options.tmpdir))
+            combine_logs_path = Path(__file__).resolve().parent.parent / "combine_logs.py"
+            self.log.error(f"Hint: Call {combine_logs_path} '{self.options.tmpdir}' to consolidate all logs")
             self.log.error("")
             self.log.error("If this failure happened unexpectedly or intermittently, please file a bug and provide a link or upload of the combined log.")
             self.log.error(self.config['environment']['PACKAGE_BUGREPORT'])
@@ -380,7 +382,7 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
 
     def setup_chain(self):
         """Override this method to customize blockchain setup"""
-        self.log.info("Initializing test directory " + self.options.tmpdir)
+        self.log.info(f"Initializing test directory {self.options.tmpdir}")
         if self.setup_clean_chain:
             self._initialize_chain_clean()
         else:
@@ -472,8 +474,7 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
                 # Starting at client version 220000 the first two digits represent
                 # the major version, e.g. v22.0 instead of v0.22.0.
                 version *= 100
-            return os.path.join(
-                self.options.previous_releases_path,
+            return self.options.previous_releases_path.joinpath(
                 re.sub(
                     r'\.0$' if version <= 219999 else r'(\.0){1,2}$',
                     '', # Remove trailing dot for point releases, after 22.0 also remove double trailing dot.
@@ -756,7 +757,7 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         self.log = logging.getLogger('TestFramework')
         self.log.setLevel(logging.DEBUG)
         # Create file handler to log all messages
-        fh = logging.FileHandler(self.options.tmpdir + '/test_framework.log', encoding='utf-8')
+        fh = logging.FileHandler(self.options.tmpdir / "test_framework.log", encoding="utf-8")
         fh.setLevel(logging.DEBUG)
         # Create console handler to log messages to stderr. By default this logs only error messages, but can be configured with --loglevel.
         ch = logging.StreamHandler(sys.stdout)
@@ -789,7 +790,7 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         cache_node_dir = get_datadir_path(self.options.cachedir, CACHE_NODE_ID)
         assert self.num_nodes <= MAX_NODES
 
-        if not os.path.isdir(cache_node_dir):
+        if not cache_node_dir.is_dir():
             self.log.debug("Creating cache directory {}".format(cache_node_dir))
 
             initialize_datadir(self.options.cachedir, CACHE_NODE_ID, self.chain, self.disable_autoconnect)
@@ -840,12 +841,15 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
             self.nodes = []
 
             def cache_path(*paths):
-                return os.path.join(cache_node_dir, self.chain, *paths)
+                return cache_node_dir.joinpath(self.chain, *paths)
 
-            os.rmdir(cache_path('wallets'))  # Remove empty wallets dir
-            for entry in os.listdir(cache_path()):
-                if entry not in ['chainstate', 'blocks', 'indexes']:  # Only indexes, chainstate and blocks folders
-                    os.remove(cache_path(entry))
+            cache_path('wallets').rmdir()  # Remove empty wallets dir
+            for entry in cache_path().iterdir():
+                if entry.name not in ['chainstate', 'blocks', 'indexes']:  # Only indexes, chainstate and blocks folders
+                    if entry.is_file():
+                        entry.unlink()
+                    elif entry.is_dir():
+                        entry.rmdir()
 
         for i in range(self.num_nodes):
             self.log.debug("Copy cache directory {} to node {}".format(cache_node_dir, i))
@@ -950,7 +954,7 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
 
     def has_previous_releases(self):
         """Checks whether previous releases are present and enabled."""
-        if not os.path.isdir(self.options.previous_releases_path):
+        if not self.options.previous_releases_path.is_dir():
             if self.options.prev_releases:
                 raise AssertionError("Force test of previous releases but releases missing: {}".format(
                     self.options.previous_releases_path))

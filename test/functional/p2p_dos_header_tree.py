@@ -3,6 +3,7 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test that we reject low difficulty headers to prevent our block tree from filling up with useless bloat"""
+from pathlib import Path
 
 from test_framework.messages import (
     CBlockHeader,
@@ -13,8 +14,6 @@ from test_framework.p2p import (
     msg_headers,
 )
 from test_framework.test_framework import BitcoinTestFramework
-
-import os
 
 
 class RejectLowDifficultyHeadersTest(BitcoinTestFramework):
@@ -33,7 +32,7 @@ class RejectLowDifficultyHeadersTest(BitcoinTestFramework):
 
     def run_test(self):
         self.log.info("Read headers data")
-        self.headers_file_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), self.options.datafile)
+        self.headers_file_path = Path(__file__).resolve().parent / self.options.datafile
         with open(self.headers_file_path, encoding='utf-8') as headers_data:
             h_lines = [l.strip() for l in headers_data.readlines()]
 

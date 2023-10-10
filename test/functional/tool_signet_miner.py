@@ -4,10 +4,11 @@
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test signet miner tool"""
 
-import os.path
 import subprocess
 import sys
 import time
+
+from pathlib import Path
 
 from test_framework.key import ECKey
 from test_framework.script_util import key_to_p2wpkh_script
@@ -46,8 +47,8 @@ class SignetMinerTest(BitcoinTestFramework):
         node.importprivkey(bytes_to_wif(CHALLENGE_PRIVATE_KEY))
 
         # generate block with signet miner tool
-        base_dir = self.config["environment"]["SRCDIR"]
-        signet_miner_path = os.path.join(base_dir, "contrib", "signet", "miner")
+        base_dir = Path(self.config["environment"]["SRCDIR"])
+        signet_miner_path = base_dir / "contrib" / "signet" / "miner"
         subprocess.run([
                 sys.executable,
                 signet_miner_path,

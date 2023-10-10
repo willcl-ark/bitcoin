@@ -7,8 +7,9 @@
 Verify that a bitcoind node can use an external signer command
 See also rpc_signer.py for tests without wallet context.
 """
-import os
 import platform
+
+from pathlib import Path
 
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
@@ -23,25 +24,25 @@ class WalletSignerTest(BitcoinTestFramework):
         self.add_wallet_options(parser, legacy=False)
 
     def mock_signer_path(self):
-        path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'mocks', 'signer.py')
+        path = Path(__file__).resolve().parent / 'mocks' / 'signer.py'
         if platform.system() == "Windows":
-            return "py -3 " + path
+            return "py -3 " + str(path)
         else:
-            return path
+            return str(path)
 
     def mock_invalid_signer_path(self):
-        path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'mocks', 'invalid_signer.py')
+        path = Path(__file__).resolve().parent / 'mocks' / 'invalid_signer.py'
         if platform.system() == "Windows":
-            return "py -3 " + path
+            return "py -3 " + str(path)
         else:
-            return path
+            return str(path)
 
     def mock_multi_signers_path(self):
-        path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'mocks', 'multi_signers.py')
+        path = Path(__file__).resolve().parent / 'mocks' / 'multi_signers.py'
         if platform.system() == "Windows":
-            return "py -3 " + path
+            return "py -3 " + str(path)
         else:
-            return path
+            return str(path)
 
     def set_test_params(self):
         self.num_nodes = 2
@@ -56,11 +57,11 @@ class WalletSignerTest(BitcoinTestFramework):
         self.skip_if_no_wallet()
 
     def set_mock_result(self, node, res):
-        with open(os.path.join(node.cwd, "mock_result"), "w", encoding="utf8") as f:
+        with open(node.cwd / "mock_result", "w", encoding="utf8") as f:
             f.write(res)
 
     def clear_mock_result(self, node):
-        os.remove(os.path.join(node.cwd, "mock_result"))
+        (node.cwd / "mock_result").unlink()
 
     def run_test(self):
         self.test_valid_signer()
@@ -201,7 +202,7 @@ class WalletSignerTest(BitcoinTestFramework):
 
         assert hww.testmempoolaccept([mock_tx])[0]["allowed"]
 
-        with open(os.path.join(self.nodes[1].cwd, "mock_psbt"), "w", encoding="utf8") as f:
+        with open(self.nodes[1].cwd / "mock_psbt", "w", encoding="utf8") as f:
             f.write(mock_psbt_signed["psbt"])
 
         self.log.info('Test send using hww1')
@@ -226,7 +227,7 @@ class WalletSignerTest(BitcoinTestFramework):
         mock_psbt_bumped = mock_wallet.psbtbumpfee(orig_tx_id)["psbt"]
         mock_psbt_bumped_signed = mock_wallet.walletprocesspsbt(psbt=mock_psbt_bumped, sign=True, sighashtype="ALL", bip32derivs=True)
 
-        with open(os.path.join(self.nodes[1].cwd, "mock_psbt"), "w", encoding="utf8") as f:
+        with open(self.nodes[1].cwd / "mock_psbt", "w", encoding="utf8") as f:
             f.write(mock_psbt_bumped_signed["psbt"])
 
         self.log.info('Test bumpfee using hww1')

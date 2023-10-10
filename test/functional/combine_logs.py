@@ -13,11 +13,12 @@ import argparse
 from collections import defaultdict, namedtuple
 import heapq
 import itertools
-import os
-import pathlib
 import re
 import sys
 import tempfile
+
+from pathlib import Path
+from typing import Optional, List, Tuple
 
 # N.B.: don't import any local modules here - this script must remain executable
 # without the parent module installed.
@@ -46,7 +47,7 @@ def main():
         print("Only one out of --color or --html should be specified")
         sys.exit(1)
 
-    testdir = args.testdir or find_latest_test_dir()
+    testdir = Path(args.testdir) or find_latest_test_dir()
 
     if not testdir:
         print("No test directories found")
@@ -73,71 +74,66 @@ def main():
         print_node_warnings(testdir, colors)
 
 
-def read_logs(tmp_dir):
+def read_logs(tmp_dir: Path):
     """Reads log files.
 
     Delegates to generator function get_log_events() to provide individual log events
     for each of the input log files."""
 
     # Find out what the folder is called that holds the debug.log file
-    glob = pathlib.Path(tmp_dir).glob('node0/**/debug.log')
+    glob = tmp_dir.glob('node0/**/debug.log')
     path = next(glob, None)
     if path:
-        assert next(glob, None) is None #  more than one debug.log, should never happen
-        chain = re.search(r'node0/(.+?)/debug\.log$', path.as_posix()).group(1)  # extract the chain name
+        assert next(glob, None) is None  # more than one debug.log, should never happen
+        chain = re.search(r'node0/(.+?)/debug\.log$', str(path)).group(1)  # extract the chain name
     else:
         chain = 'regtest'  # fallback to regtest (should only happen when none exists)
 
-    files = [("test", "%s/test_framework.log" % tmp_dir)]
+    files: List[Tuple[str, Path]] = [("test", tmp_dir / "test_framework.log")]
     for i in itertools.count():
-        logfile = "{}/node{}/{}/debug.log".format(tmp_dir, i, chain)
-        if not os.path.isfile(logfile):
+        logfile = tmp_dir / f"node{i}" / chain / "debug.log"
+        if not logfile.is_file():
             break
-        files.append(("node%d" % i, logfile))
+        files.append((f"node{i}", logfile))
 
     return heapq.merge(*[get_log_events(source, f) for source, f in files])
 
 
-def print_node_warnings(tmp_dir, colors):
+def print_node_warnings(tmp_dir: Path, colors):
     """Print nodes' errors and warnings"""
 
     warnings = []
     for stream in ['stdout', 'stderr']:
         for i in itertools.count():
-            folder = "{}/node{}/{}".format(tmp_dir, i, stream)
-            if not os.path.isdir(folder):
+            folder = tmp_dir / f"node{i}" / stream
+            if not folder.is_dir():
                 break
-            for (_, _, fns) in os.walk(folder):
-                for fn in fns:
-                    warning = pathlib.Path('{}/{}'.format(folder, fn)).read_text().strip()
-                    if warning:
-                        warnings.append(("node{} {}".format(i, stream), warning))
+            for fn in folder.iterdir():
+                warning = fn.read_text().strip()
+                if warning:
+                    warnings.append((f"node{i} {stream}", warning))
 
     print()
     for w in warnings:
         print("{} {} {} {}".format(colors[w[0].split()[0]], w[0], w[1], colors["reset"]))
 
 
-def find_latest_test_dir():
+def find_latest_test_dir() -> Optional[Path]:
     """Returns the latest tmpfile test directory prefix."""
-    tmpdir = tempfile.gettempdir()
-
-    def join_tmp(basename):
-        return os.path.join(tmpdir, basename)
+    tmpdir = Path(tempfile.gettempdir())
 
     def is_valid_test_tmpdir(basename):
-        fullpath = join_tmp(basename)
+        fullpath = tmpdir / basename
         return (
-            os.path.isdir(fullpath)
-            and basename.startswith(TMPDIR_PREFIX)
-            and os.access(fullpath, os.R_OK)
+            fullpath.is_dir()
+            and str(basename).startswith(TMPDIR_PREFIX)
         )
 
     testdir_paths = [
-        join_tmp(name) for name in os.listdir(tmpdir) if is_valid_test_tmpdir(name)
+        tmpdir / name for name in tmpdir.iterdir() if is_valid_test_tmpdir(name.name)
     ]
 
-    return max(testdir_paths, key=os.path.getmtime) if testdir_paths else None
+    return max(testdir_paths, key=lambda p: p.stat().st_mtime) if testdir_paths else None
 
 
 def get_log_events(source, logfile):

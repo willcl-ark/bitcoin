@@ -31,7 +31,6 @@ Shutdown again, restore using importwallet,
 and confirm again balances are correct.
 """
 from decimal import Decimal
-import os
 from random import randint
 import shutil
 
@@ -233,10 +232,10 @@ class WalletBackupTest(BitcoinTestFramework):
 
         # Backup to source wallet file must fail
         sourcePaths = [
-            os.path.join(self.nodes[0].wallets_path, self.default_wallet_name, self.wallet_data_filename),
-            os.path.join(self.nodes[0].wallets_path, '.', self.default_wallet_name, self.wallet_data_filename),
-            os.path.join(self.nodes[0].wallets_path, self.default_wallet_name),
-            os.path.join(self.nodes[0].wallets_path)]
+            self.nodes[0].wallets_path / self.default_wallet_name / self.wallet_data_filename,
+            self.nodes[0].wallets_path / '.' / self.default_wallet_name / self.wallet_data_filename,
+            self.nodes[0].wallets_path / self.default_wallet_name,
+            self.nodes[0].wallets_path]
 
         for sourcePath in sourcePaths:
             assert_raises_rpc_error(-4, "backup failed", self.nodes[0].backupwallet, sourcePath)

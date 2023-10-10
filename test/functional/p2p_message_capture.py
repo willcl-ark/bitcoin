@@ -7,9 +7,9 @@
 Additionally, the output of contrib/message-capture/message-capture-parser.py should be verified manually.
 """
 
-import glob
-from io import BytesIO
 import os
+from io import BytesIO
+from pathlib import Path
 
 from test_framework.p2p import P2PDataStore, MESSAGEMAP
 from test_framework.test_framework import BitcoinTestFramework
@@ -19,7 +19,7 @@ TIME_SIZE = 8
 LENGTH_SIZE = 4
 MSGTYPE_SIZE = 12
 
-def mini_parser(dat_file: str) -> None:
+def mini_parser(dat_file: Path) -> None:
     """Parse a data file created by CaptureMessageToFile.
 
     From the data file we'll only check the structure.
@@ -62,9 +62,9 @@ class MessageCaptureTest(BitcoinTestFramework):
         # Connect a node so that the handshake occurs
         self.nodes[0].add_p2p_connection(P2PDataStore())
         self.nodes[0].disconnect_p2ps()
-        recv_file = glob.glob(os.path.join(capturedir, "*/msgs_recv.dat"))[0]
+        recv_file = next(Path(capturedir).glob("*/msgs_sent.dat"))
         mini_parser(recv_file)
-        sent_file = glob.glob(os.path.join(capturedir, "*/msgs_sent.dat"))[0]
+        sent_file = next(Path(capturedir).glob("*/msgs_sent.dat"))
         mini_parser(sent_file)
 
 

@@ -39,11 +39,11 @@ class RPCSignerTest(BitcoinTestFramework):
         self.skip_if_no_external_signer()
 
     def set_mock_result(self, node, res):
-        with open(os.path.join(node.cwd, "mock_result"), "w", encoding="utf8") as f:
+        with open(node.cwd / "mock_result", "w", encoding="utf8") as f:
             f.write(res)
 
     def clear_mock_result(self, node):
-        os.remove(os.path.join(node.cwd, "mock_result"))
+        (node.cwd / "mock_result").unlink()
 
     def run_test(self):
         self.log.debug(f"-signer={self.mock_signer_path()}")

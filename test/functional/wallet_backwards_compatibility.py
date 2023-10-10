@@ -112,8 +112,8 @@ class BackwardsCompatibilityTest(BitcoinTestFramework):
 
         # Copy the 0.19 wallet to the last Bitcoin Core version and open it:
         shutil.copytree(
-            os.path.join(node_v19.wallets_path, "w1_v19"),
-            os.path.join(node_master.wallets_path, "w1_v19")
+            node_v19.wallets_path / "w1_v19",
+            node_master.wallets_path / "w1_v19",
         )
         node_master.loadwallet("w1_v19")
         wallet = node_master.get_wallet_rpc("w1_v19")
@@ -121,10 +121,10 @@ class BackwardsCompatibilityTest(BitcoinTestFramework):
 
         # Now copy that same wallet back to 0.19 to make sure no automatic upgrade breaks it
         node_master.unloadwallet("w1_v19")
-        shutil.rmtree(os.path.join(node_v19.wallets_path, "w1_v19"))
+        shutil.rmtree(node_v19.wallets_path / "w1_v19")
         shutil.copytree(
-            os.path.join(node_master.wallets_path, "w1_v19"),
-            os.path.join(node_v19.wallets_path, "w1_v19")
+            node_master.wallets_path / "w1_v19",
+            node_v19.wallets_path / "w1_v19",
         )
         node_v19.loadwallet("w1_v19")
         wallet = node_v19.get_wallet_rpc("w1_v19")
@@ -200,7 +200,7 @@ class BackwardsCompatibilityTest(BitcoinTestFramework):
 
         for node in legacy_nodes:
             # Copy wallets to previous version
-            for wallet in os.listdir(node_master_wallets_dir):
+            for wallet in node_master_wallets_dir.iterdir():
                 dest = node.wallets_path / wallet
                 source = node_master_wallets_dir / wallet
                 if self.major_version_equals(node, 16):
@@ -327,7 +327,7 @@ class BackwardsCompatibilityTest(BitcoinTestFramework):
             pubkey = addr_info["pubkey"]
 
             # Make a backup of the wallet file
-            backup_path = os.path.join(self.options.tmpdir, f"{wallet_name}.dat")
+            backup_path = self.options.tmpdir / f"{wallet_name}.dat"
             wallet_prev.backupwallet(backup_path)
 
             # Remove the wallet from old node
@@ -353,7 +353,7 @@ class BackwardsCompatibilityTest(BitcoinTestFramework):
 
             # Make backup so the wallet can be copied back to old node
             down_wallet_name = f"re_down_{node.version}"
-            down_backup_path = os.path.join(self.options.tmpdir, f"{down_wallet_name}.dat")
+            down_backup_path = self.options.tmpdir / f"{down_wallet_name}.dat"
             wallet.backupwallet(down_backup_path)
             wallet.unloadwallet()
 
@@ -370,7 +370,7 @@ class BackwardsCompatibilityTest(BitcoinTestFramework):
                 assert_equal(info, addr_info)
             else:
                 target_dir = node.wallets_path / down_wallet_name
-                os.makedirs(target_dir, exist_ok=True)
+                target_dir.mkdir(exist_ok=True)
                 shutil.copyfile(
                     down_backup_path,
                     target_dir / "wallet.dat"

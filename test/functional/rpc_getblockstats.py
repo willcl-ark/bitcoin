@@ -16,7 +16,9 @@ from test_framework.util import (
 import json
 import os
 
-TESTSDIR = os.path.dirname(os.path.realpath(__file__))
+from pathlib import Path
+
+TESTSDIR = Path(__file__).resolve().parent
 
 class GetblockstatsTest(BitcoinTestFramework):
 
@@ -97,7 +99,7 @@ class GetblockstatsTest(BitcoinTestFramework):
 
 
     def run_test(self):
-        test_data = os.path.join(TESTSDIR, self.options.test_data)
+        test_data = TESTSDIR / self.options.test_data
         if self.options.gen_test_data:
             self.generate_test_data(test_data)
         else:

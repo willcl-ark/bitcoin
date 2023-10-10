@@ -6,7 +6,8 @@
 import decimal
 import itertools
 import json
-import os
+
+from pathlib import Path
 
 from test_framework.address import address_to_scriptpubkey
 from test_framework.blocktools import COINBASE_MATURITY
@@ -104,7 +105,7 @@ class RpcCreateMultiSigTest(BitcoinTestFramework):
                     assert_equal(result['warnings'], err_msg)
 
         self.log.info('Testing sortedmulti descriptors with BIP 67 test vectors')
-        with open(os.path.join(os.path.dirname(os.path.realpath(__file__)), 'data/rpc_bip67.json'), encoding='utf-8') as f:
+        with open(Path(__file__).resolve().parent / "data/rpc_bip67.json", encoding='utf-8') as f:
             vectors = json.load(f)
 
         for t in vectors:
@@ -157,8 +158,8 @@ class RpcCreateMultiSigTest(BitcoinTestFramework):
                 try:
                     node1.loadwallet('wmulti')
                 except JSONRPCException as e:
-                    path = self.nodes[1].wallets_path / "wmulti"
-                    if e.error['code'] == -18 and "Wallet file verification failed. Failed to load database path '{}'. Path does not exist.".format(path) in e.error['message']:
+                    wmulti_path = self.nodes[1].wallets_path / "wmulti"
+                    if e.error['code'] == -18 and f"Wallet file verification failed. Failed to load database path '{wmulti_path}'. Path does not exist." in e.error["message"]:
                         node1.createwallet(wallet_name='wmulti', disable_private_keys=True)
                     else:
                         raise

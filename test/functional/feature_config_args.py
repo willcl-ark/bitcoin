@@ -123,7 +123,7 @@ class ConfArgsTest(BitcoinTestFramework):
 
         # Create a temporary directory that will be treated as the default data
         # directory by bitcoind.
-        env, default_datadir = util.get_temp_default_datadir(Path(self.options.tmpdir, "test_config_file_log"))
+        env, default_datadir = util.get_temp_default_datadir(self.options.tmpdir / "test_config_file_log")
         default_datadir.mkdir(parents=True)
 
         # Write a bitcoin.conf file in the default data directory containing a
@@ -137,7 +137,7 @@ class ConfArgsTest(BitcoinTestFramework):
         # specified it would take precedence over the datadir setting in the
         # config file.
         node_args = node.args
-        node.args = [arg for arg in node.args if not arg.startswith("-datadir=")]
+        node.args = [arg for arg in node.args if not str(arg).startswith("-datadir=")]
 
         # Check that correct configuration file path is actually logged
         # (conf_path, not node.bitcoinconf)
@@ -347,7 +347,7 @@ class ConfArgsTest(BitcoinTestFramework):
 
         # Create a temporary directory that will be treated as the default data
         # directory by bitcoind.
-        env, default_datadir = util.get_temp_default_datadir(Path(self.options.tmpdir, "home"))
+        env, default_datadir = util.get_temp_default_datadir(self.options.tmpdir / "home")
         default_datadir.mkdir(parents=True)
 
         # Write a bitcoin.conf file in the default data directory containing a
@@ -361,7 +361,7 @@ class ConfArgsTest(BitcoinTestFramework):
         # specified it would take precedence over the datadir setting in the
         # config file.
         node_args = node.args
-        node.args = [arg for arg in node.args if not arg.startswith("-datadir=")]
+        node.args = [arg for arg in node.args if not str(arg).startswith("-datadir=")]
         node.assert_start_raises_init_error([], re.escape(
             f'Error: Data directory "{node.datadir_path}" contains a "bitcoin.conf" file which is ignored, because a '
             f'different configuration file "{default_datadir}/bitcoin.conf" from data directory "{default_datadir}" '
@@ -391,7 +391,7 @@ class ConfArgsTest(BitcoinTestFramework):
         self.test_acceptstalefeeestimates_arg_support()
 
         # Remove the -datadir argument so it doesn't override the config file
-        self.nodes[0].args = [arg for arg in self.nodes[0].args if not arg.startswith("-datadir")]
+        self.nodes[0].args = [arg for arg in self.nodes[0].args if not str(arg).startswith("-datadir")]
 
         default_data_dir = self.nodes[0].datadir_path
         new_data_dir = default_data_dir / 'newdatadir'

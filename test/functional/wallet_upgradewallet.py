@@ -10,7 +10,6 @@ Requires previous releases binaries, see test/README.md.
 Only v0.15.2 and v0.16.3 are required by this test.
 """
 
-import os
 import shutil
 import struct
 
@@ -153,18 +152,15 @@ class UpgradeWalletTest(BitcoinTestFramework):
             node_master.get_wallet_rpc(self.default_wallet_name).unloadwallet()
             # Copy the 0.16.3 wallet to the last Bitcoin Core version and open it:
             shutil.rmtree(node_master_wallet_dir)
-            os.mkdir(node_master_wallet_dir)
-            shutil.copy(
-                v16_3_wallet,
-                node_master_wallet_dir
-            )
+            node_master_wallet_dir.mkdir()
+            shutil.copy(v16_3_wallet, node_master_wallet_dir)
             node_master.loadwallet(self.default_wallet_name)
 
         def copy_non_hd():
             node_master.get_wallet_rpc(self.default_wallet_name).unloadwallet()
             # Copy the 0.15.2 non hd wallet to the last Bitcoin Core version and open it:
             shutil.rmtree(node_master_wallet_dir)
-            os.mkdir(node_master_wallet_dir)
+            node_master_wallet_dir.mkdir()
             shutil.copy(
                 v15_2_wallet,
                 node_master_wallet_dir
@@ -175,11 +171,8 @@ class UpgradeWalletTest(BitcoinTestFramework):
             node_master.get_wallet_rpc(self.default_wallet_name).unloadwallet()
             # Copy the 0.15.2 split hd wallet to the last Bitcoin Core version and open it:
             shutil.rmtree(node_master_wallet_dir)
-            os.mkdir(node_master_wallet_dir)
-            shutil.copy(
-                split_hd_wallet,
-                os.path.join(node_master_wallet_dir, 'wallet.dat')
-            )
+            node_master_wallet_dir.mkdir()
+            shutil.copy(split_hd_wallet, node_master_wallet_dir / 'wallet.dat')
             node_master.loadwallet(self.default_wallet_name)
 
         self.restart_node(0)

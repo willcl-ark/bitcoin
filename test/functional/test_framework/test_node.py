@@ -76,16 +76,16 @@ class TestNode():
 
         self.index = i
         self.p2p_conn_index = 1
-        self.datadir_path = datadir_path
-        self.bitcoinconf = self.datadir_path / "bitcoin.conf"
-        self.stdout_dir = self.datadir_path / "stdout"
-        self.stderr_dir = self.datadir_path / "stderr"
+        self.datadir_path: Path = datadir_path
+        self.bitcoinconf: Path = self.datadir_path / "bitcoin.conf"
+        self.stdout_dir: Path = self.datadir_path / "stdout"
+        self.stderr_dir: Path = self.datadir_path / "stderr"
         self.chain = chain
         self.rpchost = rpchost
         self.rpc_timeout = timewait
         self.binary = bitcoind
         self.coverage_dir = coverage_dir
-        self.cwd = cwd
+        self.cwd: Path = cwd
         self.descriptors = descriptors
         if extra_conf is not None:
             append_config(self.datadir_path, extra_conf)
