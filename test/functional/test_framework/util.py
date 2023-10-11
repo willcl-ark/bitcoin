@@ -310,7 +310,7 @@ class PortSeed:
     n = None
 
 
-def get_rpc_proxy(url: str, node_number: int, *, timeout: Optional[int]=None, coveragedir: Optional[str]=None) -> coverage.AuthServiceProxyWrapper:
+def get_rpc_proxy(url: str, node_number: int, *, timeout: Optional[int]=None, coveragedir: Optional[Path]=None) -> coverage.AuthServiceProxyWrapper:
     """
     Args:
         url: URL of the RPC server to call
@@ -361,7 +361,7 @@ def rpc_url(datadir, i, chain, rpchost):
 ################
 
 
-def initialize_datadir(dirname, n, chain, disable_autoconnect=True):
+def initialize_datadir(dirname: Path, n, chain: str, disable_autoconnect=True):
     datadir = get_datadir_path(dirname, n)
     datadir.mkdir(parents=True, exist_ok=True)
     write_config(datadir / "bitcoin.conf", n=n, chain=chain, disable_autoconnect=disable_autoconnect)
@@ -370,7 +370,7 @@ def initialize_datadir(dirname, n, chain, disable_autoconnect=True):
     return datadir
 
 
-def write_config(config_path, *, n, chain, extra_config="", disable_autoconnect=True):
+def write_config(config_path: Path, *, n, chain, extra_config="", disable_autoconnect=True):
     # Translate chain subdirectory name to config name
     if chain == 'testnet3':
         chain_name_conf_arg = 'testnet'
@@ -438,7 +438,7 @@ def append_config(datadir: Path, options):
             f.write(option + "\n")
 
 
-def get_auth_cookie(datadir, chain):
+def get_auth_cookie(datadir: Path, chain: str):
     user = None
     password = None
     if (datadir / "bitcoin.conf").is_file():

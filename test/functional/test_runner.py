@@ -828,7 +828,7 @@ class RPCCoverage():
 
     """
     def __init__(self):
-        self.dir = Path(tempfile.mkdtemp(prefix="coverage"))
+        self.dir: Path = Path(tempfile.mkdtemp(prefix="coverage"))
         self.flag = '--coveragedir=%s' % self.dir
 
     def report_rpc_coverage(self):

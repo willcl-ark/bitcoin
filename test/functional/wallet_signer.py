@@ -23,21 +23,21 @@ class WalletSignerTest(BitcoinTestFramework):
     def add_options(self, parser):
         self.add_wallet_options(parser, legacy=False)
 
-    def mock_signer_path(self):
+    def mock_signer_path(self) -> str:
         path = Path(__file__).resolve().parent / 'mocks' / 'signer.py'
         if platform.system() == "Windows":
             return "py -3 " + str(path)
         else:
             return str(path)
 
-    def mock_invalid_signer_path(self):
+    def mock_invalid_signer_path(self) -> str:
         path = Path(__file__).resolve().parent / 'mocks' / 'invalid_signer.py'
         if platform.system() == "Windows":
             return "py -3 " + str(path)
         else:
             return str(path)
 
-    def mock_multi_signers_path(self):
+    def mock_multi_signers_path(self) -> str:
         path = Path(__file__).resolve().parent / 'mocks' / 'multi_signers.py'
         if platform.system() == "Windows":
             return "py -3 " + str(path)

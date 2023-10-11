@@ -16,7 +16,7 @@ class LoggingTest(BitcoinTestFramework):
         self.num_nodes = 1
         self.setup_clean_chain = True
 
-    def relative_log_path(self, name):
+    def relative_log_path(self, name: str):
         return self.nodes[0].chain_path / name
 
     def run_test(self):

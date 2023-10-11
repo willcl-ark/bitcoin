@@ -67,7 +67,7 @@ class TestNode():
     To make things easier for the test writer, any unrecognised messages will
     be dispatched to the RPC connection."""
 
-    def __init__(self, i, datadir_path, *, chain, rpchost, timewait, timeout_factor, bitcoind, bitcoin_cli, coverage_dir, cwd, extra_conf=None, extra_args=None, use_cli=False, start_perf=False, use_valgrind=False, version=None, descriptors=False):
+    def __init__(self, i, datadir_path: Path, *, chain, rpchost, timewait, timeout_factor, bitcoind, bitcoin_cli, coverage_dir: Path, cwd, extra_conf=None, extra_args=None, use_cli=False, start_perf=False, use_valgrind=False, version=None, descriptors=False):
         """
         Kwargs:
             start_perf (bool): If True, begin profiling the node with `perf` as soon as
@@ -80,11 +80,11 @@ class TestNode():
         self.bitcoinconf: Path = self.datadir_path / "bitcoin.conf"
         self.stdout_dir: Path = self.datadir_path / "stdout"
         self.stderr_dir: Path = self.datadir_path / "stderr"
-        self.chain = chain
+        self.chain: str = chain
         self.rpchost = rpchost
         self.rpc_timeout = timewait
         self.binary = bitcoind
-        self.coverage_dir = coverage_dir
+        self.coverage_dir: Path = coverage_dir
         self.cwd: Path = cwd
         self.descriptors = descriptors
         if extra_conf is not None:
@@ -747,10 +747,10 @@ def arg_to_cli(arg):
 
 class TestNodeCLI():
     """Interface to bitcoin-cli for an individual node"""
-    def __init__(self, binary, datadir):
+    def __init__(self, binary, datadir: Path):
         self.options = []
         self.binary = binary
-        self.datadir = datadir
+        self.datadir: Path = datadir
         self.input = None
         self.log = logging.getLogger('TestFramework.bitcoincli')
 

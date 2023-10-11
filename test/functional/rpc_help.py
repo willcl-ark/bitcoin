@@ -18,7 +18,7 @@ def parse_string(s):
     return s[1:-1]
 
 
-def process_mapping(fname):
+def process_mapping(fname: Path):
     """Find and parse conversion table in implementation file `fname`."""
     cmds = []
     in_rpcs = False

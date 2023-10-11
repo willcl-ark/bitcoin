@@ -18,7 +18,7 @@ from test_framework.util import (
 
 
 class RPCSignerTest(BitcoinTestFramework):
-    def mock_signer_path(self):
+    def mock_signer_path(self) -> str:
         path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'mocks', 'signer.py')
         if platform.system() == "Windows":
             return "py -3 " + path

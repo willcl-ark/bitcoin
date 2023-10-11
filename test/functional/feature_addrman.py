@@ -44,7 +44,7 @@ def serialize_addrman(
     return r
 
 
-def write_addrman(peers_dat, **kwargs):
+def write_addrman(peers_dat: Path, **kwargs):
     with open(peers_dat, "wb") as f:
         f.write(serialize_addrman(**kwargs))
 
