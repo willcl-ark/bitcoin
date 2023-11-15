@@ -156,6 +156,15 @@ std::string GetOpName(opcodetype opcode)
     }
 }
 
+std::string GetOpNameAsm(opcodetype opcode) {
+    std::string o = GetOpName(opcode);
+    const std::string prefix = "OP_";
+    if (o.compare(0, prefix.length(), prefix) == 0) {
+        o.erase(0, prefix.length());
+    }
+    return o;
+}
+
 unsigned int CScript::GetSigOpCount(bool fAccurate) const
 {
     unsigned int n = 0;
