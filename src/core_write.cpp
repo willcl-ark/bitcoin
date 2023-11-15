@@ -106,15 +106,50 @@ std::string ScriptToAsmStr(const CScript& script)
             str += "[error]";
             return str;
         }
-        if (0 <= opcode && opcode <= OP_PUSHDATA4) {
-            if (vch.size() <= static_cast<std::vector<unsigned char>::size_type>(4)) {
-                str += strprintf("%d", CScriptNum(vch, false).getint());
-            } else {
-                str += HexStr(vch);
-            }
-        } else {
-            str += GetOpNameAsm(opcode);
+        // Covers OP_FALSE
+        if (opcode == OP_0) {
+            str += "0";
+            continue;
         }
+        if (opcode == OP_1NEGATE) {
+            str += "-1";
+            continue;
+        }
+        // OP_n -> n (so 1, ..., 10, ..., 16), covers OP_TRUE
+        if ((opcode >= OP_1 && opcode <= OP_16)) {
+            // These are always minimal, use the corresponding value
+            str += strprintf("%i", opcode - OP_1NEGATE - 1);
+            continue;
+        }
+        if (0 <= opcode && opcode <= OP_PUSHDATA4) {
+            if (CheckMinimalPush(vch, opcode)) {
+                if (vch.size() <= 5 ) {
+                    // Return decimal for minimially-encoded values <= 5 bytes (OP_CLTV / OP_CSV accept 5-byte numbers)
+                    CScriptNum n(vch, false, 5);
+                    str += strprintf("%lld", n.GetInt64());
+                } else {
+                    // Otherwise display the push as LE hex enclosed in angle brackets
+                    str += "<";
+                    str += HexStr(vch);
+                    str += ">";
+                }
+                continue;
+            }
+            // If push not minimally-encoded prepend with opcode name and enclose in angle brackets
+            // TODO: There are no tests for this currently
+            str += GetOpNameAsm(opcode);
+            str += "<";
+            str += HexStr(vch);
+            str += ">";
+            continue;
+        }
+        // Handle unknown opcodes
+        if (GetOpNameAsm(opcode)== "UNKNOWN") {
+            str += strprintf("UNKNOWN_%i", opcode);
+            continue;
+        }
+        // Just return the ASM-formatted opcode
+        str += GetOpNameAsm(opcode);
     }
     return str;
 }
