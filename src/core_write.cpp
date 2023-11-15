@@ -89,6 +89,15 @@ std::string SighashToStr(unsigned char sighash_type)
 }
 
 /**
+ * Wrap a string in angle brackets for ASM
+ */
+std::string BracketStr(std::string h)
+{
+    std::string s = "<" + h + ">";
+    return s;
+}
+
+/**
  * Create the assembly string representation of a CScript object.
  * @param[in] script    CScript object to convert into the asm string representation.
  */
@@ -129,18 +138,14 @@ std::string ScriptToAsmStr(const CScript& script)
                     str += strprintf("%lld", n.GetInt64());
                 } else {
                     // Otherwise display the push as LE hex enclosed in angle brackets
-                    str += "<";
-                    str += HexStr(vch);
-                    str += ">";
+                    str += BracketStr(HexStr(vch));
                 }
                 continue;
             }
             // If push not minimally-encoded prepend with opcode name and enclose in angle brackets
             // TODO: There are no tests for this currently
             str += GetOpNameAsm(opcode);
-            str += "<";
-            str += HexStr(vch);
-            str += ">";
+            str += BracketStr(HexStr(vch));
             continue;
         }
         // Handle unknown opcodes
