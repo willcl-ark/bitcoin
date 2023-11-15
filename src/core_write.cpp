@@ -113,7 +113,7 @@ std::string ScriptToAsmStr(const CScript& script)
                 str += HexStr(vch);
             }
         } else {
-            str += GetOpName(opcode);
+            str += GetOpNameAsm(opcode);
         }
     }
     return str;
