@@ -269,8 +269,47 @@ extern const char* SENDTXRCNCL;
 
 extern const std::string NET_MESSAGE_TYPE_OTHER;
 
-/* Get a vector of all valid message types (see above) */
-const std::vector<std::string>& getAllNetMessageTypes();
+/* Number of entries in allNetMessageTypes in protocol.cpp */
+static constexpr size_t NUM_NET_MESSAGE_TYPES{35};
+
+/** All known message types */
+static const std::array<std::string, NUM_NET_MESSAGE_TYPES> g_all_net_message_types{
+    NetMsgType::VERSION,
+    NetMsgType::VERACK,
+    NetMsgType::ADDR,
+    NetMsgType::ADDRV2,
+    NetMsgType::SENDADDRV2,
+    NetMsgType::INV,
+    NetMsgType::GETDATA,
+    NetMsgType::MERKLEBLOCK,
+    NetMsgType::GETBLOCKS,
+    NetMsgType::GETHEADERS,
+    NetMsgType::TX,
+    NetMsgType::HEADERS,
+    NetMsgType::BLOCK,
+    NetMsgType::GETADDR,
+    NetMsgType::MEMPOOL,
+    NetMsgType::PING,
+    NetMsgType::PONG,
+    NetMsgType::NOTFOUND,
+    NetMsgType::FILTERLOAD,
+    NetMsgType::FILTERADD,
+    NetMsgType::FILTERCLEAR,
+    NetMsgType::SENDHEADERS,
+    NetMsgType::FEEFILTER,
+    NetMsgType::SENDCMPCT,
+    NetMsgType::CMPCTBLOCK,
+    NetMsgType::GETBLOCKTXN,
+    NetMsgType::BLOCKTXN,
+    NetMsgType::GETCFILTERS,
+    NetMsgType::CFILTER,
+    NetMsgType::GETCFHEADERS,
+    NetMsgType::CFHEADERS,
+    NetMsgType::GETCFCHECKPT,
+    NetMsgType::CFCHECKPT,
+    NetMsgType::WTXIDRELAY,
+    NetMsgType::SENDTXRCNCL,
+};
 
 /** nServices flags */
 enum ServiceFlags : uint64_t {
