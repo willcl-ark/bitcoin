@@ -127,6 +127,7 @@ This enables support for both wallet types and disables the GUI, assuming
 **Important**: Use `gmake` (the non-GNU `make` will exit with an error).
 
 ```bash
+gmake clean  # If you've built the project previously
 gmake # use "-j N" for N parallel jobs
 gmake check # Run tests if Python 3 is available
 ```

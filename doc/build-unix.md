@@ -10,6 +10,7 @@ To Build
 ```bash
 ./autogen.sh
 ./configure
+make clean # If you've built the project previously
 make # use "-j N" for N parallel jobs
 make install # optional
 ```
@@ -207,6 +208,7 @@ This example lists the steps necessary to setup and build a command line only di
     cd bitcoin/
     ./autogen.sh
     ./configure
+    make clean
     make check
     ./src/bitcoind
 

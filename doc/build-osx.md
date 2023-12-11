@@ -217,6 +217,7 @@ After configuration, you are ready to compile.
 Run the following in your terminal to compile Bitcoin Core:
 
 ``` bash
+make clean  # If you've built the project previously
 make        # use "-j N" here for N parallel jobs
 make check  # Run tests if Python 3 is available
 ```

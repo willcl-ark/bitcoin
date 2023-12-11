@@ -111,6 +111,7 @@ For a full list of configuration options, see the output of `./configure --help`
 Build and run the tests:
 
 ```bash
+gmake clean  # If you've built the project previously
 gmake # use "-j N" here for N parallel jobs
 gmake check # Run tests if Python 3 is available
 ```
