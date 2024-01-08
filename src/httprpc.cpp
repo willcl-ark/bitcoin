@@ -240,12 +240,41 @@ static bool HTTPReq_JSONRPC(const std::any& context, HTTPRequest* req)
     return true;
 }
 
+static std::optional<unsigned> StringToOctal(const std::string& str)
+{
+    unsigned ret = 0;
+    for (char c : str) {
+        if (c < '0' || c > '7') return std::nullopt;
+        ret = (ret << 3) | (c - '0');
+    }
+    return ret;
+}
+
+static auto ConvertPermsToOctal(const std::string& str) noexcept -> std::optional<unsigned>
+{
+    // Don't permit setting special bits as they're not relevant to cookie files
+    if (str.length() == 3) return StringToOctal(str);
+    return std::nullopt;
+}
+
 static bool InitRPCAuthentication()
 {
     if (gArgs.GetArg("-rpcpassword", "") == "")
     {
         LogPrintf("Using random cookie authentication.\n");
-        if (!GenerateAuthCookie(&strRPCUserColonPass)) {
+
+        auto cookie_perms{DEFAULT_COOKIE_PERMS};
+        auto cookie_perms_arg{gArgs.GetArg("-rpccookieperms")};
+        if (cookie_perms_arg) {
+            auto perms{ConvertPermsToOctal(*cookie_perms_arg)};
+            if (!perms) {
+                LogPrintf("Invalid -rpccookieperms=%s; must be a 3 digit octal number (e.g. 400, 440 or 444).\n", *cookie_perms_arg);
+                return false;
+            }
+            cookie_perms = static_cast<fs::perms>(*perms);
+        }
+
+        if (!GenerateAuthCookie(&strRPCUserColonPass, cookie_perms)) {
             return false;
         }
     } else {
