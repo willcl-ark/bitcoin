@@ -282,3 +282,39 @@ bool TryCreateDirectories(const fs::path& p)
     // create_directories didn't create the directory, it had to have existed already
     return false;
 }
+
+std::string PermsToString(fs::perms p)
+{
+    return std::string((p & fs::perms::owner_read)   != fs::perms::none ? "r" : "-") +
+           std::string((p & fs::perms::owner_write)  != fs::perms::none ? "w" : "-") +
+           std::string((p & fs::perms::owner_exec)   != fs::perms::none ? "x" : "-") +
+           std::string((p & fs::perms::group_read)   != fs::perms::none ? "r" : "-") +
+           std::string((p & fs::perms::group_write)  != fs::perms::none ? "w" : "-") +
+           std::string((p & fs::perms::group_exec)   != fs::perms::none ? "x" : "-") +
+           std::string((p & fs::perms::others_read)  != fs::perms::none ? "r" : "-") +
+           std::string((p & fs::perms::others_write) != fs::perms::none ? "w" : "-") +
+           std::string((p & fs::perms::others_exec)  != fs::perms::none ? "x" : "-");
+}
+
+unsigned int PermsToOctal(fs::perms p)
+{
+    unsigned int octalPerms = 0;
+
+    octalPerms |= (p & fs::perms::owner_read)   != fs::perms::none ? 0400 : 0;
+    octalPerms |= (p & fs::perms::owner_write)  != fs::perms::none ? 0200 : 0;
+    octalPerms |= (p & fs::perms::owner_exec)   != fs::perms::none ? 0100 : 0;
+    octalPerms |= (p & fs::perms::group_read)   != fs::perms::none ? 0040 : 0;
+    octalPerms |= (p & fs::perms::group_write)  != fs::perms::none ? 0020 : 0;
+    octalPerms |= (p & fs::perms::group_exec)   != fs::perms::none ? 0010 : 0;
+    octalPerms |= (p & fs::perms::others_read)  != fs::perms::none ? 0004 : 0;
+    octalPerms |= (p & fs::perms::others_write) != fs::perms::none ? 0002 : 0;
+    octalPerms |= (p & fs::perms::others_exec)  != fs::perms::none ? 0001 : 0;
+
+    return octalPerms;
+}
+
+std::string PermsToOctalString(fs::perms p) {
+    std::ostringstream oss;
+    oss << std::oct << std::setfill('0') << std::setw(3) << PermsToOctal(p);
+    return oss.str();
+}
