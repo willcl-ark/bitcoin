@@ -4,19 +4,26 @@
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test multiple RPC users."""
 
-from test_framework.test_framework import BitcoinTestFramework
+from test_framework.test_framework import BitcoinTestFramework, SkipTest
 from test_framework.util import (
     assert_equal,
     str_to_b64str,
 )
 
 import http.client
+import os
 import urllib.parse
 import subprocess
-from random import SystemRandom
 import string
 import configparser
+import stat
 import sys
+from random import SystemRandom
+from typing import Optional
+
+
+# Owner read matches DEFAULT_COOKIE_PERMS in src/httprpc.h
+DEFAULT_COOKIE_PERMISSION = stat.S_IRUSR
 
 
 def call_with_auth(node, user, password):
@@ -84,6 +91,40 @@ class HTTPBasicsTest(BitcoinTestFramework):
         self.log.info('Wrong...')
         assert_equal(401, call_with_auth(node, user + 'wrong', password + 'wrong').status)
 
+    def test_rpccookieperms(self):
+
+        cookie_file_path = self.nodes[1].chain_path / '.cookie'
+
+        def test_perm(perm: Optional[str]):
+            if not perm:
+                perm = f"{(DEFAULT_COOKIE_PERMISSION & 0o777):03o}"
+                self.restart_node(1)
+            else:
+                self.restart_node(1, extra_args=[f"-rpccookieperms={perm}"])
+            file_stat = os.stat(cookie_file_path)
+            actual_perms = f"{(file_stat.st_mode & 0o777):03o}"
+            assert_equal(perm, actual_perms)
+
+        if os.name != 'posix':
+            raise SkipTest("Can't test file perms using on non-posix systems")
+
+        self.log.info('Check that cookie file permissions can be set on unix using -rpccookieperms')
+
+        # Remove any leftover rpc{user|password} config options from previous tests
+        conf = self.nodes[1].bitcoinconf
+        with conf.open('r') as file:
+            lines = file.readlines()
+        filtered_lines = [line for line in lines if not line.startswith('rpcuser') and not line.startswith('rpcpassword')]
+        with conf.open('w') as file:
+            file.writelines(filtered_lines)
+
+        self.log.info('Testing default cookie permission')
+        test_perm(None)
+
+        self.log.info('Testing custom cookie permissions')
+        test_perms = ["640", "440", "444"]
+        [test_perm(perm) for perm in test_perms]
+
     def run_test(self):
         self.conf_setup()
         self.log.info('Check correctness of the rpcauth config option')
@@ -114,6 +155,8 @@ class HTTPBasicsTest(BitcoinTestFramework):
         self.log.info('Check that failure to write cookie file will abort the node gracefully')
         (self.nodes[0].chain_path / ".cookie.tmp").mkdir()
         self.nodes[0].assert_start_raises_init_error(expected_msg=init_error)
+
+        self.test_rpccookieperms()
 
 
 if __name__ == '__main__':
