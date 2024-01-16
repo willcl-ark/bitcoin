@@ -1,6 +1,6 @@
 #!/sbin/openrc-run
 
-# backward compatibility for existing gentoo layout 
+# backward compatibility for existing gentoo layout
 #
 if [ -d "/var/lib/bitcoin/.bitcoin" ]; then
 	BITCOIND_DEFAULT_DATADIR="/var/lib/bitcoin/.bitcoin"
@@ -69,25 +69,16 @@ start_pre() {
 
 checkconfig()
 {
-	if grep -qs '^rpcuser=' "${BITCOIND_CONFIGFILE}" && \
-		! grep -qs '^rpcpassword=' "${BITCOIND_CONFIGFILE}" ; then
+    # check for deprecated rpcuser and rpcpassword settings
+    if grep -qs '^rpcuser=' "$BITCOIND_CONFIGFILE" || grep -qs '^rpcpassword=' "$BITCOIND_CONFIGFILE"; then
+        eerror "WARNING: The `rpcuser` and `rpcpassword` options are now deprecated and should be removed from the configuration file."
+        eerror "Use cookie file or the `rpcauth` configuration setting for RPC authentication."
+        eerror "See share/rpcauth/README.md for more information on `rpcauth`."
+        eerror "The presence of `rpcuser` or `rpcpassword` in $BITCOIND_CONFIGFILE may in a future version cause bitcoind to fail startup."
+        eerror ""
+		eerror "It is recommended that you also set alertnotify so you are notified of problems:"
 		eerror ""
-		eerror "ERROR: You must set a secure rpcpassword to run bitcoind."
-		eerror "The setting must appear in ${BITCOIND_CONFIGFILE}"
+		eerror "ie: alertnotify=echo %%s | mail -s \"Bitcoin Alert\" admin@foo.com"
 		eerror ""
-		eerror "This password is security critical to securing wallets "
-		eerror "and must not be the same as the rpcuser setting."
-		eerror "You can generate a suitable random password using the following "
-		eerror "command from the shell:"
-		eerror ""
-		eerror "bash -c 'tr -dc a-zA-Z0-9 < /dev/urandom | head -c32 && echo'"
-		eerror ""
-		eerror "It is recommended that you also set alertnotify so you are "
-		eerror "notified of problems:"
-		eerror ""
-		eerror "ie: alertnotify=echo %%s | mail -s \"Bitcoin Alert\"" \
-			"admin@foo.com"
-		eerror ""
-		return 1
-	fi
+    fi
 }
