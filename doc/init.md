@@ -20,25 +20,27 @@ The macOS configuration assumes bitcoind will be set up for the current user.
 Configuration
 ---------------------------------
 
-Running bitcoind as a daemon does not require any manual configuration. You may
-set the `rpcauth` setting in the `bitcoin.conf` configuration file to override
-the default behaviour of using a special cookie for authentication.
+Running bitcoind as a daemon does not require any manual configuration. By
+default a special cookie file is used for RPC authentication. The cookie is
+generated with random content when the daemon starts, and deleted when it
+exits. Read access to this file controls access to RPCs.
 
-This password does not have to be remembered or typed as it is mostly used
-as a fixed token that bitcoind and client programs read from the configuration
-file, however it is recommended that a strong and secure password be used
-as this password is security critical to securing the wallet should the
+By default the cookie is stored in the data directory but its location can be
+overridden with the option '-rpccookiefile'.
+
+The cookie file allows for running bitcoind without having to do any manual
+configuration.
+
+You may optionally set the `rpcauth` setting in the `bitcoin.conf`
+configuration file to override the default behaviour of cookie-based
+authentication. See `share/rpcauth/README.md` for information on generating
+valid `rpcauth` credentials.
+
+The password used for `rpcauth` does not have to be remembered or typed as it
+is used as a fixed token that bitcoind and client programs read from the
+configuration file, however it is recommended that a strong and secure password
+be used as this password is security critical to securing the wallet should the
 wallet be enabled.
-
-If bitcoind is run with the "-server" flag (set by default), and no rpcpassword is set,
-it will use a special cookie file for authentication. The cookie is generated with random
-content when the daemon starts, and deleted when it exits. Read access to this file
-controls who can access it through RPC.
-
-By default the cookie is stored in the data directory, but it's location can be overridden
-with the option '-rpccookiefile'.
-
-This allows for running bitcoind without having to do any manual configuration.
 
 `conf`, `pid`, and `wallet` accept relative paths which are interpreted as
 relative to the data directory. `wallet` *only* supports relative paths.

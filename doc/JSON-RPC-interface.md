@@ -32,10 +32,10 @@ requests when multiple wallets are in use.
 ### Examples
 
 ```sh
-# Get block count from the / endpoint when rpcuser=alice and rpcport=38332
+# Get block count from the / endpoint when rpcauth=alice:<password_hash> and rpcport=38332
 $ curl --user alice --data-binary '{"jsonrpc": "1.0", "id": "0", "method": "getblockcount", "params": []}' -H 'content-type: text/plain;' localhost:38332/
 
-# Get balance from the /wallet/walletname endpoint when rpcuser=alice, rpcport=38332 and rpcwallet=desc-wallet
+# Get balance from the /wallet/walletname endpoint when rpcauth=alice:<password_hash>, rpcport=38332 and rpcwallet=desc-wallet
 $ curl --user alice --data-binary '{"jsonrpc": "1.0", "id": "0", "method": "getbalance", "params": []}' -H 'content-type: text/plain;' localhost:38332/wallet/desc-wallet
 
 ```
@@ -128,19 +128,17 @@ RPC interface will be abused.
     Instead, expose it only on the host system's localhost, for example:
     `-p 127.0.0.1:8332:8332`
 
-- **Secure authentication:** By default, when no `rpcpassword` is specified, Bitcoin Core generates unique
-  login credentials each time it restarts and puts them into a file
-  readable only by the user that started Bitcoin Core, allowing any of
-  that user's RPC clients with read access to the file to login
-  automatically.  The file is `.cookie` in the Bitcoin Core
-  configuration directory, and using these credentials is the preferred
-  RPC authentication method.  If you need to generate static login
-  credentials for your programs, you can use the script in the
-  `share/rpcauth` directory in the Bitcoin Core source tree.  As a final
-  fallback, you can directly use manually-chosen `rpcuser` and
-  `rpcpassword` configuration parameters---but you must ensure that you
-  choose a strong and unique passphrase (and still don't use insecure
-  networks, as mentioned above).
+- **Secure authentication:** By default Bitcoin Core generates unique login
+  credentials each time it restarts and puts them into a file readable only by
+  the user that started Bitcoin Core, allowing any of that user's RPC clients
+  with read access to the file to login automatically.  The file is `.cookie`
+  in the Bitcoin Core data directory, and using these credentials is the
+  preferred RPC authentication method.  If you need to generate static login
+  credentials for your programs, you can use the script in the `share/rpcauth`
+  directory in the Bitcoin Core source tree to generate credentials to be used
+  with the `rpcauth` option which can be specified in `bitcoin.conf` or as a
+  command line argument. The usage of `rpcuser` and `rpcpassword` is now fully
+  deprecated.
 
 - **Secure string handling:** The RPC interface does not guarantee any
   escaping of data beyond what's necessary to encode it as JSON,
