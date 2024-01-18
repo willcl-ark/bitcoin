@@ -2,6 +2,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include "common/args.h"
+#include <filesystem>
 #include <node/blockstorage.h>
 
 #include <arith_uint256.h>
@@ -1095,6 +1097,34 @@ bool BlockManager::ReadRawBlockFromDisk(std::vector<uint8_t>& block, const FlatF
     } catch (const std::exception& e) {
         return error("%s: Read from block file failed: %s for %s", __func__, e.what(), pos.ToString());
     }
+
+    return true;
+}
+
+bool BlockManager::SaveBadBlockToDisk(const CBlock& block)
+{
+    auto datadir = gArgs.GetDataDirNet();
+    auto dir = datadir / "bad_blocks";
+    if (!fs::exists(dir) && !fs::create_directories(dir)) {
+        error("%s: Unable to create directory %s", __func__, dir.utf8string());
+        return false;
+    }
+    std::string fileName = dir.utf8string() + "block_" + block.GetHash().ToString() + ".dat";
+
+    FILE* rawFile = std::fopen(fileName.c_str(), "wb");
+    if (!rawFile) {
+        error("%s: Unable to open file %s for writing", __func__, fileName.c_str());
+        return false;
+    }
+
+    AutoFile file(rawFile);
+
+    // Write index header
+    unsigned int nSize = GetSerializeSize(TX_WITH_WITNESS(block));
+    file << GetParams().MessageStart() << nSize;
+
+    // Write block
+    file << TX_WITH_WITNESS(block);
 
     return true;
 }

@@ -4131,6 +4131,8 @@ bool ChainstateManager::AcceptBlock(const std::shared_ptr<const CBlock>& pblock,
             pindex->nStatus |= BLOCK_FAILED_VALID;
             m_blockman.m_dirty_blockindex.insert(pindex);
         }
+        // Write the bad block to disk for evaluation
+        m_blockman.SaveBadBlockToDisk(block);
         return error("%s: %s", __func__, state.ToString());
     }
 
