@@ -32,7 +32,6 @@ enum class FeeReason;
 enum class OutputType;
 enum class TransactionError;
 struct PartiallySignedTransaction;
-struct bilingual_str;
 namespace wallet {
 class CCoinControl;
 class CWallet;
@@ -165,7 +164,7 @@ public:
     //! Create bump transaction.
     virtual bool createBumpTransaction(const uint256& txid,
         const wallet::CCoinControl& coin_control,
-        std::vector<bilingual_str>& errors,
+        std::vector<std::string>& errors,
         CAmount& old_fee,
         CAmount& new_fee,
         CMutableTransaction& mtx) = 0;
@@ -176,7 +175,7 @@ public:
     //! Commit bump transaction.
     virtual bool commitBumpTransaction(const uint256& txid,
         CMutableTransaction&& mtx,
-        std::vector<bilingual_str>& errors,
+        std::vector<std::string>& errors,
         uint256& bumped_txid) = 0;
 
     //! Get a transaction.
@@ -323,16 +322,16 @@ class WalletLoader : public ChainClient
 {
 public:
     //! Create new wallet.
-    virtual util::Result<std::unique_ptr<Wallet>> createWallet(const std::string& name, const SecureString& passphrase, uint64_t wallet_creation_flags, std::vector<bilingual_str>& warnings) = 0;
+    virtual util::Result<std::unique_ptr<Wallet>> createWallet(const std::string& name, const SecureString& passphrase, uint64_t wallet_creation_flags, std::vector<std::string>& warnings) = 0;
 
     //! Load existing wallet.
-    virtual util::Result<std::unique_ptr<Wallet>> loadWallet(const std::string& name, std::vector<bilingual_str>& warnings) = 0;
+    virtual util::Result<std::unique_ptr<Wallet>> loadWallet(const std::string& name, std::vector<std::string>& warnings) = 0;
 
     //! Return default wallet directory.
     virtual std::string getWalletDir() = 0;
 
     //! Restore backup wallet
-    virtual util::Result<std::unique_ptr<Wallet>> restoreWallet(const fs::path& backup_file, const std::string& wallet_name, std::vector<bilingual_str>& warnings) = 0;
+    virtual util::Result<std::unique_ptr<Wallet>> restoreWallet(const fs::path& backup_file, const std::string& wallet_name, std::vector<std::string>& warnings) = 0;
 
     //! Migrate a wallet
     virtual util::Result<WalletMigrationResult> migrateWallet(const std::string& name, const SecureString& passphrase) = 0;

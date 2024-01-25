@@ -7,7 +7,6 @@
 #include <logging.h>
 #include <node/interface_ui.h>
 #include <util/signalinterrupt.h>
-#include <util/translation.h>
 #include <warnings.h>
 
 #include <atomic>
@@ -16,10 +15,10 @@
 
 namespace node {
 
-void AbortNode(util::SignalInterrupt* shutdown, std::atomic<int>& exit_status, const bilingual_str& message)
+void AbortNode(util::SignalInterrupt* shutdown, std::atomic<int>& exit_status, const std::string& message)
 {
     SetMiscWarning(message);
-    InitError(_("A fatal internal error occurred, see debug.log for details: ") + message);
+    InitError("A fatal internal error occurred, see debug.log for details: " + message);
     exit_status.store(EXIT_FAILURE);
     if (shutdown && !(*shutdown)()) {
         LogError("Failed to send shutdown signal\n");

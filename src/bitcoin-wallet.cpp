@@ -19,7 +19,6 @@
 #include <pubkey.h>
 #include <tinyformat.h>
 #include <util/exception.h>
-#include <util/translation.h>
 #include <wallet/wallettool.h>
 
 #include <exception>
@@ -27,7 +26,6 @@
 #include <string>
 #include <tuple>
 
-const std::function<std::string(const char*)> G_TRANSLATION_FUN = nullptr;
 UrlDecodeFn* const URL_DECODE = nullptr;
 
 static void SetupWalletToolArgs(ArgsManager& argsman)

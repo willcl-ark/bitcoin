@@ -25,13 +25,11 @@
 #include <util/exception.h>
 #include <util/strencodings.h>
 #include <util/time.h>
-#include <util/translation.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
-#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -50,7 +48,6 @@
 // just use a plain system_clock.
 using CliClock = std::chrono::system_clock;
 
-const std::function<std::string(const char*)> G_TRANSLATION_FUN = nullptr;
 UrlDecodeFn* const URL_DECODE = urlDecode;
 
 static const char DEFAULT_RPCCONNECT[] = "127.0.0.1";

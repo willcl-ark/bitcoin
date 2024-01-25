@@ -15,7 +15,6 @@
 #include <util/strencodings.h>
 #include <util/string.h>
 #include <util/time.h>
-#include <util/translation.h>
 #include <wallet/scriptpubkeyman.h>
 
 #include <optional>
@@ -27,7 +26,7 @@ const uint32_t BIP32_HARDENED_KEY_LIMIT = 0x80000000;
 util::Result<CTxDestination> LegacyScriptPubKeyMan::GetNewDestination(const OutputType type)
 {
     if (LEGACY_OUTPUT_TYPES.count(type) == 0) {
-        return util::Error{_("Error: Legacy wallets only support the \"legacy\", \"p2sh-segwit\", and \"bech32\" address types")};
+        return util::Error{"Error: Legacy wallets only support the \"legacy\", \"p2sh-segwit\", and \"bech32\" address types"};
     }
     assert(type != OutputType::BECH32M);
 
@@ -39,7 +38,7 @@ util::Result<CTxDestination> LegacyScriptPubKeyMan::GetNewDestination(const Outp
     // Generate a new key that is added to wallet
     CPubKey new_key;
     if (!GetKeyFromPool(new_key, type)) {
-        return util::Error{_("Error: Keypool ran out, please call keypoolrefill first")};
+        return util::Error{"Error: Keypool ran out, please call keypoolrefill first"};
     }
     LearnRelatedScripts(new_key, type);
     return GetDestinationForKey(new_key, type);
@@ -300,20 +299,20 @@ bool LegacyScriptPubKeyMan::Encrypt(const CKeyingMaterial& master_key, WalletBat
 util::Result<CTxDestination> LegacyScriptPubKeyMan::GetReservedDestination(const OutputType type, bool internal, int64_t& index, CKeyPool& keypool)
 {
     if (LEGACY_OUTPUT_TYPES.count(type) == 0) {
-        return util::Error{_("Error: Legacy wallets only support the \"legacy\", \"p2sh-segwit\", and \"bech32\" address types")};
+        return util::Error{"Error: Legacy wallets only support the \"legacy\", \"p2sh-segwit\", and \"bech32\" address types"};
     }
     assert(type != OutputType::BECH32M);
 
     LOCK(cs_KeyStore);
     if (!CanGetAddresses(internal)) {
-        return util::Error{_("Error: Keypool ran out, please call keypoolrefill first")};
+        return util::Error{"Error: Keypool ran out, please call keypoolrefill first"};
     }
 
     // Fill-up keypool if needed
     TopUp();
 
     if (!ReserveKeyFromKeyPool(index, keypool, internal)) {
-        return util::Error{_("Error: Keypool ran out, please call keypoolrefill first")};
+        return util::Error{"Error: Keypool ran out, please call keypoolrefill first"};
     }
     return GetDestinationForKey(keypool.vchPubKey, type);
 }
@@ -467,7 +466,7 @@ bool LegacyScriptPubKeyMan::CanGetAddresses(bool internal) const
     return keypool_has_keys;
 }
 
-bool LegacyScriptPubKeyMan::Upgrade(int prev_version, int new_version, bilingual_str& error)
+bool LegacyScriptPubKeyMan::Upgrade(int prev_version, int new_version, std::string& error)
 {
     LOCK(cs_KeyStore);
 
@@ -507,7 +506,7 @@ bool LegacyScriptPubKeyMan::Upgrade(int prev_version, int new_version, bilingual
     // Regenerate the keypool if upgraded to HD
     if (hd_upgrade) {
         if (!NewKeyPool()) {
-            error = _("Unable to generate keys");
+            error = "Unable to generate keys";
             return false;
         }
     }
@@ -609,7 +608,7 @@ bool LegacyScriptPubKeyMan::CanProvide(const CScript& script, SignatureData& sig
     }
 }
 
-bool LegacyScriptPubKeyMan::SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors) const
+bool LegacyScriptPubKeyMan::SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, std::string>& input_errors) const
 {
     return ::SignTransaction(tx, this, coins, sighash, input_errors);
 }
@@ -2008,7 +2007,7 @@ util::Result<CTxDestination> DescriptorScriptPubKeyMan::GetNewDestination(const 
 {
     // Returns true if this descriptor supports getting new addresses. Conditions where we may be unable to fetch them (e.g. locked) are caught later
     if (!CanGetAddresses()) {
-        return util::Error{_("No addresses available")};
+        return util::Error{"No addresses available"};
     }
     {
         LOCK(cs_desc_man);
@@ -2026,16 +2025,16 @@ util::Result<CTxDestination> DescriptorScriptPubKeyMan::GetNewDestination(const 
         std::vector<CScript> scripts_temp;
         if (m_wallet_descriptor.range_end <= m_max_cached_index && !TopUp(1)) {
             // We can't generate anymore keys
-            return util::Error{_("Error: Keypool ran out, please call keypoolrefill first")};
+            return util::Error{"Error: Keypool ran out, please call keypoolrefill first"};
         }
         if (!m_wallet_descriptor.descriptor->ExpandFromCache(m_wallet_descriptor.next_index, m_wallet_descriptor.cache, scripts_temp, out_keys)) {
             // We can't generate anymore keys
-            return util::Error{_("Error: Keypool ran out, please call keypoolrefill first")};
+            return util::Error{"Error: Keypool ran out, please call keypoolrefill first"};
         }
 
         CTxDestination dest;
         if (!ExtractDestination(scripts_temp[0], dest)) {
-            return util::Error{_("Error: Cannot extract destination from the generated scriptpubkey")}; // shouldn't happen
+            return util::Error{"Error: Cannot extract destination from the generated scriptpubkey"}; // shouldn't happen
         }
         m_wallet_descriptor.next_index++;
         WalletBatch(m_storage.GetDatabase()).WriteDescriptor(GetID(), m_wallet_descriptor);
@@ -2453,7 +2452,7 @@ bool DescriptorScriptPubKeyMan::CanProvide(const CScript& script, SignatureData&
     return IsMine(script);
 }
 
-bool DescriptorScriptPubKeyMan::SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors) const
+bool DescriptorScriptPubKeyMan::SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, std::string>& input_errors) const
 {
     std::unique_ptr<FlatSigningProvider> keys = std::make_unique<FlatSigningProvider>();
     for (const auto& coin_pair : coins) {

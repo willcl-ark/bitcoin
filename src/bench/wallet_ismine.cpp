@@ -11,7 +11,6 @@
 #include <key_io.h>
 #include <node/context.h>
 #include <test/util/setup_common.h>
-#include <util/translation.h>
 #include <validationinterface.h>
 #include <wallet/context.h>
 #include <wallet/test/util.h>

@@ -12,15 +12,14 @@
 #include <common/system.h>
 #include <sync.h>
 #include <util/string.h>
-#include <util/translation.h>
 
 #include <vector>
 
 static GlobalMutex g_warnings_mutex;
-static bilingual_str g_misc_warnings GUARDED_BY(g_warnings_mutex);
+static std::string g_misc_warnings GUARDED_BY(g_warnings_mutex);
 static bool fLargeWorkInvalidChainFound GUARDED_BY(g_warnings_mutex) = false;
 
-void SetMiscWarning(const bilingual_str& warning)
+void SetMiscWarning(const std::string& warning)
 {
     LOCK(g_warnings_mutex);
     g_misc_warnings = warning;
@@ -32,16 +31,16 @@ void SetfLargeWorkInvalidChainFound(bool flag)
     fLargeWorkInvalidChainFound = flag;
 }
 
-bilingual_str GetWarnings(bool verbose)
+std::string GetWarnings(bool verbose)
 {
-    bilingual_str warnings_concise;
-    std::vector<bilingual_str> warnings_verbose;
+    std::string warnings_concise;
+    std::vector<std::string> warnings_verbose;
 
     LOCK(g_warnings_mutex);
 
     // Pre-release build warning
     if (!CLIENT_VERSION_IS_RELEASE) {
-        warnings_concise = _("This is a pre-release test build - use at your own risk - do not use for mining or merchant applications");
+        warnings_concise = "This is a pre-release test build - use at your own risk - do not use for mining or merchant applications";
         warnings_verbose.emplace_back(warnings_concise);
     }
 
@@ -52,12 +51,12 @@ bilingual_str GetWarnings(bool verbose)
     }
 
     if (fLargeWorkInvalidChainFound) {
-        warnings_concise = _("Warning: We do not appear to fully agree with our peers! You may need to upgrade, or other nodes may need to upgrade.");
+        warnings_concise = "Warning: We do not appear to fully agree with our peers! You may need to upgrade, or other nodes may need to upgrade.";
         warnings_verbose.emplace_back(warnings_concise);
     }
 
     if (verbose) {
-        return Join(warnings_verbose, Untranslated("<hr />"));
+        return Join(warnings_verbose, "<hr />");
     }
 
     return warnings_concise;

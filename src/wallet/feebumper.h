@@ -11,7 +11,6 @@
 
 class uint256;
 enum class FeeEstimateMode;
-struct bilingual_str;
 
 namespace wallet {
 class CCoinControl;
@@ -49,7 +48,7 @@ bool TransactionCanBeBumped(const CWallet& wallet, const uint256& txid);
 Result CreateRateBumpTransaction(CWallet& wallet,
     const uint256& txid,
     const CCoinControl& coin_control,
-    std::vector<bilingual_str>& errors,
+    std::vector<std::string>& errors,
     CAmount& old_fee,
     CAmount& new_fee,
     CMutableTransaction& mtx,
@@ -69,7 +68,7 @@ bool SignTransaction(CWallet& wallet, CMutableTransaction& mtx);
 Result CommitTransaction(CWallet& wallet,
     const uint256& txid,
     CMutableTransaction&& mtx,
-    std::vector<bilingual_str>& errors,
+    std::vector<std::string>& errors,
     uint256& bumped_txid);
 
 struct SignatureWeights

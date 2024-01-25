@@ -27,7 +27,6 @@
 #include <unordered_map>
 
 enum class OutputType;
-struct bilingual_str;
 
 namespace wallet {
 struct MigrationData;
@@ -178,14 +177,14 @@ protected:
 public:
     explicit ScriptPubKeyMan(WalletStorage& storage) : m_storage(storage) {}
     virtual ~ScriptPubKeyMan() {};
-    virtual util::Result<CTxDestination> GetNewDestination(const OutputType type) { return util::Error{Untranslated("Not supported")}; }
+    virtual util::Result<CTxDestination> GetNewDestination(const OutputType type) { return util::Error{"Not supported"}; }
     virtual isminetype IsMine(const CScript& script) const { return ISMINE_NO; }
 
     //! Check that the given decryption key is valid for this ScriptPubKeyMan, i.e. it decrypts all of the keys handled by it.
     virtual bool CheckDecryptionKey(const CKeyingMaterial& master_key) { return false; }
     virtual bool Encrypt(const CKeyingMaterial& master_key, WalletBatch* batch) { return false; }
 
-    virtual util::Result<CTxDestination> GetReservedDestination(const OutputType type, bool internal, int64_t& index, CKeyPool& keypool) { return util::Error{Untranslated("Not supported")}; }
+    virtual util::Result<CTxDestination> GetReservedDestination(const OutputType type, bool internal, int64_t& index, CKeyPool& keypool) { return util::Error{"Not supported"}; }
     virtual void KeepDestination(int64_t index, const OutputType& type) {}
     virtual void ReturnDestination(int64_t index, bool internal, const CTxDestination& addr) {}
 
@@ -217,7 +216,7 @@ public:
     virtual bool CanGetAddresses(bool internal = false) const { return false; }
 
     /** Upgrades the wallet to the specified version */
-    virtual bool Upgrade(int prev_version, int new_version, bilingual_str& error) { return true; }
+    virtual bool Upgrade(int prev_version, int new_version, std::string& error) { return true; }
 
     virtual bool HavePrivateKeys() const { return false; }
 
@@ -240,7 +239,7 @@ public:
     virtual bool CanProvide(const CScript& script, SignatureData& sigdata) { return false; }
 
     /** Creates new signatures and adds them to the transaction. Returns whether all inputs were signed */
-    virtual bool SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors) const { return false; }
+    virtual bool SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, std::string>& input_errors) const { return false; }
     /** Sign a message with the given script */
     virtual SigningResult SignMessage(const std::string& message, const PKHash& pkhash, std::string& str_sig) const { return SigningResult::SIGNING_FAILED; };
     /** Adds script and derivation path information to a PSBT, and optionally signs it. */
@@ -400,7 +399,7 @@ public:
 
     bool SetupGeneration(bool force = false) override;
 
-    bool Upgrade(int prev_version, int new_version, bilingual_str& error) override;
+    bool Upgrade(int prev_version, int new_version, std::string& error) override;
 
     bool HavePrivateKeys() const override;
 
@@ -420,7 +419,7 @@ public:
 
     bool CanProvide(const CScript& script, SignatureData& sigdata) override;
 
-    bool SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors) const override;
+    bool SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, std::string>& input_errors) const override;
     SigningResult SignMessage(const std::string& message, const PKHash& pkhash, std::string& str_sig) const override;
     TransactionError FillPSBT(PartiallySignedTransaction& psbt, const PrecomputedTransactionData& txdata, int sighash_type = SIGHASH_DEFAULT, bool sign = true, bool bip32derivs = false, int* n_signed = nullptr, bool finalize = true) const override;
 
@@ -650,7 +649,7 @@ public:
 
     bool CanProvide(const CScript& script, SignatureData& sigdata) override;
 
-    bool SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, bilingual_str>& input_errors) const override;
+    bool SignTransaction(CMutableTransaction& tx, const std::map<COutPoint, Coin>& coins, int sighash, std::map<int, std::string>& input_errors) const override;
     SigningResult SignMessage(const std::string& message, const PKHash& pkhash, std::string& str_sig) const override;
     TransactionError FillPSBT(PartiallySignedTransaction& psbt, const PrecomputedTransactionData& txdata, int sighash_type = SIGHASH_DEFAULT, bool sign = true, bool bip32derivs = false, int* n_signed = nullptr, bool finalize = true) const override;
 

@@ -13,7 +13,6 @@
 #include <test/fuzz/util.h>
 #include <test/fuzz/util/net.h>
 #include <test/util/setup_common.h>
-#include <util/translation.h>
 
 #include <cstdint>
 #include <vector>

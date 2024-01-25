@@ -19,7 +19,6 @@
 #include <test/fuzz/util/descriptor.h>
 #include <test/util/setup_common.h>
 #include <util/check.h>
-#include <util/translation.h>
 #include <validation.h>
 #include <wallet/scriptpubkeyman.h>
 #include <wallet/test/util.h>
@@ -178,7 +177,7 @@ FUZZ_TARGET(scriptpubkeyman, .init = initialize_spkm)
 
                 std::map<COutPoint, Coin> coins{ConsumeCoins(fuzzed_data_provider)};
                 const int sighash{fuzzed_data_provider.ConsumeIntegral<int>()};
-                std::map<int, bilingual_str> input_errors;
+                std::map<int, std::string> input_errors;
                 (void)spk_manager->SignTransaction(tx_to, coins, sighash, input_errors);
             },
             [&] {

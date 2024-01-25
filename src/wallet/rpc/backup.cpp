@@ -22,7 +22,6 @@
 #include <util/bip32.h>
 #include <util/fs.h>
 #include <util/time.h>
-#include <util/translation.h>
 #include <wallet/rpc/util.h>
 #include <wallet/wallet.h>
 
@@ -399,7 +398,7 @@ RPCHelpMan removeprunedfunds()
     std::vector<uint256> vHash;
     vHash.push_back(hash);
     if (auto res = pwallet->RemoveTxs(vHash); !res) {
-        throw JSONRPCError(RPC_WALLET_ERROR, util::ErrorString(res).original);
+        throw JSONRPCError(RPC_WALLET_ERROR, util::ErrorString(res));
     }
 
     return UniValue::VNULL;
@@ -540,7 +539,7 @@ RPCHelpMan importwallet()
 
         // Use uiInterface.ShowProgress instead of pwallet.ShowProgress because pwallet.ShowProgress has a cancel button tied to AbortRescan which
         // we don't want for this progress bar showing the import progress. uiInterface.ShowProgress does not have a cancel button.
-        pwallet->chain().showProgress(strprintf("%s " + _("Importing…").translated, pwallet->GetDisplayName()), 0, false); // show progress dialog in GUI
+        pwallet->chain().showProgress(strprintf("%s Importing…", pwallet->GetDisplayName()), 0, false); // show progress dialog in GUI
         std::vector<std::tuple<CKey, int64_t, bool, std::string>> keys;
         std::vector<std::pair<CScript, int64_t>> scripts;
         while (file.good()) {
@@ -1932,8 +1931,8 @@ RPCHelpMan restorewallet()
     std::optional<bool> load_on_start = request.params[2].isNull() ? std::nullopt : std::optional<bool>(request.params[2].get_bool());
 
     DatabaseStatus status;
-    bilingual_str error;
-    std::vector<bilingual_str> warnings;
+    std::string error;
+    std::vector<std::string> warnings;
 
     const std::shared_ptr<CWallet> wallet = RestoreWallet(context, backup_file, wallet_name, load_on_start, status, error, warnings);
 

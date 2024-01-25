@@ -21,8 +21,8 @@ namespace wallet {
 // Common selection error across the algorithms
 static util::Result<SelectionResult> ErrorMaxWeightExceeded()
 {
-    return util::Error{_("The inputs size exceeds the maximum weight. "
-                         "Please try sending a smaller amount or manually consolidating your wallet's UTXOs")};
+    return util::Error{"The inputs size exceeds the maximum weight. "
+                         "Please try sending a smaller amount or manually consolidating your wallet's UTXOs"};
 }
 
 // Sort by descending (effective) value prefer lower waste on tie

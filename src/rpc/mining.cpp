@@ -36,7 +36,6 @@
 #include <util/strencodings.h>
 #include <util/string.h>
 #include <util/time.h>
-#include <util/translation.h>
 #include <validation.h>
 #include <validationinterface.h>
 #include <warnings.h>
@@ -448,7 +447,7 @@ static RPCHelpMan getmininginfo()
     obj.pushKV("networkhashps",    getnetworkhashps().HandleRequest(request));
     obj.pushKV("pooledtx",         (uint64_t)mempool.size());
     obj.pushKV("chain", chainman.GetParams().GetChainTypeString());
-    obj.pushKV("warnings",         GetWarnings(false).original);
+    obj.pushKV("warnings",         GetWarnings(false));
     return obj;
 },
     };

@@ -19,7 +19,6 @@
 #include <util/moneystr.h>
 #include <util/rbf.h>
 #include <util/trace.h>
-#include <util/translation.h>
 #include <wallet/coincontrol.h>
 #include <wallet/fees.h>
 #include <wallet/receive.h>
@@ -270,7 +269,7 @@ util::Result<PreSelectedInputs> FetchSelectedInputs(const CWallet& wallet, const
         if (auto ptr_wtx = wallet.GetWalletTx(outpoint.hash)) {
             // Clearly invalid input, fail
             if (ptr_wtx->tx->vout.size() <= outpoint.n) {
-                return util::Error{strprintf(_("Invalid pre-selected input %s"), outpoint.ToString())};
+                return util::Error{strprintf("Invalid pre-selected input %s", outpoint.ToString())};
             }
             txout = ptr_wtx->tx->vout.at(outpoint.n);
             if (input_bytes == -1) {
@@ -280,7 +279,7 @@ util::Result<PreSelectedInputs> FetchSelectedInputs(const CWallet& wallet, const
             // The input is external. We did not find the tx in mapWallet.
             const auto out{coin_control.GetExternalOutput(outpoint)};
             if (!out) {
-                return util::Error{strprintf(_("Not found pre-selected input %s"), outpoint.ToString())};
+                return util::Error{strprintf("Not found pre-selected input %s", outpoint.ToString())};
             }
 
             txout = *out;
@@ -291,7 +290,7 @@ util::Result<PreSelectedInputs> FetchSelectedInputs(const CWallet& wallet, const
         }
 
         if (input_bytes == -1) {
-            return util::Error{strprintf(_("Not solvable pre-selected input %s"), outpoint.ToString())}; // Not solvable, can't estimate size for fee
+            return util::Error{strprintf("Not solvable pre-selected input %s", outpoint.ToString())}; // Not solvable, can't estimate size for fee
         }
 
         /* Set some defaults for depth, spendable, solvable, safe, time, and from_me as these don't matter for preset inputs since no selection is being done. */
@@ -740,7 +739,7 @@ util::Result<SelectionResult> ChooseSelectionResult(interfaces::Chain& chain, co
         }
         std::optional<CAmount> combined_bump_fee = chain.calculateCombinedBumpFee(outpoints, coin_selection_params.m_effective_feerate);
         if (!combined_bump_fee.has_value()) {
-            return util::Error{_("Failed to calculate bump fees, because unconfirmed UTXOs depend on enormous cluster of unconfirmed transactions.")};
+            return util::Error{"Failed to calculate bump fees, because unconfirmed UTXOs depend on enormous cluster of unconfirmed transactions."};
         }
         CAmount bump_fee_overestimate = summed_bump_fees - combined_bump_fee.value();
         if (bump_fee_overestimate) {
@@ -763,8 +762,8 @@ util::Result<SelectionResult> SelectCoins(const CWallet& wallet, CoinsResult& av
 
     // Return if automatic coin selection is disabled, and we don't cover the selection target
     if (!coin_control.m_allow_other_inputs && selection_target > 0) {
-        return util::Error{_("The preselected coins total amount does not cover the transaction target. "
-                             "Please allow other inputs to be automatically selected or include more coins manually")};
+        return util::Error{"The preselected coins total amount does not cover the transaction target. "
+                             "Please allow other inputs to be automatically selected or include more coins manually"};
     }
 
     // Return if we can cover the target only with the preset inputs
@@ -866,7 +865,7 @@ util::Result<SelectionResult> AutomaticCoinSelection(const CWallet& wallet, Coin
         if (CAmount total_amount = available_coins.GetTotalAmount() - total_discarded < value_to_select) {
             // Special case, too-long-mempool cluster.
             if (total_amount + total_unconf_long_chain > value_to_select) {
-                return util::Result<SelectionResult>({_("Unconfirmed UTXOs are available, but spending them creates a chain of transactions that will be rejected by the mempool")});
+                return util::Result<SelectionResult>({"Unconfirmed UTXOs are available, but spending them creates a chain of transactions that will be rejected by the mempool"});
             }
             return util::Result<SelectionResult>(util::Error()); // General "Insufficient Funds"
         }
@@ -1012,7 +1011,7 @@ static util::Result<CreatedTransactionResult> CreateTransactionInternal(
 
     // Create change script that will be used if we need change
     CScript scriptChange;
-    bilingual_str error; // possible error str
+    std::string error; // possible error str
 
     // coin control: send change to custom address
     if (!std::get_if<CNoDestination>(&coin_control.destChange)) {
@@ -1030,7 +1029,7 @@ static util::Result<CreatedTransactionResult> CreateTransactionInternal(
         CTxDestination dest;
         auto op_dest = reservedest.GetReservedDestination(true);
         if (!op_dest) {
-            error = _("Transaction needs a change address, but we can't generate it.") + Untranslated(" ") + util::ErrorString(op_dest);
+            error = "Transaction needs a change address, but we can't generate it." + util::ErrorString(op_dest);
         } else {
             dest = *op_dest;
             scriptChange = GetScriptForDestination(dest);
@@ -1062,11 +1061,11 @@ static util::Result<CreatedTransactionResult> CreateTransactionInternal(
     // Do not, ever, assume that it's fine to change the fee rate if the user has explicitly
     // provided one
     if (coin_control.m_feerate && coin_selection_params.m_effective_feerate > *coin_control.m_feerate) {
-        return util::Error{strprintf(_("Fee rate (%s) is lower than the minimum fee rate setting (%s)"), coin_control.m_feerate->ToString(FeeEstimateMode::SAT_VB), coin_selection_params.m_effective_feerate.ToString(FeeEstimateMode::SAT_VB))};
+        return util::Error{strprintf("Fee rate (%s) is lower than the minimum fee rate setting (%s)", coin_control.m_feerate->ToString(FeeEstimateMode::SAT_VB), coin_selection_params.m_effective_feerate.ToString(FeeEstimateMode::SAT_VB))};
     }
     if (feeCalc.reason == FeeReason::FALLBACK && !wallet.m_allow_fallback_fee) {
         // eventually allow a fallback fee
-        return util::Error{strprintf(_("Fee estimation failed. Fallbackfee is disabled. Wait a few blocks or enable %s."), "-fallbackfee")};
+        return util::Error{strprintf("Fee estimation failed. Fallbackfee is disabled. Wait a few blocks or enable %s.", "-fallbackfee")};
     }
 
     // Calculate the cost of change
@@ -1098,7 +1097,7 @@ static util::Result<CreatedTransactionResult> CreateTransactionInternal(
         coin_selection_params.tx_noinputs_size += ::GetSerializeSize(txout);
 
         if (IsDust(txout, wallet.chain().relayDustFee())) {
-            return util::Error{_("Transaction amount too small")};
+            return util::Error{"Transaction amount too small"};
         }
         txNew.vout.push_back(txout);
     }
@@ -1110,7 +1109,7 @@ static util::Result<CreatedTransactionResult> CreateTransactionInternal(
     // This can only happen if feerate is 0, and requested destinations are value of 0 (e.g. OP_RETURN)
     // and no pre-selected inputs. This will result in 0-input transaction, which is consensus-invalid anyways
     if (selection_target == 0 && !coin_control.HasSelected()) {
-        return util::Error{_("Transaction requires one destination of non-0 value, a non-0 feerate, or a pre-selected input")};
+        return util::Error{"Transaction requires one destination of non-0 value, a non-0 feerate, or a pre-selected input"};
     }
 
     // Fetch manually selected coins
@@ -1132,8 +1131,8 @@ static util::Result<CreatedTransactionResult> CreateTransactionInternal(
     auto select_coins_res = SelectCoins(wallet, available_coins, preset_inputs, /*nTargetValue=*/selection_target, coin_control, coin_selection_params);
     if (!select_coins_res) {
         // 'SelectCoins' either returns a specific error message or, if empty, means a general "Insufficient funds".
-        const bilingual_str& err = util::ErrorString(select_coins_res);
-        return util::Error{err.empty() ?_("Insufficient funds") : err};
+        const std::string& err = util::ErrorString(select_coins_res);
+        return util::Error{err.empty() ?"Insufficient funds" : err};
     }
     const SelectionResult& result = *select_coins_res;
     TRACE5(coin_selection, selected_coins,
@@ -1150,7 +1149,7 @@ static util::Result<CreatedTransactionResult> CreateTransactionInternal(
             // Insert change txn at random position:
             change_pos = rng_fast.randrange(txNew.vout.size() + 1);
         } else if ((unsigned int)*change_pos > txNew.vout.size()) {
-            return util::Error{_("Transaction change output index out of range")};
+            return util::Error{"Transaction change output index out of range"};
         }
         txNew.vout.insert(txNew.vout.begin() + *change_pos, newTxOut);
     } else {
@@ -1218,7 +1217,7 @@ static util::Result<CreatedTransactionResult> CreateTransactionInternal(
     TxSize tx_sizes = CalculateMaximumSignedTxSize(CTransaction(txNew), &wallet, &coin_control);
     int nBytes = tx_sizes.vsize;
     if (nBytes == -1) {
-        return util::Error{_("Missing solving data for estimating transaction size")};
+        return util::Error{"Missing solving data for estimating transaction size"};
     }
     CAmount fee_needed = coin_selection_params.m_effective_feerate.GetFee(nBytes) + result.GetTotalBumpFees();
     const CAmount output_value = CalculateOutputValue(txNew);
@@ -1227,7 +1226,7 @@ static util::Result<CreatedTransactionResult> CreateTransactionInternal(
 
     // Sanity check that the fee cannot be negative as that means we have more output value than input value
     if (current_fee < 0) {
-        return util::Error{Untranslated(STR_INTERNAL_BUG("Fee paid < 0"))};
+        return util::Error{STR_INTERNAL_BUG("Fee paid < 0")};
     }
 
     // If there is a change output and we overpay the fees then increase the change to match the fee needed
@@ -1236,7 +1235,7 @@ static util::Result<CreatedTransactionResult> CreateTransactionInternal(
         change.nValue += current_fee - fee_needed;
         current_fee = result.GetSelectedValue() - CalculateOutputValue(txNew);
         if (fee_needed != current_fee) {
-            return util::Error{Untranslated(STR_INTERNAL_BUG("Change adjustment: Fee needed != fee paid"))};
+            return util::Error{STR_INTERNAL_BUG("Change adjustment: Fee needed != fee paid")};
         }
     }
 
@@ -1265,9 +1264,9 @@ static util::Result<CreatedTransactionResult> CreateTransactionInternal(
                 // Error if this output is reduced to be below dust
                 if (IsDust(txout, wallet.chain().relayDustFee())) {
                     if (txout.nValue < 0) {
-                        return util::Error{_("The transaction amount is too small to pay the fee")};
+                        return util::Error{"The transaction amount is too small to pay the fee"};
                     } else {
-                        return util::Error{_("The transaction amount is too small to send after the fee has been deducted")};
+                        return util::Error{"The transaction amount is too small to send after the fee has been deducted"};
                     }
                 }
             }
@@ -1275,14 +1274,14 @@ static util::Result<CreatedTransactionResult> CreateTransactionInternal(
         }
         current_fee = result.GetSelectedValue() - CalculateOutputValue(txNew);
         if (fee_needed != current_fee) {
-            return util::Error{Untranslated(STR_INTERNAL_BUG("SFFO: Fee needed != fee paid"))};
+            return util::Error{STR_INTERNAL_BUG("SFFO: Fee needed != fee paid")};
         }
     }
 
     // fee_needed should now always be less than or equal to the current fees that we pay.
     // If it is not, it is a bug.
     if (fee_needed > current_fee) {
-        return util::Error{Untranslated(STR_INTERNAL_BUG("Fee needed > fee paid"))};
+        return util::Error{STR_INTERNAL_BUG("Fee needed > fee paid")};
     }
 
     // Give up if change keypool ran out and change is required
@@ -1291,7 +1290,7 @@ static util::Result<CreatedTransactionResult> CreateTransactionInternal(
     }
 
     if (sign && !wallet.SignTransaction(txNew)) {
-        return util::Error{_("Signing transaction failed")};
+        return util::Error{"Signing transaction failed"};
     }
 
     // Return the constructed transaction data.
@@ -1301,7 +1300,7 @@ static util::Result<CreatedTransactionResult> CreateTransactionInternal(
     if ((sign && GetTransactionWeight(*tx) > MAX_STANDARD_TX_WEIGHT) ||
         (!sign && tx_sizes.weight > MAX_STANDARD_TX_WEIGHT))
     {
-        return util::Error{_("Transaction too large")};
+        return util::Error{"Transaction too large"};
     }
 
     if (current_fee > wallet.m_default_max_tx_fee) {
@@ -1340,11 +1339,11 @@ util::Result<CreatedTransactionResult> CreateTransaction(
         bool sign)
 {
     if (vecSend.empty()) {
-        return util::Error{_("Transaction must have at least one recipient")};
+        return util::Error{"Transaction must have at least one recipient"};
     }
 
     if (std::any_of(vecSend.cbegin(), vecSend.cend(), [](const auto& recipient){ return recipient.nAmount < 0; })) {
-        return util::Error{_("Transaction amounts must not be negative")};
+        return util::Error{"Transaction amounts must not be negative"};
     }
 
     LOCK(wallet.cs_wallet);
@@ -1415,7 +1414,7 @@ util::Result<CreatedTransactionResult> FundTransaction(CWallet& wallet, const CM
         PreselectedInput& preset_txin = coinControl.Select(outPoint);
         if (!wallet.IsMine(outPoint)) {
             if (coins[outPoint].out.IsNull()) {
-                return util::Error{_("Unable to find UTXO for external input")};
+                return util::Error{"Unable to find UTXO for external input"};
             }
 
             // The input was not in the wallet, but is in the UTXO set, so select as external

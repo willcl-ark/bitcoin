@@ -22,7 +22,6 @@
 #include <util/result.h>
 #include <util/strencodings.h>
 #include <util/string.h>
-#include <util/translation.h>
 
 #include <string_view>
 #include <tuple>
@@ -343,7 +342,7 @@ int ParseSighashString(const UniValue& sighash)
     }
     const auto result{SighashFromStr(sighash.get_str())};
     if (!result) {
-        throw JSONRPCError(RPC_INVALID_PARAMETER, util::ErrorString(result).original);
+        throw JSONRPCError(RPC_INVALID_PARAMETER, util::ErrorString(result));
     }
     return result.value();
 }
@@ -382,7 +381,7 @@ UniValue JSONRPCTransactionError(TransactionError terr, const std::string& err_s
     if (err_string.length() > 0) {
         return JSONRPCError(RPCErrorFromTransactionError(terr), err_string);
     } else {
-        return JSONRPCError(RPCErrorFromTransactionError(terr), TransactionErrorString(terr).original);
+        return JSONRPCError(RPCErrorFromTransactionError(terr), TransactionErrorString(terr));
     }
 }
 
@@ -1323,13 +1322,13 @@ std::vector<CScript> EvalDescriptorStringOrObject(const UniValue& scanobject, Fl
     return ret;
 }
 
-/** Convert a vector of bilingual strings to a UniValue::VARR containing their original untranslated values. */
-[[nodiscard]] static UniValue BilingualStringsToUniValue(const std::vector<bilingual_str>& bilingual_strings)
+/** Convert a vector of strings to a UniValue::VARR. */
+[[nodiscard]] static UniValue StringsToUniValue(const std::vector<std::string>& strings)
 {
-    CHECK_NONFATAL(!bilingual_strings.empty());
+    CHECK_NONFATAL(!strings.empty());
     UniValue result{UniValue::VARR};
-    for (const auto& s : bilingual_strings) {
-        result.push_back(s.original);
+    for (const auto& s : strings) {
+        result.push_back(s);
     }
     return result;
 }
@@ -1340,8 +1339,8 @@ void PushWarnings(const UniValue& warnings, UniValue& obj)
     obj.pushKV("warnings", warnings);
 }
 
-void PushWarnings(const std::vector<bilingual_str>& warnings, UniValue& obj)
+void PushWarnings(const std::vector<std::string>& warnings, UniValue& obj)
 {
     if (warnings.empty()) return;
-    obj.pushKV("warnings", BilingualStringsToUniValue(warnings));
+    obj.pushKV("warnings", StringsToUniValue(warnings));
 }

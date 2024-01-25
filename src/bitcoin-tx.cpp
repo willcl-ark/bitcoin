@@ -28,17 +28,14 @@
 #include <util/rbf.h>
 #include <util/strencodings.h>
 #include <util/string.h>
-#include <util/translation.h>
 
 #include <cstdio>
-#include <functional>
 #include <memory>
 
 static bool fCreateBlank;
 static std::map<std::string,UniValue> registers;
 static const int CONTINUE_EXECUTION=-1;
 
-const std::function<std::string(const char*)> G_TRANSLATION_FUN = nullptr;
 
 static void SetupBitcoinTxArgs(ArgsManager &argsman)
 {

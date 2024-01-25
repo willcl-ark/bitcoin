@@ -14,7 +14,6 @@
 #include <test/fuzz/fuzz.h>
 #include <test/fuzz/util.h>
 #include <util/chaintype.h>
-#include <util/translation.h>
 
 #include <cassert>
 #include <cstdint>
@@ -125,7 +124,7 @@ FUZZ_TARGET(script_sign, .init = initialize_script_sign)
                 (void)signature_creator.CreateSig(provider, vch_sig, address, ConsumeScript(fuzzed_data_provider), fuzzed_data_provider.PickValueInArray({SigVersion::BASE, SigVersion::WITNESS_V0}));
             }
             std::map<COutPoint, Coin> coins{ConsumeCoins(fuzzed_data_provider)};
-            std::map<int, bilingual_str> input_errors;
+            std::map<int, std::string> input_errors;
             (void)SignTransaction(sign_transaction_tx_to, &provider, coins, fuzzed_data_provider.ConsumeIntegral<int>(), input_errors);
         }
     }

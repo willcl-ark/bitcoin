@@ -8,8 +8,6 @@
 #include <sync.h>
 #include <wallet/db.h>
 
-struct bilingual_str;
-
 struct sqlite3_stmt;
 struct sqlite3;
 
@@ -131,7 +129,7 @@ public:
     // This ensures that only one batch is modifying the database at a time.
     CSemaphore m_write_semaphore;
 
-    bool Verify(bilingual_str& error);
+    bool Verify(std::string& error);
 
     /** Open the database if it is not already opened */
     void Open() override;
@@ -177,7 +175,7 @@ public:
     bool m_use_unsafe_sync;
 };
 
-std::unique_ptr<SQLiteDatabase> MakeSQLiteDatabase(const fs::path& path, const DatabaseOptions& options, DatabaseStatus& status, bilingual_str& error);
+std::unique_ptr<SQLiteDatabase> MakeSQLiteDatabase(const fs::path& path, const DatabaseOptions& options, DatabaseStatus& status, std::string& error);
 
 std::string SQLiteDatabaseVersion();
 } // namespace wallet

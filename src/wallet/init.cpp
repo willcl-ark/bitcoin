@@ -19,7 +19,6 @@
 #include <univalue.h>
 #include <util/check.h>
 #include <util/moneystr.h>
-#include <util/translation.h>
 #ifdef USE_BDB
 #include <wallet/bdb.h>
 #endif
@@ -105,7 +104,7 @@ bool WalletInit::ParameterInteraction() const
 {
 #ifdef USE_BDB
      if (!BerkeleyDatabaseSanityCheck()) {
-         return InitError(Untranslated("A version conflict was detected between the run-time BerkeleyDB library and the one used during compilation."));
+         return InitError("A version conflict was detected between the run-time BerkeleyDB library and the one used during compilation.");
      }
 #endif
     if (gArgs.GetBoolArg("-disablewallet", DEFAULT_DISABLE_WALLET)) {

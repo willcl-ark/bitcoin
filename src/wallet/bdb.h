@@ -21,8 +21,6 @@
 #include <unordered_map>
 #include <vector>
 
-struct bilingual_str;
-
 class DbEnv;
 class DbTxn;
 class Db;
@@ -66,7 +64,7 @@ public:
     bool IsInitialized() const { return fDbEnvInit; }
     fs::path Directory() const { return fs::PathFromString(strPath); }
 
-    bool Open(bilingual_str& error);
+    bool Open(std::string& error);
     void Close();
     void Flush(bool fShutdown);
     void CheckpointLSN(const std::string& strFile);
@@ -127,7 +125,7 @@ public:
     void ReloadDbEnv() override;
 
     /** Verifies the environment and database file */
-    bool Verify(bilingual_str& error);
+    bool Verify(std::string& error);
 
     /** Return path to main database filename */
     std::string Filename() override { return fs::PathToString(env->Directory() / m_filename); }
@@ -215,7 +213,7 @@ std::string BerkeleyDatabaseVersion();
 bool BerkeleyDatabaseSanityCheck();
 
 //! Return object giving access to Berkeley database at specified path.
-std::unique_ptr<BerkeleyDatabase> MakeBerkeleyDatabase(const fs::path& path, const DatabaseOptions& options, DatabaseStatus& status, bilingual_str& error);
+std::unique_ptr<BerkeleyDatabase> MakeBerkeleyDatabase(const fs::path& path, const DatabaseOptions& options, DatabaseStatus& status, std::string& error);
 } // namespace wallet
 
 #endif // BITCOIN_WALLET_BDB_H

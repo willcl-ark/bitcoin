@@ -11,7 +11,6 @@
 #include <script/script.h>
 #include <util/fees.h>
 #include <util/rbf.h>
-#include <util/translation.h>
 #include <util/vector.h>
 #include <wallet/coincontrol.h>
 #include <wallet/feebumper.h>
@@ -169,7 +168,7 @@ UniValue SendMoney(CWallet& wallet, const CCoinControl &coin_control, std::vecto
     // Send
     auto res = CreateTransaction(wallet, recipients, /*change_pos=*/std::nullopt, coin_control, true);
     if (!res) {
-        throw JSONRPCError(RPC_WALLET_INSUFFICIENT_FUNDS, util::ErrorString(res).original);
+        throw JSONRPCError(RPC_WALLET_INSUFFICIENT_FUNDS, util::ErrorString(res));
     }
     const CTransactionRef& tx = res->tx;
     wallet.CommitTransaction(tx, std::move(map_value), /*orderForm=*/{});
@@ -707,7 +706,7 @@ CreatedTransactionResult FundTransaction(CWallet& wallet, const CMutableTransact
 
     auto txr = FundTransaction(wallet, tx, recipients, change_position, lockUnspents, coinControl);
     if (!txr) {
-        throw JSONRPCError(RPC_WALLET_ERROR, ErrorString(txr).original);
+        throw JSONRPCError(RPC_WALLET_ERROR, ErrorString(txr));
     }
     return *txr;
 }
@@ -946,7 +945,7 @@ RPCHelpMan signrawtransactionwithwallet()
     int nHashType = ParseSighashString(request.params[2]);
 
     // Script verification errors
-    std::map<int, bilingual_str> input_errors;
+    std::map<int, std::string> input_errors;
 
     bool complete = pwallet->SignTransaction(mtx, coins, nHashType, input_errors);
     UniValue result(UniValue::VOBJ);
@@ -1113,7 +1112,7 @@ static RPCHelpMan bumpfee_helper(std::string method_name)
     EnsureWalletIsUnlocked(*pwallet);
 
 
-    std::vector<bilingual_str> errors;
+    std::vector<std::string> errors;
     CAmount old_fee;
     CAmount new_fee;
     CMutableTransaction mtx;
@@ -1123,19 +1122,19 @@ static RPCHelpMan bumpfee_helper(std::string method_name)
     if (res != feebumper::Result::OK) {
         switch(res) {
             case feebumper::Result::INVALID_ADDRESS_OR_KEY:
-                throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, errors[0].original);
+                throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, errors[0]);
                 break;
             case feebumper::Result::INVALID_REQUEST:
-                throw JSONRPCError(RPC_INVALID_REQUEST, errors[0].original);
+                throw JSONRPCError(RPC_INVALID_REQUEST, errors[0]);
                 break;
             case feebumper::Result::INVALID_PARAMETER:
-                throw JSONRPCError(RPC_INVALID_PARAMETER, errors[0].original);
+                throw JSONRPCError(RPC_INVALID_PARAMETER, errors[0]);
                 break;
             case feebumper::Result::WALLET_ERROR:
-                throw JSONRPCError(RPC_WALLET_ERROR, errors[0].original);
+                throw JSONRPCError(RPC_WALLET_ERROR, errors[0]);
                 break;
             default:
-                throw JSONRPCError(RPC_MISC_ERROR, errors[0].original);
+                throw JSONRPCError(RPC_MISC_ERROR, errors[0]);
                 break;
         }
     }
@@ -1154,7 +1153,7 @@ static RPCHelpMan bumpfee_helper(std::string method_name)
 
         uint256 txid;
         if (feebumper::CommitTransaction(*pwallet, hash, std::move(mtx), errors, txid) != feebumper::Result::OK) {
-            throw JSONRPCError(RPC_WALLET_ERROR, errors[0].original);
+            throw JSONRPCError(RPC_WALLET_ERROR, errors[0]);
         }
 
         result.pushKV("txid", txid.GetHex());
@@ -1172,8 +1171,8 @@ static RPCHelpMan bumpfee_helper(std::string method_name)
     result.pushKV("origfee", ValueFromAmount(old_fee));
     result.pushKV("fee", ValueFromAmount(new_fee));
     UniValue result_errors(UniValue::VARR);
-    for (const bilingual_str& error : errors) {
-        result_errors.push_back(error.original);
+    for (const std::string& error : errors) {
+        result_errors.push_back(error);
     }
     result.pushKV("errors", result_errors);
 
@@ -1484,7 +1483,7 @@ RPCHelpMan sendall()
             const CAmount effective_value{total_input_value - fee_from_size};
 
             if (fee_from_size > pwallet->m_default_max_tx_fee) {
-                throw JSONRPCError(RPC_WALLET_ERROR, TransactionErrorString(TransactionError::MAX_FEE_EXCEEDED).original);
+                throw JSONRPCError(RPC_WALLET_ERROR, TransactionErrorString(TransactionError::MAX_FEE_EXCEEDED));
             }
 
             if (effective_value <= 0) {

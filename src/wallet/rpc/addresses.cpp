@@ -12,7 +12,6 @@
 #include <script/script.h>
 #include <script/solver.h>
 #include <util/bip32.h>
-#include <util/translation.h>
 #include <wallet/receive.h>
 #include <wallet/rpc/util.h>
 #include <wallet/wallet.h>
@@ -64,7 +63,7 @@ RPCHelpMan getnewaddress()
 
     auto op_dest = pwallet->GetNewDestination(output_type, label);
     if (!op_dest) {
-        throw JSONRPCError(RPC_WALLET_KEYPOOL_RAN_OUT, util::ErrorString(op_dest).original);
+        throw JSONRPCError(RPC_WALLET_KEYPOOL_RAN_OUT, util::ErrorString(op_dest));
     }
 
     return EncodeDestination(*op_dest);
@@ -111,7 +110,7 @@ RPCHelpMan getrawchangeaddress()
 
     auto op_dest = pwallet->GetNewChangeDestination(output_type);
     if (!op_dest) {
-        throw JSONRPCError(RPC_WALLET_KEYPOOL_RAN_OUT, util::ErrorString(op_dest).original);
+        throw JSONRPCError(RPC_WALLET_KEYPOOL_RAN_OUT, util::ErrorString(op_dest));
     }
     return EncodeDestination(*op_dest);
 },

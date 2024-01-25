@@ -7,7 +7,6 @@
 #endif
 
 #include <clientversion.h>
-#include <util/translation.h>
 
 #include <tinyformat.h>
 
@@ -16,9 +15,7 @@
 #include <vector>
 
 /**
- * Name of client reported in the 'version' message. Report the same name
- * for both bitcoind and bitcoin-qt, to make it harder for attackers to
- * target servers or GUI users specifically.
+ * Name of client reported in the 'version' message.
  */
 const std::string CLIENT_NAME("Satoshi");
 
@@ -83,7 +80,7 @@ std::string FormatSubVersion(const std::string& name, int nClientVersion, const 
 
 std::string CopyrightHolders(const std::string& strPrefix)
 {
-    const auto copyright_devs = strprintf(_(COPYRIGHT_HOLDERS).translated, COPYRIGHT_HOLDERS_SUBSTITUTION);
+    const auto copyright_devs = strprintf("%s\n%s", COPYRIGHT_HOLDERS, COPYRIGHT_HOLDERS_SUBSTITUTION);
     std::string strCopyrightHolders = strPrefix + copyright_devs;
 
     // Make sure Bitcoin Core copyright is not removed by accident
@@ -97,15 +94,15 @@ std::string LicenseInfo()
 {
     const std::string URL_SOURCE_CODE = "<https://github.com/bitcoin/bitcoin>";
 
-    return CopyrightHolders(strprintf(_("Copyright (C) %i-%i").translated, 2009, COPYRIGHT_YEAR) + " ") + "\n" +
+    return CopyrightHolders(strprintf("Copyright (C) %i-%i", 2009, COPYRIGHT_YEAR) + " ") + "\n" +
            "\n" +
-           strprintf(_("Please contribute if you find %s useful. "
-                       "Visit %s for further information about the software.").translated, PACKAGE_NAME, "<" PACKAGE_URL ">") +
+           strprintf("Please contribute if you find %s useful. "
+                       "Visit %s for further information about the software.", PACKAGE_NAME, "<" PACKAGE_URL ">") +
            "\n" +
-           strprintf(_("The source code is available from %s.").translated, URL_SOURCE_CODE) +
+           strprintf("The source code is available from %s.", URL_SOURCE_CODE) +
            "\n" +
            "\n" +
-           _("This is experimental software.").translated + "\n" +
-           strprintf(_("Distributed under the MIT software license, see the accompanying file %s or %s").translated, "COPYING", "<https://opensource.org/licenses/MIT>") +
+           "This is experimental software." + "\n" +
+           strprintf("Distributed under the MIT software license, see the accompanying file %s or %s", "COPYING", "<https://opensource.org/licenses/MIT>") +
            "\n";
 }

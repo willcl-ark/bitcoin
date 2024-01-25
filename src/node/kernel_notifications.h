@@ -9,11 +9,11 @@
 
 #include <atomic>
 #include <cstdint>
+#include <string>
 
 class ArgsManager;
 class CBlockIndex;
 enum class SynchronizationState;
-struct bilingual_str;
 
 namespace util {
 class SignalInterrupt;
@@ -32,13 +32,13 @@ public:
 
     void headerTip(SynchronizationState state, int64_t height, int64_t timestamp, bool presync) override;
 
-    void progress(const bilingual_str& title, int progress_percent, bool resume_possible) override;
+    void progress(const std::string& title, int progress_percent, bool resume_possible) override;
 
-    void warning(const bilingual_str& warning) override;
+    void warning(const std::string& warning) override;
 
-    void flushError(const bilingual_str& message) override;
+    void flushError(const std::string& message) override;
 
-    void fatalError(const bilingual_str& message) override;
+    void fatalError(const std::string& message) override;
 
     //! Block height after which blockTip notification will return Interrupted{}, if >0.
     int m_stop_at_height{DEFAULT_STOPATHEIGHT};

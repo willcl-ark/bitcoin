@@ -35,7 +35,6 @@
 #include <util/thread.h>
 #include <util/threadinterrupt.h>
 #include <util/trace.h>
-#include <util/translation.h>
 #include <util/vector.h>
 
 #ifdef WIN32
@@ -146,7 +145,7 @@ uint16_t GetListenPort()
     // (-whitebind= is required to have ":port").
     for (const std::string& whitebind_arg : gArgs.GetArgs("-whitebind")) {
         NetWhitebindPermissions whitebind;
-        bilingual_str error;
+        std::string error;
         if (NetWhitebindPermissions::TryParse(whitebind_arg, whitebind, error)) {
             if (!NetPermissions::HasFlag(whitebind.m_flags, NetPermissionFlags::NoBan)) {
                 return whitebind.m_service.GetPort();
@@ -2962,7 +2961,7 @@ void CConnman::ThreadI2PAcceptIncoming()
     }
 }
 
-bool CConnman::BindListenPort(const CService& addrBind, bilingual_str& strError, NetPermissionFlags permissions)
+bool CConnman::BindListenPort(const CService& addrBind, std::string& strError, NetPermissionFlags permissions)
 {
     int nOne = 1;
 
@@ -2971,23 +2970,23 @@ bool CConnman::BindListenPort(const CService& addrBind, bilingual_str& strError,
     socklen_t len = sizeof(sockaddr);
     if (!addrBind.GetSockAddr((struct sockaddr*)&sockaddr, &len))
     {
-        strError = strprintf(Untranslated("Bind address family for %s not supported"), addrBind.ToStringAddrPort());
-        LogPrintLevel(BCLog::NET, BCLog::Level::Error, "%s\n", strError.original);
+        strError = strprintf("Bind address family for %s not supported", addrBind.ToStringAddrPort());
+        LogPrintLevel(BCLog::NET, BCLog::Level::Error, "%s\n", strError);
         return false;
     }
 
     std::unique_ptr<Sock> sock = CreateSock(addrBind.GetSAFamily());
     if (!sock) {
-        strError = strprintf(Untranslated("Couldn't open socket for incoming connections (socket returned error %s)"), NetworkErrorString(WSAGetLastError()));
-        LogPrintLevel(BCLog::NET, BCLog::Level::Error, "%s\n", strError.original);
+        strError = strprintf("Couldn't open socket for incoming connections (socket returned error %s)", NetworkErrorString(WSAGetLastError()));
+        LogPrintLevel(BCLog::NET, BCLog::Level::Error, "%s\n", strError);
         return false;
     }
 
     // Allow binding if the port is still in TIME_WAIT state after
     // the program was closed and restarted.
     if (sock->SetSockOpt(SOL_SOCKET, SO_REUSEADDR, (sockopt_arg_type)&nOne, sizeof(int)) == SOCKET_ERROR) {
-        strError = strprintf(Untranslated("Error setting SO_REUSEADDR on socket: %s, continuing anyway"), NetworkErrorString(WSAGetLastError()));
-        LogPrintf("%s\n", strError.original);
+        strError = strprintf("Error setting SO_REUSEADDR on socket: %s, continuing anyway", NetworkErrorString(WSAGetLastError()));
+        LogPrintf("%s\n", strError);
     }
 
     // some systems don't have IPV6_V6ONLY but are always v6only; others do have the option
@@ -2995,15 +2994,15 @@ bool CConnman::BindListenPort(const CService& addrBind, bilingual_str& strError,
     if (addrBind.IsIPv6()) {
 #ifdef IPV6_V6ONLY
         if (sock->SetSockOpt(IPPROTO_IPV6, IPV6_V6ONLY, (sockopt_arg_type)&nOne, sizeof(int)) == SOCKET_ERROR) {
-            strError = strprintf(Untranslated("Error setting IPV6_V6ONLY on socket: %s, continuing anyway"), NetworkErrorString(WSAGetLastError()));
-            LogPrintf("%s\n", strError.original);
+            strError = strprintf("Error setting IPV6_V6ONLY on socket: %s, continuing anyway", NetworkErrorString(WSAGetLastError()));
+            LogPrintf("%s\n", strError);
         }
 #endif
 #ifdef WIN32
         int nProtLevel = PROTECTION_LEVEL_UNRESTRICTED;
         if (sock->SetSockOpt(IPPROTO_IPV6, IPV6_PROTECTION_LEVEL, (const char*)&nProtLevel, sizeof(int)) == SOCKET_ERROR) {
-            strError = strprintf(Untranslated("Error setting IPV6_PROTECTION_LEVEL on socket: %s, continuing anyway"), NetworkErrorString(WSAGetLastError()));
-            LogPrintf("%s\n", strError.original);
+            strError = strprintf("Error setting IPV6_PROTECTION_LEVEL on socket: %s, continuing anyway", NetworkErrorString(WSAGetLastError()));
+            LogPrintf("%s\n", strError);
         }
 #endif
     }
@@ -3011,10 +3010,10 @@ bool CConnman::BindListenPort(const CService& addrBind, bilingual_str& strError,
     if (sock->Bind(reinterpret_cast<struct sockaddr*>(&sockaddr), len) == SOCKET_ERROR) {
         int nErr = WSAGetLastError();
         if (nErr == WSAEADDRINUSE)
-            strError = strprintf(_("Unable to bind to %s on this computer. %s is probably already running."), addrBind.ToStringAddrPort(), PACKAGE_NAME);
+            strError = strprintf("Unable to bind to %s on this computer. %s is probably already running.", addrBind.ToStringAddrPort(), PACKAGE_NAME);
         else
-            strError = strprintf(_("Unable to bind to %s on this computer (bind returned error %s)"), addrBind.ToStringAddrPort(), NetworkErrorString(nErr));
-        LogPrintLevel(BCLog::NET, BCLog::Level::Error, "%s\n", strError.original);
+            strError = strprintf("Unable to bind to %s on this computer (bind returned error %s)", addrBind.ToStringAddrPort(), NetworkErrorString(nErr));
+        LogPrintLevel(BCLog::NET, BCLog::Level::Error, "%s\n", strError);
         return false;
     }
     LogPrintf("Bound to %s\n", addrBind.ToStringAddrPort());
@@ -3022,8 +3021,8 @@ bool CConnman::BindListenPort(const CService& addrBind, bilingual_str& strError,
     // Listen for incoming connections
     if (sock->Listen(SOMAXCONN) == SOCKET_ERROR)
     {
-        strError = strprintf(_("Listening for incoming connections failed (listen returned error %s)"), NetworkErrorString(WSAGetLastError()));
-        LogPrintLevel(BCLog::NET, BCLog::Level::Error, "%s\n", strError.original);
+        strError = strprintf("Listening for incoming connections failed (listen returned error %s)", NetworkErrorString(WSAGetLastError()));
+        LogPrintLevel(BCLog::NET, BCLog::Level::Error, "%s\n", strError);
         return false;
     }
 
@@ -3129,7 +3128,7 @@ bool CConnman::Bind(const CService& addr_, unsigned int flags, NetPermissionFlag
 {
     const CService addr{MaybeFlipIPv6toCJDNS(addr_)};
 
-    bilingual_str strError;
+    std::string strError;
     if (!BindListenPort(addr, strError, permissions)) {
         if ((flags & BF_REPORT_ERROR) && m_client_interface) {
             m_client_interface->ThreadSafeMessageBox(strError, "", CClientUIInterface::MSG_ERROR);
@@ -3174,7 +3173,7 @@ bool CConnman::Start(CScheduler& scheduler, const Options& connOptions)
     if (fListen && !InitBinds(connOptions)) {
         if (m_client_interface) {
             m_client_interface->ThreadSafeMessageBox(
-                _("Failed to listen on any port. Use -listen=0 if you want this."),
+                "Failed to listen on any port. Use -listen=0 if you want this.",
                 "", CClientUIInterface::MSG_ERROR);
         }
         return false;
@@ -3200,7 +3199,7 @@ bool CConnman::Start(CScheduler& scheduler, const Options& connOptions)
     }
 
     if (m_client_interface) {
-        m_client_interface->InitMessage(_("Starting network threads…").translated);
+        m_client_interface->InitMessage("Starting network threads…");
     }
 
     fAddressesInitialized = true;
@@ -3240,7 +3239,7 @@ bool CConnman::Start(CScheduler& scheduler, const Options& connOptions)
     if (connOptions.m_use_addrman_outgoing && !connOptions.m_specified_outgoing.empty()) {
         if (m_client_interface) {
             m_client_interface->ThreadSafeMessageBox(
-                _("Cannot provide specific connections and have addrman find outgoing connections at the same time."),
+                "Cannot provide specific connections and have addrman find outgoing connections at the same time.",
                 "", CClientUIInterface::MSG_ERROR);
         }
         return false;

@@ -12,12 +12,10 @@
  *
  * Error types defined here can be used in different parts of the
  * codebase, to avoid the need to write boilerplate code catching and
- * translating errors passed across wallet/node/rpc/gui code boundaries.
+ * translating errors passed across wallet/node/rpc code boundaries.
  */
 
 #include <string>
-
-struct bilingual_str;
 
 enum class TransactionError {
     OK, //!< No error
@@ -36,14 +34,14 @@ enum class TransactionError {
     INVALID_PACKAGE,
 };
 
-bilingual_str TransactionErrorString(const TransactionError error);
+std::string TransactionErrorString(const TransactionError error);
 
-bilingual_str ResolveErrMsg(const std::string& optname, const std::string& strBind);
+std::string ResolveErrMsg(const std::string& optname, const std::string& strBind);
 
-bilingual_str InvalidPortErrMsg(const std::string& optname, const std::string& strPort);
+std::string InvalidPortErrMsg(const std::string& optname, const std::string& strPort);
 
-bilingual_str AmountHighWarn(const std::string& optname);
+std::string AmountHighWarn(const std::string& optname);
 
-bilingual_str AmountErrMsg(const std::string& optname, const std::string& strValue);
+std::string AmountErrMsg(const std::string& optname, const std::string& strValue);
 
 #endif // BITCOIN_UTIL_ERROR_H

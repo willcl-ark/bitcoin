@@ -10,7 +10,6 @@
 
 #include <common/args.h>
 #include <util/fs.h>
-#include <util/translation.h>
 #include <wallet/dump.h>
 #include <wallet/salvage.h>
 #include <wallet/wallet.h>
@@ -50,10 +49,10 @@ static void WalletCreate(CWallet* wallet_instance, uint64_t wallet_creation_flag
 static std::shared_ptr<CWallet> MakeWallet(const std::string& name, const fs::path& path, DatabaseOptions options)
 {
     DatabaseStatus status;
-    bilingual_str error;
+    std::string error;
     std::unique_ptr<WalletDatabase> database = MakeDatabase(path, options, status, error);
     if (!database) {
-        tfm::format(std::cerr, "%s\n", error.original);
+        tfm::format(std::cerr, "%s\n", error);
         return nullptr;
     }
 
@@ -173,15 +172,15 @@ bool ExecuteWalletToolFunc(const ArgsManager& args, const std::string& command)
         wallet_instance->Close();
     } else if (command == "salvage") {
 #ifdef USE_BDB
-        bilingual_str error;
-        std::vector<bilingual_str> warnings;
+        std::string error;
+        std::vector<std::string> warnings;
         bool ret = RecoverDatabaseFile(args, path, error, warnings);
         if (!ret) {
             for (const auto& warning : warnings) {
-                tfm::format(std::cerr, "%s\n", warning.original);
+                tfm::format(std::cerr, "%s\n", warning);
             }
             if (!error.empty()) {
-                tfm::format(std::cerr, "%s\n", error.original);
+                tfm::format(std::cerr, "%s\n", error);
             }
         }
         return ret;
@@ -194,29 +193,29 @@ bool ExecuteWalletToolFunc(const ArgsManager& args, const std::string& command)
         ReadDatabaseArgs(args, options);
         options.require_existing = true;
         DatabaseStatus status;
-        bilingual_str error;
+        std::string error;
         std::unique_ptr<WalletDatabase> database = MakeDatabase(path, options, status, error);
         if (!database) {
-            tfm::format(std::cerr, "%s\n", error.original);
+            tfm::format(std::cerr, "%s\n", error);
             return false;
         }
 
         bool ret = DumpWallet(args, *database, error);
         if (!ret && !error.empty()) {
-            tfm::format(std::cerr, "%s\n", error.original);
+            tfm::format(std::cerr, "%s\n", error);
             return ret;
         }
         tfm::format(std::cout, "The dumpfile may contain private keys. To ensure the safety of your Bitcoin, do not share the dumpfile.\n");
         return ret;
     } else if (command == "createfromdump") {
-        bilingual_str error;
-        std::vector<bilingual_str> warnings;
+        std::string error;
+        std::vector<std::string> warnings;
         bool ret = CreateFromDump(args, name, path, error, warnings);
         for (const auto& warning : warnings) {
-            tfm::format(std::cout, "%s\n", warning.original);
+            tfm::format(std::cout, "%s\n", warning);
         }
         if (!ret && !error.empty()) {
-            tfm::format(std::cerr, "%s\n", error.original);
+            tfm::format(std::cerr, "%s\n", error);
         }
         return ret;
     } else {

@@ -478,7 +478,7 @@ BOOST_FIXTURE_TEST_CASE(calc_feerate_diagram_rbf, TestChain100Setup)
     {
         const auto replace_too_large{pool.CalculateFeerateDiagramsForRBF(/*replacement_fees=*/normal_fee, /*replacement_vsize=*/normal_size, {entry_low}, {entry_low, entry_high, entry_normal})};
         BOOST_CHECK(!replace_too_large.has_value());
-        BOOST_CHECK_EQUAL(util::ErrorString(replace_too_large).original, strprintf("%s has 2 descendants, max 1 allowed", low_tx->GetHash().GetHex()));
+        BOOST_CHECK_EQUAL(util::ErrorString(replace_too_large), strprintf("%s has 2 descendants, max 1 allowed", low_tx->GetHash().GetHex()));
     }
 
     // Make a size 2 cluster that is itself two chunks; evict both txns
@@ -543,7 +543,7 @@ BOOST_FIXTURE_TEST_CASE(calc_feerate_diagram_rbf, TestChain100Setup)
         const auto replace_cluster_size_3{pool.CalculateFeerateDiagramsForRBF(/*replacement_fees=*/high_fee, /*replacement_vsize=*/low_size, {conflict_1_entry, conflict_2_entry, conflict_3_entry}, {conflict_1_entry, conflict_2_entry, conflict_3_entry, conflict_1_child_entry, conflict_1_grand_child_entry})};
 
         BOOST_CHECK(!replace_cluster_size_3.has_value());
-        BOOST_CHECK_EQUAL(util::ErrorString(replace_cluster_size_3).original, strprintf("%s has 2 descendants, max 1 allowed", conflict_1->GetHash().GetHex()));
+        BOOST_CHECK_EQUAL(util::ErrorString(replace_cluster_size_3), strprintf("%s has 2 descendants, max 1 allowed", conflict_1->GetHash().GetHex()));
     }
 }
 

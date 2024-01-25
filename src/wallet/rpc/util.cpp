@@ -7,7 +7,6 @@
 #include <common/url.h>
 #include <rpc/util.h>
 #include <util/any.h>
-#include <util/translation.h>
 #include <wallet/context.h>
 #include <wallet/wallet.h>
 
@@ -151,7 +150,7 @@ void PushParentDescriptors(const CWallet& wallet, const CScript& script_pubkey, 
     entry.pushKV("parent_descs", parent_descs);
 }
 
-void HandleWalletError(const std::shared_ptr<CWallet> wallet, DatabaseStatus& status, bilingual_str& error)
+void HandleWalletError(const std::shared_ptr<CWallet> wallet, DatabaseStatus& status, std::string& error)
 {
     if (!wallet) {
         // Map bad format to not found, since bad format is returned when the
@@ -174,7 +173,7 @@ void HandleWalletError(const std::shared_ptr<CWallet> wallet, DatabaseStatus& st
             default: // RPC_WALLET_ERROR is returned for all other cases.
                 break;
         }
-        throw JSONRPCError(code, error.original);
+        throw JSONRPCError(code, error);
     }
 }
 

@@ -12,7 +12,6 @@
 #include <test/util/mining.h>
 #include <test/util/setup_common.h>
 #include <wallet/test/util.h>
-#include <util/translation.h>
 #include <validationinterface.h>
 #include <wallet/context.h>
 #include <wallet/receive.h>

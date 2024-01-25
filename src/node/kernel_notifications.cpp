@@ -18,7 +18,6 @@
 #include <util/check.h>
 #include <util/strencodings.h>
 #include <util/string.h>
-#include <util/translation.h>
 #include <warnings.h>
 
 #include <cstdint>
@@ -45,12 +44,12 @@ static void AlertNotify(const std::string& strMessage)
 #endif
 }
 
-static void DoWarning(const bilingual_str& warning)
+static void DoWarning(const std::string& warning)
 {
     static bool fWarned = false;
     SetMiscWarning(warning);
     if (!fWarned) {
-        AlertNotify(warning.original);
+        AlertNotify(warning);
         fWarned = true;
     }
 }
@@ -74,22 +73,22 @@ void KernelNotifications::headerTip(SynchronizationState state, int64_t height, 
     uiInterface.NotifyHeaderTip(state, height, timestamp, presync);
 }
 
-void KernelNotifications::progress(const bilingual_str& title, int progress_percent, bool resume_possible)
+void KernelNotifications::progress(const std::string& title, int progress_percent, bool resume_possible)
 {
-    uiInterface.ShowProgress(title.translated, progress_percent, resume_possible);
+    uiInterface.ShowProgress(title, progress_percent, resume_possible);
 }
 
-void KernelNotifications::warning(const bilingual_str& warning)
+void KernelNotifications::warning(const std::string& warning)
 {
     DoWarning(warning);
 }
 
-void KernelNotifications::flushError(const bilingual_str& message)
+void KernelNotifications::flushError(const std::string& message)
 {
     AbortNode(&m_shutdown, m_exit_status, message);
 }
 
-void KernelNotifications::fatalError(const bilingual_str& message)
+void KernelNotifications::fatalError(const std::string& message)
 {
     node::AbortNode(m_shutdown_on_fatal_error ? &m_shutdown : nullptr,
                     m_exit_status, message);

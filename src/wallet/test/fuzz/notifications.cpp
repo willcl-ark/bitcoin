@@ -23,7 +23,6 @@
 #include <uint256.h>
 #include <util/check.h>
 #include <util/result.h>
-#include <util/translation.h>
 #include <wallet/coincontrol.h>
 #include <wallet/context.h>
 #include <wallet/fees.h>
@@ -162,7 +161,7 @@ struct FuzzedWallet {
         // Add solving data (m_external_provider and SelectExternal)?
 
         int change_position{fuzzed_data_provider.ConsumeIntegralInRange<int>(-1, tx.vout.size() - 1)};
-        bilingual_str error;
+        std::string error;
         // Clear tx.vout since it is not meant to be used now that we are passing outputs directly.
         // This sets us up for a future PR to completely remove tx from the function signature in favor of passing inputs directly
         tx.vout.clear();

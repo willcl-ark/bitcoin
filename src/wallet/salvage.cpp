@@ -5,7 +5,6 @@
 
 #include <streams.h>
 #include <util/fs.h>
-#include <util/translation.h>
 #include <wallet/bdb.h>
 #include <wallet/salvage.h>
 #include <wallet/wallet.h>
@@ -66,7 +65,7 @@ public:
     std::unique_ptr<DatabaseBatch> MakeBatch(bool flush_on_close = true) override { return std::make_unique<DummyBatch>(); }
 };
 
-bool RecoverDatabaseFile(const ArgsManager& args, const fs::path& file_path, bilingual_str& error, std::vector<bilingual_str>& warnings)
+bool RecoverDatabaseFile(const ArgsManager& args, const fs::path& file_path, std::string& error, std::vector<std::string>& warnings)
 {
     DatabaseOptions options;
     DatabaseStatus status;
@@ -99,7 +98,7 @@ bool RecoverDatabaseFile(const ArgsManager& args, const fs::path& file_path, bil
                                        newFilename.c_str(), DB_AUTO_COMMIT);
     if (result != 0)
     {
-        error = strprintf(Untranslated("Failed to rename %s to %s"), filename, newFilename);
+        error = strprintf("Failed to rename %s to %s", filename, newFilename);
         return false;
     }
 
@@ -116,10 +115,10 @@ bool RecoverDatabaseFile(const ArgsManager& args, const fs::path& file_path, bil
     Db db(env->dbenv.get(), 0);
     result = db.verify(newFilename.c_str(), nullptr, &strDump, DB_SALVAGE | DB_AGGRESSIVE);
     if (result == DB_VERIFY_BAD) {
-        warnings.push_back(Untranslated("Salvage: Database salvage found errors, all data may not be recoverable."));
+        warnings.emplace_back("Salvage: Database salvage found errors, all data may not be recoverable.");
     }
     if (result != 0 && result != DB_VERIFY_BAD) {
-        error = strprintf(Untranslated("Salvage: Database salvage failed with result %d."), result);
+        error = strprintf("Salvage: Database salvage failed with result %d.", result);
         return false;
     }
 
@@ -143,7 +142,7 @@ bool RecoverDatabaseFile(const ArgsManager& args, const fs::path& file_path, bil
                 break;
             getline(strDump, valueHex);
             if (valueHex == DATA_END) {
-                warnings.push_back(Untranslated("Salvage: WARNING: Number of keys in data does not match number of values."));
+                warnings.emplace_back("Salvage: WARNING: Number of keys in data does not match number of values.");
                 break;
             }
             salvagedData.emplace_back(ParseHex(keyHex), ParseHex(valueHex));
@@ -152,7 +151,7 @@ bool RecoverDatabaseFile(const ArgsManager& args, const fs::path& file_path, bil
 
     bool fSuccess;
     if (keyHex != DATA_END) {
-        warnings.push_back(Untranslated("Salvage: WARNING: Unexpected end of file while reading salvage output."));
+        warnings.emplace_back("Salvage: WARNING: Unexpected end of file while reading salvage output.");
         fSuccess = false;
     } else {
         fSuccess = (result == 0);
@@ -160,7 +159,7 @@ bool RecoverDatabaseFile(const ArgsManager& args, const fs::path& file_path, bil
 
     if (salvagedData.empty())
     {
-        error = strprintf(Untranslated("Salvage(aggressive) found no records in %s."), newFilename);
+        error = strprintf("Salvage(aggressive) found no records in %s.", newFilename);
         return false;
     }
 
@@ -172,7 +171,7 @@ bool RecoverDatabaseFile(const ArgsManager& args, const fs::path& file_path, bil
                             DB_CREATE,          // Flags
                             0);
     if (ret > 0) {
-        error = strprintf(Untranslated("Cannot create database file %s"), filename);
+        error = strprintf("Cannot create database file %s", filename);
         pdbCopy->close(0);
         return false;
     }
@@ -203,7 +202,7 @@ bool RecoverDatabaseFile(const ArgsManager& args, const fs::path& file_path, bil
 
         if (!fReadOK)
         {
-            warnings.push_back(strprintf(Untranslated("WARNING: WalletBatch::Recover skipping %s: %s"), strType, strErr));
+            warnings.push_back(strprintf("WARNING: WalletBatch::Recover skipping %s: %s", strType, strErr));
             continue;
         }
         Dbt datKey(row.first.data(), row.first.size());

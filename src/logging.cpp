@@ -163,7 +163,6 @@ static const std::map<std::string, BCLog::LogFlags> LOG_CATEGORIES_BY_STR{
     {"mempoolrej", BCLog::MEMPOOLREJ},
     {"libevent", BCLog::LIBEVENT},
     {"coindb", BCLog::COINDB},
-    {"qt", BCLog::QT},
     {"leveldb", BCLog::LEVELDB},
     {"validation", BCLog::VALIDATION},
     {"i2p", BCLog::I2P},

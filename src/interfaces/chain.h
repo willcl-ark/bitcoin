@@ -29,7 +29,6 @@ class uint256;
 enum class MemPoolRemovalReason;
 enum class RBFTransactionState;
 enum class ChainstateRole;
-struct bilingual_str;
 struct CBlockLocator;
 struct FeeCalculation;
 namespace node {
@@ -297,10 +296,10 @@ public:
     virtual void initMessage(const std::string& message) = 0;
 
     //! Send init warning.
-    virtual void initWarning(const bilingual_str& message) = 0;
+    virtual void initWarning(const std::string& message) = 0;
 
     //! Send init error.
-    virtual void initError(const bilingual_str& message) = 0;
+    virtual void initError(const std::string& message) = 0;
 
     //! Send progress indicator.
     virtual void showProgress(const std::string& title, int progress, bool resume_possible) = 0;

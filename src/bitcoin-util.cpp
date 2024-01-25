@@ -18,17 +18,12 @@
 #include <streams.h>
 #include <util/exception.h>
 #include <util/strencodings.h>
-#include <util/translation.h>
 
 #include <atomic>
-#include <cstdio>
 #include <functional>
-#include <memory>
 #include <thread>
 
 static const int CONTINUE_EXECUTION=-1;
-
-const std::function<std::string(const char*)> G_TRANSLATION_FUN = nullptr;
 
 static void SetupBitcoinUtilArgs(ArgsManager &argsman)
 {

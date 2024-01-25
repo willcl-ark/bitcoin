@@ -5,63 +5,62 @@
 #include <util/error.h>
 
 #include <tinyformat.h>
-#include <util/translation.h>
 
 #include <cassert>
 #include <string>
 
-bilingual_str TransactionErrorString(const TransactionError err)
+std::string TransactionErrorString(const TransactionError err)
 {
     switch (err) {
         case TransactionError::OK:
-            return Untranslated("No error");
+            return "No error";
         case TransactionError::MISSING_INPUTS:
-            return Untranslated("Inputs missing or spent");
+            return "Inputs missing or spent";
         case TransactionError::ALREADY_IN_CHAIN:
-            return Untranslated("Transaction already in block chain");
+            return "Transaction already in block chain";
         case TransactionError::P2P_DISABLED:
-            return Untranslated("Peer-to-peer functionality missing or disabled");
+            return "Peer-to-peer functionality missing or disabled";
         case TransactionError::MEMPOOL_REJECTED:
-            return Untranslated("Transaction rejected by mempool");
+            return "Transaction rejected by mempool";
         case TransactionError::MEMPOOL_ERROR:
-            return Untranslated("Mempool internal error");
+            return "Mempool internal error";
         case TransactionError::INVALID_PSBT:
-            return Untranslated("PSBT is not well-formed");
+            return "PSBT is not well-formed";
         case TransactionError::PSBT_MISMATCH:
-            return Untranslated("PSBTs not compatible (different transactions)");
+            return "PSBTs not compatible (different transactions)";
         case TransactionError::SIGHASH_MISMATCH:
-            return Untranslated("Specified sighash value does not match value stored in PSBT");
+            return "Specified sighash value does not match value stored in PSBT";
         case TransactionError::MAX_FEE_EXCEEDED:
-            return Untranslated("Fee exceeds maximum configured by user (e.g. -maxtxfee, maxfeerate)");
+            return "Fee exceeds maximum configured by user (e.g. -maxtxfee, maxfeerate)";
         case TransactionError::MAX_BURN_EXCEEDED:
-            return Untranslated("Unspendable output exceeds maximum configured by user (maxburnamount)");
+            return "Unspendable output exceeds maximum configured by user (maxburnamount)";
         case TransactionError::EXTERNAL_SIGNER_NOT_FOUND:
-            return Untranslated("External signer not found");
+            return "External signer not found";
         case TransactionError::EXTERNAL_SIGNER_FAILED:
-            return Untranslated("External signer failed to sign");
+            return "External signer failed to sign";
         case TransactionError::INVALID_PACKAGE:
-            return Untranslated("Transaction rejected due to invalid package");
+            return "Transaction rejected due to invalid package";
         // no default case, so the compiler can warn about missing cases
     }
     assert(false);
 }
 
-bilingual_str ResolveErrMsg(const std::string& optname, const std::string& strBind)
+std::string ResolveErrMsg(const std::string& optname, const std::string& strBind)
 {
-    return strprintf(_("Cannot resolve -%s address: '%s'"), optname, strBind);
+    return strprintf("Cannot resolve -%s address: '%s'", optname, strBind);
 }
 
-bilingual_str InvalidPortErrMsg(const std::string& optname, const std::string& invalid_value)
+std::string InvalidPortErrMsg(const std::string& optname, const std::string& invalid_value)
 {
-    return strprintf(_("Invalid port specified in %s: '%s'"), optname, invalid_value);
+    return strprintf("Invalid port specified in %s: '%s'", optname, invalid_value);
 }
 
-bilingual_str AmountHighWarn(const std::string& optname)
+std::string AmountHighWarn(const std::string& optname)
 {
-    return strprintf(_("%s is set very high!"), optname);
+    return strprintf("%s is set very high!", optname);
 }
 
-bilingual_str AmountErrMsg(const std::string& optname, const std::string& strValue)
+std::string AmountErrMsg(const std::string& optname, const std::string& strValue)
 {
-    return strprintf(_("Invalid amount for -%s=<amount>: '%s'"), optname, strValue);
+    return strprintf("Invalid amount for -%s=<amount>: '%s'", optname, strValue);
 }

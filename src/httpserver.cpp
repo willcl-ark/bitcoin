@@ -20,7 +20,6 @@
 #include <util/signalinterrupt.h>
 #include <util/strencodings.h>
 #include <util/threadnames.h>
-#include <util/translation.h>
 
 #include <condition_variable>
 #include <cstdio>
@@ -227,7 +226,7 @@ static bool InitHTTPAllowList()
         const CSubNet subnet{LookupSubNet(strAllow)};
         if (!subnet.IsValid()) {
             uiInterface.ThreadSafeMessageBox(
-                strprintf(Untranslated("Invalid -rpcallowip subnet specification: %s. Valid are a single IP (e.g. 1.2.3.4), a network/netmask (e.g. 1.2.3.4/255.255.255.0) or a network/CIDR (e.g. 1.2.3.4/24)."), strAllow),
+                strprintf("Invalid -rpcallowip subnet specification: %s. Valid are a single IP (e.g. 1.2.3.4), a network/netmask (e.g. 1.2.3.4/255.255.255.0) or a network/CIDR (e.g. 1.2.3.4/24).", strAllow),
                 "", CClientUIInterface::MSG_ERROR);
             return false;
         }

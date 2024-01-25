@@ -6,15 +6,14 @@
 #define BITCOIN_NODE_ABORT_H
 
 #include <atomic>
-
-struct bilingual_str;
+#include <string>
 
 namespace util {
 class SignalInterrupt;
 } // namespace util
 
 namespace node {
-void AbortNode(util::SignalInterrupt* shutdown, std::atomic<int>& exit_status, const bilingual_str& message);
+void AbortNode(util::SignalInterrupt* shutdown, std::atomic<int>& exit_status, const std::string& message);
 } // namespace node
 
 #endif // BITCOIN_NODE_ABORT_H

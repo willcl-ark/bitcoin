@@ -48,8 +48,8 @@ std::unique_ptr<CWallet> CreateSyncedWallet(interfaces::Chain& chain, CChain& cc
 
 std::shared_ptr<CWallet> TestLoadWallet(std::unique_ptr<WalletDatabase> database, WalletContext& context, uint64_t create_flags)
 {
-    bilingual_str error;
-    std::vector<bilingual_str> warnings;
+    std::string error;
+    std::vector<std::string> warnings;
     auto wallet = CWallet::Create(context, "", std::move(database), create_flags, error, warnings);
     NotifyWalletLoaded(context, wallet);
     if (context.chain) {
@@ -63,8 +63,8 @@ std::shared_ptr<CWallet> TestLoadWallet(WalletContext& context)
     DatabaseOptions options;
     options.create_flags = WALLET_FLAG_DESCRIPTORS;
     DatabaseStatus status;
-    bilingual_str error;
-    std::vector<bilingual_str> warnings;
+    std::string error;
+    std::vector<std::string> warnings;
     auto database = MakeWalletDatabase("", options, status, error);
     return TestLoadWallet(std::move(database), context, options.create_flags);
 }

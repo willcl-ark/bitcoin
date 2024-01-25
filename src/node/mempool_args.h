@@ -9,7 +9,6 @@
 
 class ArgsManager;
 class CChainParams;
-struct bilingual_str;
 namespace kernel {
 struct MemPoolOptions;
 };

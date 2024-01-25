@@ -14,6 +14,7 @@
 #include <script/solver.h>
 #include <serialize.h>
 #include <streams.h>
+#include <tinyformat.h>
 #include <undo.h>
 #include <univalue.h>
 #include <util/check.h>

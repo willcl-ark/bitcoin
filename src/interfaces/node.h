@@ -12,7 +12,6 @@
 #include <netaddress.h>                // For Network
 #include <netbase.h>                   // For ConnectionDirection
 #include <support/allocators/secure.h> // For SecureString
-#include <util/translation.h>
 
 #include <functional>
 #include <memory>
@@ -32,7 +31,6 @@ class Proxy;
 enum class SynchronizationState;
 enum class TransactionError;
 struct CNodeStateStats;
-struct bilingual_str;
 namespace node {
 struct NodeContext;
 } // namespace node
@@ -78,7 +76,7 @@ public:
     virtual void initParameterInteraction() = 0;
 
     //! Get warnings.
-    virtual bilingual_str getWarnings() = 0;
+    virtual std::string getWarnings() = 0;
 
     //! Get exit status.
     virtual int getExitStatus() = 0;
@@ -219,11 +217,11 @@ public:
 
     //! Register handler for message box messages.
     using MessageBoxFn =
-        std::function<bool(const bilingual_str& message, const std::string& caption, unsigned int style)>;
+        std::function<bool(const std::string& message, const std::string& caption, unsigned int style)>;
     virtual std::unique_ptr<Handler> handleMessageBox(MessageBoxFn fn) = 0;
 
     //! Register handler for question messages.
-    using QuestionFn = std::function<bool(const bilingual_str& message,
+    using QuestionFn = std::function<bool(const std::string& message,
         const std::string& non_interactive_message,
         const std::string& caption,
         unsigned int style)>;

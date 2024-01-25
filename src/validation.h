@@ -29,7 +29,6 @@
 #include <util/fs.h>
 #include <util/hasher.h>
 #include <util/result.h>
-#include <util/translation.h>
 #include <versionbits.h>
 
 #include <atomic>
@@ -93,7 +92,7 @@ extern const std::vector<std::string> CHECKLEVEL_DOC;
 
 CAmount GetBlockSubsidy(int nHeight, const Consensus::Params& consensusParams);
 
-bool FatalError(kernel::Notifications& notifications, BlockValidationState& state, const bilingual_str& message);
+bool FatalError(kernel::Notifications& notifications, BlockValidationState& state, const std::string& message);
 
 /** Guess verification progress (as a fraction between 0.0=genesis and 1.0=current tip). */
 double GuessVerificationProgress(const ChainTxData& data, const CBlockIndex* pindex);

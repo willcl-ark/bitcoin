@@ -19,7 +19,6 @@
 #include <test/util/logging.h>
 #include <test/util/random.h>
 #include <test/util/setup_common.h>
-#include <util/translation.h>
 #include <validation.h>
 #include <validationinterface.h>
 #include <wallet/coincontrol.h>
@@ -55,7 +54,7 @@ static CMutableTransaction TestSimpleSpend(const CTransaction& from, uint32_t in
     keystore.AddKey(key);
     std::map<COutPoint, Coin> coins;
     coins[mtx.vin[0].prevout].out = from.vout[index];
-    std::map<int, bilingual_str> input_errors;
+    std::map<int, std::string> input_errors;
     BOOST_CHECK(SignTransaction(mtx, &keystore, coins, SIGHASH_ALL, input_errors));
     return mtx;
 }
@@ -416,8 +415,8 @@ void TestLoadWallet(const std::string& name, DatabaseFormat format, std::functio
     DatabaseOptions options;
     options.require_format = format;
     DatabaseStatus status;
-    bilingual_str error;
-    std::vector<bilingual_str> warnings;
+    std::string error;
+    std::vector<std::string> warnings;
     auto database{MakeWalletDatabase(name, options, status, error)};
     auto wallet{std::make_shared<CWallet>(chain.get(), "", std::move(database))};
     BOOST_CHECK_EQUAL(wallet->LoadWallet(), DBErrors::LOAD_OK);

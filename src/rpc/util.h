@@ -36,7 +36,6 @@ enum ServiceFlags : uint64_t;
 enum class OutputType;
 enum class TransactionError;
 struct FlatSigningProvider;
-struct bilingual_str;
 
 static constexpr bool DEFAULT_RPC_DOC_CHECK{
 #ifdef RPC_DOC_CHECK
@@ -469,6 +468,6 @@ private:
  * @param[out] obj      UniValue object to push the warnings array object to.
  */
 void PushWarnings(const UniValue& warnings, UniValue& obj);
-void PushWarnings(const std::vector<bilingual_str>& warnings, UniValue& obj);
+void PushWarnings(const std::vector<std::string>& warnings, UniValue& obj);
 
 #endif // BITCOIN_RPC_UTIL_H

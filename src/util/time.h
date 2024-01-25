@@ -39,7 +39,7 @@ void UninterruptibleSleep(const std::chrono::microseconds& n);
  * protect against a reliance on the exact type of t.
  *
  * This helper is used to convert durations/time_points before passing them over an
- * interface that doesn't support std::chrono (e.g. RPC, debug log, or the GUI)
+ * interface that doesn't support std::chrono (e.g. RPC or debug log)
  */
 template <typename Dur1, typename Dur2>
 constexpr auto Ticks(Dur2 d)

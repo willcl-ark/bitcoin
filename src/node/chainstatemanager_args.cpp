@@ -14,7 +14,6 @@
 #include <uint256.h>
 #include <util/result.h>
 #include <util/strencodings.h>
-#include <util/translation.h>
 #include <validation.h>
 
 #include <algorithm>
@@ -30,7 +29,7 @@ util::Result<void> ApplyArgsManOptions(const ArgsManager& args, ChainstateManage
 
     if (auto value{args.GetArg("-minimumchainwork")}) {
         if (!IsHexNumber(*value)) {
-            return util::Error{strprintf(Untranslated("Invalid non-hex (%s) minimum chain work value specified"), *value)};
+            return util::Error{strprintf("Invalid non-hex (%s) minimum chain work value specified", *value)};
         }
         opts.minimum_chain_work = UintToArith256(uint256S(*value));
     }

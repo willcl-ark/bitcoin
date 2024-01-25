@@ -16,7 +16,6 @@
 
 class JSONRPCRequest;
 class UniValue;
-struct bilingual_str;
 
 namespace wallet {
 class LegacyScriptPubKeyMan;
@@ -50,7 +49,7 @@ std::string LabelFromValue(const UniValue& value);
 //! Fetch parent descriptors of this scriptPubKey.
 void PushParentDescriptors(const CWallet& wallet, const CScript& script_pubkey, UniValue& entry);
 
-void HandleWalletError(const std::shared_ptr<CWallet> wallet, DatabaseStatus& status, bilingual_str& error);
+void HandleWalletError(const std::shared_ptr<CWallet> wallet, DatabaseStatus& status, std::string& error);
 int64_t ParseISO8601DateTime(const std::string& str);
 void AppendLastProcessedBlock(UniValue& entry, const CWallet& wallet) EXCLUSIVE_LOCKS_REQUIRED(wallet.cs_wallet);
 } //  namespace wallet

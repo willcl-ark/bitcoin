@@ -11,7 +11,6 @@
 #include <streams.h>
 #include <test/util/setup_common.h>
 #include <util/strencodings.h>
-#include <util/translation.h>
 
 #include <string>
 
@@ -363,16 +362,16 @@ BOOST_AUTO_TEST_CASE(netbase_parsenetwork)
 
 BOOST_AUTO_TEST_CASE(netpermissions_test)
 {
-    bilingual_str error;
+    std::string error;
     NetWhitebindPermissions whitebindPermissions;
     NetWhitelistPermissions whitelistPermissions;
     ConnectionDirection connection_direction;
 
     // Detect invalid white bind
     BOOST_CHECK(!NetWhitebindPermissions::TryParse("", whitebindPermissions, error));
-    BOOST_CHECK(error.original.find("Cannot resolve -whitebind address") != std::string::npos);
+    BOOST_CHECK(error.find("Cannot resolve -whitebind address") != std::string::npos);
     BOOST_CHECK(!NetWhitebindPermissions::TryParse("127.0.0.1", whitebindPermissions, error));
-    BOOST_CHECK(error.original.find("Need to specify a port with -whitebind") != std::string::npos);
+    BOOST_CHECK(error.find("Need to specify a port with -whitebind") != std::string::npos);
     BOOST_CHECK(!NetWhitebindPermissions::TryParse("", whitebindPermissions, error));
 
     // If no permission flags, assume backward compatibility
@@ -437,15 +436,15 @@ BOOST_AUTO_TEST_CASE(netpermissions_test)
     BOOST_CHECK_EQUAL(whitebindPermissions.m_flags, NetPermissionFlags::None);
 
     BOOST_CHECK(!NetWhitebindPermissions::TryParse("out,forcerelay@1.2.3.4:32", whitebindPermissions, error));
-    BOOST_CHECK(error.original.find("whitebind may only be used for incoming connections (\"out\" was passed)") != std::string::npos);
+    BOOST_CHECK(error.find("whitebind may only be used for incoming connections (\"out\" was passed)") != std::string::npos);
 
     // Detect invalid flag
     BOOST_CHECK(!NetWhitebindPermissions::TryParse("bloom,forcerelay,oopsie@1.2.3.4:32", whitebindPermissions, error));
-    BOOST_CHECK(error.original.find("Invalid P2P permission") != std::string::npos);
+    BOOST_CHECK(error.find("Invalid P2P permission") != std::string::npos);
 
     // Check netmask error
     BOOST_CHECK(!NetWhitelistPermissions::TryParse("bloom,forcerelay,noban@1.2.3.4:32", whitelistPermissions, connection_direction, error));
-    BOOST_CHECK(error.original.find("Invalid netmask specified in -whitelist") != std::string::npos);
+    BOOST_CHECK(error.find("Invalid netmask specified in -whitelist") != std::string::npos);
 
     // Happy path for whitelist parsing
     BOOST_CHECK(NetWhitelistPermissions::TryParse("noban@1.2.3.4", whitelistPermissions, connection_direction, error));

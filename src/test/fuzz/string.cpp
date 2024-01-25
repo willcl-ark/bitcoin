@@ -25,7 +25,6 @@
 #include <util/fees.h>
 #include <util/strencodings.h>
 #include <util/string.h>
-#include <util/translation.h>
 
 #include <cassert>
 #include <cstdint>
@@ -92,7 +91,7 @@ FUZZ_TARGET(string)
     (void)TrimString(random_string_1, random_string_2);
     (void)urlDecode(random_string_1);
     (void)ContainsNoNUL(random_string_1);
-    (void)_(random_string_1.c_str());
+    (void)random_string_1.c_str();
     try {
         throw scriptnum_error{random_string_1};
     } catch (const std::runtime_error&) {
@@ -134,9 +133,7 @@ FUZZ_TARGET(string)
         assert(any_split.size() >= 1);
     }
     {
-        (void)Untranslated(random_string_1);
-        const bilingual_str bs1{random_string_1, random_string_2};
-        const bilingual_str bs2{random_string_2, random_string_1};
-        (void)(bs1 + bs2);
+        (void)random_string_1;
+        (void)(random_string_1 + random_string_2);
     }
 }

@@ -43,7 +43,6 @@
 #include <util/check.h>
 #include <util/fs.h>
 #include <util/strencodings.h>
-#include <util/translation.h>
 #include <validation.h>
 #include <validationinterface.h>
 #include <versionbits.h>
@@ -1298,7 +1297,7 @@ RPCHelpMan getblockchaininfo()
         }
     }
 
-    obj.pushKV("warnings", GetWarnings(false).original);
+    obj.pushKV("warnings", GetWarnings(false));
     return obj;
 },
     };

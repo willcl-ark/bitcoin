@@ -4,7 +4,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 //! @file Public type definitions that are used inside and outside of the wallet
-//! (e.g. by src/wallet and src/interfaces and src/qt code).
+//! (e.g. by src/wallet and src/interfaces code).
 //!
 //! File is home for simple enum and struct definitions that don't deserve
 //! separate header files. More complicated wallet public types like
@@ -49,12 +49,11 @@ enum isminetype : unsigned int {
 /** used for bitflags of isminetype */
 using isminefilter = std::underlying_type<isminetype>::type;
 
-/**
- * Address purpose field that has been been stored with wallet sending and
+/** Address purpose field that has been been stored with wallet sending and
  * receiving addresses since BIP70 payment protocol support was added in
  * https://github.com/bitcoin/bitcoin/pull/2539. This field is not currently
- * used for any logic inside the wallet, but it is still shown in RPC and GUI
- * interfaces and saved for new addresses. It is basically redundant with an
+ * used for any logic inside the wallet, but it is still shown in the RPC
+ * interface and saved for new addresses. It is basically redundant with an
  * address's IsMine() result.
  */
 enum class AddressPurpose {

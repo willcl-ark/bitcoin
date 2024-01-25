@@ -11,7 +11,6 @@
 #include <test/util/setup_common.h>
 #include <util/check.h>
 #include <util/fs.h>
-#include <util/translation.h>
 #ifdef USE_BDB
 #include <wallet/bdb.h>
 #endif
@@ -131,7 +130,7 @@ static std::vector<std::unique_ptr<WalletDatabase>> TestDatabases(const fs::path
     std::vector<std::unique_ptr<WalletDatabase>> dbs;
     DatabaseOptions options;
     DatabaseStatus status;
-    bilingual_str error;
+    std::string error;
 #ifdef USE_BDB
     dbs.emplace_back(MakeBerkeleyDatabase(path_root / "bdb", options, status, error));
 #endif
@@ -289,7 +288,7 @@ BOOST_AUTO_TEST_CASE(txn_close_failure_dangling_txn)
     // after the batch object that initiated it is destroyed.
     DatabaseOptions options;
     DatabaseStatus status;
-    bilingual_str error;
+    std::string error;
     std::unique_ptr<SQLiteDatabase> database = MakeSQLiteDatabase(m_path_root / "sqlite", options, status, error);
 
     std::string key = "key";
@@ -324,7 +323,7 @@ BOOST_AUTO_TEST_CASE(concurrent_txn_dont_interfere)
 
     DatabaseOptions options;
     DatabaseStatus status;
-    bilingual_str error;
+    std::string error;
     const auto& database = MakeSQLiteDatabase(m_path_root / "sqlite", options, status, error);
 
     std::unique_ptr<DatabaseBatch> handler = Assert(database)->MakeBatch();

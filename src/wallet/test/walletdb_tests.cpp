@@ -37,7 +37,7 @@ BOOST_AUTO_TEST_CASE(walletdb_read_write_deadlock)
         DatabaseOptions options;
         options.require_format = db_format;
         DatabaseStatus status;
-        bilingual_str error_string;
+        std::string error_string;
         std::unique_ptr<WalletDatabase> db = MakeDatabase(m_path_root / strprintf("wallet_%d_.dat", db_format).c_str(), options, status, error_string);
         BOOST_CHECK_EQUAL(status, DatabaseStatus::SUCCESS);
 

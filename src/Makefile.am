@@ -328,7 +328,6 @@ BITCOIN_CORE_H = \
   util/tokenpipe.h \
   util/trace.h \
   util/transaction_identifier.h \
-  util/translation.h \
   util/types.h \
   util/ui_change_type.h \
   util/vector.h \
@@ -923,7 +922,6 @@ libbitcoinkernel_la_CXXFLAGS = $(AM_CXXFLAGS) $(PIE_FLAGS) -fvisibility=default
 #       and more modules are decoupled from the consensus engine, this list will
 #       shrink to only those which are absolutely necessary.
 libbitcoinkernel_la_SOURCES = \
-  kernel/bitcoinkernel.cpp \
   arith_uint256.cpp \
   chain.cpp \
   clientversion.cpp \

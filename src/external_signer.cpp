@@ -8,6 +8,7 @@
 #include <common/run_command.h>
 #include <core_io.h>
 #include <psbt.h>
+#include <tinyformat.h>
 #include <util/strencodings.h>
 
 #include <algorithm>

@@ -33,8 +33,8 @@ static void WalletCreate(benchmark::Bench& bench, bool encrypted)
     }
 
     DatabaseStatus status;
-    bilingual_str error_string;
-    std::vector<bilingual_str> warnings;
+    std::string error_string;
+    std::vector<std::string> warnings;
 
     fs::path wallet_path = test_setup->m_path_root / strprintf("test_wallet_%d", random.rand32()).c_str();
     bench.run([&] {

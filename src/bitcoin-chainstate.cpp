@@ -81,21 +81,21 @@ int main(int argc, char* argv[])
         {
             std::cout << "Header tip changed: " << height << ", " << timestamp << ", " << presync << std::endl;
         }
-        void progress(const bilingual_str& title, int progress_percent, bool resume_possible) override
+        void progress(const std::string& title, int progress_percent, bool resume_possible) override
         {
-            std::cout << "Progress: " << title.original << ", " << progress_percent << ", " << resume_possible << std::endl;
+            std::cout << "Progress: " << title << ", " << progress_percent << ", " << resume_possible << std::endl;
         }
-        void warning(const bilingual_str& warning) override
+        void warning(const std::string& warning) override
         {
-            std::cout << "Warning: " << warning.original << std::endl;
+            std::cout << "Warning: " << warning << std::endl;
         }
-        void flushError(const bilingual_str& message) override
+        void flushError(const std::string& message) override
         {
-            std::cerr << "Error flushing block data to disk: " << message.original << std::endl;
+            std::cerr << "Error flushing block data to disk: " << message << std::endl;
         }
-        void fatalError(const bilingual_str& message) override
+        void fatalError(const std::string& message) override
         {
-            std::cerr << "Error: " << message.original << std::endl;
+            std::cerr << "Error: " << message << std::endl;
         }
     };
     auto notifications = std::make_unique<KernelNotifications>();

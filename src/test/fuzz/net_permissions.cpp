@@ -8,7 +8,6 @@
 #include <test/fuzz/fuzz.h>
 #include <test/fuzz/util.h>
 #include <test/fuzz/util/net.h>
-#include <util/translation.h>
 
 #include <cassert>
 #include <cstdint>
@@ -22,7 +21,7 @@ FUZZ_TARGET(net_permissions)
     const NetPermissionFlags net_permission_flags = ConsumeWeakEnum(fuzzed_data_provider, ALL_NET_PERMISSION_FLAGS);
 
     NetWhitebindPermissions net_whitebind_permissions;
-    bilingual_str error_net_whitebind_permissions;
+    std::string error_net_whitebind_permissions;
     if (NetWhitebindPermissions::TryParse(s, net_whitebind_permissions, error_net_whitebind_permissions)) {
         (void)NetPermissions::ToStrings(net_whitebind_permissions.m_flags);
         (void)NetPermissions::AddFlag(net_whitebind_permissions.m_flags, net_permission_flags);
@@ -33,7 +32,7 @@ FUZZ_TARGET(net_permissions)
 
     NetWhitelistPermissions net_whitelist_permissions;
     ConnectionDirection connection_direction;
-    bilingual_str error_net_whitelist_permissions;
+    std::string error_net_whitelist_permissions;
     if (NetWhitelistPermissions::TryParse(s, net_whitelist_permissions, connection_direction, error_net_whitelist_permissions)) {
         (void)NetPermissions::ToStrings(net_whitelist_permissions.m_flags);
         (void)NetPermissions::AddFlag(net_whitelist_permissions.m_flags, net_permission_flags);

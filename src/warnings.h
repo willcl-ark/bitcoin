@@ -8,9 +8,8 @@
 
 #include <string>
 
-struct bilingual_str;
 
-void SetMiscWarning(const bilingual_str& warning);
+void SetMiscWarning(const std::string& warning);
 void SetfLargeWorkInvalidChainFound(bool flag);
 /** Format a string that describes several potential problems detected by the core.
  * @param[in] verbose bool
@@ -18,6 +17,6 @@ void SetfLargeWorkInvalidChainFound(bool flag);
  * - if false, get the most important warning
  * @returns the warning string
  */
-bilingual_str GetWarnings(bool verbose);
+std::string GetWarnings(bool verbose);
 
 #endif // BITCOIN_WARNINGS_H

@@ -26,15 +26,12 @@
 #include <util/syserror.h>
 #include <util/threadnames.h>
 #include <util/tokenpipe.h>
-#include <util/translation.h>
 
 #include <any>
-#include <functional>
 #include <optional>
 
 using node::NodeContext;
 
-const std::function<std::string(const char*)> G_TRANSLATION_FUN = nullptr;
 UrlDecodeFn* const URL_DECODE = urlDecode;
 
 #if HAVE_DECL_FORK
@@ -112,11 +109,10 @@ int fork_daemon(bool nochdir, bool noclose, TokenPipeEnd& endpoint)
 
 static bool ParseArgs(ArgsManager& args, int argc, char* argv[])
 {
-    // If Qt is used, parameters/bitcoin.conf are parsed in qt/bitcoin.cpp's main()
     SetupServerArgs(args);
     std::string error;
     if (!args.ParseParameters(argc, argv, error)) {
-        return InitError(Untranslated(strprintf("Error parsing command line arguments: %s", error)));
+        return InitError(strprintf("Error parsing command line arguments: %s", error));
     }
 
     if (auto error = common::InitConfig(args)) {
@@ -126,7 +122,7 @@ static bool ParseArgs(ArgsManager& args, int argc, char* argv[])
     // Error out when loose non-argument tokens are encountered on command line
     for (int i = 1; i < argc; i++) {
         if (!IsSwitchChar(argv[i][0])) {
-            return InitError(Untranslated(strprintf("Command line contains unexpected token '%s', see bitcoind -h for a list of options.", argv[i])));
+            return InitError(strprintf("Command line contains unexpected token '%s', see bitcoind -h for a list of options.", argv[i]));
         }
     }
     return true;
@@ -169,7 +165,6 @@ static bool AppInit(NodeContext& node)
     std::any context{&node};
     try
     {
-        // -server defaults to true for bitcoind but not for the GUI so do this here
         args.SoftSetBoolArg("-server", true);
         // Set this early so that parameter interactions go to console
         InitLogging(args);
@@ -204,7 +199,7 @@ static bool AppInit(NodeContext& node)
                 }
                 break;
             case -1: // Error happened.
-                return InitError(Untranslated(strprintf("fork_daemon() failed: %s", SysErrorString(errno))));
+                return InitError(strprintf("fork_daemon() failed: %s", SysErrorString(errno)));
             default: { // Parent: wait and exit.
                 int token = daemon_ep.TokenRead();
                 if (token) { // Success
@@ -216,7 +211,7 @@ static bool AppInit(NodeContext& node)
             }
             }
 #else
-            return InitError(Untranslated("-daemon is not supported on this operating system"));
+            return InitError("-daemon is not supported on this operating system");
 #endif // HAVE_DECL_FORK
         }
         // Lock data directory after daemonization

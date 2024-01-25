@@ -9,7 +9,6 @@
 #include <test/util/setup_common.h>
 #include <timedata.h>
 #include <util/string.h>
-#include <util/translation.h>
 #include <warnings.h>
 
 #include <string>
@@ -67,7 +66,7 @@ BOOST_AUTO_TEST_CASE(addtimedata)
         MultiAddTimeData(1, DEFAULT_MAX_TIME_ADJUSTMENT + 1); //filter size 5
     }
 
-    BOOST_CHECK(GetWarnings(true).original.find("clock is wrong") != std::string::npos);
+    BOOST_CHECK(GetWarnings(true).find("clock is wrong") != std::string::npos);
 
     // nTimeOffset is not changed if the median of offsets exceeds DEFAULT_MAX_TIME_ADJUSTMENT
     BOOST_CHECK_EQUAL(GetTimeOffset(), 0);

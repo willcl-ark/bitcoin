@@ -47,7 +47,6 @@
 #include <util/check.h>
 #include <util/result.h>
 #include <util/signalinterrupt.h>
-#include <util/translation.h>
 #include <validation.h>
 #include <validationinterface.h>
 #include <warnings.h>
@@ -91,7 +90,7 @@ public:
     explicit NodeImpl(NodeContext& context) { setContext(&context); }
     void initLogging() override { InitLogging(args()); }
     void initParameterInteraction() override { InitParameterInteraction(args()); }
-    bilingual_str getWarnings() override { return GetWarnings(true); }
+    std::string getWarnings() override { return GetWarnings(true); }
     int getExitStatus() override { return Assert(m_context)->exit_status.load(); }
     uint32_t getLogCategories() override { return LogInstance().GetCategoryMask(); }
     bool baseInitialize() override
@@ -755,8 +754,8 @@ public:
     }
     bool shutdownRequested() override { return ShutdownRequested(m_node); }
     void initMessage(const std::string& message) override { ::uiInterface.InitMessage(message); }
-    void initWarning(const bilingual_str& message) override { InitWarning(message); }
-    void initError(const bilingual_str& message) override { InitError(message); }
+    void initWarning(const std::string& message) override { InitWarning(message); }
+    void initError(const std::string& message) override { InitError(message); }
     void showProgress(const std::string& title, int progress, bool resume_possible) override
     {
         ::uiInterface.ShowProgress(title, progress, resume_possible);

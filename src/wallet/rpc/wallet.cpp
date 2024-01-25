@@ -11,7 +11,6 @@
 #include <key_io.h>
 #include <rpc/server.h>
 #include <rpc/util.h>
-#include <util/translation.h>
 #include <wallet/context.h>
 #include <wallet/receive.h>
 #include <wallet/rpc/wallet.h>
@@ -248,8 +247,8 @@ static RPCHelpMan loadwallet()
     DatabaseStatus status;
     ReadDatabaseArgs(*context.args, options);
     options.require_existing = true;
-    bilingual_str error;
-    std::vector<bilingual_str> warnings;
+    std::string error;
+    std::vector<std::string> warnings;
     std::optional<bool> load_on_start = request.params[1].isNull() ? std::nullopt : std::optional<bool>(request.params[1].get_bool());
 
     {
@@ -385,12 +384,12 @@ static RPCHelpMan createwallet()
     }
     SecureString passphrase;
     passphrase.reserve(100);
-    std::vector<bilingual_str> warnings;
+    std::vector<std::string> warnings;
     if (!request.params[3].isNull()) {
         passphrase = std::string_view{request.params[3].get_str()};
         if (passphrase.empty()) {
             // Empty string means unencrypted
-            warnings.emplace_back(Untranslated("Empty string given as passphrase, wallet will not be encrypted."));
+            warnings.emplace_back("Empty string given as passphrase, wallet will not be encrypted.");
         }
     }
 
@@ -428,12 +427,12 @@ static RPCHelpMan createwallet()
     options.require_create = true;
     options.create_flags = flags;
     options.create_passphrase = passphrase;
-    bilingual_str error;
+    std::string error;
     std::optional<bool> load_on_start = request.params[6].isNull() ? std::nullopt : std::optional<bool>(request.params[6].get_bool());
     const std::shared_ptr<CWallet> wallet = CreateWallet(context, request.params[0].get_str(), load_on_start, options, status, error, warnings);
     if (!wallet) {
         RPCErrorCode code = status == DatabaseStatus::FAILED_ENCRYPT ? RPC_WALLET_ENCRYPTION_FAILED : RPC_WALLET_ERROR;
-        throw JSONRPCError(code, error.original);
+        throw JSONRPCError(code, error);
     }
 
     UniValue obj(UniValue::VOBJ);
@@ -481,7 +480,7 @@ static RPCHelpMan unloadwallet()
         throw JSONRPCError(RPC_WALLET_NOT_FOUND, "Requested wallet does not exist or is not loaded");
     }
 
-    std::vector<bilingual_str> warnings;
+    std::vector<std::string> warnings;
     {
         WalletRescanReserver reserver(*wallet);
         if (!reserver.reserve()) {
@@ -611,7 +610,7 @@ static RPCHelpMan upgradewallet()
     if (!request.params[0].isNull()) {
         version = request.params[0].getInt<int>();
     }
-    bilingual_str error;
+    std::string error;
     const int previous_version{pwallet->GetVersion()};
     const bool wallet_upgraded{pwallet->UpgradeWallet(version, error)};
     const int current_version{pwallet->GetVersion()};
@@ -633,7 +632,7 @@ static RPCHelpMan upgradewallet()
         obj.pushKV("result", result);
     } else {
         CHECK_NONFATAL(!error.empty());
-        obj.pushKV("error", error.original);
+        obj.pushKV("error", error);
     }
     return obj;
 },
@@ -799,7 +798,7 @@ static RPCHelpMan migratewallet()
             WalletContext& context = EnsureWalletContext(request.context);
             util::Result<MigrationResult> res = MigrateLegacyToDescriptor(wallet_name, wallet_pass, context);
             if (!res) {
-                throw JSONRPCError(RPC_WALLET_ERROR, util::ErrorString(res).original);
+                throw JSONRPCError(RPC_WALLET_ERROR, util::ErrorString(res));
             }
 
             UniValue r{UniValue::VOBJ};

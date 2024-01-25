@@ -23,7 +23,6 @@
 #include <util/result.h>
 #include <util/time.h>
 #include <util/trace.h>
-#include <util/translation.h>
 #include <validationinterface.h>
 
 #include <cmath>
@@ -173,11 +172,11 @@ util::Result<CTxMemPool::setEntries> CTxMemPool::CalculateAncestorsAndCheckLimit
         totalSizeWithAncestors += stageit->GetTxSize();
 
         if (stageit->GetSizeWithDescendants() + entry_size > limits.descendant_size_vbytes) {
-            return util::Error{Untranslated(strprintf("exceeds descendant size limit for tx %s [limit: %u]", stageit->GetTx().GetHash().ToString(), limits.descendant_size_vbytes))};
+            return util::Error{strprintf("exceeds descendant size limit for tx %s [limit: %u]", stageit->GetTx().GetHash().ToString(), limits.descendant_size_vbytes)};
         } else if (stageit->GetCountWithDescendants() + entry_count > static_cast<uint64_t>(limits.descendant_count)) {
-            return util::Error{Untranslated(strprintf("too many descendants for tx %s [limit: %u]", stageit->GetTx().GetHash().ToString(), limits.descendant_count))};
+            return util::Error{strprintf("too many descendants for tx %s [limit: %u]", stageit->GetTx().GetHash().ToString(), limits.descendant_count)};
         } else if (totalSizeWithAncestors > limits.ancestor_size_vbytes) {
-            return util::Error{Untranslated(strprintf("exceeds ancestor size limit [limit: %u]", limits.ancestor_size_vbytes))};
+            return util::Error{strprintf("exceeds ancestor size limit [limit: %u]", limits.ancestor_size_vbytes)};
         }
 
         const CTxMemPoolEntry::Parents& parents = stageit->GetMemPoolParentsConst();
@@ -189,7 +188,7 @@ util::Result<CTxMemPool::setEntries> CTxMemPool::CalculateAncestorsAndCheckLimit
                 staged_ancestors.insert(parent);
             }
             if (staged_ancestors.size() + ancestors.size() + entry_count > static_cast<uint64_t>(limits.ancestor_count)) {
-                return util::Error{Untranslated(strprintf("too many unconfirmed ancestors [limit: %u]", limits.ancestor_count))};
+                return util::Error{strprintf("too many unconfirmed ancestors [limit: %u]", limits.ancestor_count)};
             }
         }
     }
@@ -204,13 +203,13 @@ util::Result<void> CTxMemPool::CheckPackageLimits(const Package& package,
 
     // Package itself is busting mempool limits; should be rejected even if no staged_ancestors exist
     if (pack_count > static_cast<uint64_t>(m_limits.ancestor_count)) {
-        return util::Error{Untranslated(strprintf("package count %u exceeds ancestor count limit [limit: %u]", pack_count, m_limits.ancestor_count))};
+        return util::Error{strprintf("package count %u exceeds ancestor count limit [limit: %u]", pack_count, m_limits.ancestor_count)};
     } else if (pack_count > static_cast<uint64_t>(m_limits.descendant_count)) {
-        return util::Error{Untranslated(strprintf("package count %u exceeds descendant count limit [limit: %u]", pack_count, m_limits.descendant_count))};
+        return util::Error{strprintf("package count %u exceeds descendant count limit [limit: %u]", pack_count, m_limits.descendant_count)};
     } else if (total_vsize > m_limits.ancestor_size_vbytes) {
-        return util::Error{Untranslated(strprintf("package size %u exceeds ancestor size limit [limit: %u]", total_vsize, m_limits.ancestor_size_vbytes))};
+        return util::Error{strprintf("package size %u exceeds ancestor size limit [limit: %u]", total_vsize, m_limits.ancestor_size_vbytes)};
     } else if (total_vsize > m_limits.descendant_size_vbytes) {
-        return util::Error{Untranslated(strprintf("package size %u exceeds descendant size limit [limit: %u]", total_vsize, m_limits.descendant_size_vbytes))};
+        return util::Error{strprintf("package size %u exceeds descendant size limit [limit: %u]", total_vsize, m_limits.descendant_size_vbytes)};
     }
 
     CTxMemPoolEntry::Parents staged_ancestors;
@@ -220,7 +219,7 @@ util::Result<void> CTxMemPool::CheckPackageLimits(const Package& package,
             if (piter) {
                 staged_ancestors.insert(**piter);
                 if (staged_ancestors.size() + package.size() > static_cast<uint64_t>(m_limits.ancestor_count)) {
-                    return util::Error{Untranslated(strprintf("too many unconfirmed parents [limit: %u]", m_limits.ancestor_count))};
+                    return util::Error{strprintf("too many unconfirmed parents [limit: %u]", m_limits.ancestor_count)};
                 }
             }
         }
@@ -231,7 +230,7 @@ util::Result<void> CTxMemPool::CheckPackageLimits(const Package& package,
     const auto ancestors{CalculateAncestorsAndCheckLimits(total_vsize, package.size(),
                                                           staged_ancestors, m_limits)};
     // It's possible to overestimate the ancestor/descendant totals.
-    if (!ancestors.has_value()) return util::Error{Untranslated("possibly " + util::ErrorString(ancestors).original)};
+    if (!ancestors.has_value()) return util::Error{"possibly " + util::ErrorString(ancestors)};
     return {};
 }
 
@@ -252,7 +251,7 @@ util::Result<CTxMemPool::setEntries> CTxMemPool::CalculateMemPoolAncestors(
             if (piter) {
                 staged_ancestors.insert(**piter);
                 if (staged_ancestors.size() + 1 > static_cast<uint64_t>(limits.ancestor_count)) {
-                    return util::Error{Untranslated(strprintf("too many unconfirmed parents [limit: %u]", limits.ancestor_count))};
+                    return util::Error{strprintf("too many unconfirmed parents [limit: %u]", limits.ancestor_count)};
                 }
             }
         }
@@ -276,7 +275,7 @@ CTxMemPool::setEntries CTxMemPool::AssumeCalculateMemPoolAncestors(
     auto result{CalculateMemPoolAncestors(entry, limits, fSearchForParents)};
     if (!Assume(result)) {
         LogPrintLevel(BCLog::MEMPOOL, BCLog::Level::Error, "%s: CalculateMemPoolAncestors failed unexpectedly, continuing with empty ancestor set (%s)\n",
-                      calling_fn_name, util::ErrorString(result).original);
+                      calling_fn_name, util::ErrorString(result));
     }
     return std::move(result).value_or(CTxMemPool::setEntries{});
 }
@@ -1287,7 +1286,7 @@ util::Result<std::pair<std::vector<FeeFrac>, std::vector<FeeFrac>>> CTxMemPool::
     auto err_string{CheckConflictTopology(direct_conflicts)};
     if (err_string.has_value()) {
         // Unsupported topology for calculating a feerate diagram
-        return util::Error{Untranslated(err_string.value())};
+        return util::Error{err_string.value()};
     }
 
     // new diagram will have chunks that consist of each ancestor of

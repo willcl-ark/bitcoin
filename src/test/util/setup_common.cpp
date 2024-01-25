@@ -59,7 +59,6 @@
 #include <util/thread.h>
 #include <util/threadnames.h>
 #include <util/time.h>
-#include <util/translation.h>
 #include <util/vector.h>
 #include <validation.h>
 #include <validationinterface.h>
@@ -80,7 +79,6 @@ using node::LoadChainstate;
 using node::RegenerateCommitments;
 using node::VerifyLoadedChainstate;
 
-const std::function<std::string(const char*)> G_TRANSLATION_FUN = nullptr;
 UrlDecodeFn* const URL_DECODE = nullptr;
 
 /** Random context to get unique temp data dirs. Separate from g_insecure_rand_ctx, which can be seeded from a const env var */
@@ -439,7 +437,7 @@ std::pair<CMutableTransaction, CAmount> TestChain100Setup::CreateValidTransactio
     }
     // - Default signature hashing type
     int nHashType = SIGHASH_ALL;
-    std::map<int, bilingual_str> input_errors;
+    std::map<int, std::string> input_errors;
     assert(SignTransaction(mempool_txn, &keystore, input_coins, nHashType, input_errors));
     CAmount current_fee = inputs_amount - std::accumulate(outputs.begin(), outputs.end(), CAmount(0),
         [](const CAmount& acc, const CTxOut& out) {
