@@ -261,8 +261,7 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         self.set_binary_paths()
 
         os.environ['PATH'] = os.pathsep.join([
-            os.path.join(config['environment']['BUILDDIR'], 'src'),
-            os.path.join(config['environment']['BUILDDIR'], 'src', 'qt'), os.environ['PATH']
+            os.path.join(config['environment']['BUILDDIR'], 'src'), os.environ['PATH']
         ])
 
         # Set up temp directory and start logging

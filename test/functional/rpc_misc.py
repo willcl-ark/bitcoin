@@ -57,11 +57,11 @@ class RpcMiscTest(BitcoinTestFramework):
         self.log.info("test logging rpc and help")
 
         # Test toggling a logging category on/off/on with the logging RPC.
-        assert_equal(node.logging()['qt'], True)
-        node.logging(exclude=['qt'])
-        assert_equal(node.logging()['qt'], False)
-        node.logging(include=['qt'])
-        assert_equal(node.logging()['qt'], True)
+        assert_equal(node.logging()['net'], True)
+        node.logging(exclude=['net'])
+        assert_equal(node.logging()['net'], False)
+        node.logging(include=['net'])
+        assert_equal(node.logging()['net'], True)
 
         # Test logging RPC returns the logging categories in alphabetical order.
         sorted_logging_categories = sorted(node.logging())

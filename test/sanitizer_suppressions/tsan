@@ -20,10 +20,6 @@ deadlock:Chainstate::ConnectTip
 # Intentional deadlock in tests
 deadlock:sync_tests::potential_deadlock_detected
 
-# Wildcard for all gui tests, should be replaced with non-wildcard suppressions
-race:src/qt/test/*
-deadlock:src/qt/test/*
-
 # External libraries
 # https://github.com/bitcoin/bitcoin/pull/27658#issuecomment-1547639621
 deadlock:libdb
