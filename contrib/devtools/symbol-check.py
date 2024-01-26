@@ -41,7 +41,6 @@ MAX_VERSIONS = {
     lief.ELF.ARCH.RISCV:  (2,27),
 },
 'LIBATOMIC': (1,0),
-'V':         (0,5,0),  # xkb (bitcoin-qt only)
 }
 
 # Ignore symbols that are exported as part of every executable
@@ -92,7 +91,6 @@ ELF_ABIS: dict[lief.ELF.ARCH, dict[lief.ENDIANNESS, list[int]]] = {
 
 # Allowed NEEDED libraries
 ELF_ALLOWED_LIBRARIES = {
-# bitcoind and bitcoin-qt
 'libgcc_s.so.1', # GCC base support
 'libc.so.6', # C library
 'libpthread.so.0', # threading
@@ -105,49 +103,11 @@ ELF_ALLOWED_LIBRARIES = {
 'ld64.so.1', # POWER64 ABIv1 dynamic linker
 'ld64.so.2', # POWER64 ABIv2 dynamic linker
 'ld-linux-riscv64-lp64d.so.1', # 64-bit RISC-V dynamic linker
-# bitcoin-qt only
-'libxcb.so.1', # part of X11
-'libxkbcommon.so.0', # keyboard keymapping
-'libxkbcommon-x11.so.0', # keyboard keymapping
-'libfontconfig.so.1', # font support
-'libfreetype.so.6', # font parsing
-'libdl.so.2', # programming interface to dynamic linker
-'libxcb-icccm.so.4',
-'libxcb-image.so.0',
-'libxcb-shm.so.0',
-'libxcb-keysyms.so.1',
-'libxcb-randr.so.0',
-'libxcb-render-util.so.0',
-'libxcb-render.so.0',
-'libxcb-shape.so.0',
-'libxcb-sync.so.1',
-'libxcb-xfixes.so.0',
-'libxcb-xinerama.so.0',
-'libxcb-xkb.so.1',
 }
 
 MACHO_ALLOWED_LIBRARIES = {
-# bitcoind and bitcoin-qt
 'libc++.1.dylib', # C++ Standard Library
 'libSystem.B.dylib', # libc, libm, libpthread, libinfo
-# bitcoin-qt only
-'AppKit', # user interface
-'ApplicationServices', # common application tasks.
-'Carbon', # deprecated c back-compat API
-'ColorSync',
-'CoreFoundation', # low level func, data types
-'CoreGraphics', # 2D rendering
-'CoreServices', # operating system services
-'CoreText', # interface for laying out text and handling fonts.
-'CoreVideo', # video processing
-'Foundation', # base layer functionality for apps/frameworks
-'ImageIO', # read and write image file formats.
-'IOKit', # user-space access to hardware devices and drivers.
-'IOSurface', # cross process image/drawing buffers
-'libobjc.A.dylib', # Objective-C runtime library
-'Metal', # 3D graphics
-'Security', # access control and authentication
-'QuartzCore', # animation
 }
 
 PE_ALLOWED_LIBRARIES = {
@@ -157,20 +117,6 @@ PE_ALLOWED_LIBRARIES = {
 'msvcrt.dll', # C standard library for MSVC
 'SHELL32.dll', # shell API
 'WS2_32.dll', # sockets
-# bitcoin-qt only
-'dwmapi.dll', # desktop window manager
-'GDI32.dll', # graphics device interface
-'IMM32.dll', # input method editor
-'NETAPI32.dll', # network management
-'ole32.dll', # component object model
-'OLEAUT32.dll', # OLE Automation API
-'SHLWAPI.dll', # light weight shell API
-'USER32.dll', # user interface
-'USERENV.dll', # user management
-'UxTheme.dll', # visual style
-'VERSION.dll', # version checking
-'WINMM.dll', # WinMM audio API
-'WTSAPI32.dll', # Remote Desktop
 }
 
 def check_version(max_versions, version, arch) -> bool:
