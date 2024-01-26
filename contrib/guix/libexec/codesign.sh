@@ -82,9 +82,6 @@ mkdir -p "$DISTSRC"
             done
             ;;
         *darwin*)
-            # Apply detached codesignatures to dist/ (in-place)
-            signapple apply dist/Bitcoin-Qt.app codesignatures/osx/dist
-
             # Make a .zip from dist/
             cd dist/
             find . -print0 \
