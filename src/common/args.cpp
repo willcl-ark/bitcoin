@@ -625,9 +625,6 @@ std::string ArgsManager::GetHelpMessage() const
             case OptionsCategory::CHAINPARAMS:
                 usage += HelpMessageGroup("Chain selection options:");
                 break;
-            case OptionsCategory::GUI:
-                usage += HelpMessageGroup("UI Options:");
-                break;
             case OptionsCategory::COMMANDS:
                 usage += HelpMessageGroup("Commands:");
                 break;
