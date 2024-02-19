@@ -622,7 +622,52 @@ void CTxMemPool::removeConflicts(const CTransaction &tx)
         }
     }
 }
+struct FeeRateInfo {
+    int fee_rate;
+    int size;
+};
 
+double calculateWeightedMedian(std::vector<FeeRateInfo>& removed_txs)
+{
+    // Sort by fee rate, low to high
+    std::sort(removed_txs.begin(), removed_txs.end(), [](const FeeRateInfo& a, const FeeRateInfo& b) {
+        return a.fee_rate < b.fee_rate;
+    });
+
+    // Total weight
+    long total_weight{0};
+    for (const auto& tx : removed_txs) {
+        total_weight += tx.size;
+    }
+
+    long cumulative_weight{0};
+    for (const auto& tx : removed_txs) {
+        cumulative_weight += tx.size;
+        // When we pass halfway weight, return the fee rate
+        if (cumulative_weight >= total_weight / 2) {
+            return tx.fee_rate;
+        }
+    }
+    return 0; // In case of empty fees vector
+}
+
+int calculateWeightedMode(const std::vector<FeeRateInfo>& removed_txs)
+{
+    std::map<int, int> weighted_counts;
+    for (const auto& tx : removed_txs) {
+        weighted_counts[tx.fee_rate] += tx.size;
+    }
+
+    int mode{0};
+    int max_weight{0};
+    for (const auto& wc : weighted_counts) {
+        if (wc.second > max_weight) {
+            max_weight = wc.second;
+            mode = wc.first;
+        }
+    }
+    return mode;
+}
 /**
  * Called when a block is connected. Removes from mempool.
  */
@@ -631,6 +676,14 @@ void CTxMemPool::removeForBlock(const std::vector<CTransactionRef>& vtx, unsigne
     AssertLockHeld(cs);
     std::vector<RemovedMempoolTransactionInfo> txs_removed_for_block;
     txs_removed_for_block.reserve(vtx.size());
+
+    std::vector<FeeRateInfo> feeRates;
+    int total_fees{0};
+    int total_size{0};
+    int fee{0};
+    int v_size{0};
+    int fee_rate{0};
+
     for (const auto& tx : vtx)
     {
         txiter it = mapTx.find(tx->GetHash());
@@ -638,10 +691,29 @@ void CTxMemPool::removeForBlock(const std::vector<CTransactionRef>& vtx, unsigne
             setEntries stage;
             stage.insert(it);
             txs_removed_for_block.emplace_back(*it);
+
+            fee = it->GetFee();
+            v_size = it->GetTxSize();
+            fee_rate = fee / v_size;
+            total_fees += fee;
+            total_size += v_size;
+            feeRates.push_back({fee_rate, v_size});
+
             RemoveStaged(stage, true, MemPoolRemovalReason::BLOCK);
+
+            LogPrintf("mempool: RemoveMempoolTxForBlock: height: %i, txid: %s, size (vB): %i, fees: %lu feerate (s/vB): %i \n", nBlockHeight, tx->GetHash().GetHex(), v_size, fee, fee_rate);
         }
         removeConflicts(*tx);
         ClearPrioritisation(tx->GetHash());
+    }
+
+    if (!feeRates.empty()) {
+        double weightedMedian = calculateWeightedMedian(feeRates);
+        int weightedMode = calculateWeightedMode(feeRates);
+        double average_fee_rate = total_size > 0 ? static_cast<double>(total_fees) / total_size : 0;
+        LogPrintf("mempool: RemoveMempoolTxForBlock: height: %i, mean fee rate: %f, weighted median fee rate: %f, weighted mode fee rate: %i\n", nBlockHeight, average_fee_rate, weightedMedian, weightedMode);
+    } else {
+        LogPrintf("mempool: RemoveMempoolTxForBlock: height: %i, no transactions found, cannot calculate weighted median or mode fee rate.\n", nBlockHeight);
     }
     GetMainSignals().MempoolTransactionsRemovedForBlock(txs_removed_for_block, nBlockHeight);
     lastRollingFeeUpdate = GetTime();
