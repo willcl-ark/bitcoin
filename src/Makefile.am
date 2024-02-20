@@ -247,6 +247,7 @@ BITCOIN_CORE_H = \
   policy/fees.h \
   policy/fees_args.h \
   policy/packages.h \
+  policy/mempool_fees.h \
   policy/policy.h \
   policy/rbf.h \
   policy/settings.h \
@@ -445,6 +446,7 @@ libbitcoin_node_a_SOURCES = \
   policy/v3_policy.cpp \
   policy/fees.cpp \
   policy/fees_args.cpp \
+  policy/mempool_fees.cpp \
   policy/packages.cpp \
   policy/rbf.cpp \
   policy/settings.cpp \
@@ -706,6 +708,7 @@ libbitcoin_common_a_SOURCES = \
   outputtype.cpp \
   policy/v3_policy.cpp \
   policy/feerate.cpp \
+  policy/mempool_fees.cpp \
   policy/policy.cpp \
   protocol.cpp \
   psbt.cpp \
@@ -965,6 +968,8 @@ libbitcoinkernel_la_SOURCES = \
   node/utxo_snapshot.cpp \
   policy/v3_policy.cpp \
   policy/feerate.cpp \
+  policy/fees.cpp \
+  policy/mempool_fees.cpp
   policy/packages.cpp \
   policy/policy.cpp \
   policy/rbf.cpp \
