@@ -9,6 +9,7 @@
 #include <consensus/merkle.h>
 #include <consensus/tx_verify.h>
 #include <node/miner.h>
+#include <optional>
 #include <policy/policy.h>
 #include <test/util/random.h>
 #include <test/util/txmempool.h>
@@ -52,6 +53,24 @@ struct MinerTestingSetup : public TestingSetup {
         return *m_node.mempool;
     }
     BlockAssembler AssemblerForTest(CTxMemPool& tx_mempool);
+
+    // Find a CFeeRate in a vector of tuples
+    std::optional<std::tuple<CFeeRate, uint64_t>> findFeeRate(
+        const std::vector<std::tuple<CFeeRate, uint64_t>>& blockFeeHistogram,
+        const CFeeRate& targetRate) {
+
+        auto iter = std::find_if(
+            blockFeeHistogram.begin(), blockFeeHistogram.end(),
+            [&targetRate](const std::tuple<CFeeRate, uint64_t>& element) -> bool {
+                return std::get<0>(element) == targetRate;
+            });
+
+        if (iter != blockFeeHistogram.end()) {
+            return *iter;
+        } else {
+            return std::nullopt;
+        }
+    }
 };
 } // namespace miner_tests
 
@@ -151,14 +170,17 @@ void MinerTestingSetup::TestPackageSelection(const CScript& scriptPubKey, const 
     const auto packageFee = lowerFeeTx.GetFee() + highFeeChildTx.GetFee();
     const auto packageSize = lowerFeeTx.GetTxSize() + highFeeChildTx.GetTxSize();
 
-    const auto packageFeeRateIter = blockFeeHistogram.find(CFeeRate(packageFee, packageSize));
-    const auto mediumTxFeeRateIter = blockFeeHistogram.find(CFeeRate(mediumFeeTx.GetFee(), mediumFeeTx.GetTxSize()));
+    CFeeRate packageRate(packageFee, packageSize);
+    auto packageFeeRateFound = findFeeRate(blockFeeHistogram, packageRate);
 
-    BOOST_CHECK(packageFeeRateIter != blockFeeHistogram.end());
-    BOOST_CHECK(mediumTxFeeRateIter != blockFeeHistogram.end());
+    CFeeRate mediumRate(mediumFeeTx.GetFee(), mediumFeeTx.GetTxSize());
+    auto mediumTxFeeRateFound = findFeeRate(blockFeeHistogram, mediumRate);
 
-    BOOST_CHECK(packageFeeRateIter->second == static_cast<uint64_t>(packageSize));
-    BOOST_CHECK(mediumTxFeeRateIter->second == static_cast<uint64_t>(mediumFeeTx.GetTxSize()));
+    BOOST_CHECK(packageFeeRateFound != std::nullopt);
+    BOOST_CHECK(mediumTxFeeRateFound != std::nullopt);
+
+    BOOST_CHECK(std::get<1>(*packageFeeRateFound) == static_cast<uint64_t>(packageSize));
+    BOOST_CHECK(std::get<1>(*mediumTxFeeRateFound) == static_cast<uint64_t>(mediumFeeTx.GetTxSize()));
 
     // Test that a package below the block min tx fee doesn't get included
     tx.vin[0].prevout.hash = hashHighFeeTx;

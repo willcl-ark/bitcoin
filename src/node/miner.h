@@ -143,7 +143,7 @@ private:
     uint64_t nBlockSigOpsCost;
     CAmount nFees;
     std::unordered_set<Txid, SaltedTxidHasher> inBlock;
-    std::map<CFeeRate, uint64_t> size_per_feerate;
+    std::vector<std::tuple<CFeeRate, uint64_t>> size_per_feerate;
 
     // Chain context for the block
     int nHeight;
@@ -173,9 +173,9 @@ public:
     inline static std::optional<int64_t> m_last_block_num_txs{};
     inline static std::optional<int64_t> m_last_block_weight{};
 
-    /** Return a map from feerates to vbyte, indicating how many vbytes were
-     *  included in the block at which feerate. This can only be called once. */
-    std::map<CFeeRate, uint64_t> GetFeeRateStats();
+    /** Return a vector of feerates and vbytes included in a block. This can
+     * only be called once. */
+    std::vector<std::tuple<CFeeRate, uint64_t>> GetFeeRateStats();
 
 private:
     const Options m_options;
@@ -212,7 +212,7 @@ int64_t UpdateTime(CBlockHeader* pblock, const Consensus::Params& consensusParam
 void RegenerateCommitments(CBlock& block, ChainstateManager& chainman);
 
 /** Get feerate statistics of a block weight from the mempool. */
-std::map<CFeeRate, uint64_t> GetCustomBlockFeeRateHistogram(Chainstate& chainstate, const CTxMemPool* mempool, size_t block_weight);
+std::vector<std::tuple<CFeeRate, uint64_t>> GetCustomBlockFeeRateHistogram(Chainstate& chainstate, const CTxMemPool* mempool, size_t block_weight);
 
 /** Apply -blockmintxfee and -blockmaxweight options from ArgsManager to BlockAssembler options. */
 void ApplyArgsManOptions(const ArgsManager& gArgs, BlockAssembler::Options& options);

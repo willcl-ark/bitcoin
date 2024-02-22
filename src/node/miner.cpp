@@ -425,19 +425,19 @@ void BlockAssembler::addPackageTxs(const CTxMemPool& mempool, int& nPackagesSele
         }
 
         ++nPackagesSelected;
-        size_per_feerate[CFeeRate{packageFees, packageSize}] += packageSize;
+        size_per_feerate.emplace_back(CFeeRate{packageFees, packageSize}, packageSize);
 
         // Update transactions that depend on each of these
         nDescendantsUpdated += UpdatePackagesForAdded(mempool, ancestors, mapModifiedTx);
     }
 }
 
-std::map<CFeeRate, uint64_t> BlockAssembler::GetFeeRateStats()
+std::vector<std::tuple<CFeeRate, uint64_t>> BlockAssembler::GetFeeRateStats()
 {
     return std::move(size_per_feerate);
 }
 
-std::map<CFeeRate, uint64_t> GetCustomBlockFeeRateHistogram(Chainstate& chainstate, const CTxMemPool* mempool, size_t block_weight)
+std::vector<std::tuple<CFeeRate, uint64_t>> GetCustomBlockFeeRateHistogram(Chainstate& chainstate, const CTxMemPool* mempool, size_t block_weight)
 {
     BlockAssembler::Options options = {
         .nBlockMaxWeight = block_weight,
