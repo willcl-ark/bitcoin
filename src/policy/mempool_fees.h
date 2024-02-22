@@ -106,7 +106,7 @@ private:
      * @param[in] num_blocks The numbers of blocks to calculate fees for.
      * @return The fee rate estimate in satoshis per kilobyte.
      */
-    std::map<uint64_t, CFeeRate> EstimateBlockFeeRatesWithMempool(const std::map<CFeeRate, uint64_t>& mempool_fee_stats, unsigned int num_blocks) const;
+    std::map<uint64_t, CFeeRate> EstimateBlockFeeRatesWithMempool(const std::vector<std::tuple<CFeeRate, uint64_t>>& mempool_fee_stats, unsigned int num_blocks) const;
 
     /**
      * Calculate the median fee rate for a range of txs in the mempool.
@@ -115,6 +115,6 @@ private:
      * @param[in] end_it The iterator pointing to the end of the range.
      * @return The median fee rate.
      */
-    CFeeRate CalculateMedianFeeRate(std::map<CFeeRate, uint64_t>::const_reverse_iterator start_it, std::map<CFeeRate, uint64_t>::const_reverse_iterator end_it) const;
+    CFeeRate CalculateMedianFeeRate(std::vector<std::tuple<CFeeRate, uint64_t>>::const_reverse_iterator start_it, std::vector<std::tuple<CFeeRate, uint64_t>>::const_reverse_iterator end_it) const;
 };
 #endif // BITCOIN_POLICY_MEMPOOL_FEES_H

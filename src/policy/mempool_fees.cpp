@@ -33,7 +33,7 @@ CFeeRate MemPoolPolicyEstimator::EstimateFeeWithMemPool(Chainstate& chainstate, 
     }
 
     if (!cached_fee) {
-        std::map<CFeeRate, uint64_t> mempool_fee_stats;
+        std::vector<std::tuple<CFeeRate, uint64_t>> mempool_fee_stats;
         // Always get stats for MAX_CONF_TARGET blocks (3) because current algo
         // fast enough to run that far while we're locked and in here
         {
@@ -58,7 +58,7 @@ CFeeRate MemPoolPolicyEstimator::EstimateFeeWithMemPool(Chainstate& chainstate, 
 }
 
 std::map<uint64_t, CFeeRate> MemPoolPolicyEstimator::EstimateBlockFeeRatesWithMempool(
-    const std::map<CFeeRate, uint64_t>& mempool_fee_stats, unsigned int confTarget) const
+    const std::vector<std::tuple<CFeeRate, uint64_t>>& mempool_fee_stats, unsigned int confTarget) const
 {
     std::map<uint64_t, CFeeRate> fee_rates;
     if (mempool_fee_stats.empty()) return fee_rates;
@@ -71,8 +71,8 @@ std::map<uint64_t, CFeeRate> MemPoolPolicyEstimator::EstimateBlockFeeRatesWithMe
     size_t block_weight{0};
 
     while (block_number <= confTarget && rcur != rend) {
-        size_t bin_weight = rcur->second * WITNESS_SCALE_FACTOR;
-        block_weight += bin_weight;
+        size_t tx_weight = std::get<1>(*rcur) * WITNESS_SCALE_FACTOR;
+        block_weight += tx_weight;
         auto next_rcur = std::next(rcur);
         if (block_weight >= DEFAULT_BLOCK_MAX_WEIGHT || next_rcur == rend) {
             fee_rates[block_number] = CalculateMedianFeeRate(rstart, rcur);
@@ -86,14 +86,14 @@ std::map<uint64_t, CFeeRate> MemPoolPolicyEstimator::EstimateBlockFeeRatesWithMe
 }
 
 CFeeRate MemPoolPolicyEstimator::CalculateMedianFeeRate(
-    std::map<CFeeRate, uint64_t>::const_reverse_iterator rstart,
-    std::map<CFeeRate, uint64_t>::const_reverse_iterator rend) const
+    std::vector<std::tuple<CFeeRate, uint64_t>>::const_reverse_iterator rstart,
+    std::vector<std::tuple<CFeeRate, uint64_t>>::const_reverse_iterator rend) const
 {
     unsigned int total_weight = 0;
     std::vector<CFeeRate> feeRates;
     for (auto rit = rstart; rit != rend; ++rit) {
-        total_weight += rit->second * WITNESS_SCALE_FACTOR;
-        feeRates.push_back(rit->first);
+        total_weight += std::get<1>(*rit) * WITNESS_SCALE_FACTOR;
+        feeRates.push_back(std::get<0>(*rit));
     }
 
     // Not enough info to provide a decent estimate
