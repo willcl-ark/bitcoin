@@ -3652,8 +3652,10 @@ void ChainstateManager::ReceivedBlockTransactions(const CBlock& block, CBlockInd
 static bool CheckBlockHeader(const CBlockHeader& block, BlockValidationState& state, const Consensus::Params& consensusParams, bool fCheckPOW = true)
 {
     // Check proof of work matches claimed amount
-    if (fCheckPOW && !CheckProofOfWork(block.GetHash(), block.nBits, consensusParams))
+    if (fCheckPOW && !CheckProofOfWork(block.GetHash(), block.nBits, consensusParams)) {
+        LogPrint(BCLog::VALIDATION, "high-hash: proof of work failed: %u received and %u needed\n", block.nBits, UintToArith256(consensusParams.powLimit).GetCompact());
         return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER, "high-hash", "proof of work failed");
+    }
 
     return true;
 }
@@ -3679,8 +3681,10 @@ bool CheckBlock(const CBlock& block, BlockValidationState& state, const Consensu
     if (fCheckMerkleRoot) {
         bool mutated;
         uint256 hashMerkleRoot2 = BlockMerkleRoot(block, &mutated);
-        if (block.hashMerkleRoot != hashMerkleRoot2)
+        if (block.hashMerkleRoot != hashMerkleRoot2) {
+            LogPrint(BCLog::VALIDATION, "bad-txnmrklroot: hashMerkleRoot mismatch: received: %s, calculated: %s\n", block.hashMerkleRoot.GetHex(), hashMerkleRoot2.GetHex());
             return state.Invalid(BlockValidationResult::BLOCK_MUTATED, "bad-txnmrklroot", "hashMerkleRoot mismatch");
+        }
 
         // Check for merkle tree malleability (CVE-2012-2459): repeating sequences
         // of transactions in a block without affecting the merkle root of a block,
@@ -3696,15 +3700,21 @@ bool CheckBlock(const CBlock& block, BlockValidationState& state, const Consensu
     // checks that use witness data may be performed here.
 
     // Size limits
-    if (block.vtx.empty() || block.vtx.size() * WITNESS_SCALE_FACTOR > MAX_BLOCK_WEIGHT || ::GetSerializeSize(TX_NO_WITNESS(block)) * WITNESS_SCALE_FACTOR > MAX_BLOCK_WEIGHT)
+    if (block.vtx.empty() || block.vtx.size() * WITNESS_SCALE_FACTOR > MAX_BLOCK_WEIGHT || ::GetSerializeSize(TX_NO_WITNESS(block)) * WITNESS_SCALE_FACTOR > MAX_BLOCK_WEIGHT) {
+        LogPrint(BCLog::VALIDATION, "bad-blk-length: size limits failed: empty: %d, block size: %i, serialized size: %l\n", block.vtx.empty(), block.vtx.size() * WITNESS_SCALE_FACTOR, ::GetSerializeSize(TX_NO_WITNESS(block)) * WITNESS_SCALE_FACTOR);
         return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-blk-length", "size limits failed");
+    }
 
     // First transaction must be coinbase, the rest must not be
-    if (block.vtx.empty() || !block.vtx[0]->IsCoinBase())
+    if (block.vtx.empty() || !block.vtx[0]->IsCoinBase()) {
+        LogPrint(BCLog::VALIDATION, "bad-cb-missing: first tx is not coinbase: %s\n", block.vtx[0]->ToString());
         return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-cb-missing", "first tx is not coinbase");
+    }
     for (unsigned int i = 1; i < block.vtx.size(); i++)
-        if (block.vtx[i]->IsCoinBase())
+        if (block.vtx[i]->IsCoinBase()) {
+            LogPrint(BCLog::VALIDATION, "bad-cb-multiple: more than one coinbase: tx: %s\n", block.vtx[i]->ToString());
             return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-cb-multiple", "more than one coinbase");
+        }
 
     // Check transactions
     // Must check for duplicate inputs (see CVE-2018-17144)
@@ -3719,12 +3729,13 @@ bool CheckBlock(const CBlock& block, BlockValidationState& state, const Consensu
         }
     }
     unsigned int nSigOps = 0;
-    for (const auto& tx : block.vtx)
-    {
+    for (const auto& tx : block.vtx) {
         nSigOps += GetLegacySigOpCount(*tx);
     }
-    if (nSigOps * WITNESS_SCALE_FACTOR > MAX_BLOCK_SIGOPS_COST)
+    if (nSigOps * WITNESS_SCALE_FACTOR > MAX_BLOCK_SIGOPS_COST) {
+        LogPrint(BCLog::VALIDATION, "bad-blk-sigops: out-of-bounds SigOpCount: %u\n", nSigOps * WITNESS_SCALE_FACTOR);
         return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-blk-sigops", "out-of-bounds SigOpCount");
+    }
 
     if (fCheckPOW && fCheckMerkleRoot)
         block.fChecked = true;
@@ -3804,8 +3815,10 @@ static bool ContextualCheckBlockHeader(const CBlockHeader& block, BlockValidatio
 
     // Check proof of work
     const Consensus::Params& consensusParams = chainman.GetConsensus();
-    if (block.nBits != GetNextWorkRequired(pindexPrev, &block, consensusParams))
+    if (block.nBits != GetNextWorkRequired(pindexPrev, &block, consensusParams)) {
+        LogPrint(BCLog::VALIDATION, "block %i bad-diffbits; incorrect proof of work: %u != %u\n", nHeight, block.nBits, GetNextWorkRequired(pindexPrev, &block, consensusParams));
         return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER, "bad-diffbits", "incorrect proof of work");
+    }
 
     // Check against checkpoints
     if (chainman.m_options.checkpoints_enabled) {
@@ -3820,11 +3833,15 @@ static bool ContextualCheckBlockHeader(const CBlockHeader& block, BlockValidatio
     }
 
     // Check timestamp against prev
-    if (block.GetBlockTime() <= pindexPrev->GetMedianTimePast())
+    if (block.GetBlockTime() <= pindexPrev->GetMedianTimePast()) {
+        LogPrint(BCLog::VALIDATION, "time-too-old; block's timestamp is too early: %lld vs %lld\n", block.GetBlockTime(), pindexPrev->GetMedianTimePast());
         return state.Invalid(BlockValidationResult::BLOCK_INVALID_HEADER, "time-too-old", "block's timestamp is too early");
+    }
 
     // Check timestamp
-    if (block.Time() > NodeClock::now() + std::chrono::seconds{MAX_FUTURE_BLOCK_TIME}) {
+    auto future{NodeClock::now() + std::chrono::seconds{MAX_FUTURE_BLOCK_TIME}};
+    if (block.Time() > future) {
+        LogPrint(BCLog::VALIDATION, "time-too-new; block's timestamp is too far in the future: %l vs %l\n", TicksSinceEpoch<typename std::chrono::seconds>(block.Time()), TicksSinceEpoch<typename std::chrono::seconds>(future));
         return state.Invalid(BlockValidationResult::BLOCK_TIME_FUTURE, "time-too-new", "block timestamp too far in the future");
     }
 
@@ -3863,6 +3880,7 @@ static bool ContextualCheckBlock(const CBlock& block, BlockValidationState& stat
     // Check that all transactions are finalized
     for (const auto& tx : block.vtx) {
         if (!IsFinalTx(*tx, nHeight, nLockTimeCutoff)) {
+            LogPrint(BCLog::VALIDATION, "bad-txns-nonfinal non-final transaction: %s, height: %i, nLockTimeCutoff: %i\n", tx->ToString(), nHeight, nLockTimeCutoff);
             return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-txns-nonfinal", "non-final transaction");
         }
     }
@@ -3873,6 +3891,7 @@ static bool ContextualCheckBlock(const CBlock& block, BlockValidationState& stat
         CScript expect = CScript() << nHeight;
         if (block.vtx[0]->vin[0].scriptSig.size() < expect.size() ||
             !std::equal(expect.begin(), expect.end(), block.vtx[0]->vin[0].scriptSig.begin())) {
+            LogPrint(BCLog::VALIDATION, "bad-cb-height block height mismatch in coinbase. scriptSig size: %i, expected size: %i\n", block.vtx[0]->vin[0].scriptSig.size(), expect.size());
             return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-cb-height", "block height mismatch in coinbase");
         }
     }
@@ -3895,10 +3914,12 @@ static bool ContextualCheckBlock(const CBlock& block, BlockValidationState& stat
             // already does not permit it, it is impossible to trigger in the
             // witness tree.
             if (block.vtx[0]->vin[0].scriptWitness.stack.size() != 1 || block.vtx[0]->vin[0].scriptWitness.stack[0].size() != 32) {
+                LogPrint(BCLog::VALIDATION, "bad-witness-nonce-size; invalid witness reserved value size: %i, witness: %s\n", block.vtx[0]->vin[0].scriptWitness.stack.size(), hashWitness.GetHex());
                 return state.Invalid(BlockValidationResult::BLOCK_MUTATED, "bad-witness-nonce-size", strprintf("%s : invalid witness reserved value size", __func__));
             }
             CHash256().Write(hashWitness).Write(block.vtx[0]->vin[0].scriptWitness.stack[0]).Finalize(hashWitness);
             if (memcmp(hashWitness.begin(), &block.vtx[0]->vout[commitpos].scriptPubKey[6], 32)) {
+                LogPrint(BCLog::VALIDATION, "bad-witness-merkle-match; witness merkle commitment mismatch: %s != %s\n", hashWitness.GetHex(), &block.vtx[0]->vout[commitpos].scriptPubKey[6]);
                 return state.Invalid(BlockValidationResult::BLOCK_MUTATED, "bad-witness-merkle-match", strprintf("%s : witness merkle commitment mismatch", __func__));
             }
             fHaveWitness = true;
@@ -3907,8 +3928,9 @@ static bool ContextualCheckBlock(const CBlock& block, BlockValidationState& stat
 
     // No witness data is allowed in blocks that don't commit to witness data, as this would otherwise leave room for spam
     if (!fHaveWitness) {
-      for (const auto& tx : block.vtx) {
+        for (const auto& tx : block.vtx) {
             if (tx->HasWitness()) {
+                LogPrint(BCLog::VALIDATION, "unexpected witness; unexpected witness data found: %s\n", tx->ToString());
                 return state.Invalid(BlockValidationResult::BLOCK_MUTATED, "unexpected-witness", strprintf("%s : unexpected witness data found", __func__));
             }
         }
@@ -3921,6 +3943,7 @@ static bool ContextualCheckBlock(const CBlock& block, BlockValidationState& stat
     // the block hash, so we couldn't mark the block as permanently
     // failed).
     if (GetBlockWeight(block) > MAX_BLOCK_WEIGHT) {
+        LogPrint(BCLog::VALIDATION, "bad-blk-weight; weight limit failed: %l\n", GetBlockWeight(block));
         return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-blk-weight", strprintf("%s : weight limit failed", __func__));
     }
 
