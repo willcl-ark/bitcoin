@@ -62,10 +62,24 @@ with tempfile.NamedTemporaryFile('w', suffix='.h2m') as footer:
     # Copyright is the same for all binaries, so just use the first.
     footer.write('[COPYRIGHT]\n')
     footer.write('\n'.join(versions[0][2]).strip())
+    footer.write('\n')
     footer.flush()
 
     # Call the binaries through help2man to produce a manual page for each of them.
     for (abspath, verstr, _) in versions:
         outname = os.path.join(mandir, os.path.basename(abspath) + '.1')
         print(f'Generating {outname}…')
-        subprocess.run([help2man, '-N', '--version-string=' + verstr, '--include=' + footer.name, '-o', outname, abspath], check=True)
+
+        # Add other binaries to [SEE ALSO] section
+        see_also_content = '[SEE ALSO]\n'
+        for (other_abspath, _, _) in versions:
+            if other_abspath != abspath:
+                binary_name = os.path.basename(other_abspath)
+                man_page_section = "1"
+                see_also_content += f'{binary_name}({man_page_section}),\n'
+
+        with tempfile.NamedTemporaryFile('w', suffix='.h2m') as see_also_file:
+            see_also_file.write(see_also_content.rstrip(',\n'))
+            see_also_file.flush()
+
+            subprocess.run([help2man, '-N', '--version-string=' + verstr, '--include=' + footer.name, '--include=' + see_also_file.name, '-o', outname, abspath], check=True)
