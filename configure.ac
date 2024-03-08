@@ -843,11 +843,11 @@ if test "$use_lcov" = "yes"; then
     [AC_MSG_ERROR([lcov testing requested but --coverage linker flag does not work])])
   AX_CHECK_COMPILE_FLAG([--coverage],[CORE_CXXFLAGS="$CORE_CXXFLAGS --coverage"],
     [AC_MSG_ERROR([lcov testing requested but --coverage flag does not work])])
-  CORE_CXXFLAGS="$CORE_CXXFLAGS -Og"
+  CORE_CXXFLAGS="$CORE_CXXFLAGS -Og -fprofile-update=prefer-atomic"
 fi
 
 if test "$use_lcov_branch" != "no"; then
-  AC_SUBST(LCOV_OPTS, "$LCOV_OPTS --rc lcov_branch_coverage=1")
+  AC_SUBST(LCOV_OPTS, "$LCOV_OPTS --rc branch_coverage=1 --ignore mismatch")
 fi
 
 dnl Check for endianness
