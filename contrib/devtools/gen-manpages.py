@@ -46,10 +46,10 @@ for relpath in BINARIES:
     verstr = verstr.split()[-1]
     assert verstr.startswith('v')
     # remaining lines are copyright
-    copyright = r.stdout.split('\n')[1:]
-    assert copyright[0].startswith('Copyright (C)')
+    bitcoin_copyright = r.stdout.split('\n')[1:]
+    assert bitcoin_copyright[0].startswith('Copyright (C)')
 
-    versions.append((abspath, verstr, copyright))
+    versions.append((abspath, verstr, bitcoin_copyright))
 
 if any(verstr.endswith('-dirty') for (_, verstr, _) in versions):
     print("WARNING: Binaries were built from a dirty tree.")
