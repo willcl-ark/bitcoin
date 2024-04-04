@@ -65,7 +65,7 @@ git clone https://github.com/bitcoin/bitcoin.git
 
 #### Wallet Dependencies
 
-It is not necessary to build wallet functionality to run `bitcoind` or  `bitcoin-qt`.
+It is not necessary to build wallet functionality to run `bitcoind`.
 
 ###### Descriptor Wallet Support
 
@@ -81,31 +81,6 @@ Skip if you don't intend to use legacy wallets.
 
 ``` bash
 brew install berkeley-db@4
-```
----
-
-#### GUI Dependencies
-
-###### Qt
-
-Bitcoin Core includes a GUI built with the cross-platform Qt Framework.
-To compile the GUI, we need to install `qt@5`.
-Skip if you don't intend to use the GUI.
-
-``` bash
-brew install qt@5
-```
-
-Note: Building with Qt binaries downloaded from the Qt website is not officially supported.
-See the notes in [#7714](https://github.com/bitcoin/bitcoin/issues/7714).
-
-###### qrencode
-
-The GUI can encode addresses in a QR Code. To build in QR support for the GUI, install `qrencode`.
-Skip if not using the GUI or don't want QR code functionality.
-
-``` bash
-brew install qrencode
 ```
 ---
 
@@ -183,23 +158,22 @@ Additionally, this explicitly disables the GUI.
 ./configure --with-gui=no
 ```
 
-##### Wallet (only SQlite) and GUI Support:
+##### Wallet (only SQlite):
 
 This explicitly enables the GUI and disables legacy wallet support.
-If `qt` is not installed, this will throw an error.
 If `sqlite` is installed then descriptor wallet functionality will be built.
 If `sqlite` is not installed, then wallet functionality will be disabled.
 
 ``` bash
 ./autogen.sh
-./configure --without-bdb --with-gui=yes
+./configure --without-bdb
 ```
 
-##### No Wallet or GUI
+##### No Wallet
 
 ``` bash
 ./autogen.sh
-./configure --without-wallet --with-gui=no
+./configure --without-wallet
 ```
 
 ##### Further Configuration
@@ -232,9 +206,8 @@ make deploy
 ## Running Bitcoin Core
 
 Bitcoin Core should now be available at `./src/bitcoind`.
-If you compiled support for the GUI, it should be available at `./src/qt/bitcoin-qt`.
 
-The first time you run `bitcoind` or `bitcoin-qt`, it will start downloading the blockchain.
+The first time you run `bitcoind` it will start downloading the blockchain.
 This process could take many hours, or even days on slower than average systems.
 
 By default, blockchain and wallet data files will be stored in:
@@ -265,5 +238,4 @@ tail -f $HOME/Library/Application\ Support/Bitcoin/debug.log
 ./src/bitcoind -daemon      # Starts the bitcoin daemon.
 ./src/bitcoin-cli --help    # Outputs a list of command-line options.
 ./src/bitcoin-cli help      # Outputs a list of RPC commands when the daemon is running.
-./src/qt/bitcoin-qt -server # Starts the bitcoin-qt server mode, allows bitcoin-cli control
 ```

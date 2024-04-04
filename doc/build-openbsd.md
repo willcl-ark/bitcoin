@@ -27,7 +27,7 @@ git clone https://github.com/bitcoin/bitcoin.git
 
 #### Wallet Dependencies
 
-It is not necessary to build wallet functionality to run either `bitcoind` or `bitcoin-qt`.
+It is not necessary to build wallet functionality to run either `bitcoind`.
 
 ###### Descriptor Wallet Support
 
@@ -46,7 +46,7 @@ from ports. However you can build it yourself, [using depends](/depends).
 Refer to [depends/README.md](/depends/README.md) for detailed instructions.
 
 ```bash
-gmake -C depends NO_BOOST=1 NO_LIBEVENT=1 NO_QT=1 NO_SQLITE=1 NO_NATPMP=1 NO_UPNP=1 NO_ZMQ=1 NO_USDT=1
+gmake -C depends NO_BOOST=1 NO_LIBEVENT=1 NO_SQLITE=1 NO_NATPMP=1 NO_UPNP=1 NO_ZMQ=1 NO_USDT=1
 ...
 to: /path/to/bitcoin/depends/x86_64-unknown-openbsd
 ```
@@ -55,15 +55,6 @@ Then set `BDB_PREFIX`:
 
 ```bash
 export BDB_PREFIX="/path/to/bitcoin/depends/x86_64-unknown-openbsd"
-```
-
-#### GUI Dependencies
-###### Qt5
-
-Bitcoin Core includes a GUI built with the cross-platform Qt Framework. To compile the GUI, Qt 5 is required.
-
-```bash
-pkg_add qt5
 ```
 
 ## Building Bitcoin Core
@@ -84,18 +75,20 @@ export AUTOMAKE_VERSION=1.16
 
 There are many ways to configure Bitcoin Core, here are a few common examples:
 
-##### Descriptor Wallet and GUI:
-This enables the GUI and descriptor wallet support, assuming `sqlite` and `qt5` are installed.
+##### Descriptor Wallet:
+
+This enables descriptor wallet support, assuming `sqlite` is installed.
 
 ```bash
 ./configure MAKE=gmake
 ```
 
-##### Descriptor & Legacy Wallet. No GUI:
-This enables support for both wallet types and disables the GUI:
+##### Descriptor & Legacy Wallet:
+
+This enables support for both wallet types:
 
 ```bash
-./configure --with-gui=no \
+./configure \
     BDB_LIBS="-L${BDB_PREFIX}/lib -ldb_cxx-4.8" \
     BDB_CFLAGS="-I${BDB_PREFIX}/include" \
     MAKE=gmake

@@ -73,28 +73,6 @@ User-Space, Statically Defined Tracing (USDT) dependencies:
 
     sudo apt install systemtap-sdt-dev
 
-GUI dependencies:
-
-If you want to build bitcoin-qt, make sure that the required packages for Qt development
-are installed. Qt 5 is necessary to build the GUI.
-To build without GUI pass `--without-gui`.
-
-To build with Qt 5 you need the following:
-
-    sudo apt-get install qtbase5-dev qttools5-dev qttools5-dev-tools
-
-Additionally, to support Wayland protocol for modern desktop environments:
-
-    sudo apt install qtwayland5
-
-libqrencode (optional) can be installed with:
-
-    sudo apt-get install libqrencode-dev
-
-Once these are installed, they will be found by configure and a bitcoin-qt executable will be
-built by default.
-
-
 ### Fedora
 
 #### Dependency Build Instructions
@@ -130,27 +108,6 @@ User-Space, Statically Defined Tracing (USDT) dependencies:
 
     sudo dnf install systemtap-sdt-devel
 
-GUI dependencies:
-
-If you want to build bitcoin-qt, make sure that the required packages for Qt development
-are installed. Qt 5 is necessary to build the GUI.
-To build without GUI pass `--without-gui`.
-
-To build with Qt 5 you need the following:
-
-    sudo dnf install qt5-qttools-devel qt5-qtbase-devel
-
-Additionally, to support Wayland protocol for modern desktop environments:
-
-    sudo dnf install qt5-qtwayland
-
-libqrencode (optional) can be installed with:
-
-    sudo dnf install qrencode-devel
-
-Once these are installed, they will be found by configure and a bitcoin-qt executable will be
-built by default.
-
 ## Dependencies
 
 See [dependencies.md](dependencies.md) for a complete overview, and
@@ -163,7 +120,7 @@ The legacy wallet uses Berkeley DB. To ensure backwards compatibility it is
 recommended to use Berkeley DB 4.8. If you have to build it yourself, and don't
 want to use any other libraries built in depends, you can do:
 ```bash
-make -C depends NO_BOOST=1 NO_LIBEVENT=1 NO_QT=1 NO_SQLITE=1 NO_NATPMP=1 NO_UPNP=1 NO_ZMQ=1 NO_USDT=1
+make -C depends NO_BOOST=1 NO_LIBEVENT=1 NO_SQLITE=1 NO_NATPMP=1 NO_UPNP=1 NO_ZMQ=1 NO_USDT=1
 ...
 to: /path/to/bitcoin/depends/x86_64-pc-linux-gnu
 ```

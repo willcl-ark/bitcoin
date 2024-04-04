@@ -55,7 +55,6 @@ After running `./autogen.sh`, which generates the `./configure` file, use `./con
 --without-natpmp
 --disable-bench
 --disable-wallet
---without-gui
 ```
 
 If you do need the wallet enabled, it is common for devs to add `--with-incompatible-bdb`. This uses your system bdb version for the wallet, so you don't have to find a copy of bdb 4.8. Wallets from such a build will be incompatible with any release binary (and vice versa), so use with caution on mainnet.
@@ -76,7 +75,6 @@ Obviously, it is important to build and run the tests at appropriate times -- bu
 
 ```sh
 make src/bitcoind src/bitcoin-cli
-make src/qt/bitcoin-qt
 make -C src bitcoin_bench
 ```
 

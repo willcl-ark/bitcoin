@@ -11,20 +11,17 @@ Running
 ---------------------
 The following are some helpful notes on how to run Bitcoin Core on your native platform.
 
-### Unix
+### Unix & MacOS
 
 Unpack the files into a directory and run:
 
-- `bin/bitcoin-qt` (GUI) or
-- `bin/bitcoind` (headless)
+- `bin/bitcoind`
 
 ### Windows
 
-Unpack the files into a directory, and then run bitcoin-qt.exe.
+Unpack the files into a directory and run:
 
-### macOS
-
-Drag Bitcoin Core to your applications folder, and then run Bitcoin Core.
+- `bin/bitcoind.exe`
 
 ### Need Help?
 
@@ -55,8 +52,6 @@ The Bitcoin repo's [root README](/README.md) contains relevant information on th
 - [Productivity Notes](productivity.md)
 - [Release Process](release-process.md)
 - [Source Code Documentation (External Link)](https://doxygen.bitcoincore.org/)
-- [Translation Process](translation_process.md)
-- [Translation Strings Policy](translation_strings_policy.md)
 - [JSON-RPC Interface](JSON-RPC-interface.md)
 - [Unauthenticated REST Interface](REST-interface.md)
 - [BIPS](bips.md)

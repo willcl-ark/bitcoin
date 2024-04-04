@@ -64,20 +64,6 @@ pkgin install sqlite3
 pkgin install db4
 ```
 
-#### GUI Dependencies
-
-Bitcoin Core includes a GUI built with the cross-platform Qt Framework. To compile the GUI, we need to install `qt5`.
-
-```bash
-pkgin install qt5
-```
-
-The GUI can encode addresses in a QR Code. To build in QR support for the GUI, install `qrencode`.
-
-```bash
-pkgin install qrencode
-```
-
 #### Test Suite Dependencies
 
 There is an included test suite that is useful for testing code changes when developing.

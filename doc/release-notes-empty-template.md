@@ -10,7 +10,7 @@ Bitcoin Core version *version* is now available from:
   <https://bitcoincore.org/bin/bitcoin-core-*version*/>
 
 This release includes new features, various bug fixes and performance
-improvements, as well as updated translations.
+improvements.
 
 Please report bugs using the issue tracker at GitHub:
 
@@ -25,8 +25,7 @@ How to Upgrade
 
 If you are running an older version, shut it down. Wait until it has completely
 shut down (which might take a few minutes in some cases), then run the
-installer (on Windows) or just copy over `/Applications/Bitcoin-Qt` (on macOS)
-or `bitcoind`/`bitcoin-qt` (on Linux).
+installer (on Windows) or just copy over `bitcoind`.
 
 Upgrading directly from a version of Bitcoin Core that has reached its EOL is
 possible, but it might take some time if the data directory needs to be migrated. Old
@@ -94,6 +93,3 @@ Credits
 
 Thanks to everyone who directly contributed to this release:
 
-
-As well as to everyone that helped with translations on
-[Transifex](https://www.transifex.com/bitcoin/bitcoin/).

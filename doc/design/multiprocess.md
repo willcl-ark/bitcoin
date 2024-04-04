@@ -31,7 +31,7 @@ The Bitcoin Core software has historically employed a monolithic architecture. T
 
 ## Current Architecture
 
-The current system features two primary executables: `bitcoind` and `bitcoin-qt`. `bitcoind` combines a Bitcoin P2P node with an integrated JSON-RPC server, wallet, and indexes. `bitcoin-qt` extends this by incorporating a Qt-based GUI. This monolithic structure, although robust, presents challenges such as limited operational flexibility and increased security risks due to the tight integration of components.
+The current system features one primary executable: `bitcoind`. `bitcoind` combines a Bitcoin P2P node with an integrated JSON-RPC server, wallet, and indexes.
 
 ## Proposed Architecture
 
@@ -39,7 +39,6 @@ The new architecture divides the existing code into three specialized executable
 
 - `bitcoin-node`: Manages the P2P node, indexes, and JSON-RPC server.
 - `bitcoin-wallet`: Handles all wallet functionality.
-- `bitcoin-gui`: Provides a standalone Qt-based GUI.
 
 This modular approach is designed to enhance security through component isolation and improve usability by allowing independent operation of each module. This allows for new use-cases, such as running the node on a dedicated machine and operating wallets and GUIs on separate machines with the flexibility to start and stop them as needed.
 
@@ -63,7 +62,7 @@ Processes and socket connection.
 This section describes the major components of the Inter-Process Communication (IPC) framework covering the relevant source files, generated files, tools, and libraries.
 
 ### Abstract C++ Classes in [`src/interfaces/`](../../src/interfaces/)
-- The foundation of the IPC implementation lies in the abstract C++ classes within the [`src/interfaces/`](../../src/interfaces/) directory. These classes define pure virtual methods that code in [`src/node/`](../../src/node/), [`src/wallet/`](../../src/wallet/), and [`src/qt/`](../../src/qt/) directories call to interact with each other.
+- The foundation of the IPC implementation lies in the abstract C++ classes within the [`src/interfaces/`](../../src/interfaces/) directory. These classes define pure virtual methods that code in [`src/node/`](../../src/node/) and [`src/wallet/`](../../src/wallet/) directories call to interact with each other.
 - Each abstract class in this directory represents a distinct interface that the different modules (node, wallet, GUI) implement and use for cross-process communication.
 - The classes are written following conventions described in [Internal Interface
   Guidelines](../developer-notes.md#internal-interface-guidelines) to ensure
