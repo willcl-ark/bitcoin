@@ -739,18 +739,6 @@ case $host in
          *darwin*)
            BUILD_OS=darwin
            ;;
-         *)
-           AC_PATH_TOOL([DSYMUTIL], [dsymutil], [dsymutil])
-           AC_PATH_TOOL([INSTALL_NAME_TOOL], [install_name_tool], [install_name_tool])
-           AC_PATH_TOOL([OTOOL], [otool], [otool])
-           AC_PATH_PROG([ZIP], [zip], [zip])
-
-           dnl libtool will try to strip the static lib, which is a problem for
-           dnl cross-builds because strip attempts to call a hard-coded ld,
-           dnl which may not exist in the path. Stripping the .a is not
-           dnl necessary, so just disable it.
-           old_striplib=
-           ;;
        esac
      fi
 
