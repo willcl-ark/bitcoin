@@ -97,13 +97,6 @@ if test -n "@STRIP@"; then
   ac_cv_path_ac_pt_STRIP="${STRIP}"
 fi
 
-if test "@host_os@" = darwin; then
-  if test -n "@OTOOL@"; then
-    OTOOL="@OTOOL@"
-    ac_cv_path_OTOOL="${OTOOL}"
-  fi
-fi
-
 if test -n "@debug@"; then
   enable_reduce_exports=no
 fi
