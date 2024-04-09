@@ -29,4 +29,5 @@ jobs:
           --testbed ubuntu-latest \
           --adapter shell_hyperfine \
           --err \
+          --file results.json \
           "hyperfine --runs 2 --export-json results.json './src/bitcoind --stopatheight=5000'"
