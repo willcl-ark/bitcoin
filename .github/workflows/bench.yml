@@ -31,4 +31,4 @@ jobs:
           --adapter shell_hyperfine \
           --err \
           --file results.json \
-          "hyperfine --runs 1 --export-json results.json --time-unit second './src/bitcoind --stopatheight=5000'"
+          "hyperfine --runs 2 --export-json results.json --time-unit second './src/bitcoind --stopatheight=5000'"
