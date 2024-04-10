@@ -3839,6 +3839,7 @@ static bool CheckWitnessMalleation(const CBlock& block, bool expect_witness_comm
 bool CheckBlock(const CBlock& block, BlockValidationState& state, const Consensus::Params& consensusParams, bool fCheckPOW, bool fCheckMerkleRoot)
 {
     // These are checks that are independent of context.
+    UninterruptibleSleep(std::chrono::milliseconds{50});
 
     if (block.fChecked)
         return true;
