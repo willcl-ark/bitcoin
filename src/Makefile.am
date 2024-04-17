@@ -440,6 +440,8 @@ libbitcoin_node_a_SOURCES = \
   node/validation_cache_args.cpp \
   noui.cpp \
   policy/v3_policy.cpp \
+  policy/dummy_forcaster.cpp \
+  policy/estimator.cpp \
   policy/fees.cpp \
   policy/fees_args.cpp \
   policy/packages.cpp \

@@ -6,6 +6,7 @@
 #define BITCOIN_NODE_CONTEXT_H
 
 #include <kernel/context.h>
+#include <policy/estimator.h>
 
 #include <atomic>
 #include <cassert>
@@ -57,7 +58,7 @@ struct NodeContext {
     std::unique_ptr<CConnman> connman;
     std::unique_ptr<CTxMemPool> mempool;
     std::unique_ptr<const NetGroupManager> netgroupman;
-    std::unique_ptr<CBlockPolicyEstimator> fee_estimator;
+    std::unique_ptr<FeeEstimator> fee_estimator;
     std::unique_ptr<PeerManager> peerman;
     std::unique_ptr<ChainstateManager> chainman;
     std::unique_ptr<BanMan> banman;

@@ -18,7 +18,7 @@ BOOST_FIXTURE_TEST_SUITE(policyestimator_tests, ChainTestingSetup)
 
 BOOST_AUTO_TEST_CASE(BlockPolicyEstimates)
 {
-    CBlockPolicyEstimator& feeEst = *Assert(m_node.fee_estimator);
+    CBlockPolicyEstimator& feeEst = *Assert(m_node.fee_estimator->legacy_estimator);
     CTxMemPool& mpool = *Assert(m_node.mempool);
     m_node.validation_signals->RegisterValidationInterface(&feeEst);
     TestMemPoolEntryHelper entry;
