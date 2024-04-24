@@ -31,6 +31,7 @@
 #include <node/interface_ui.h>
 #include <node/mini_miner.h>
 #include <node/transaction.h>
+#include <policy/fee_estimator.h>
 #include <policy/feerate.h>
 #include <policy/fees.h>
 #include <policy/policy.h>
@@ -716,13 +717,13 @@ public:
     }
     CFeeRate estimateSmartFee(int num_blocks, bool conservative, FeeCalculation* calc) override
     {
-        if (!m_node.fee_estimator) return {};
-        return m_node.fee_estimator->estimateSmartFee(num_blocks, calc, conservative);
+        if (!m_node.fee_estimator || (m_node.fee_estimator->legacy_estimator == std::nullopt)) return {};
+        return (*m_node.fee_estimator->legacy_estimator)->estimateSmartFee(num_blocks, calc, conservative);
     }
     unsigned int estimateMaxBlocks() override
     {
-        if (!m_node.fee_estimator) return 0;
-        return m_node.fee_estimator->HighestTargetTracked(FeeEstimateHorizon::LONG_HALFLIFE);
+        if (!m_node.fee_estimator || (m_node.fee_estimator->legacy_estimator == std::nullopt)) return 0;
+        return (*m_node.fee_estimator->legacy_estimator)->HighestTargetTracked(FeeEstimateHorizon::LONG_HALFLIFE);
     }
     CFeeRate mempoolMinFee() override
     {
