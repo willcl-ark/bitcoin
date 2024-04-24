@@ -33,6 +33,7 @@
 #include <node/validation_cache_args.h>
 #include <node/warnings.h>
 #include <noui.h>
+#include <policy/fee_estimator.h>
 #include <policy/fees.h>
 #include <policy/fees_args.h>
 #include <pow.h>
@@ -228,7 +229,7 @@ ChainTestingSetup::ChainTestingSetup(const ChainType chainType, const std::vecto
     m_node.scheduler->m_service_thread = std::thread(util::TraceThread, "scheduler", [&] { m_node.scheduler->serviceQueue(); });
     m_node.validation_signals = std::make_unique<ValidationSignals>(std::make_unique<SerialTaskRunner>(*m_node.scheduler));
 
-    m_node.fee_estimator = std::make_unique<CBlockPolicyEstimator>(FeeestPath(*m_node.args), DEFAULT_ACCEPT_STALE_FEE_ESTIMATES);
+    m_node.fee_estimator = std::make_unique<FeeEstimator>(FeeestPath(*m_node.args), DEFAULT_ACCEPT_STALE_FEE_ESTIMATES);
     bilingual_str error{};
     m_node.mempool = std::make_unique<CTxMemPool>(MemPoolOptionsForTest(m_node), error);
     Assert(error.empty());
