@@ -45,7 +45,9 @@ if [ ! -d "${LINT_RUNNER_PATH}" ]; then
   )
 fi
 
-${CI_RETRY_EXE} pip3 install -r /requirements-lint.txt
+${CI_RETRY_EXE} pip3 install uv
+export VIRTUAL_ENV="$PYTHON_PATH"
+${CI_RETRY_EXE} uv pip install -r /requirements-lint.txt
 
 SHELLCHECK_VERSION=v0.8.0
 curl -sL "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" | \
