@@ -9,7 +9,7 @@ export LC_ALL=C.UTF-8
 export HOST=x86_64-apple-darwin
 # Homebrew's python@3.12 is marked as externally managed (PEP 668).
 # Therefore, `--break-system-packages` is needed.
-export PIP_PACKAGES="--break-system-packages zmq"
+export PIP_PACKAGES="--break-system-packages pyzmq"
 export GOAL="install"
 export BITCOIN_CONFIG="--with-gui --with-miniupnpc --with-natpmp --enable-reduce-exports"
 export CI_OS_NAME="macos"
