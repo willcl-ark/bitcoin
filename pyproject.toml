@@ -1,0 +1,24 @@
+[project]
+name = "bitcoin"
+description = "Bitcoin Core"
+readme = "README.md"
+requires-python = ">=3.9, <3.10"
+keywords = ["bitcoin"]
+license = {text = "MIT"}
+classifiers = [
+    "Programming Language :: Python :: 3",
+]
+dynamic = ["version"]
+dependencies = [
+    "jinja2==3.1.3",
+    "pyzmq==25.1.0",
+]
+[project.optional-dependencies]
+lint = [
+    "codespell==2.2.6",
+    "flake8==6.1.0",
+    "lief==0.13.2",
+    "mypy==1.4.1",
+    "vulture==2.6",
+    "yapf>=0.40",
+]
