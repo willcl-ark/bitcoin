@@ -23,7 +23,7 @@ fi
 export COMMIT_RANGE
 
 echo
-git log --no-merges --oneline "$COMMIT_RANGE"
+git --no-pager log --no-merges --oneline "$COMMIT_RANGE"
 echo
 test/lint/commit-script-check.sh "$COMMIT_RANGE"
 RUST_BACKTRACE=1 "${LINT_RUNNER_PATH}/test_runner"
