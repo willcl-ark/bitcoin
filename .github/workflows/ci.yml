@@ -308,3 +308,13 @@ jobs:
           BITCOINFUZZ: "${{ github.workspace}}\\src\\fuzz.exe"
         shell: cmd
         run: py -3 test\fuzz\test_runner.py --par %NUMBER_OF_PROCESSORS% --loglevel DEBUG %RUNNER_TEMP%\qa-assets\fuzz_seed_corpus
+  check-md-links:
+    name: "Check markdown links"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Markup Link Checker (mlc)
+        uses: becheran/mlc@v0.16.3
+        with:
+          args: --offline --ignore-path "./doc/release-notes","./doc/README_doxygen.md","./.github","./src/crc32c","./src/crypto","./src/leveldb","./src/minisketch","./src/secp256k1" --root-dir ./ ./
