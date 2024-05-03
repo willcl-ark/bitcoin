@@ -34,6 +34,10 @@ export PATH="${PYTHON_PATH}/bin:${PATH}"
 command -v python3
 python3 --version
 
+${CI_RETRY_EXE} pip3 install uv
+export VIRTUAL_ENV="$PYTHON_PATH"
+${CI_RETRY_EXE} uv pip install -r ./requirements-lint.txt
+
 export LINT_RUNNER_PATH="/lint_test_runner"
 if [ ! -d "${LINT_RUNNER_PATH}" ]; then
   ${CI_RETRY_EXE} apt-get install -y cargo
@@ -44,7 +48,3 @@ if [ ! -d "${LINT_RUNNER_PATH}" ]; then
     mv target/debug/test_runner "${LINT_RUNNER_PATH}"
   )
 fi
-
-${CI_RETRY_EXE} pip3 install uv
-export VIRTUAL_ENV="$PYTHON_PATH"
-${CI_RETRY_EXE} uv pip install -r /requirements-lint.txt
