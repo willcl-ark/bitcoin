@@ -31,10 +31,9 @@ COPY ./requirements-lint.txt /requirements-lint.txt
 RUN pip install uv && \
     uv pip install --system -r /requirements-lint.txt
 
-ENV SHELLCHECK_VERSION=v0.8.0
-RUN curl -sL "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" | \
-    tar --xz -xf - --directory /tmp/ && \
-    mv "/tmp/shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/bin/
+COPY ./ci/lint/05_install_shellcheck.sh /05_install_shellcheck.sh
+RUN chmod 755 /05_install_shellcheck.sh
+RUN /05_install_shellcheck.sh
 
 COPY ./ci/lint/container-entrypoint.sh /entrypoint.sh
 RUN chmod 755 /entrypoint.sh
