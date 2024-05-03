@@ -4,22 +4,40 @@
 
 # See test/lint/README.md for usage.
 
-FROM debian:bookworm
+FROM python:3.9.18-slim-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LC_ALL=C.UTF-8
 
-COPY ./.python-version /.python-version
-COPY ./requirements-lint.txt /requirements-lint.txt
-COPY ./ci/lint/container-entrypoint.sh /entrypoint.sh
-COPY ./ci/lint/04_install.sh /install.sh
+RUN apt-get update && apt-get --no-install-recommends -y install \
+    automake cargo curl git gpg libtool pkg-config xz-utils && \
+    rm -rf /var/lib/apt/lists/*
+
+# Used by `uv` as the python env to select
+ENV VIRTUAL_ENV="/usr/local/bin/python"
+
+# Copy test runner source files
 COPY ./test/lint/test_runner /test/lint/test_runner
 
-RUN /install.sh && \
-  echo 'alias lint="./ci/lint/06_script.sh"' >> ~/.bashrc && \
-  chmod 755 /entrypoint.sh && \
-  rm -rf /var/lib/apt/lists/*
+# Build the test runner
+ENV LINT_RUNNER_PATH="/lint_test_runner"
+RUN cd /test/lint/test_runner && \
+      cargo build && \
+      mkdir -p "${LINT_RUNNER_PATH}" && \
+      mv target/debug/test_runner "${LINT_RUNNER_PATH}"
 
+# Install python requirements
+COPY ./requirements-lint.txt /requirements-lint.txt
+RUN pip install uv && \
+    uv pip install --system -r /requirements-lint.txt
+
+ENV SHELLCHECK_VERSION=v0.8.0
+RUN curl -sL "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" | \
+    tar --xz -xf - --directory /tmp/ && \
+    mv "/tmp/shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/bin/
+
+COPY ./ci/lint/container-entrypoint.sh /entrypoint.sh
+RUN chmod 755 /entrypoint.sh
 
 WORKDIR /bitcoin
 ENTRYPOINT ["/entrypoint.sh"]

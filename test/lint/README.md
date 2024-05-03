@@ -38,7 +38,7 @@ Then you can use:
 | [`lint-shell.py`](lint/lint-shell.py) | [ShellCheck](https://github.com/koalaman/shellcheck)
 | [`lint-spelling.py`](lint/lint-spelling.py) | [codespell](https://github.com/codespell-project/codespell)
 
-In use versions and install instructions are available in the [CI setup](../../ci/lint/04_install.sh).
+In use versions of python dependencies are available in [`requirements-lint.txt`](../../requirements-lint.txt) and the shellcheck version in use is found in the [`ci_imagefile`](../../ci/lint_imagefile) directly.
 
 Please be aware that on Linux distributions all dependencies are usually available as packages, but could be outdated.
 
