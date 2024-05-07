@@ -2,11 +2,12 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://opensource.org/license/mit/.
 
+use std::collections::HashSet;
 use std::env;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::process::ExitCode;
+use std::process::{Command, ExitCode, Stdio};
 
 type LintError = String;
 type LintResult = Result<(), LintError>;
@@ -284,6 +285,94 @@ fn lint_doc() -> LintResult {
     }
 }
 
+fn list_top_level_dirs(dir: PathBuf) -> std::io::Result<Vec<String>> {
+    let entries = fs::read_dir(&dir)?;
+
+    let directories = entries
+        .filter_map(|entry| match entry {
+            Ok(entry) => {
+                let path = entry.path();
+                if path.is_dir() {
+                    // Make path relative
+                    path.strip_prefix(&dir)
+                        .ok()
+                        .and_then(|p| p.to_str().map(String::from))
+                } else {
+                    None
+                }
+            }
+            Err(_) => None,
+        })
+        .collect();
+
+    Ok(directories)
+}
+
+fn list_top_level_tracked_dirs() -> std::io::Result<Vec<String>> {
+    let output = Command::new("git")
+        .args(["ls-tree", "-rtd", "--name-only", "HEAD", "./"])
+        .output()?;
+
+    if !output.status.success() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "Git command failed",
+        ));
+    }
+
+    Ok(std::str::from_utf8(&output.stdout)
+        .unwrap()
+        .lines()
+        .map(|s| s.to_string())
+        .collect())
+}
+
+// Return top-level directories not tracked by git
+fn filter_untracked_directories(all_dirs: Vec<String>, tracked_dirs: Vec<String>) -> Vec<String> {
+    let tracked_set: HashSet<String> = tracked_dirs.into_iter().collect();
+    all_dirs
+        .into_iter()
+        .filter(|dir| !tracked_set.contains(dir))
+        .collect()
+}
+
+fn lint_markdown() -> LintResult {
+    let mut md_ignore_paths = get_subtrees()
+        .into_iter()
+        .map(|path| path.to_string())
+        .collect::<Vec<_>>();
+
+    // Malformed markdown
+    md_ignore_paths.push("./doc/README_doxygen.md".to_string());
+
+    // Exclude any top-level directories not tracked by git
+    let top_level_dirs = list_top_level_dirs(get_git_root()).expect("Failed to list directories");
+    let tracked_dirs = list_top_level_tracked_dirs().expect("Failed to list tracked directories");
+    let extra_exclude_dirs = filter_untracked_directories(top_level_dirs, tracked_dirs);
+    md_ignore_paths.extend(extra_exclude_dirs);
+
+    let md_ignore_path_str = md_ignore_paths.join(",");
+
+    let mut cmd = Command::new("mlc");
+    cmd.arg("--offline")
+        .arg("--ignore-path")
+        .arg(md_ignore_path_str)
+        .arg("--root-dir")
+        .arg(".")
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit()); // only print errors
+
+    match cmd.status() {
+        Ok(status) if status.success() => Ok(()),
+        Ok(_) => Err("mlc command failed".to_string()), // Ran but did not succeed
+        Err(e) if e.kind() == ErrorKind::NotFound => {
+            println!("`mlc` was not found in $PATH, skipping markdown lint check.");
+            Ok(())
+        }
+        Err(e) => Err(format!("Error running mlc: {}", e)), // Misc errors
+    }
+}
+
 fn lint_all() -> LintResult {
     let mut good = true;
     let lint_dir = get_git_root().join("test/lint");
@@ -317,6 +406,7 @@ fn main() -> ExitCode {
         ("no-tabs check", lint_tabs_whitespace),
         ("build config includes check", lint_includes_build_config),
         ("-help=1 documentation check", lint_doc),
+        ("markdown link check", lint_markdown),
         ("lint-*.py scripts", lint_all),
     ];
 
