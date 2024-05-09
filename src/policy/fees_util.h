@@ -5,8 +5,11 @@
 #ifndef BITCOIN_POLICY_FEES_UTIL_H
 #define BITCOIN_POLICY_FEES_UTIL_H
 
+#include <kernel/mempool_entry.h>
 #include <policy/feerate.h>
 
+#include <map>
+#include <set>
 #include <tuple>
 #include <vector>
 
@@ -34,5 +37,16 @@ struct BlockPercentiles {
  * @return BlockPercentiles of a given fee statistics.
  */
 BlockPercentiles CalculateBlockPercentiles(const std::vector<std::tuple<CFeeRate, uint64_t>>& fee_rate_stats);
+
+using TxAncestorsAndDescendants = std::map<Txid, std::tuple<std::set<Txid>, std::set<Txid>>>;
+
+/* GetTxAncestorsAndDescendants takes the vector of transactions removed from the mempool after a block is connected.
+ * The function assumes the order the transactions were included in the block was maintained; that is, all transaction
+ * that is, all transaction parents was added into the vector first before descendants.
+ *
+ * GetTxAncestorsAndDescendants computes all the ancestors and descendants of the transactions, the transaction is
+ * also included as a descendant and ancestor of itself.
+ */
+TxAncestorsAndDescendants GetTxAncestorsAndDescendants(const std::vector<RemovedMempoolTransactionInfo>& transactions);
 
 #endif // BITCOIN_POLICY_FEES_UTIL_H
