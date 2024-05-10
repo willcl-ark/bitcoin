@@ -118,12 +118,24 @@ public:
 
     void push_back(UniValue val);
     void push_backV(const std::vector<UniValue>& vec);
+    void push_backV(std::vector<UniValue>&& vec);
     template <class It>
     void push_backV(It first, It last);
 
     void pushKVEnd(std::string key, UniValue val);
-    void pushKV(std::string key, UniValue val);
-    void pushKVs(UniValue obj);
+
+    void __pushKV(const std::string& key, const UniValue& val);
+    void __pushKV(const std::string& key, UniValue&& val);
+    void __pushKV(std::string&& key, const UniValue& val);
+    void __pushKV(std::string&& key, UniValue&& val);
+
+    bool pushKV(const std::string& key, const UniValue& val);
+    bool pushKV(const std::string& key, UniValue&& val);
+    bool pushKV(std::string&& key, const UniValue& val);
+    bool pushKV(std::string&& key, UniValue&& val);
+
+    bool pushKVs(const UniValue& obj);
+    bool pushKVs(UniValue&& obj);
 
     std::string write(unsigned int prettyIndent = 0,
                       unsigned int indentLevel = 0) const;
