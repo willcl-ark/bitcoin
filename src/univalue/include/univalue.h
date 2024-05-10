@@ -50,6 +50,37 @@ public:
             setStr(std::string{std::forward<Ref>(val)});
         }
     }
+    // Move constructor
+    UniValue(UniValue&& other) noexcept
+        : typ(other.typ), val(std::move(other.val)), keys(std::move(other.keys)), values(std::move(other.values))
+    {
+        other.typ = VNULL; // Set the moved-from object to a valid state
+    }
+    // Move assignment operator
+    UniValue& operator=(UniValue&& other) noexcept
+    {
+        if (this != &other) {
+            typ = other.typ;
+            val = std::move(other.val);
+            keys = std::move(other.keys);
+            values = std::move(other.values);
+            other.typ = VNULL; // Set the moved-from object to a valid state
+        }
+        return *this;
+    }
+    // Copy constructor
+    UniValue(const UniValue& other)
+    : typ(other.typ), val(other.val), keys(other.keys), values(other.values) {}
+
+    UniValue& operator=(const UniValue& other) {
+        if (this != &other) {
+            typ = other.typ;
+            val = other.val;
+            keys = other.keys;
+            values = other.values;
+        }
+        return *this;
+    }
 
     void clear();
 
