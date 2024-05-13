@@ -58,6 +58,7 @@
 #include <policy/feerate.h>
 #include <policy/fees.h>
 #include <policy/fees_args.h>
+#include <policy/forecasters/mempool.h>
 #include <policy/policy.h>
 #include <policy/settings.h>
 #include <protocol.h>
@@ -1278,26 +1279,6 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
                                               GetRand<uint64_t>(),
                                               *node.addrman, *node.netgroupman, chainparams, args.GetBoolArg("-networkactive", true));
 
-    assert(!node.fee_estimator);
-    // Don't initialize legacy fee estimator if we don't relay transactions,
-    // as new data will not be appended and old data will never be updated.
-    if (!peerman_opts.ignore_incoming_txs) {
-        bool read_stale_estimates = args.GetBoolArg("-acceptstalefeeestimates", DEFAULT_ACCEPT_STALE_FEE_ESTIMATES);
-        if (read_stale_estimates && (chainparams.GetChainType() != ChainType::REGTEST)) {
-            return InitError(strprintf(_("acceptstalefeeestimates is not supported on %s chain."), chainparams.GetChainTypeString()));
-        }
-
-        node.fee_estimator = std::make_unique<FeeEstimator>(FeeestPath(args), read_stale_estimates);
-
-        // Flush legacy estimates to disk periodically
-        CBlockPolicyEstimator* legacy_estimator = node.fee_estimator->legacy_estimator->get();
-        scheduler.scheduleEvery([legacy_estimator] { legacy_estimator->FlushFeeEstimates(); }, FEE_FLUSH_INTERVAL);
-        validation_signals.RegisterValidationInterface(legacy_estimator);
-    } else {
-        // Initialize fee estimator without legacy estimator
-        node.fee_estimator = std::make_unique<FeeEstimator>();
-    }
-
     // Check port numbers
     for (const std::string port_option : {
         "-port",
@@ -1640,6 +1621,26 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     }
 
     ChainstateManager& chainman = *Assert(node.chainman);
+    assert(!node.fee_estimator);
+    // Don't initialize legacy fee estimator if we don't relay transactions,
+    // as new data will not be appended and old data will never be updated.
+    if (!peerman_opts.ignore_incoming_txs) {
+        bool read_stale_estimates = args.GetBoolArg("-acceptstalefeeestimates", DEFAULT_ACCEPT_STALE_FEE_ESTIMATES);
+        if (read_stale_estimates && (chainparams.GetChainType() != ChainType::REGTEST)) {
+            return InitError(strprintf(_("acceptstalefeeestimates is not supported on %s chain."), chainparams.GetChainTypeString()));
+        }
+
+        node.fee_estimator = std::make_unique<FeeEstimator>(node.mempool.get(), FeeestPath(args), read_stale_estimates);
+
+        // Flush legacy estimates to disk periodically
+        CBlockPolicyEstimator* legacy_estimator = node.fee_estimator->legacy_estimator->get();
+        scheduler.scheduleEvery([legacy_estimator] { legacy_estimator->FlushFeeEstimates(); }, FEE_FLUSH_INTERVAL);
+        validation_signals.RegisterValidationInterface(legacy_estimator);
+    } else {
+        // Initialize fee estimator without legacy estimator
+        node.fee_estimator = std::make_unique<FeeEstimator>();
+    }
+    node.fee_estimator->RegisterForecaster(std::make_unique<MemPoolForecaster>(node.mempool.get(), &(chainman.ActiveChainstate())));
 
     assert(!node.peerman);
     node.peerman = PeerManager::make(*node.connman, *node.addrman,

@@ -12,7 +12,8 @@
 
 
 enum class ForecastType {
-
+    MEMPOOL_FORECAST,
+    POLICY_ESTIMATOR,
 };
 
 struct ForecastResult {

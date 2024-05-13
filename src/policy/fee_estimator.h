@@ -11,9 +11,10 @@
 
 #include <map>
 #include <memory>
-#include <optional>
 #include <string>
 #include <utility>
+
+class CTxMemPool;
 
 /** \class FeeEstimator
  * Module for managing and utilising multiple fee rate forecasters to provide fee estimates.
@@ -25,6 +26,7 @@
 class FeeEstimator
 {
 private:
+    CTxMemPool* m_mempool;
     //! Map of all registered forecasters to their shared pointers.
     std::map<ForecastType, std::shared_ptr<Forecaster>> forecasters;
 
@@ -38,8 +40,8 @@ public:
      * @param[in] legacy_estimator_filepath Path to the legacy estimator dump file.
      * @param[in] read_stale_legacy_estimates Boolean flag indicating whether to read stale legacy estimates.
      */
-    FeeEstimator(const fs::path& legacy_estimator_filepath, const bool read_stale_legacy_estimates)
-        : legacy_estimator(std::make_unique<CBlockPolicyEstimator>(legacy_estimator_filepath, read_stale_legacy_estimates))
+    FeeEstimator(CTxMemPool* mempool, const fs::path& legacy_estimator_filepath, const bool read_stale_legacy_estimates)
+        : m_mempool(mempool), legacy_estimator(std::make_unique<CBlockPolicyEstimator>(legacy_estimator_filepath, read_stale_legacy_estimates))
     {
     }
 
@@ -74,6 +76,9 @@ public:
      * @return The maximum number of blocks for which any forecaster can provide a fee rate estimate.
      */
     unsigned int MaxForecastingTarget();
+
+private:
+    ForecastResult GetPolicyEstimatorEstimate(unsigned int targetBlocks);
 };
 
 #endif // BITCOIN_POLICY_FEE_ESTIMATOR_H
