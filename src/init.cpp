@@ -58,6 +58,7 @@
 #include <policy/feerate.h>
 #include <policy/fees.h>
 #include <policy/fees_args.h>
+#include <policy/forecasters/mempool.h>
 #include <policy/policy.h>
 #include <policy/settings.h>
 #include <protocol.h>
@@ -1636,6 +1637,8 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     }
 
     ChainstateManager& chainman = *Assert(node.chainman);
+
+    node.fee_estimator->RegisterForecaster(std::make_unique<MemPoolForecaster>(node.mempool.get(), &(chainman.ActiveChainstate())));
 
     assert(!node.peerman);
     node.peerman = PeerManager::make(*node.connman, *node.addrman,
