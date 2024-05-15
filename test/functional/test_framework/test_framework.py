@@ -9,6 +9,7 @@ from enum import Enum
 import argparse
 import logging
 import os
+import pathlib
 import platform
 import pdb
 import random
@@ -118,6 +119,7 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         # Disable ThreadOpenConnections by default, so that adding entries to
         # addrman will not result in automatic connections to them.
         self.disable_autoconnect = True
+        self.signetchallenge = ""
         self.set_test_params()
         assert self.wallet_names is None or len(self.wallet_names) <= self.num_nodes
         self.rpc_timeout = int(self.rpc_timeout * self.options.timeout_factor) # optionally, increase timeout by a factor
@@ -536,6 +538,10 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
                 descriptors=self.options.descriptors,
                 v2transport=self.options.v2transport,
             )
+            if self.chain == "signet" and self.signetchallenge:
+                test_node_i.datadir_path = pathlib.Path(f"{str(test_node_i.datadir_path)}/signet_{self.signetchallenge[0:8]}")
+                print(f"DEBUG: Using signetchallenge: {self.signetchallenge}")
+                print(f"DEBUG: Using datadir path: {test_node_i.datadir_path}")
             self.nodes.append(test_node_i)
             if not test_node_i.version_is_at_least(170000):
                 # adjust conf for pre 17
