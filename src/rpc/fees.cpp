@@ -99,10 +99,10 @@ static RPCHelpMan estimatesmartfee()
     };
 }
 
-static RPCHelpMan estimatefeewithforecasters()
+static RPCHelpMan estimatefee()
 {
     return RPCHelpMan{
-        "estimatefeewithforecasters",
+        "estimatefee",
         "\nEstimates the approximate fee per kilobyte needed for a transaction to begin\n"
         "confirmation within conf_target blocks if possible Uses virtual transaction size as defined\n"
         "in BIP 141 (witness data is discounted).\n",
@@ -118,7 +118,7 @@ static RPCHelpMan estimatefeewithforecasters()
                     {RPCResult::Type::STR, "", "error"},
                 }},
             }},
-        RPCExamples{HelpExampleCli("estimatefeewithforecasters", "2") + HelpExampleRpc("estimatefeewithforecasters", "2")},
+        RPCExamples{HelpExampleCli("estimatefee", "2") + HelpExampleRpc("estimatefee", "2")},
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue {
             FeeEstimator& fee_estimator = EnsureAnyFeeForecasters(request.context);
             const unsigned int targetBlocks = request.params[0].getInt<unsigned int>();
@@ -134,7 +134,7 @@ static RPCHelpMan estimatefeewithforecasters()
             // If the confirmation target is more than 2 fail early.
             // This should change whenever we have a forecaster that can support higher target.
             if (targetBlocks > 2) {
-                errors.push_back("estimatefeewithforecasters currently provide estimates for confirmation target 1 and 2 only");
+                errors.push_back("estimatefee currently provide estimates for confirmation target 1 and 2 only");
                 result.pushKV("errors", errors);
                 return result;
             }
@@ -281,7 +281,7 @@ void RegisterFeeRPCCommands(CRPCTable& t)
 {
     static const CRPCCommand commands[]{
         {"util", &estimatesmartfee},
-        {"util", &estimatefeewithforecasters},
+        {"util", &estimatefee},
         {"hidden", &estimaterawfee},
     };
     for (const auto& c : commands) {
