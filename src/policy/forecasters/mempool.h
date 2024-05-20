@@ -5,9 +5,14 @@
 #ifndef BITCOIN_POLICY_FORECASTERS_MEMPOOL_H
 #define BITCOIN_POLICY_FORECASTERS_MEMPOOL_H
 
+#include <logging.h>
 #include <policy/fee_estimator.h>
 #include <policy/feerate.h>
 #include <policy/fees_util.h>
+#include <sync.h>
+#include <util/time.h>
+
+#include <chrono>
 
 class Chainstate;
 class CTxMemPool;
@@ -15,6 +20,47 @@ class CTxMemPool;
 // Fee rate estimates above this confirmation target are not reliable,
 // mempool condition might likely change.
 const unsigned int MEMPOOL_FORECAST_MAX_TARGET{2};
+static const std::chrono::seconds CACHE_LIFE{30};
+
+
+/**
+ * CachedMempoolEstimates holds a cache of recent forecast.
+ * We only provide fresh estimates if the last cached fee rate
+ * forecast ages more than CACHE_LIFE.
+ */
+struct CachedMempoolEstimates {
+private:
+    mutable Mutex cache_mutex;
+    BlockPercentiles fee_estimate GUARDED_BY(cache_mutex);
+    NodeClock::time_point last_updated GUARDED_BY(cache_mutex){NodeClock::now() - CACHE_LIFE - std::chrono::seconds(1)};
+
+    bool isStale() const EXCLUSIVE_LOCKS_REQUIRED(cache_mutex)
+    {
+        AssertLockHeld(cache_mutex);
+        return (last_updated + CACHE_LIFE) < NodeClock::now();
+    }
+
+public:
+    CachedMempoolEstimates() {}
+    CachedMempoolEstimates(const CachedMempoolEstimates&) = delete;
+    CachedMempoolEstimates& operator=(const CachedMempoolEstimates&) = delete;
+
+    std::optional<BlockPercentiles> get() const EXCLUSIVE_LOCKS_REQUIRED(!cache_mutex)
+    {
+        LOCK(cache_mutex);
+        if (isStale()) return std::nullopt;
+        LogPrint(BCLog::ESTIMATEFEE, "%s: cache is not stale, using cached value\n", forecastTypeToString(ForecastType::MEMPOOL_FORECAST));
+        return fee_estimate;
+    }
+
+    void update(const BlockPercentiles& new_fee_estimate) EXCLUSIVE_LOCKS_REQUIRED(!cache_mutex)
+    {
+        LOCK(cache_mutex);
+        fee_estimate = new_fee_estimate;
+        last_updated = NodeClock::now();
+        LogPrint(BCLog::ESTIMATEFEE, "%s: updated cache\n", forecastTypeToString(ForecastType::MEMPOOL_FORECAST));
+    }
+};
 
 /** \class MemPoolForecaster
  * This fee estimate forecaster estimates the fee rate that a transaction will pay
@@ -28,6 +74,7 @@ class MemPoolForecaster : public Forecaster
 private:
     CTxMemPool* m_mempool;
     Chainstate* m_chainstate;
+    mutable CachedMempoolEstimates cache;
 
 public:
     MemPoolForecaster(CTxMemPool* mempool, Chainstate* chainstate)

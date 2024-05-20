@@ -24,6 +24,12 @@ ForecastResult MemPoolForecaster::EstimateFee(unsigned int targetBlocks)
     node::BlockAssembler::Options options = {
         .test_block_validity = false,
     };
+    const auto cached_estimate = cache.get();
+    if (cached_estimate) {
+        forecast_options.m_l_priority_estimate = cached_estimate->p25;
+        forecast_options.m_h_priority_estimate = cached_estimate->p50;
+        return ForecastResult(forecast_options, std::nullopt);
+    }
 
     node::BlockAssembler assembler(*m_chainstate, m_mempool, options);
     const auto pblocktemplate = assembler.CreateNewBlock(CScript{});
@@ -37,6 +43,7 @@ ForecastResult MemPoolForecaster::EstimateFee(unsigned int targetBlocks)
              forecastTypeToString(m_forecastType), forecast_options.m_block_height, fee_rate_estimate_result.p75.GetFeePerK(), CURRENCY_ATOM, fee_rate_estimate_result.p50.GetFeePerK(), CURRENCY_ATOM,
              fee_rate_estimate_result.p25.GetFeePerK(), CURRENCY_ATOM, fee_rate_estimate_result.p5.GetFeePerK(), CURRENCY_ATOM);
 
+    cache.update(fee_rate_estimate_result);
     forecast_options.m_l_priority_estimate = fee_rate_estimate_result.p25;
     forecast_options.m_h_priority_estimate = fee_rate_estimate_result.p50;
     return ForecastResult(forecast_options, std::nullopt);
