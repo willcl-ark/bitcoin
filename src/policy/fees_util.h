@@ -6,7 +6,9 @@
 #define BITCOIN_POLICY_FEES_UTIL_H
 
 #include <kernel/mempool_entry.h>
+#include <node/mini_miner.h>
 #include <policy/feerate.h>
+#include <primitives/transaction.h>
 
 #include <map>
 #include <set>
@@ -48,5 +50,7 @@ using TxAncestorsAndDescendants = std::map<Txid, std::tuple<std::set<Txid>, std:
  * also included as a descendant and ancestor of itself.
  */
 TxAncestorsAndDescendants GetTxAncestorsAndDescendants(const std::vector<RemovedMempoolTransactionInfo>& transactions);
+
+node::LinearizationResult LinearizeTransactions(const std::vector<RemovedMempoolTransactionInfo>& txs_removed_for_block);
 
 #endif // BITCOIN_POLICY_FEES_UTIL_H
