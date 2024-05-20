@@ -68,6 +68,12 @@ std::pair<ForecastResult, std::vector<std::string>> FeeEstimator::GetFeeEstimate
                  forecastTypeToString(forecast.m_forecast_opt.m_forecaster), forecast.m_forecast_opt.m_block_height, forecast.m_forecast_opt.m_l_priority_estimate.GetFeePerK(),
                  CURRENCY_ATOM, forecast.m_forecast_opt.m_h_priority_estimate.GetFeePerK(), CURRENCY_ATOM);
 
+        TRACE5(fee_estimator, estimate_calculated,
+               targetBlocks,
+               forecastTypeToString(forecast.m_forecast_opt.m_forecaster).c_str(),
+               forecast.m_forecast_opt.m_block_height,
+               forecast.m_forecast_opt.m_l_priority_estimate.GetFeePerK(),
+               forecast.m_forecast_opt.m_h_priority_estimate.GetFeePerK());
     }
     return std::make_pair(forecast, err_messages);
 };
