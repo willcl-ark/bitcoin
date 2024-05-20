@@ -32,6 +32,11 @@ ForecastResult MemPoolForecaster::EstimateFeeWithMemPool(unsigned int targetBloc
         return ForecastResult(strprintf("%s: Mempool not finished loading; can't get accurate fee rate forecast", MEMPOOL_FORECAST_NAME_STR));
     }
 
+    const auto cached_estimate = cache.get();
+    if (cached_estimate) {
+        return ForecastResult(cached_estimate->p25, cached_estimate->p50, MEMPOOL_FORECAST_NAME_STR);
+    }
+
     std::vector<std::tuple<CFeeRate, uint64_t>> block_fee_stats;
     {
         LOCK2(cs_main, m_mempool->cs);
@@ -57,6 +62,9 @@ ForecastResult MemPoolForecaster::EstimateFeeWithMemPool(unsigned int targetBloc
            fee_rate_estimate_result.p25.GetFeePerK(),
            fee_rate_estimate_result.p50.GetFeePerK(),
            fee_rate_estimate_result.p75.GetFeePerK());
-
+    if (fee_rate_estimate_result.empty()) {
+        return ForecastResult(strprintf("%s: Insufficient mempool transactions to provide a fee rate forecast", MEMPOOL_FORECAST_NAME_STR));
+    }
+    cache.update(fee_rate_estimate_result);
     return ForecastResult(fee_rate_estimate_result.p25, fee_rate_estimate_result.p50, MEMPOOL_FORECAST_NAME_STR);
 }
