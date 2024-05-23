@@ -73,7 +73,7 @@ node::LinearizationResult LinearizeTransactions(const std::vector<RemovedMempool
     // Cache all the transactions for efficient lookup
     std::map<Txid, TransactionInfo> tx_caches;
     for (const auto& tx : txs_removed_for_block) {
-        tx_caches.emplace(std::make_pair(tx.info.m_tx->GetHash(), TransactionInfo(tx.info.m_tx, tx.info.m_fee, tx.info.m_virtual_transaction_size, tx.info.txHeight)));
+        tx_caches.emplace(tx.info.m_tx->GetHash(), TransactionInfo(tx.info.m_tx, tx.info.m_fee, tx.info.m_virtual_transaction_size, tx.info.txHeight));
     }
 
     const auto& txAncestorsAndDescendants = GetTxAncestorsAndDescendants(txs_removed_for_block);
@@ -96,5 +96,5 @@ node::LinearizationResult LinearizeTransactions(const std::vector<RemovedMempool
         auto tx_info = tx_caches.find(txid)->second;
         transactions.emplace_back(tx_info.m_tx, tx_info.m_virtual_transaction_size, vsize_ancestor, tx_info.m_fee, fee_with_ancestors);
     }
-    return node::MiniMiner(std::move(transactions), std::move(descendant_caches)).Linearize();
+    return node::MiniMiner(transactions, descendant_caches).Linearize();
 }
