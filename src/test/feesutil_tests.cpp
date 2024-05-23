@@ -21,12 +21,12 @@ static inline CTransactionRef make_tx(const std::vector<COutPoint>& outpoints, i
     tx.vin.reserve(outpoints.size());
     tx.vout.resize(num_outputs);
     for (const auto& outpoint : outpoints) {
-        tx.vin.push_back(CTxIn(outpoint));
+        tx.vin.emplace_back(outpoint);
     }
 
     for (int i = 0; i < num_outputs; ++i) {
         auto scriptPubKey = CScript() << OP_11 << OP_EQUAL;
-        tx.vout.push_back(CTxOut(COIN, scriptPubKey));
+        tx.vout.emplace_back(COIN, scriptPubKey);
     }
     return MakeTransactionRef(tx);
 }
@@ -44,7 +44,7 @@ BOOST_AUTO_TEST_CASE(ComputingTxAncestorsAndDescendants)
         for (auto i = 0; i < 20; ++i) {
             const std::vector<COutPoint> outpoints{COutPoint(Txid::FromUint256(InsecureRand256()), 0)};
             const CTransactionRef tx = make_tx(outpoints);
-            transactions.push_back(RemovedMempoolTransactionInfo(entry.FromTx(tx)));
+            transactions.emplace_back(entry.FromTx(tx));
         }
 
         const auto txAncestorsAndDescendants = GetTxAncestorsAndDescendants(transactions);
@@ -81,14 +81,14 @@ BOOST_AUTO_TEST_CASE(ComputingTxAncestorsAndDescendants)
         for (auto i = 0; i < 4; ++i) {
             const std::vector<COutPoint> outpoints{COutPoint(Txid::FromUint256(InsecureRand256()), 0)};
             const CTransactionRef tx = make_tx(outpoints);
-            transactions.push_back(RemovedMempoolTransactionInfo(entry.FromTx(tx)));
+            transactions.emplace_back(entry.FromTx(tx));
         }
 
         // Create cluster A children ---> E->F->G
         std::vector<COutPoint> outpoints{COutPoint(transactions[0].info.m_tx->GetHash(), 0)};
         for (auto i = 0; i < 3; ++i) {
             const CTransactionRef tx = make_tx(outpoints);
-            transactions.push_back(RemovedMempoolTransactionInfo(entry.FromTx(tx)));
+            transactions.emplace_back(entry.FromTx(tx));
             outpoints = {COutPoint(tx->GetHash(), 0)};
         }
 
@@ -96,19 +96,19 @@ BOOST_AUTO_TEST_CASE(ComputingTxAncestorsAndDescendants)
         outpoints = {COutPoint(transactions[1].info.m_tx->GetHash(), 0)};
         for (size_t i = 0; i < 2; ++i) {
             const CTransactionRef tx = make_tx(outpoints);
-            transactions.push_back(RemovedMempoolTransactionInfo(entry.FromTx(tx)));
+            transactions.emplace_back(entry.FromTx(tx));
             outpoints = {COutPoint(tx->GetHash(), 0)};
         }
 
         // Create cluster C child ---> J
         outpoints = {COutPoint(transactions[2].info.m_tx->GetHash(), 0)};
         const CTransactionRef txJ = make_tx(outpoints);
-        transactions.push_back(RemovedMempoolTransactionInfo(entry.FromTx(txJ)));
+        transactions.emplace_back(entry.FromTx(txJ));
 
         // Create cluster B child ---> K
         outpoints = {COutPoint(transactions[3].info.m_tx->GetHash(), 0)};
         const CTransactionRef txK = make_tx(outpoints);
-        transactions.push_back(RemovedMempoolTransactionInfo(entry.FromTx(txK)));
+        transactions.emplace_back(entry.FromTx(txK));
 
         const auto txAncestorsAndDescendants = GetTxAncestorsAndDescendants(transactions);
 
@@ -245,52 +245,52 @@ BOOST_AUTO_TEST_CASE(ComputingTxAncestorsAndDescendants)
         for (auto i = 0; i < 2; ++i) {
             const std::vector<COutPoint> outpoints{COutPoint(Txid::FromUint256(InsecureRand256()), 0)};
             const CTransactionRef tx = make_tx(outpoints, /*num_outputs=*/2);
-            transactions.push_back(RemovedMempoolTransactionInfo(entry.FromTx(tx)));
+            transactions.emplace_back(entry.FromTx(tx));
         }
 
         // Cluster 1 Topology
         // Create a child for A ---> C
         std::vector<COutPoint> outpoints{COutPoint(transactions[0].info.m_tx->GetHash(), 0)};
         const CTransactionRef tx_C = make_tx(outpoints, /*num_outputs=*/2);
-        transactions.push_back(RemovedMempoolTransactionInfo(entry.FromTx(tx_C)));
+        transactions.emplace_back(entry.FromTx(tx_C));
 
         // Create a child for A ---> D
         outpoints = {COutPoint(transactions[0].info.m_tx->GetHash(), 1)};
         const CTransactionRef tx_D = make_tx(outpoints);
-        transactions.push_back(RemovedMempoolTransactionInfo(entry.FromTx(tx_D)));
+        transactions.emplace_back(entry.FromTx(tx_D));
 
         // Create a child for C ---> E
         outpoints = {COutPoint(tx_C->GetHash(), 0)};
         const CTransactionRef tx_E = make_tx(outpoints);
-        transactions.push_back(RemovedMempoolTransactionInfo(entry.FromTx(tx_E)));
+        transactions.emplace_back(entry.FromTx(tx_E));
 
         // Create a child for C ---> F
         outpoints = {COutPoint(tx_C->GetHash(), 1)};
         const CTransactionRef tx_F = make_tx(outpoints);
-        transactions.push_back(RemovedMempoolTransactionInfo(entry.FromTx(tx_F)));
+        transactions.emplace_back(entry.FromTx(tx_F));
 
         // Create a child for E and F  ---> G
         outpoints = {COutPoint(tx_E->GetHash(), 0), COutPoint(tx_F->GetHash(), 0)};
-        transactions.push_back(RemovedMempoolTransactionInfo(entry.FromTx(make_tx(outpoints))));
+        transactions.emplace_back(entry.FromTx(make_tx(outpoints)));
 
         // Create a child for D ---> H
         outpoints = {COutPoint(tx_D->GetHash(), 0)};
-        transactions.push_back(RemovedMempoolTransactionInfo(entry.FromTx(make_tx(outpoints))));
+        transactions.emplace_back(entry.FromTx(make_tx(outpoints)));
 
 
         // Cluster 2
         // Create a child for B ---> I
         outpoints = {COutPoint(transactions[1].info.m_tx->GetHash(), 0)};
-        transactions.push_back(RemovedMempoolTransactionInfo(entry.FromTx(make_tx(outpoints))));
+        transactions.emplace_back(entry.FromTx(make_tx(outpoints)));
 
         // Create a child for B ---> J
         outpoints = {COutPoint(transactions[1].info.m_tx->GetHash(), 1)};
         const CTransactionRef tx_J = make_tx(outpoints);
-        transactions.push_back(RemovedMempoolTransactionInfo(entry.FromTx(tx_J)));
+        transactions.emplace_back(entry.FromTx(tx_J));
 
         // Create a child for J ---> K
         outpoints = {COutPoint(tx_J->GetHash(), 0)};
-        transactions.push_back(RemovedMempoolTransactionInfo(entry.FromTx(make_tx(outpoints))));
+        transactions.emplace_back(entry.FromTx(make_tx(outpoints)));
 
         const auto txAncestorsAndDescendants = GetTxAncestorsAndDescendants(transactions);
 
