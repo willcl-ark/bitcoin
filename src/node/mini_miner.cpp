@@ -273,7 +273,7 @@ void MiniMiner::BuildMockTemplate(std::optional<CFeeRate> target_feerate)
             break;
         }
 
-        m_linearize_result.size_per_feerate.push_back(std::make_tuple(CFeeRate{ancestor_package_fee, ancestor_package_size}, ancestor_package_size));
+        m_linearize_result.size_per_feerate.emplace_back(CFeeRate{ancestor_package_fee, ancestor_package_size}, ancestor_package_size);
 
         // Calculate ancestors on the fly. This lookup should be fairly cheap, and ancestor sets
         // change at every iteration, so this is more efficient than maintaining a cache.
@@ -297,7 +297,7 @@ void MiniMiner::BuildMockTemplate(std::optional<CFeeRate> target_feerate)
         }
         // Track the order in which transactions were selected.
         for (const auto& ancestor : ancestors) {
-            m_linearize_result.inclusion_order.emplace(std::make_pair(Txid::FromUint256(ancestor->first), sequence_num));
+            m_linearize_result.inclusion_order.emplace(Txid::FromUint256(ancestor->first), sequence_num);
         }
         DeleteAncestorPackage(ancestors);
         SanityCheck();
