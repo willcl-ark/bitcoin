@@ -33,6 +33,7 @@ from test_framework.messages import (
     CTxInWitness,
     CTxOut,
     hash256,
+    WITNESS_SCALE_FACTOR,
 )
 from test_framework.script import (
     CScript,
@@ -367,7 +368,17 @@ class MiniWallet:
             vsize = Decimal(168)  # P2PK (73 bytes scriptSig + 35 bytes scriptPubKey + 60 bytes other)
         else:
             assert False
-        send_value = utxo_to_spend["value"] - (fee or (fee_rate * vsize / 1000))
+
+        tx_base_fee = fee_rate * vsize / 1000
+        if target_weight:
+            target_fee = fee_rate * (target_weight // WITNESS_SCALE_FACTOR) / 1000
+            fee_rate_to_fee = Decimal(max(target_fee, tx_base_fee))
+        else:
+            fee_rate_to_fee = tx_base_fee
+
+        send_value = utxo_to_spend["value"] - (fee or fee_rate_to_fee)
+        # Ensure UTXO is enough to account for the required fee
+        assert_greater_than_or_equal(send_value, 0)
 
         # create tx
         tx = self.create_self_transfer_multi(

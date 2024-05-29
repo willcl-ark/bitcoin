@@ -237,11 +237,16 @@ BITCOIN_CORE_H = \
   node/validation_cache_args.h \
   noui.h \
   outputtype.h \
+  policy/fee_estimator.h \
+  policy/forecaster.h \
   policy/v3_policy.h \
   policy/feerate.h \
   policy/fees.h \
   policy/fees_args.h \
+  policy/fees_util.h \
   policy/packages.h \
+  policy/forecasters/block.h \
+  policy/forecasters/mempool.h \
   policy/policy.h \
   policy/rbf.h \
   policy/settings.h \
@@ -348,6 +353,7 @@ BITCOIN_CORE_H = \
   wallet/feebumper.h \
   wallet/fees.h \
   wallet/load.h \
+  wallet/migrate.h \
   wallet/receive.h \
   wallet/rpc/util.h \
   wallet/rpc/wallet.h \
@@ -441,8 +447,12 @@ libbitcoin_node_a_SOURCES = \
   node/validation_cache_args.cpp \
   noui.cpp \
   policy/v3_policy.cpp \
+  policy/fee_estimator.cpp \
   policy/fees.cpp \
   policy/fees_args.cpp \
+  policy/fees_util.cpp \
+  policy/forecasters/block.cpp \
+  policy/forecasters/mempool.cpp \
   policy/packages.cpp \
   policy/rbf.cpp \
   policy/settings.cpp \
@@ -508,6 +518,7 @@ libbitcoin_wallet_a_SOURCES = \
   wallet/fees.cpp \
   wallet/interfaces.cpp \
   wallet/load.cpp \
+  wallet/migrate.cpp \
   wallet/receive.cpp \
   wallet/rpc/addresses.cpp \
   wallet/rpc/backup.cpp \

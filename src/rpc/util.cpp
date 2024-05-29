@@ -175,7 +175,7 @@ std::string HelpExampleCliNamed(const std::string& methodname, const RPCArgList&
 
 std::string HelpExampleRpc(const std::string& methodname, const std::string& args)
 {
-    return "> curl --user myusername --data-binary '{\"jsonrpc\": \"1.0\", \"id\": \"curltest\", "
+    return "> curl --user myusername --data-binary '{\"jsonrpc\": \"2.0\", \"id\": \"curltest\", "
         "\"method\": \"" + methodname + "\", \"params\": [" + args + "]}' -H 'content-type: text/plain;' http://127.0.0.1:8332/\n";
 }
 
@@ -186,7 +186,7 @@ std::string HelpExampleRpcNamed(const std::string& methodname, const RPCArgList&
         params.pushKV(param.first, param.second);
     }
 
-    return "> curl --user myusername --data-binary '{\"jsonrpc\": \"1.0\", \"id\": \"curltest\", "
+    return "> curl --user myusername --data-binary '{\"jsonrpc\": \"2.0\", \"id\": \"curltest\", "
            "\"method\": \"" + methodname + "\", \"params\": " + params.write() + "}' -H 'content-type: text/plain;' http://127.0.0.1:8332/\n";
 }
 
@@ -645,7 +645,7 @@ UniValue RPCHelpMan::HandleRequest(const JSONRPCRequest& request) const
                 mismatch.setNull();
                 break;
             }
-            mismatch.push_back(match);
+            mismatch.push_back(std::move(match));
         }
         if (!mismatch.isNull()) {
             std::string explain{
@@ -818,7 +818,7 @@ UniValue RPCHelpMan::GetArgMap() const
         map.push_back(arg_name);
         map.push_back(type == RPCArg::Type::STR ||
                       type == RPCArg::Type::STR_HEX);
-        arr.push_back(map);
+        arr.push_back(std::move(map));
     };
 
     for (int i{0}; i < int(m_args.size()); ++i) {
@@ -1124,7 +1124,7 @@ UniValue RPCResult::MatchesType(const UniValue& result) const
             // If there are more results than documented, reuse the last doc_inner.
             const RPCResult& doc_inner{m_inner.at(std::min(m_inner.size() - 1, i))};
             UniValue match{doc_inner.MatchesType(result.get_array()[i])};
-            if (!match.isTrue()) errors.pushKV(strprintf("%d", i), match);
+            if (!match.isTrue()) errors.pushKV(strprintf("%d", i), std::move(match));
         }
         if (errors.empty()) return true; // empty result array is valid
         return errors;
@@ -1137,7 +1137,7 @@ UniValue RPCResult::MatchesType(const UniValue& result) const
             const RPCResult& doc_inner{m_inner.at(0)}; // Assume all types are the same, randomly pick the first
             for (size_t i{0}; i < result.get_obj().size(); ++i) {
                 UniValue match{doc_inner.MatchesType(result.get_obj()[i])};
-                if (!match.isTrue()) errors.pushKV(result.getKeys()[i], match);
+                if (!match.isTrue()) errors.pushKV(result.getKeys()[i], std::move(match));
             }
             if (errors.empty()) return true; // empty result obj is valid
             return errors;
@@ -1163,7 +1163,7 @@ UniValue RPCResult::MatchesType(const UniValue& result) const
                 continue;
             }
             UniValue match{doc_entry.MatchesType(result_it->second)};
-            if (!match.isTrue()) errors.pushKV(doc_entry.m_key_name, match);
+            if (!match.isTrue()) errors.pushKV(doc_entry.m_key_name, std::move(match));
         }
         if (errors.empty()) return true;
         return errors;

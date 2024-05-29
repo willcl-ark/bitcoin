@@ -13,6 +13,7 @@
 #include <memory>
 #include <optional>
 #include <stdint.h>
+#include <tuple>
 
 #include <boost/multi_index/identity.hpp>
 #include <boost/multi_index/indexed_by.hpp>
@@ -143,6 +144,7 @@ private:
     uint64_t nBlockSigOpsCost;
     CAmount nFees;
     std::unordered_set<Txid, SaltedTxidHasher> inBlock;
+    std::vector<std::tuple<CFeeRate, uint64_t>> size_per_feerate;
 
     // Chain context for the block
     int nHeight;
@@ -169,6 +171,10 @@ public:
 
     inline static std::optional<int64_t> m_last_block_num_txs{};
     inline static std::optional<int64_t> m_last_block_weight{};
+
+    /** Return a vector of feerate's and vsize's of packages included in a block.
+     * This can only be called once. */
+    std::vector<std::tuple<CFeeRate, uint64_t>> GetFeeRateStats();
 
 private:
     const Options m_options;
@@ -203,6 +209,9 @@ int64_t UpdateTime(CBlockHeader* pblock, const Consensus::Params& consensusParam
 
 /** Update an old GenerateCoinbaseCommitment from CreateNewBlock after the block txs have changed */
 void RegenerateCommitments(CBlock& block, ChainstateManager& chainman);
+
+/** Get feerate and vsizes of packages in the next block*/
+std::vector<std::tuple<CFeeRate, uint64_t>> GetNextBlockFeeRateAndVsize(Chainstate& chainstate, const CTxMemPool* mempool);
 
 /** Apply -blockmintxfee and -blockmaxweight options from ArgsManager to BlockAssembler options. */
 void ApplyArgsManOptions(const ArgsManager& gArgs, BlockAssembler::Options& options);

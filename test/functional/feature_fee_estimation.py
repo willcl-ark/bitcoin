@@ -11,6 +11,8 @@ import time
 
 from test_framework.messages import (
     COIN,
+    DEFAULT_BLOCK_MAX_WEIGHT,
+    WITNESS_SCALE_FACTOR,
 )
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
@@ -128,6 +130,14 @@ def make_tx(wallet, utxo, feerate):
         fee_rate=Decimal(feerate * 1000) / COIN,
     )
 
+def send_tx(wallet, node, utxo, feerate, target_weight=0):
+    """Broadcast a 1in-1out transaction with a specific input and feerate (sat/vb)."""
+    return wallet.send_self_transfer(
+        from_node=node,
+        utxo_to_spend=utxo,
+        fee_rate=Decimal(feerate * 1000) / COIN,
+        target_weight=target_weight,
+    )
 
 class EstimateFeeTest(BitcoinTestFramework):
     def set_test_params(self):
@@ -382,6 +392,62 @@ class EstimateFeeTest(BitcoinTestFramework):
         self.start_node(0,extra_args=["-acceptstalefeeestimates"])
         assert_equal(self.nodes[0].estimatesmartfee(1)["feerate"], fee_rate)
 
+    def fill_mempool_to_block_max_weight(self, fee_rates, utxos, target_weight):
+        """
+        Fills the mempool with transactions until it reaches the block's maximum weight.
+        """
+        for fee_rate in fee_rates:
+            utxo = utxos.pop(0)
+            send_tx(self.wallet, self.nodes[0], utxo, fee_rate, target_weight)
+
+        mempool_weight = self.nodes[0].getmempoolinfo()["bytes"] * WITNESS_SCALE_FACTOR
+        assert_greater_than_or_equal(mempool_weight, DEFAULT_BLOCK_MAX_WEIGHT)
+
+    def test_estimate_fee_with_lower_mempool_estimate(self):
+        self.log.info("test estimatefee rpc")
+        num_txs = 20
+        target_weight = int(DEFAULT_BLOCK_MAX_WEIGHT / num_txs)
+        self.restart_node(0, extra_args=[f"-datacarriersize={target_weight}"])
+
+        self.confutxo = self.wallet.send_self_transfer_multi(
+            from_node=self.nodes[0],
+            utxos_to_spend=[self.wallet.get_utxo() for _ in range(2)],
+            num_outputs=num_txs * 2
+        )['new_utxos']
+
+        self.generate(self.nodes[0], 1, sync_fun=self.no_op)
+
+        fee_rates = list(range(num_txs + 1, 1, -1))  # fee rates from (21...1) sat/vb
+
+        self.fill_mempool_to_block_max_weight(fee_rates, self.confutxo[0:num_txs], target_weight)
+
+        estimate = self.nodes[0].estimatefee(1)
+        fee_rate_below_25th_percentile = fee_rates[15]
+        fee_rate_below_50th_percentile = fee_rates[10]
+
+        fee_rate_above_25th_percentile = fee_rates[13]
+        fee_rate_above_50th_percentile = fee_rates[8]
+
+        assert_greater_than(estimate["low"], Decimal((fee_rate_below_25th_percentile * 1000) / COIN))
+        assert_greater_than(estimate["high"], Decimal((fee_rate_below_50th_percentile * 1000) / COIN))
+
+        assert_greater_than(Decimal((fee_rate_above_25th_percentile * 1000) / COIN), estimate["low"])
+        assert_greater_than(Decimal((fee_rate_above_50th_percentile * 1000) / COIN), estimate["high"])
+
+        high_fee_rates = list(range((num_txs * 2) + 1, num_txs + 1, -1)) # fee rates from (41...22) sat/vb
+        self.fill_mempool_to_block_max_weight(high_fee_rates, self.confutxo[num_txs:num_txs * 2], target_weight)
+
+        new_estimate = self.nodes[0].estimatefee(1)
+        # Previous estimate was cached; so cached value will be used
+        self.nodes[0].assert_debug_log(expected_msgs=["Mempool Forecast: cache is not stale, using cached value"])
+        assert_greater_than(new_estimate["low"], Decimal((fee_rate_below_25th_percentile * 1000) / COIN))
+        assert_greater_than(new_estimate["high"], Decimal((fee_rate_below_50th_percentile * 1000) / COIN))
+
+        assert_greater_than(Decimal((fee_rate_above_25th_percentile * 1000) / COIN), new_estimate["low"])
+        assert_greater_than(Decimal((fee_rate_above_50th_percentile * 1000) / COIN), new_estimate["high"])
+
+        # TODO: Check fee estimate after six blocks are mined with mempool estimate higher than block
+        # TODO: Check fee estimate after six blocks are mined with mempool estimate lower than block
 
     def run_test(self):
         self.log.info("This test is time consuming, please be patient")
@@ -431,6 +497,8 @@ class EstimateFeeTest(BitcoinTestFramework):
         self.log.info("Testing estimates with RBF.")
         self.sanity_check_rbf_estimates(self.confutxo + self.memutxo)
 
+        self.log.info("Test fee estimation module")
+        self.test_estimate_fee_with_lower_mempool_estimate()
         self.log.info("Testing that fee estimation is disabled in blocksonly.")
         self.restart_node(0, ["-blocksonly"])
         assert_raises_rpc_error(
