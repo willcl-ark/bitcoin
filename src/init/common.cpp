@@ -113,6 +113,14 @@ bool StartLogging(const ArgsManager& args)
                 fs::PathToString(LogInstance().m_file_path)));
     }
 
+    // Replay logger
+    LogPrintf("Using replay logger: %s\n", ReplayLogInstance().m_file_path.c_str());
+    if (!ReplayLogInstance().StartLogging()) {
+        return InitError(strprintf(Untranslated("Could not open replay log file %s"),
+            fs::PathToString(ReplayLogInstance().m_file_path)));
+    }
+    ReplayLogPrintf("Replay Startup time: %s\n", FormatISO8601DateTime(GetTime()));
+
     if (!LogInstance().m_log_timestamps)
         LogPrintf("Startup time: %s\n", FormatISO8601DateTime(GetTime()));
     LogPrintf("Default data directory %s\n", fs::PathToString(GetDefaultDataDir()));

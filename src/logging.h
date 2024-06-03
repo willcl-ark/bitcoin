@@ -204,6 +204,7 @@ namespace BCLog {
 } // namespace BCLog
 
 BCLog::Logger& LogInstance();
+BCLog::Logger& ReplayLogInstance();
 
 /** Return true if log accepts specified category, at the specified level. */
 static inline bool LogAcceptCategory(BCLog::LogFlags category, BCLog::Level level)
@@ -230,6 +231,21 @@ static inline void LogPrintf_(const std::string& logging_function, const std::st
             log_msg = "Error \"" + std::string(fmterr.what()) + "\" while formatting log message: " + fmt;
         }
         LogInstance().LogPrintStr(log_msg, logging_function, source_file, source_line, flag, level);
+    }
+}
+
+template <typename... Args>
+static inline void ReplayLogPrintf_(const std::string& logging_function, const std::string& source_file, const int source_line, const BCLog::LogFlags flag, const BCLog::Level level, const char* fmt, const Args&... args)
+{
+    if (ReplayLogInstance().Enabled()) {
+        std::string log_msg;
+        try {
+            log_msg = tfm::format(fmt, args...);
+        } catch (tinyformat::format_error& fmterr) {
+            /* Original format string will have newline so don't add one here */
+            log_msg = "Error \"" + std::string(fmterr.what()) + "\" while formatting log message: " + fmt;
+        }
+        ReplayLogInstance().LogPrintStr(log_msg, logging_function, source_file, source_line, flag, level);
     }
 }
 
@@ -261,5 +277,10 @@ static inline void LogPrintf_(const std::string& logging_function, const std::st
 
 // Deprecated conditional logging
 #define LogPrint(category, ...)  LogDebug(category, __VA_ARGS__)
+
+// Replay logger
+#define ReplayLogPrintLevel_(category, level, ...) ReplayLogPrintf_(__func__, __FILE__, __LINE__, category, level, __VA_ARGS__)
+#define ReplayLogInfo(...) ReplayLogPrintLevel_(BCLog::LogFlags::ALL, BCLog::Level::Info, __VA_ARGS__)
+#define ReplayLogPrintf(...) ReplayLogInfo(__VA_ARGS__)
 
 #endif // BITCOIN_LOGGING_H

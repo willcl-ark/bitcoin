@@ -3,6 +3,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <common/args.h>
 #include <logging.h>
 #include <util/fs.h>
 #include <util/string.h>
@@ -35,6 +36,15 @@ BCLog::Logger& LogInstance()
  */
     static BCLog::Logger* g_logger{new BCLog::Logger()};
     return *g_logger;
+}
+
+BCLog::Logger& ReplayLogInstance()
+{
+    static BCLog::Logger* g_secondary_logger{new BCLog::Logger()};
+    auto logfile = gArgs.GetDataDirNet() / "replay.log";
+    g_secondary_logger->m_file_path = logfile.c_str();
+    g_secondary_logger->m_print_to_file = true;
+    return *g_secondary_logger;
 }
 
 bool fLogIPs = DEFAULT_LOGIPS;
