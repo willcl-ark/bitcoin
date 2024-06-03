@@ -12,6 +12,7 @@
 #include <chainparams.h>
 #include <consensus/amount.h>
 #include <consensus/validation.h>
+#include <core_io.h>
 #include <deploymentstatus.h>
 #include <hash.h>
 #include <headerssync.h>
@@ -3599,6 +3600,10 @@ void PeerManagerImpl::ProcessGetCFCheckPt(CNode& node, Peer& peer, DataStream& v
 
 void PeerManagerImpl::ProcessBlock(CNode& node, const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked)
 {
+    DataStream ssBlock{};
+    ssBlock << TX_WITH_WITNESS(*block);
+    ssBlock.Rewind();
+    ReplayLogPrintf("block %s %s\n", block->GetHash().ToString(), HexStr(ssBlock));
     bool new_block{false};
     m_chainman.ProcessNewBlock(block, force_processing, min_pow_checked, &new_block);
     if (new_block) {
@@ -4550,6 +4555,7 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
 
         const uint256& hash = peer->m_wtxid_relay ? wtxid : txid;
         AddKnownTx(*peer, hash);
+        ReplayLogPrintf("transaction %s %s %s\n", txid.ToString(), wtxid.ToString(), EncodeHexTx(*ptx.get()));
 
         LOCK(cs_main);
 
