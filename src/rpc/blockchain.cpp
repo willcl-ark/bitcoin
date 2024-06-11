@@ -1595,11 +1595,12 @@ static RPCHelpMan reconsiderblock()
                 "This can be used to undo the effects of invalidateblock.\n",
                 {
                     {"blockhash", RPCArg::Type::STR_HEX, RPCArg::Optional::NO, "the hash of the block to reconsider"},
+                    {"single", RPCArg::Type::STR, RPCArg::Optional::OMITTED, "whether this should reconsider descendants too"},
                 },
                 RPCResult{RPCResult::Type::NONE, "", ""},
                 RPCExamples{
-                    HelpExampleCli("reconsiderblock", "\"blockhash\"")
-            + HelpExampleRpc("reconsiderblock", "\"blockhash\"")
+                    HelpExampleCli("reconsiderblock", "\"blockhash\" 1")
+            + HelpExampleRpc("reconsiderblock", "\"blockhash\" 1")
                 },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
 {
@@ -1613,7 +1614,11 @@ static RPCHelpMan reconsiderblock()
             throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Block not found");
         }
 
-        chainman.ActiveChainstate().ResetBlockFailureFlags(pblockindex);
+        if (!request.params[1].isNull() ) {
+            chainman.ActiveChainstate().ResetBlockFailureFlagsSingle(pblockindex);
+        } else {
+            chainman.ActiveChainstate().ResetBlockFailureFlags(pblockindex);
+        }
     }
 
     BlockValidationState state;
