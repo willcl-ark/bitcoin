@@ -3720,6 +3720,23 @@ void Chainstate::ResetBlockFailureFlags(CBlockIndex *pindex) {
     }
 }
 
+void Chainstate::ResetBlockFailureFlagsSingle(CBlockIndex* pindex) {
+    AssertLockHeld(cs_main);
+
+    // Remove the invalidity flag from this block only.
+    pindex->nStatus &= ~BLOCK_FAILED_MASK;
+    m_blockman.m_dirty_blockindex.insert(pindex);
+
+    if (pindex->IsValid(BLOCK_VALID_TRANSACTIONS) && pindex->HaveNumChainTxs() && setBlockIndexCandidates.value_comp()(m_chain.Tip(), pindex)) {
+        setBlockIndexCandidates.insert(pindex);
+    }
+    if (pindex == m_chainman.m_best_invalid) {
+        // Reset invalid block marker if it was pointing to one of those.
+        m_chainman.m_best_invalid = nullptr;
+    }
+    m_chainman.m_failed_blocks.erase(pindex);
+}
+
 void Chainstate::TryAddBlockIndexCandidate(CBlockIndex* pindex)
 {
     AssertLockHeld(cs_main);
