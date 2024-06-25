@@ -340,6 +340,7 @@ void UpdatePSBTOutput(const SigningProvider& provider, PartiallySignedTransactio
     CMutableTransaction& tx = *Assert(psbt.tx);
     const CTxOut& out = tx.vout.at(index);
     PSBTOutput& psbt_out = psbt.outputs.at(index);
+    psbt_out.hide_origin = provider.HideOrigin();
 
     // Fill a SignatureData with output info
     SignatureData sigdata;

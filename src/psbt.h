@@ -719,6 +719,7 @@ struct PSBTOutput
     XOnlyPubKey m_tap_internal_key;
     std::vector<std::tuple<uint8_t, uint8_t, std::vector<unsigned char>>> m_tap_tree;
     std::map<XOnlyPubKey, std::pair<std::set<uint256>, KeyOriginInfo>> m_tap_bip32_paths;
+    bool hide_origin;
     std::map<std::vector<unsigned char>, std::vector<unsigned char>> unknown;
     std::set<PSBTProprietary> m_proprietary;
 
@@ -771,14 +772,16 @@ struct PSBTOutput
         }
 
         // Write taproot bip32 keypaths
-        for (const auto& [xonly, leaf] : m_tap_bip32_paths) {
-            const auto& [leaf_hashes, origin] = leaf;
-            SerializeToVector(s, PSBT_OUT_TAP_BIP32_DERIVATION, xonly);
-            std::vector<unsigned char> value;
-            VectorWriter s_value{value, 0};
-            s_value << leaf_hashes;
-            SerializeKeyOrigin(s_value, origin);
-            s << value;
+        if (!hide_origin) {
+            for (const auto& [xonly, leaf] : m_tap_bip32_paths) {
+                const auto& [leaf_hashes, origin] = leaf;
+                SerializeToVector(s, PSBT_OUT_TAP_BIP32_DERIVATION, xonly);
+                std::vector<unsigned char> value;
+                VectorWriter s_value{value, 0};
+                s_value << leaf_hashes;
+                SerializeKeyOrigin(s_value, origin);
+                s << value;
+            }
         }
 
         // Write unknown things
@@ -1241,7 +1244,7 @@ size_t CountPSBTUnsignedInputs(const PartiallySignedTransaction& psbt);
 
 /** Updates a PSBTOutput with information from provider.
  *
- * This fills in the redeem_script, witness_script, and hd_keypaths where possible.
+ * This fills in the redeem_script, witness_script, and hd_keypaths where possible if the hide_origin bool has not been set.
  */
 void UpdatePSBTOutput(const SigningProvider& provider, PartiallySignedTransaction& psbt, int index);
 
