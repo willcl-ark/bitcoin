@@ -19,6 +19,7 @@ from test_framework.messages import (
 )
 from test_framework.psbt import (
     PSBT,
+    PSBT_IN_FINAL_SCRIPTWITNESS,
     PSBTMap,
     PSBT_GLOBAL_UNSIGNED_TX,
     PSBT_IN_RIPEMD160,
@@ -67,6 +68,44 @@ class PSBTTest(BitcoinTestFramework):
 
     def skip_test_if_missing_module(self):
         self.skip_if_no_wallet()
+
+    def test_psbt_incomplete_after_invalid_modification(self):
+        self.log.info("Check that PSBT is correctly marked as incomplete after invalid modification")
+        node = self.nodes[2]
+        wallet = node.get_wallet_rpc(self.default_wallet_name)
+        address = wallet.getnewaddress()
+        wallet.sendtoaddress(address=address, amount=1.0)
+        self.generate(node, nblocks=1, sync_fun=lambda: self.sync_all(self.nodes[:2]))
+
+        utxos = wallet.listunspent(addresses=[address])
+        psbt = wallet.createpsbt(utxos, [{wallet.getnewaddress(): 0.9999}])
+        signed_psbt = wallet.walletprocesspsbt(psbt)["psbt"]
+
+        # Get the output known destination derivation path
+        decoded_psbt = wallet.decodepsbt(signed_psbt)
+        dest_deriv_path = decoded_psbt['outputs'][0]['bip32_derivs']
+        assert_equal(len(dest_deriv_path), 1)
+
+        # Check we have a signature on the input
+        signed_psbt_obj = PSBT.from_base64(signed_psbt)
+        assert PSBT_IN_FINAL_SCRIPTWITNESS in signed_psbt_obj.i[0].map and signed_psbt_obj.i[0].map[PSBT_IN_FINAL_SCRIPTWITNESS], "ScriptWitness for input missing or empty"
+
+        # Clear the output data map in preparation to modify the output
+        signed_psbt_obj.o[0].map.clear()
+
+        # Modify the PSBT by changing an output in the PSBT_GLOBAL_UNSIGNED_TX, so the input PSBT_IN_FINAL_SCRIPTSIG is no longer valid
+        substitute_addr = wallet.getnewaddress()
+        raw = wallet.createrawtransaction([{"txid": utxos[0]["txid"], "vout": utxos[0]["vout"]}], [{substitute_addr: 0.9999}])
+        signed_psbt_obj.g.map[PSBT_GLOBAL_UNSIGNED_TX] = bytes.fromhex(raw)
+
+        # Check that the walletprocesspsbt call succeeds but also recognizes that the transaction is not complete
+        signed_psbt_incomplete = wallet.walletprocesspsbt(signed_psbt_obj.to_base64(), finalize=False)
+        assert signed_psbt_incomplete["complete"] is False
+
+        # Check the replaced output information is no longer in the psbt
+        new_dest_deriv_path = wallet.decodepsbt(signed_psbt_incomplete['psbt'])['outputs'][0]['bip32_derivs']
+        assert_equal(len(new_dest_deriv_path), 1)  # only the derivation path of the new destination
+        assert dest_deriv_path not in new_dest_deriv_path
 
     def test_utxo_conversion(self):
         self.log.info("Check that non-witness UTXOs are removed for segwit v1+ inputs")
@@ -589,6 +628,7 @@ class PSBTTest(BitcoinTestFramework):
 
         if self.options.descriptors:
             self.test_utxo_conversion()
+        self.test_psbt_incomplete_after_invalid_modification()
 
         self.test_input_confs_control()
 
