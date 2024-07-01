@@ -207,6 +207,28 @@ for normal IPv4/IPv6 communication, use:
 
     ./bitcoind -onion=127.0.0.1:9050 -externalip=7zvj7a2imdgkdbg4f2dryd5rgtrn7upivr5eeij4cicjh65pooxeshid.onion -discover
 
+It is also possible to set Onion Services' ["Proof of Work
+Defence"](https://community.torproject.org/onion-services/ecosystem/technology/pow/)
+on a manually-configured Hidden Service, if your version of Tor supports this
+feature.
+
+This requires that your version of Tor has the `pow` and `gpl` modules enabled.
+See the Tor documentation on ["How to enable this as a service
+operator"](https://community.torproject.org/onion-services/ecosystem/technology/pow/#how-to-enable-this-as-a-service-operator)
+for specific information on how to check for and enable these modules.
+
+With both modules enabled the feature can be set on a per-Hidden Service basis
+by adding the following configuration line to your `/etc/tor/torrc` (or
+equivalent config file):
+
+    HiddenServiceDir /var/lib/tor/bitcoin-service/
+    HiddenServicePort 8333 127.0.0.1:8334
+    HiddenServicePoWDefensesEnabled 1
+
+`HiddenServicePoWDefensesEnabled` cannot currently be enabled via the Control
+Socket and therefore cannot be set on automatically-created Hidden Services as
+described in the previous method [2](tor.md#2-automatically-create-a-bitcoin-core-onion-service).
+
 ## 4. Privacy recommendations
 
 - Do not add anything but Bitcoin Core ports to the onion service created in section 3.
