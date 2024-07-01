@@ -12,6 +12,9 @@
 #include <immintrin.h>
 
 #include <attributes.h>
+#include <crypto/macros.h>
+
+SHA256_INTRINSIC_TARGET("sse4,sha")
 
 namespace {
 
@@ -354,5 +357,7 @@ void Transform_2way(unsigned char* out, const unsigned char* in)
 }
 
 }
+
+SHA256_INTRINSIC_TARGET_END
 
 #endif

@@ -9,6 +9,9 @@
 
 #include <attributes.h>
 #include <crypto/common.h>
+#include <crypto/macros.h>
+
+SHA256_INTRINSIC_TARGET("avx,avx2")
 
 namespace sha256d64_avx2 {
 namespace {
@@ -325,5 +328,7 @@ void Transform_8way(unsigned char* out, const unsigned char* in)
 }
 
 }
+
+SHA256_INTRINSIC_TARGET_END
 
 #endif

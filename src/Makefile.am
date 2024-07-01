@@ -584,6 +584,7 @@ crypto_libbitcoin_crypto_base_la_SOURCES = \
   crypto/hmac_sha512.h \
   crypto/poly1305.h \
   crypto/poly1305.cpp \
+  crypto/macros.h \
   crypto/muhash.h \
   crypto/muhash.cpp \
   crypto/ripemd160.cpp \
