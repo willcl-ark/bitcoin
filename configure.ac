@@ -511,22 +511,34 @@ AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[
 )
 CXXFLAGS="$TEMP_CXXFLAGS"
 
-TEMP_CXXFLAGS="$CXXFLAGS"
-CXXFLAGS="$X86_SHANI_CXXFLAGS $CXXFLAGS"
-AC_MSG_CHECKING([for x86 SHA-NI intrinsics])
-AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[
-    #include <stdint.h>
-    #include <immintrin.h>
-  ]],[[
-    __m128i i = _mm_set1_epi32(0);
-    __m128i j = _mm_set1_epi32(1);
-    __m128i k = _mm_set1_epi32(2);
-    return _mm_extract_epi32(_mm_sha256rnds2_epu32(i, i, k), 0);
-  ]])],
- [ AC_MSG_RESULT([yes]); enable_x86_shani=yes; AC_DEFINE([ENABLE_X86_SHANI], [1], [Define this symbol to build code that uses x86 SHA-NI intrinsics]) ],
- [ AC_MSG_RESULT([no])]
-)
-CXXFLAGS="$TEMP_CXXFLAGS"
+dnl SHANI depends on SSE4.1 so only check if that is already enabled
+if test "x$enable_sse41" = "xyes"; then
+  TEMP_CXXFLAGS="$CXXFLAGS"
+  CXXFLAGS="$X86_SHANI_CXXFLAGS $CXXFLAGS"
+  AC_MSG_CHECKING([for x86 SHA-NI intrinsics])
+  AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[
+      #include <stdint.h>
+      #include <immintrin.h>
+    ]],[[
+      __m128i i = _mm_set1_epi32(0);
+      __m128i j = _mm_set1_epi32(1);
+      __m128i k = _mm_set1_epi32(2);
+      return _mm_extract_epi32(_mm_sha256rnds2_epu32(i, i, k), 0);
+    ]])],
+   [ AC_MSG_RESULT([yes])
+     enable_x86_shani=yes
+     AC_DEFINE([ENABLE_X86_SHANI], [1], [Define this symbol to build code that uses x86 SHA-NI intrinsics]) ],
+   [ AC_MSG_RESULT([no])
+     enable_x86_shani=no ]
+  )
+  CXXFLAGS="$TEMP_CXXFLAGS"
+else
+  enable_x86_shani=no
+  AC_MSG_WARN([SSE4.1 not enabled. SHANI support will be disabled.])
+fi
+
+dnl Ensure the conditional is set correctly
+AM_CONDITIONAL([ENABLE_X86_SHANI], [test "x$enable_x86_shani" = "xyes"])
 
 # ARM
 AX_CHECK_COMPILE_FLAG([-march=armv8-a+crc+crypto], [ARM_CRC_CXXFLAGS="-march=armv8-a+crc+crypto"], [], [$CXXFLAG_WERROR])
