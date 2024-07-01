@@ -485,8 +485,11 @@ AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[
     #include <stdint.h>
     #include <immintrin.h>
   ]],[[
-    __m128i l = _mm_set1_epi32(0);
-    return _mm_extract_epi32(l, 3);
+    __m128i a = _mm_set1_epi32(1);
+    __m128i b = _mm_set1_epi32(2);
+    __m128i c = _mm_max_epi32(a, b);
+    int result = _mm_extract_epi32(c, 0);
+    return result;
   ]])],
  [ AC_MSG_RESULT([yes]); enable_sse41=yes; AC_DEFINE([ENABLE_SSE41], [1], [Define this symbol to build code that uses SSE4.1 intrinsics]) ],
  [ AC_MSG_RESULT([no])]
