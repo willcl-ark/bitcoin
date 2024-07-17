@@ -7,6 +7,7 @@
 
 #include <primitives/transaction.h>
 #include <univalue.h>
+#include <util/fs.h>
 
 class FooImplementation
 {
@@ -18,6 +19,8 @@ public:
     std::vector<char> passVectorChar(std::vector<char> v) { return v; }
 };
 
-void IpcTest();
+void IpcPipeTest();
+void IpcSocketPairTest();
+void IpcSocketTest(const fs::path& datadir);
 
 #endif // BITCOIN_TEST_IPC_TEST_H
