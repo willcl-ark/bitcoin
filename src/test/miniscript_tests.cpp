@@ -288,9 +288,6 @@ public:
     }
 };
 
-//! Public key to be used as internal key for dummy Taproot spends.
-const std::vector<unsigned char> NUMS_PK{ParseHex("50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0")};
-
 using Fragment = miniscript::Fragment;
 using NodeRef = miniscript::NodeRef<CPubKey>;
 using miniscript::operator"" _mst;
@@ -330,7 +327,7 @@ CScript ScriptPubKey(miniscript::MiniscriptContext ctx, const CScript& script, T
 
     // For Taproot outputs we always use a tree with a single script and a dummy internal key.
     builder.Add(0, script, TAPROOT_LEAF_TAPSCRIPT);
-    builder.Finalize(XOnlyPubKey{NUMS_PK});
+    builder.Finalize(XOnlyPubKey::NUMS_H);
     return GetScriptForDestination(builder.GetOutput());
 }
 
@@ -349,7 +346,7 @@ void TestSatisfy(const KeyConverter& converter, const std::string& testcase, con
     auto challenges = FindChallenges(node); // Find all challenges in the generated miniscript.
     std::vector<Challenge> challist(challenges.begin(), challenges.end());
     for (int iter = 0; iter < 3; ++iter) {
-        Shuffle(challist.begin(), challist.end(), g_insecure_rand_ctx);
+        std::shuffle(challist.begin(), challist.end(), g_insecure_rand_ctx);
         Satisfier satisfier(converter.MsContext());
         TestSignatureChecker checker(satisfier);
         bool prev_mal_success = false, prev_nonmal_success = false;

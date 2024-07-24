@@ -6,6 +6,8 @@
 #ifndef BITCOIN_NODE_MINER_H
 #define BITCOIN_NODE_MINER_H
 
+#include <node/types.h>
+#include <policy/feerate.h>
 #include <policy/policy.h>
 #include <primitives/block.h>
 #include <txmempool.h>
@@ -13,6 +15,7 @@
 #include <memory>
 #include <optional>
 #include <stdint.h>
+#include <tuple>
 
 #include <boost/multi_index/identity.hpp>
 #include <boost/multi_index/indexed_by.hpp>
@@ -30,7 +33,7 @@ class ChainstateManager;
 namespace Consensus { struct Params; };
 
 namespace node {
-static const bool DEFAULT_PRINTPRIORITY = false;
+static const bool DEFAULT_PRINT_MODIFIED_FEE = false;
 
 struct CBlockTemplate
 {
@@ -38,6 +41,7 @@ struct CBlockTemplate
     std::vector<CAmount> vTxFees;
     std::vector<int64_t> vTxSigOpsCost;
     std::vector<unsigned char> vchCoinbaseCommitment;
+    std::vector<std::tuple<CFeeRate, uint32_t>> vFeeratePerSize;
 };
 
 // Container for tracking updates to ancestor feerate as we include (parent)
@@ -143,6 +147,7 @@ private:
     uint64_t nBlockSigOpsCost;
     CAmount nFees;
     std::unordered_set<Txid, SaltedTxidHasher> inBlock;
+    std::vector<std::tuple<CFeeRate, uint32_t>> feerate_per_size;
 
     // Chain context for the block
     int nHeight;
@@ -153,15 +158,15 @@ private:
     Chainstate& m_chainstate;
 
 public:
-    struct Options {
+    struct Options : BlockCreateOptions {
         // Configuration parameters for the block size
         size_t nBlockMaxWeight{DEFAULT_BLOCK_MAX_WEIGHT};
         CFeeRate blockMinFeeRate{DEFAULT_BLOCK_MIN_TX_FEE};
         // Whether to call TestBlockValidity() at the end of CreateNewBlock().
         bool test_block_validity{true};
+        bool print_modified_fee{DEFAULT_PRINT_MODIFIED_FEE};
     };
 
-    explicit BlockAssembler(Chainstate& chainstate, const CTxMemPool* mempool);
     explicit BlockAssembler(Chainstate& chainstate, const CTxMemPool* mempool, const Options& options);
 
     /** Construct a new block template with coinbase to scriptPubKeyIn */

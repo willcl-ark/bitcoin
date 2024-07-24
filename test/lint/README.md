@@ -26,6 +26,21 @@ Then you can use:
 ( cd ./test/lint/test_runner/ && cargo fmt && cargo clippy && RUST_BACKTRACE=1 cargo run )
 ```
 
+If you wish to run individual lint checks, run the test_runner with
+`--lint=TEST_TO_RUN` arguments. If running with `cargo run`, arguments after
+`--` are passed to the binary you are running e.g.:
+
+```sh
+( cd ./test/lint/test_runner/ && RUST_BACKTRACE=1 cargo run -- --lint=doc --lint=trailing_whitespace )
+```
+
+To see a list of all individual lint checks available in test_runner, use `-h`
+or `--help`:
+
+```sh
+( cd ./test/lint/test_runner/ && RUST_BACKTRACE=1 cargo run -- --help )
+```
+
 #### Dependencies
 
 | Lint test | Dependency |
@@ -37,6 +52,7 @@ Then you can use:
 | [`lint-python-dead-code.py`](/test/lint/lint-python-dead-code.py) | [vulture](https://github.com/jendrikseipp/vulture)
 | [`lint-shell.py`](/test/lint/lint-shell.py) | [ShellCheck](https://github.com/koalaman/shellcheck)
 | [`lint-spelling.py`](/test/lint/lint-spelling.py) | [codespell](https://github.com/codespell-project/codespell)
+| markdown link check | [mlc](https://github.com/becheran/mlc)
 
 In use versions and install instructions are available in the [CI setup](../../ci/lint/04_install.sh).
 

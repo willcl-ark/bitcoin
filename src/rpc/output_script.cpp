@@ -72,11 +72,11 @@ static RPCHelpMan validateaddress()
                 ret.pushKV("scriptPubKey", HexStr(scriptPubKey));
 
                 UniValue detail = DescribeAddress(dest);
-                ret.pushKVs(detail);
+                ret.pushKVs(std::move(detail));
             } else {
                 UniValue error_indices(UniValue::VARR);
                 for (int i : error_locations) error_indices.push_back(i);
-                ret.pushKV("error_locations", error_indices);
+                ret.pushKV("error_locations", std::move(error_indices));
                 ret.pushKV("error", error_msg);
             }
 
@@ -139,8 +139,7 @@ static RPCHelpMan createmultisig()
                 output_type = parsed.value();
             }
 
-            // Construct using pay-to-script-hash:
-            FillableSigningProvider keystore;
+            FlatSigningProvider keystore;
             CScript inner;
             const CTxDestination dest = AddAndGetMultisigDestination(required, pubkeys, output_type, keystore, inner);
 
