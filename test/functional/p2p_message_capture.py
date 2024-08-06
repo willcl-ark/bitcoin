@@ -19,6 +19,7 @@ TIME_SIZE = 8
 LENGTH_SIZE = 4
 MSGTYPE_SIZE = 12
 
+
 def mini_parser(dat_file: str) -> None:
     """Parse a data file created by CaptureMessageToFile.
 
@@ -34,7 +35,7 @@ def mini_parser(dat_file: str) -> None:
 
     We're ignoring these because they're simply too brittle to test here.
     """
-    with open(dat_file, 'rb') as f_in:
+    with open(dat_file, "rb") as f_in:
         # This should have at least one message in it
         assert os.fstat(f_in.fileno()).st_size >= TIME_SIZE + LENGTH_SIZE + MSGTYPE_SIZE
         while True:
@@ -42,13 +43,12 @@ def mini_parser(dat_file: str) -> None:
             if not tmp_header_raw:
                 break
             tmp_header = BytesIO(tmp_header_raw)
-            tmp_header.read(TIME_SIZE) # skip the timestamp field
-            msgtype = tmp_header.read(MSGTYPE_SIZE).rstrip(b'\x00')
+            tmp_header.read(TIME_SIZE)  # skip the timestamp field
+            msgtype = tmp_header.read(MSGTYPE_SIZE).rstrip(b"\x00")
             assert msgtype in MESSAGEMAP
             length: int = int.from_bytes(tmp_header.read(LENGTH_SIZE), "little")
             data = f_in.read(length)
             assert_equal(len(data), length)
-
 
 
 class MessageCaptureTest(BitcoinTestFramework):
@@ -68,5 +68,5 @@ class MessageCaptureTest(BitcoinTestFramework):
         mini_parser(sent_file)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     MessageCaptureTest(__file__).main()

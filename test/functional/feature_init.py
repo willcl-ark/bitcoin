@@ -3,6 +3,7 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Stress tests related to node initialization."""
+
 from pathlib import Path
 import platform
 import shutil
@@ -36,7 +37,7 @@ class InitStressTest(BitcoinTestFramework):
         # and other approaches (like below) don't work:
         #
         #   os.kill(node.process.pid, signal.CTRL_C_EVENT)
-        if platform.system() == 'Windows':
+        if platform.system() == "Windows":
             raise SkipTest("can't SIGTERM on Windows")
 
         self.stop_node(0)
@@ -48,7 +49,13 @@ class InitStressTest(BitcoinTestFramework):
 
         def start_expecting_error(err_fragment):
             node.assert_start_raises_init_error(
-                extra_args=['-txindex=1', '-blockfilterindex=1', '-coinstatsindex=1', '-checkblocks=200', '-checklevel=4'],
+                extra_args=[
+                    "-txindex=1",
+                    "-blockfilterindex=1",
+                    "-coinstatsindex=1",
+                    "-checkblocks=200",
+                    "-checklevel=4",
+                ],
                 expected_msg=err_fragment,
                 match=ErrorMatch.PARTIAL_REGEX,
             )
@@ -60,33 +67,33 @@ class InitStressTest(BitcoinTestFramework):
             assert_equal(200, node.getblockcount())
 
         lines_to_terminate_after = [
-            b'Validating signatures for all blocks',
-            b'scheduler thread start',
-            b'Starting HTTP server',
-            b'Loading P2P addresses',
-            b'Loading banlist',
-            b'Loading block index',
-            b'Checking all blk files are present',
-            b'Loaded best chain:',
-            b'init message: Verifying blocks',
-            b'init message: Starting network threads',
-            b'net thread start',
-            b'addcon thread start',
-            b'initload thread start',
-            b'txindex thread start',
-            b'block filter index thread start',
-            b'coinstatsindex thread start',
-            b'msghand thread start',
-            b'net thread start',
-            b'addcon thread start',
+            b"Validating signatures for all blocks",
+            b"scheduler thread start",
+            b"Starting HTTP server",
+            b"Loading P2P addresses",
+            b"Loading banlist",
+            b"Loading block index",
+            b"Checking all blk files are present",
+            b"Loaded best chain:",
+            b"init message: Verifying blocks",
+            b"init message: Starting network threads",
+            b"net thread start",
+            b"addcon thread start",
+            b"initload thread start",
+            b"txindex thread start",
+            b"block filter index thread start",
+            b"coinstatsindex thread start",
+            b"msghand thread start",
+            b"net thread start",
+            b"addcon thread start",
         ]
         if self.is_wallet_compiled():
-            lines_to_terminate_after.append(b'Verifying wallet')
+            lines_to_terminate_after.append(b"Verifying wallet")
 
         for terminate_line in lines_to_terminate_after:
             self.log.info(f"Starting node and will exit after line {terminate_line}")
             with node.busy_wait_for_debug_log([terminate_line]):
-                node.start(extra_args=['-txindex=1', '-blockfilterindex=1', '-coinstatsindex=1'])
+                node.start(extra_args=["-txindex=1", "-blockfilterindex=1", "-coinstatsindex=1"])
             self.log.debug("Terminating node after terminate line was found")
             sigterm_node()
 
@@ -96,15 +103,15 @@ class InitStressTest(BitcoinTestFramework):
         self.log.info("Test startup errors after removing certain essential files")
 
         files_to_delete = {
-            'blocks/index/*.ldb': 'Error opening block database.',
-            'chainstate/*.ldb': 'Error opening block database.',
-            'blocks/blk*.dat': 'Error loading block database.',
+            "blocks/index/*.ldb": "Error opening block database.",
+            "chainstate/*.ldb": "Error opening block database.",
+            "blocks/blk*.dat": "Error loading block database.",
         }
 
         files_to_perturb = {
-            'blocks/index/*.ldb': 'Error loading block database.',
-            'chainstate/*.ldb': 'Error opening block database.',
-            'blocks/blk*.dat': 'Corrupted block database detected.',
+            "blocks/index/*.ldb": "Error loading block database.",
+            "chainstate/*.ldb": "Error opening block database.",
+            "blocks/blk*.dat": "Corrupted block database detected.",
         }
 
         for file_patt, err_fragment in files_to_delete.items():
@@ -148,5 +155,5 @@ class InitStressTest(BitcoinTestFramework):
             shutil.move(node.chain_path / "chainstate_bak", node.chain_path / "chainstate")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     InitStressTest(__file__).main()

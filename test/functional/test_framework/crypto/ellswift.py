@@ -17,6 +17,7 @@ from test_framework.crypto.secp256k1 import FE, G, GE
 # Precomputed constant square root of -3 (mod p).
 MINUS_3_SQRT = FE(-3).sqrt()
 
+
 def xswiftec(u, t):
     """Decode field elements (u, t) to an X coordinate on the curve."""
     if u == 0:
@@ -32,6 +33,7 @@ def xswiftec(u, t):
             return x
     assert False
 
+
 def xswiftec_inv(x, u, case):
     """Given x and u, find t such that xswiftec(u, t) = x, or return None.
 
@@ -41,7 +43,7 @@ def xswiftec_inv(x, u, case):
         if GE.is_valid_x(-x - u):
             return None
         v = x
-        s = -(u**3 + 7) / (u**2 + u*v + v**2)
+        s = -(u**3 + 7) / (u**2 + u * v + v**2)
     else:
         s = x - u
         if s == 0:
@@ -64,6 +66,7 @@ def xswiftec_inv(x, u, case):
     if case & 5 == 5:
         return -w * (u * (1 + MINUS_3_SQRT) / 2 + v)
 
+
 def xelligatorswift(x):
     """Given a field element X on the curve, find (u, t) that encode them."""
     assert GE.is_valid_x(x)
@@ -74,17 +77,19 @@ def xelligatorswift(x):
         if t is not None:
             return u, t
 
+
 def ellswift_create():
     """Generate a (privkey, ellswift_pubkey) pair."""
     priv = random.randrange(1, GE.ORDER)
     u, t = xelligatorswift((priv * G).x)
-    return priv.to_bytes(32, 'big'), u.to_bytes() + t.to_bytes()
+    return priv.to_bytes(32, "big"), u.to_bytes() + t.to_bytes()
+
 
 def ellswift_ecdh_xonly(pubkey_theirs, privkey):
     """Compute X coordinate of shared ECDH point between ellswift pubkey and privkey."""
-    u = FE(int.from_bytes(pubkey_theirs[:32], 'big'))
-    t = FE(int.from_bytes(pubkey_theirs[32:], 'big'))
-    d = int.from_bytes(privkey, 'big')
+    u = FE(int.from_bytes(pubkey_theirs[:32], "big"))
+    t = FE(int.from_bytes(pubkey_theirs[32:], "big"))
+    d = int.from_bytes(privkey, "big")
     return (d * GE.lift_x(xswiftec(u, t))).x.to_bytes()
 
 
@@ -104,7 +109,7 @@ class TestFrameworkEllSwift(unittest.TestCase):
             (FE(42), FE(0)),  # t = 0
             (FE(5), FE(-132).sqrt()),  # u^3 + t^2 + 7 = 0
         ]
-        assert undefined_inputs[-1][0]**3 + undefined_inputs[-1][1]**2 + 7 == 0
+        assert undefined_inputs[-1][0] ** 3 + undefined_inputs[-1][1] ** 2 + 7 == 0
         for u, t in undefined_inputs:
             x = xswiftec(u, t)
             self.assertTrue(GE.is_valid_x(x))
@@ -133,12 +138,12 @@ class TestFrameworkEllSwift(unittest.TestCase):
 
     def test_elligator_encode_testvectors(self):
         """Implement the BIP324 test vectors for ellswift encoding (read from xswiftec_inv_test_vectors.csv)."""
-        vectors_file = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'xswiftec_inv_test_vectors.csv')
-        with open(vectors_file, newline='', encoding='utf8') as csvfile:
+        vectors_file = os.path.join(os.path.dirname(os.path.realpath(__file__)), "xswiftec_inv_test_vectors.csv")
+        with open(vectors_file, newline="", encoding="utf8") as csvfile:
             reader = csv.DictReader(csvfile)
             for row in reader:
-                u = FE.from_bytes(bytes.fromhex(row['u']))
-                x = FE.from_bytes(bytes.fromhex(row['x']))
+                u = FE.from_bytes(bytes.fromhex(row["u"]))
+                x = FE.from_bytes(bytes.fromhex(row["x"]))
                 for case in range(8):
                     ret = xswiftec_inv(x, u, case)
                     if ret is None:
@@ -149,15 +154,15 @@ class TestFrameworkEllSwift(unittest.TestCase):
 
     def test_elligator_decode_testvectors(self):
         """Implement the BIP324 test vectors for ellswift decoding (read from ellswift_decode_test_vectors.csv)."""
-        vectors_file = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'ellswift_decode_test_vectors.csv')
-        with open(vectors_file, newline='', encoding='utf8') as csvfile:
+        vectors_file = os.path.join(os.path.dirname(os.path.realpath(__file__)), "ellswift_decode_test_vectors.csv")
+        with open(vectors_file, newline="", encoding="utf8") as csvfile:
             reader = csv.DictReader(csvfile)
             for row in reader:
-                encoding = bytes.fromhex(row['ellswift'])
+                encoding = bytes.fromhex(row["ellswift"])
                 assert len(encoding) == 64
-                expected_x = FE(int(row['x'], 16))
-                u = FE(int.from_bytes(encoding[:32], 'big'))
-                t = FE(int.from_bytes(encoding[32:], 'big'))
+                expected_x = FE(int(row["x"], 16))
+                u = FE(int.from_bytes(encoding[:32], "big"))
+                t = FE(int.from_bytes(encoding[32:], "big"))
                 x = xswiftec(u, t)
                 self.assertEqual(x, expected_x)
                 self.assertTrue(GE.is_valid_x(x))

@@ -2,8 +2,7 @@
 # Copyright (c) 2019-present The Bitcoin Core developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
-"""Run fuzz test targets.
-"""
+"""Run fuzz test targets."""
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -18,26 +17,25 @@ import sys
 
 
 def get_fuzz_env(*, target, source_dir):
-    symbolizer = os.environ.get('LLVM_SYMBOLIZER_PATH', "/usr/bin/llvm-symbolizer")
+    symbolizer = os.environ.get("LLVM_SYMBOLIZER_PATH", "/usr/bin/llvm-symbolizer")
     fuzz_env = {
-        'FUZZ': target,
-        'UBSAN_OPTIONS':
-        f'suppressions={source_dir}/test/sanitizer_suppressions/ubsan:print_stacktrace=1:halt_on_error=1:report_error_type=1',
-        'UBSAN_SYMBOLIZER_PATH':symbolizer,
+        "FUZZ": target,
+        "UBSAN_OPTIONS": f"suppressions={source_dir}/test/sanitizer_suppressions/ubsan:print_stacktrace=1:halt_on_error=1:report_error_type=1",
+        "UBSAN_SYMBOLIZER_PATH": symbolizer,
         "ASAN_OPTIONS": "detect_stack_use_after_return=1:check_initialization_order=1:strict_init_order=1",
-        'ASAN_SYMBOLIZER_PATH':symbolizer,
-        'MSAN_SYMBOLIZER_PATH':symbolizer,
+        "ASAN_SYMBOLIZER_PATH": symbolizer,
+        "MSAN_SYMBOLIZER_PATH": symbolizer,
     }
     if platform.system() == "Windows":
         # On Windows, `env` option must include valid `SystemRoot`.
-        fuzz_env = {**fuzz_env, 'SystemRoot': os.environ.get('SystemRoot')}
+        fuzz_env = {**fuzz_env, "SystemRoot": os.environ.get("SystemRoot")}
     return fuzz_env
 
 
 def main():
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-        description='''Run the fuzz targets with all inputs from the corpus_dir once.''',
+        description="""Run the fuzz targets with all inputs from the corpus_dir once.""",
     )
     parser.add_argument(
         "-l",
@@ -47,9 +45,9 @@ def main():
         help="log events at this level and higher to the console. Can be set to DEBUG, INFO, WARNING, ERROR or CRITICAL. Passing --loglevel DEBUG will output all logs to console.",
     )
     parser.add_argument(
-        '--valgrind',
-        action='store_true',
-        help='If true, run fuzzing binaries under the valgrind memory error detector',
+        "--valgrind",
+        action="store_true",
+        help="If true, run fuzzing binaries under the valgrind memory error detector",
     )
     parser.add_argument(
         "--empty_min_time",
@@ -57,38 +55,38 @@ def main():
         help="If set, run at least this long, if the existing fuzz inputs directory is empty.",
     )
     parser.add_argument(
-        '-x',
-        '--exclude',
+        "-x",
+        "--exclude",
         help="A comma-separated list of targets to exclude",
     )
     parser.add_argument(
-        '--par',
-        '-j',
+        "--par",
+        "-j",
         type=int,
         default=4,
-        help='How many targets to merge or execute in parallel.',
+        help="How many targets to merge or execute in parallel.",
     )
     parser.add_argument(
-        'corpus_dir',
-        help='The corpus to run on (must contain subfolders for each fuzz target).',
+        "corpus_dir",
+        help="The corpus to run on (must contain subfolders for each fuzz target).",
     )
     parser.add_argument(
-        'target',
-        nargs='*',
-        help='The target(s) to run. Default is to run all targets.',
+        "target",
+        nargs="*",
+        help="The target(s) to run. Default is to run all targets.",
     )
     parser.add_argument(
-        '--m_dir',
+        "--m_dir",
         action="append",
         help="Merge inputs from these directories into the corpus_dir.",
     )
     parser.add_argument(
-        '-g',
-        '--generate',
-        action='store_true',
-        help='Create new corpus (or extend the existing ones) by running'
-             ' the given targets for a finite number of times. Outputs them to'
-             ' the passed corpus_dir.'
+        "-g",
+        "--generate",
+        action="store_true",
+        help="Create new corpus (or extend the existing ones) by running"
+        " the given targets for a finite number of times. Outputs them to"
+        " the passed corpus_dir.",
     )
 
     args = parser.parse_args()
@@ -96,7 +94,7 @@ def main():
 
     # Set up logging
     logging.basicConfig(
-        format='%(message)s',
+        format="%(message)s",
         level=int(args.loglevel) if args.loglevel.isdigit() else args.loglevel.upper(),
     )
 
@@ -109,12 +107,14 @@ def main():
         logging.error("Must have fuzz executable built")
         sys.exit(1)
 
-    fuzz_bin=os.getenv("BITCOINFUZZ", default=os.path.join(config["environment"]["BUILDDIR"], 'src', 'test', 'fuzz', 'fuzz'))
+    fuzz_bin = os.getenv(
+        "BITCOINFUZZ", default=os.path.join(config["environment"]["BUILDDIR"], "src", "test", "fuzz", "fuzz")
+    )
 
     # Build list of tests
     test_list_all = parse_test_list(
         fuzz_bin=fuzz_bin,
-        source_dir=config['environment']['SRCDIR'],
+        source_dir=config["environment"]["SRCDIR"],
     )
 
     if not test_list_all:
@@ -133,12 +133,16 @@ def main():
     if args.exclude:
         for excluded_target in args.exclude.split(","):
             if excluded_target not in test_list_selection:
-                logging.error("Target \"{}\" not found in current target list.".format(excluded_target))
+                logging.error('Target "{}" not found in current target list.'.format(excluded_target))
                 continue
             test_list_selection.remove(excluded_target)
     test_list_selection.sort()
 
-    logging.info("{} of {} detected fuzz target(s) selected: {}".format(len(test_list_selection), len(test_list_all), " ".join(test_list_selection)))
+    logging.info(
+        "{} of {} detected fuzz target(s) selected: {}".format(
+            len(test_list_selection), len(test_list_all), " ".join(test_list_selection)
+        )
+    )
 
     if not args.generate:
         test_list_missing_corpus = []
@@ -148,20 +152,16 @@ def main():
                 test_list_missing_corpus.append(t)
         test_list_missing_corpus.sort()
         if test_list_missing_corpus:
-            logging.info(
-                "Fuzzing harnesses lacking a corpus: {}".format(
-                    " ".join(test_list_missing_corpus)
-                )
-            )
+            logging.info("Fuzzing harnesses lacking a corpus: {}".format(" ".join(test_list_missing_corpus)))
             logging.info("Please consider adding a fuzz corpus at https://github.com/bitcoin-core/qa-assets")
 
     try:
         help_output = subprocess.run(
             args=[
                 fuzz_bin,
-                '-help=1',
+                "-help=1",
             ],
-            env=get_fuzz_env(target=test_list_selection[0], source_dir=config['environment']['SRCDIR']),
+            env=get_fuzz_env(target=test_list_selection[0], source_dir=config["environment"]["SRCDIR"]),
             timeout=20,
             check=False,
             stderr=subprocess.PIPE,
@@ -179,7 +179,7 @@ def main():
         if args.generate:
             return generate_corpus(
                 fuzz_pool=fuzz_pool,
-                src_dir=config['environment']['SRCDIR'],
+                src_dir=config["environment"]["SRCDIR"],
                 fuzz_bin=fuzz_bin,
                 corpus_dir=args.corpus_dir,
                 targets=test_list_selection,
@@ -190,7 +190,7 @@ def main():
                 fuzz_pool=fuzz_pool,
                 corpus=args.corpus_dir,
                 test_list=test_list_selection,
-                src_dir=config['environment']['SRCDIR'],
+                src_dir=config["environment"]["SRCDIR"],
                 fuzz_bin=fuzz_bin,
                 merge_dirs=[Path(m_dir) for m_dir in args.m_dir],
             )
@@ -200,7 +200,7 @@ def main():
             fuzz_pool=fuzz_pool,
             corpus=args.corpus_dir,
             test_list=test_list_selection,
-            src_dir=config['environment']['SRCDIR'],
+            src_dir=config["environment"]["SRCDIR"],
             fuzz_bin=fuzz_bin,
             using_libfuzzer=using_libfuzzer,
             use_valgrind=args.valgrind,
@@ -220,7 +220,9 @@ def transform_process_message_target(targets, src_dir):
             stdout=subprocess.PIPE,
             text=True,
         ).stdout.splitlines()
-        lines = [l.split("::", 1)[1].split(",")[0].lower() for l in lines if l.startswith("src/protocol.h-    NetMsgType::")]
+        lines = [
+            l.split("::", 1)[1].split(",")[0].lower() for l in lines if l.startswith("src/protocol.h-    NetMsgType::")
+        ]
         assert len(lines)
         targets += [(p2p_msg_target, {"LIMIT_TO_MESSAGE_TYPE": m}) for m in lines]
     return targets
@@ -233,12 +235,18 @@ def transform_rpc_target(targets, src_dir):
     rpc_target = "rpc"
     if (rpc_target, {}) in targets:
         lines = subprocess.run(
-            ["git", "grep", "--function-context", "RPC_COMMANDS_SAFE_FOR_FUZZING{", src_dir / "src" / "test" / "fuzz" / "rpc.cpp"],
+            [
+                "git",
+                "grep",
+                "--function-context",
+                "RPC_COMMANDS_SAFE_FOR_FUZZING{",
+                src_dir / "src" / "test" / "fuzz" / "rpc.cpp",
+            ],
             check=True,
             stdout=subprocess.PIPE,
             text=True,
         ).stdout.splitlines()
-        lines = [l.split("\"", 1)[1].split("\"")[0] for l in lines if l.startswith("src/test/fuzz/rpc.cpp-    \"")]
+        lines = [l.split('"', 1)[1].split('"')[0] for l in lines if l.startswith('src/test/fuzz/rpc.cpp-    "')]
         assert len(lines)
         targets += [(rpc_target, {"LIMIT_TO_RPC_COMMAND": r}) for r in lines]
     return targets
@@ -257,25 +265,27 @@ def generate_corpus(*, fuzz_pool, src_dir, fuzz_bin, corpus_dir, targets):
 
     def job(command, t, t_env):
         logging.debug(f"Running '{command}'")
-        logging.debug("Command '{}' output:\n'{}'\n".format(
-            command,
-            subprocess.run(
+        logging.debug(
+            "Command '{}' output:\n'{}'\n".format(
                 command,
-                env={
-                    **t_env,
-                    **get_fuzz_env(target=t, source_dir=src_dir),
-                },
-                check=True,
-                stderr=subprocess.PIPE,
-                text=True,
-            ).stderr,
-        ))
+                subprocess.run(
+                    command,
+                    env={
+                        **t_env,
+                        **get_fuzz_env(target=t, source_dir=src_dir),
+                    },
+                    check=True,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                ).stderr,
+            )
+        )
 
     futures = []
     for target, t_env in targets:
         target_corpus_dir = corpus_dir / target
         os.makedirs(target_corpus_dir, exist_ok=True)
-        use_value_profile = int(random.random() < .3)
+        use_value_profile = int(random.random() < 0.3)
         command = [
             fuzz_bin,
             "-rss_limit_mb=8000",
@@ -296,15 +306,15 @@ def merge_inputs(*, fuzz_pool, corpus, test_list, src_dir, fuzz_bin, merge_dirs)
     for t in test_list:
         args = [
             fuzz_bin,
-            '-rss_limit_mb=8000',
-            '-set_cover_merge=1',
+            "-rss_limit_mb=8000",
+            "-set_cover_merge=1",
             # set_cover_merge is used instead of -merge=1 to reduce the overall
             # size of the qa-assets git repository a bit, but more importantly,
             # to cut the runtime to iterate over all fuzz inputs [0].
             # [0] https://github.com/bitcoin-core/qa-assets/issues/130#issuecomment-1761760866
-            '-shuffle=0',
-            '-prefer_small=1',
-            '-use_value_profile=0',
+            "-shuffle=0",
+            "-prefer_small=1",
+            "-use_value_profile=0",
             # use_value_profile is enabled by oss-fuzz [0], but disabled for
             # now to avoid bloating the qa-assets git repository [1].
             # [0] https://github.com/google/oss-fuzz/issues/1406#issuecomment-387790487
@@ -316,7 +326,7 @@ def merge_inputs(*, fuzz_pool, corpus, test_list, src_dir, fuzz_bin, merge_dirs)
             (m_dir / t).mkdir(exist_ok=True)
 
         def job(t, args):
-            output = 'Run {} with args {}\n'.format(t, " ".join(args))
+            output = "Run {} with args {}\n".format(t, " ".join(args))
             output += subprocess.run(
                 args,
                 env=get_fuzz_env(target=t, source_dir=src_dir),
@@ -352,10 +362,10 @@ def run_once(*, fuzz_pool, corpus, test_list, src_dir, fuzz_bin, using_libfuzzer
         else:
             args += [corpus_path]
         if use_valgrind:
-            args = ['valgrind', '--quiet', '--error-exitcode=1'] + args
+            args = ["valgrind", "--quiet", "--error-exitcode=1"] + args
 
         def job(t, args):
-            output = 'Run {} with args {}'.format(t, args)
+            output = "Run {} with args {}".format(t, args)
             result = subprocess.run(
                 args,
                 env=get_fuzz_env(target=t, source_dir=src_dir),
@@ -396,10 +406,7 @@ def run_once(*, fuzz_pool, corpus, test_list, src_dir, fuzz_bin, using_libfuzzer
 def parse_test_list(*, fuzz_bin, source_dir):
     test_list_all = subprocess.run(
         fuzz_bin,
-        env={
-            'PRINT_ALL_FUZZ_TARGETS_AND_ABORT': '',
-            **get_fuzz_env(target="", source_dir=source_dir)
-        },
+        env={"PRINT_ALL_FUZZ_TARGETS_AND_ABORT": "", **get_fuzz_env(target="", source_dir=source_dir)},
         stdout=subprocess.PIPE,
         text=True,
         check=True,
@@ -407,5 +414,5 @@ def parse_test_list(*, fuzz_bin, source_dir):
     return test_list_all
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

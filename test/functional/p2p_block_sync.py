@@ -10,8 +10,8 @@ Ensure that even in IBD, we'll eventually sync chain from inbound peers
 
 from test_framework.test_framework import BitcoinTestFramework
 
-class BlockSyncTest(BitcoinTestFramework):
 
+class BlockSyncTest(BitcoinTestFramework):
     def set_test_params(self):
         self.setup_clean_chain = True
         self.num_nodes = 3
@@ -33,5 +33,5 @@ class BlockSyncTest(BitcoinTestFramework):
         self.log.info("Success!")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     BlockSyncTest(__file__).main()

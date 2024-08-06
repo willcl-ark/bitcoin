@@ -9,6 +9,7 @@
 - Mine a fork that requires disconnecting the tip.
 - Verify that bitcoind AbortNode's.
 """
+
 from test_framework.test_framework import BitcoinTestFramework
 
 
@@ -36,10 +37,14 @@ class AbortNodeTest(BitcoinTestFramework):
 
             # Check that node0 aborted
             self.log.info("Waiting for crash")
-            self.nodes[0].wait_until_stopped(timeout=5, expect_error=True, expected_stderr="Error: A fatal internal error occurred, see debug.log for details: Failed to disconnect block.")
+            self.nodes[0].wait_until_stopped(
+                timeout=5,
+                expect_error=True,
+                expected_stderr="Error: A fatal internal error occurred, see debug.log for details: Failed to disconnect block.",
+            )
         self.log.info("Node crashed - now verifying restart fails")
         self.nodes[0].assert_start_raises_init_error()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     AbortNodeTest(__file__).main()

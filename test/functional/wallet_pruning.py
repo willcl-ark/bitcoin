@@ -6,10 +6,7 @@
 """Test wallet import on pruned node."""
 
 from test_framework.util import assert_equal, assert_raises_rpc_error
-from test_framework.blocktools import (
-    COINBASE_MATURITY,
-    create_block
-)
+from test_framework.blocktools import COINBASE_MATURITY, create_block
 from test_framework.blocktools import create_coinbase
 from test_framework.test_framework import BitcoinTestFramework
 
@@ -18,6 +15,7 @@ from test_framework.script import (
     OP_RETURN,
     OP_TRUE,
 )
+
 
 class WalletPruningTest(BitcoinTestFramework):
     def add_options(self, parser):
@@ -28,8 +26,8 @@ class WalletPruningTest(BitcoinTestFramework):
         self.num_nodes = 2
         self.wallet_names = []
         self.extra_args = [
-            [], # node dedicated to mining
-            ['-prune=550'], # node dedicated to testing pruning
+            [],  # node dedicated to mining
+            ["-prune=550"],  # node dedicated to testing pruning
         ]
 
     def skip_test_if_missing_module(self):
@@ -48,7 +46,9 @@ class WalletPruningTest(BitcoinTestFramework):
             if i.running:
                 i.setmocktime(self.nTime + 600 * n)
         for _ in range(n):
-            block = create_block(hashprev=previousblockhash, ntime=self.nTime, coinbase=create_coinbase(height, script_pubkey=big_script))
+            block = create_block(
+                hashprev=previousblockhash, ntime=self.nTime, coinbase=create_coinbase(height, script_pubkey=big_script)
+            )
             block.solve()
 
             # Submit to the node
@@ -87,20 +87,30 @@ class WalletPruningTest(BitcoinTestFramework):
         wallet_birthheight = self.get_birthheight(wallet_file)
 
         # Verify that the block at wallet's birthheight is not available at the pruned node
-        assert_raises_rpc_error(-1, "Block not available (pruned data)", self.nodes[1].getblock, self.nodes[1].getblockhash(wallet_birthheight))
+        assert_raises_rpc_error(
+            -1,
+            "Block not available (pruned data)",
+            self.nodes[1].getblock,
+            self.nodes[1].getblockhash(wallet_birthheight),
+        )
 
         # Make sure wallet cannot be imported because of missing blocks
         # This will try to rescan blocks `TIMESTAMP_WINDOW` (2h) before the wallet birthheight.
         # There are 6 blocks an hour, so 11 blocks (excluding birthheight).
-        assert_raises_rpc_error(-4, f"Pruned blocks from height {wallet_birthheight - 11} required to import keys. Use RPC call getblockchaininfo to determine your pruned height.", self.nodes[1].importwallet, self.nodes[0].datadir_path / wallet_file)
+        assert_raises_rpc_error(
+            -4,
+            f"Pruned blocks from height {wallet_birthheight - 11} required to import keys. Use RPC call getblockchaininfo to determine your pruned height.",
+            self.nodes[1].importwallet,
+            self.nodes[0].datadir_path / wallet_file,
+        )
         self.log.info("- Done")
 
     def get_birthheight(self, wallet_file):
         """Gets birthheight of a wallet on node0"""
-        with open(self.nodes[0].datadir_path / wallet_file, 'r', encoding="utf8") as f:
+        with open(self.nodes[0].datadir_path / wallet_file, "r", encoding="utf8") as f:
             for line in f:
-                if line.startswith('# * Best block at time of backup'):
-                    wallet_birthheight = int(line.split(' ')[9])
+                if line.startswith("# * Best block at time of backup"):
+                    wallet_birthheight = int(line.split(" ")[9])
                     return wallet_birthheight
 
     def has_block(self, block_index):
@@ -111,7 +121,7 @@ class WalletPruningTest(BitcoinTestFramework):
         """Creates and dumps a wallet on the non-pruned node0 to be later import by the pruned node"""
         self.nodes[0].createwallet(wallet_name=wallet_name, descriptors=False, load_on_startup=True)
         self.nodes[0].dumpwallet(self.nodes[0].datadir_path / f"{wallet_name}.dat")
-        if (unload):
+        if unload:
             self.nodes[0].unloadwallet(wallet_name)
 
     def run_test(self):
@@ -154,5 +164,6 @@ class WalletPruningTest(BitcoinTestFramework):
         self.test_wallet_import_pruned(wallet_birthheight_2)
         self.test_wallet_import_pruned_with_missing_blocks(wallet_birthheight_1)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     WalletPruningTest(__file__).main()

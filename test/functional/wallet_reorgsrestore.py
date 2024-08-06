@@ -18,8 +18,9 @@ import shutil
 
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
-        assert_equal,
+    assert_equal,
 )
+
 
 class ReorgsRestoreTest(BitcoinTestFramework):
     def add_options(self, parser):
@@ -51,7 +52,11 @@ class ReorgsRestoreTest(BitcoinTestFramework):
 
         # Disconnect node0 from node2 to broadcast a conflict on their respective chains
         self.disconnect_nodes(0, 2)
-        nA = next(tx_out["vout"] for tx_out in self.nodes[0].gettransaction(txid_conflict_from)["details"] if tx_out["amount"] == Decimal("10"))
+        nA = next(
+            tx_out["vout"]
+            for tx_out in self.nodes[0].gettransaction(txid_conflict_from)["details"]
+            if tx_out["amount"] == Decimal("10")
+        )
         inputs = []
         inputs.append({"txid": txid_conflict_from, "vout": nA})
         outputs_1 = {}
@@ -88,8 +93,11 @@ class ReorgsRestoreTest(BitcoinTestFramework):
 
         # Node0 wallet file is loaded on longest sync'ed node1
         self.stop_node(1)
-        self.nodes[0].backupwallet(self.nodes[0].datadir_path / 'wallet.bak')
-        shutil.copyfile(self.nodes[0].datadir_path / 'wallet.bak', self.nodes[1].chain_path / self.default_wallet_name / self.wallet_data_filename)
+        self.nodes[0].backupwallet(self.nodes[0].datadir_path / "wallet.bak")
+        shutil.copyfile(
+            self.nodes[0].datadir_path / "wallet.bak",
+            self.nodes[1].chain_path / self.default_wallet_name / self.wallet_data_filename,
+        )
         self.start_node(1)
         tx_after_reorg = self.nodes[1].gettransaction(txid)
         # Check that normal confirmed tx is confirmed again but with different blockhash
@@ -100,5 +108,6 @@ class ReorgsRestoreTest(BitcoinTestFramework):
         assert_equal(conflicted_after_reorg["confirmations"], 1)
         assert conflicting["blockhash"] != conflicted_after_reorg["blockhash"]
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     ReorgsRestoreTest(__file__).main()

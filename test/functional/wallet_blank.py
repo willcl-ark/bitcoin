@@ -76,10 +76,14 @@ class WalletBlankTest(BitcoinTestFramework):
         info = wallet.getwalletinfo()
         assert_equal(info["descriptors"], False)
         assert_equal(info["blank"], True)
-        wallet.importmulti([{
-            "desc": ADDRESS_BCRT1_UNSPENDABLE_DESCRIPTOR,
-            "timestamp": "now",
-        }])
+        wallet.importmulti(
+            [
+                {
+                    "desc": ADDRESS_BCRT1_UNSPENDABLE_DESCRIPTOR,
+                    "timestamp": "now",
+                }
+            ]
+        )
         assert_equal(wallet.getwalletinfo()["blank"], False)
 
     def test_importdescriptors(self):
@@ -91,10 +95,14 @@ class WalletBlankTest(BitcoinTestFramework):
         info = wallet.getwalletinfo()
         assert_equal(info["descriptors"], True)
         assert_equal(info["blank"], True)
-        wallet.importdescriptors([{
-            "desc": ADDRESS_BCRT1_UNSPENDABLE_DESCRIPTOR,
-            "timestamp": "now",
-        }])
+        wallet.importdescriptors(
+            [
+                {
+                    "desc": ADDRESS_BCRT1_UNSPENDABLE_DESCRIPTOR,
+                    "timestamp": "now",
+                }
+            ]
+        )
         assert_equal(wallet.getwalletinfo()["blank"], True)
 
     def test_importwallet(self):
@@ -118,7 +126,9 @@ class WalletBlankTest(BitcoinTestFramework):
     def test_encrypt_legacy(self):
         if self.options.descriptors:
             return
-        self.log.info("Test that encrypting a blank legacy wallet preserves the blank flag and does not generate a seed")
+        self.log.info(
+            "Test that encrypting a blank legacy wallet preserves the blank flag and does not generate a seed"
+        )
         self.nodes[0].createwallet(wallet_name="encblanklegacy", blank=True)
         wallet = self.nodes[0].get_wallet_rpc("encblanklegacy")
 
@@ -135,7 +145,9 @@ class WalletBlankTest(BitcoinTestFramework):
     def test_encrypt_descriptors(self):
         if not self.options.descriptors:
             return
-        self.log.info("Test that encrypting a blank descriptor wallet preserves the blank flag and descriptors remain the same")
+        self.log.info(
+            "Test that encrypting a blank descriptor wallet preserves the blank flag and descriptors remain the same"
+        )
         self.nodes[0].createwallet(wallet_name="encblankdesc", blank=True)
         wallet = self.nodes[0].get_wallet_rpc("encblankdesc")
 
@@ -159,5 +171,5 @@ class WalletBlankTest(BitcoinTestFramework):
         self.test_encrypt_descriptors()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     WalletBlankTest(__file__).main()

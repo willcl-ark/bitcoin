@@ -27,10 +27,13 @@ class MempoolCompatibilityTest(BitcoinTestFramework):
         self.skip_if_no_previous_releases()
 
     def setup_network(self):
-        self.add_nodes(self.num_nodes, versions=[
-            200100,  # Last release without unbroadcast serialization and without XOR
-            None,
-        ])
+        self.add_nodes(
+            self.num_nodes,
+            versions=[
+                200100,  # Last release without unbroadcast serialization and without XOR
+                None,
+            ],
+        )
         self.start_nodes()
 
     def run_test(self):
@@ -63,16 +66,16 @@ class MempoolCompatibilityTest(BitcoinTestFramework):
         assert old_tx_hash in new_node.getrawmempool()
 
         self.log.info("Add unbroadcasted tx to mempool on new node and shutdown")
-        unbroadcasted_tx_hash = new_wallet.send_self_transfer(from_node=new_node)['txid']
+        unbroadcasted_tx_hash = new_wallet.send_self_transfer(from_node=new_node)["txid"]
         assert unbroadcasted_tx_hash in new_node.getrawmempool()
-        assert new_node.getmempoolentry(unbroadcasted_tx_hash)['unbroadcast']
+        assert new_node.getmempoolentry(unbroadcasted_tx_hash)["unbroadcast"]
         self.stop_node(1)
 
         self.log.info("Move mempool.dat from new to old node")
         new_node_mempool.rename(old_node_mempool)
 
         self.log.info("Start old node again and verify mempool contains both txs")
-        self.start_node(0, ['-nowallet'])
+        self.start_node(0, ["-nowallet"])
         assert old_tx_hash in old_node.getrawmempool()
         assert unbroadcasted_tx_hash in old_node.getrawmempool()
 

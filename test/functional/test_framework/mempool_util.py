@@ -3,6 +3,7 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Helpful routines for mempool testing."""
+
 from decimal import Decimal
 
 from .blocktools import (
@@ -22,20 +23,20 @@ from .wallet import (
 def fill_mempool(test_framework, node):
     """Fill mempool until eviction.
 
-    Allows for simpler testing of scenarios with floating mempoolminfee > minrelay
-    Requires -datacarriersize=100000 and
-   -maxmempool=5.
-    It will not ensure mempools become synced as it
-    is based on a single node and assumes -minrelaytxfee
-    is 1 sat/vbyte.
-    To avoid unintentional tx dependencies, the mempool filling txs are created with a
-    tagged ephemeral miniwallet instance.
+     Allows for simpler testing of scenarios with floating mempoolminfee > minrelay
+     Requires -datacarriersize=100000 and
+    -maxmempool=5.
+     It will not ensure mempools become synced as it
+     is based on a single node and assumes -minrelaytxfee
+     is 1 sat/vbyte.
+     To avoid unintentional tx dependencies, the mempool filling txs are created with a
+     tagged ephemeral miniwallet instance.
     """
     test_framework.log.info("Fill the mempool until eviction is triggered and the mempoolminfee rises")
     txouts = gen_return_txouts()
-    relayfee = node.getnetworkinfo()['relayfee']
+    relayfee = node.getnetworkinfo()["relayfee"]
 
-    assert_equal(relayfee, Decimal('0.00001000'))
+    assert_equal(relayfee, Decimal("0.00001000"))
 
     tx_batch_size = 1
     num_of_batches = 75
@@ -50,12 +51,15 @@ def fill_mempool(test_framework, node):
 
     # Get all UTXOs up front to ensure none of the transactions spend from each other, as that may
     # change their effective feerate and thus the order in which they are selected for eviction.
-    confirmed_utxos = [ephemeral_miniwallet.get_utxo(confirmed_only=True) for _ in range(num_of_batches * tx_batch_size + 1)]
+    confirmed_utxos = [
+        ephemeral_miniwallet.get_utxo(confirmed_only=True) for _ in range(num_of_batches * tx_batch_size + 1)
+    ]
     assert_equal(len(confirmed_utxos), num_of_batches * tx_batch_size + 1)
 
     test_framework.log.debug("Create a mempool tx that will be evicted")
     tx_to_be_evicted_id = ephemeral_miniwallet.send_self_transfer(
-        from_node=node, utxo_to_spend=confirmed_utxos.pop(0), fee_rate=relayfee)["txid"]
+        from_node=node, utxo_to_spend=confirmed_utxos.pop(0), fee_rate=relayfee
+    )["txid"]
 
     # Increase the tx fee rate to give the subsequent transactions a higher priority in the mempool
     # The tx has an approx. vsize of 65k, i.e. multiplying the previous fee rate (in sats/kvB)
@@ -77,5 +81,5 @@ def fill_mempool(test_framework, node):
     assert tx_to_be_evicted_id not in node.getrawmempool()
 
     test_framework.log.debug("Check that mempoolminfee is larger than minrelaytxfee")
-    assert_equal(node.getmempoolinfo()['minrelaytxfee'], Decimal('0.00001000'))
-    assert_greater_than(node.getmempoolinfo()['mempoolminfee'], Decimal('0.00001000'))
+    assert_equal(node.getmempoolinfo()["minrelaytxfee"], Decimal("0.00001000"))
+    assert_greater_than(node.getmempoolinfo()["mempoolminfee"], Decimal("0.00001000"))

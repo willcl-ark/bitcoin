@@ -11,6 +11,7 @@ See feature_assumeutxo.py for background.
 - TODO: test loading a wallet (backup) on a pruned node
 
 """
+
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
     assert_equal,
@@ -60,9 +61,9 @@ class AssumeutxoTest(BitcoinTestFramework):
 
         # Mock time for a deterministic chain
         for n in self.nodes:
-            n.setmocktime(n.getblockheader(n.getbestblockhash())['time'])
+            n.setmocktime(n.getblockheader(n.getbestblockhash())["time"])
 
-        n0.createwallet('w')
+        n0.createwallet("w")
         w = n0.get_wallet_rpc("w")
 
         # Generate a series of blocks that `n0` will have in the snapshot,
@@ -81,8 +82,7 @@ class AssumeutxoTest(BitcoinTestFramework):
 
         # Ensure everyone is seeing the same headers.
         for n in self.nodes:
-            assert_equal(n.getblockchaininfo()[
-                         "headers"], SNAPSHOT_BASE_HEIGHT)
+            assert_equal(n.getblockchaininfo()["headers"], SNAPSHOT_BASE_HEIGHT)
 
         w.backupwallet("backup_w.dat")
 
@@ -91,13 +91,10 @@ class AssumeutxoTest(BitcoinTestFramework):
         assert_equal(n0.getblockcount(), SNAPSHOT_BASE_HEIGHT)
         assert_equal(n1.getblockcount(), START_HEIGHT)
 
-        self.log.info(
-            f"Creating a UTXO snapshot at height {SNAPSHOT_BASE_HEIGHT}")
-        dump_output = n0.dumptxoutset('utxos.dat')
+        self.log.info(f"Creating a UTXO snapshot at height {SNAPSHOT_BASE_HEIGHT}")
+        dump_output = n0.dumptxoutset("utxos.dat")
 
-        assert_equal(
-            dump_output['txoutset_hash'],
-            "a4bf3407ccb2cc0145c49ebba8fa91199f8a3903daf0883875941497d2493c27")
+        assert_equal(dump_output["txoutset_hash"], "a4bf3407ccb2cc0145c49ebba8fa91199f8a3903daf0883875941497d2493c27")
         assert_equal(dump_output["nchaintx"], 334)
         assert_equal(n0.getblockchaininfo()["blocks"], SNAPSHOT_BASE_HEIGHT)
 
@@ -110,30 +107,34 @@ class AssumeutxoTest(BitcoinTestFramework):
 
         assert_equal(n0.getblockchaininfo()["blocks"], FINAL_HEIGHT)
 
-        self.log.info(
-            f"Loading snapshot into second node from {dump_output['path']}")
-        loaded = n1.loadtxoutset(dump_output['path'])
-        assert_equal(loaded['coins_loaded'], SNAPSHOT_BASE_HEIGHT)
-        assert_equal(loaded['base_height'], SNAPSHOT_BASE_HEIGHT)
+        self.log.info(f"Loading snapshot into second node from {dump_output['path']}")
+        loaded = n1.loadtxoutset(dump_output["path"])
+        assert_equal(loaded["coins_loaded"], SNAPSHOT_BASE_HEIGHT)
+        assert_equal(loaded["base_height"], SNAPSHOT_BASE_HEIGHT)
 
         normal, snapshot = n1.getchainstates()["chainstates"]
-        assert_equal(normal['blocks'], START_HEIGHT)
-        assert_equal(normal.get('snapshot_blockhash'), None)
-        assert_equal(normal['validated'], True)
-        assert_equal(snapshot['blocks'], SNAPSHOT_BASE_HEIGHT)
-        assert_equal(snapshot['snapshot_blockhash'], dump_output['base_hash'])
-        assert_equal(snapshot['validated'], False)
+        assert_equal(normal["blocks"], START_HEIGHT)
+        assert_equal(normal.get("snapshot_blockhash"), None)
+        assert_equal(normal["validated"], True)
+        assert_equal(snapshot["blocks"], SNAPSHOT_BASE_HEIGHT)
+        assert_equal(snapshot["snapshot_blockhash"], dump_output["base_hash"])
+        assert_equal(snapshot["validated"], False)
 
         assert_equal(n1.getblockchaininfo()["blocks"], SNAPSHOT_BASE_HEIGHT)
 
         self.log.info("Backup can't be loaded during background sync")
-        assert_raises_rpc_error(-4, "Wallet loading failed. Error loading wallet. Wallet requires blocks to be downloaded, and software does not currently support loading wallets while blocks are being downloaded out of order when using assumeutxo snapshots. Wallet should be able to load successfully after node sync reaches height 299", n1.restorewallet, "w", "backup_w.dat")
+        assert_raises_rpc_error(
+            -4,
+            "Wallet loading failed. Error loading wallet. Wallet requires blocks to be downloaded, and software does not currently support loading wallets while blocks are being downloaded out of order when using assumeutxo snapshots. Wallet should be able to load successfully after node sync reaches height 299",
+            n1.restorewallet,
+            "w",
+            "backup_w.dat",
+        )
 
         PAUSE_HEIGHT = FINAL_HEIGHT - 40
 
         self.log.info("Restarting node to stop at height %d", PAUSE_HEIGHT)
-        self.restart_node(1, extra_args=[
-            f"-stopatheight={PAUSE_HEIGHT}", *self.extra_args[1]])
+        self.restart_node(1, extra_args=[f"-stopatheight={PAUSE_HEIGHT}", *self.extra_args[1]])
 
         # Finally connect the nodes and let them sync.
         #
@@ -143,25 +144,22 @@ class AssumeutxoTest(BitcoinTestFramework):
 
         n1.wait_until_stopped(timeout=5)
 
-        self.log.info(
-            "Restarted node before snapshot validation completed, reloading...")
+        self.log.info("Restarted node before snapshot validation completed, reloading...")
         self.restart_node(1, extra_args=self.extra_args[1])
 
         # TODO: inspect state of e.g. the wallet before reconnecting
         self.connect_nodes(0, 1)
 
-        self.log.info(
-            f"Ensuring snapshot chain syncs to tip. ({FINAL_HEIGHT})")
-        self.wait_until(lambda: n1.getchainstates()[
-                        'chainstates'][-1]['blocks'] == FINAL_HEIGHT)
+        self.log.info(f"Ensuring snapshot chain syncs to tip. ({FINAL_HEIGHT})")
+        self.wait_until(lambda: n1.getchainstates()["chainstates"][-1]["blocks"] == FINAL_HEIGHT)
         self.sync_blocks(nodes=(n0, n1))
 
         self.log.info("Ensuring background validation completes")
-        self.wait_until(lambda: len(n1.getchainstates()['chainstates']) == 1)
+        self.wait_until(lambda: len(n1.getchainstates()["chainstates"]) == 1)
 
         self.log.info("Ensuring wallet can be restored from backup")
         n1.restorewallet("w", "backup_w.dat")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     AssumeutxoTest(__file__).main()

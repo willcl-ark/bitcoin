@@ -5,6 +5,7 @@
 """
 Test Inactive HD Chains.
 """
+
 import shutil
 import time
 
@@ -30,10 +31,14 @@ class InactiveHDChainsTest(BitcoinTestFramework):
         self.skip_if_no_previous_releases()
 
     def setup_nodes(self):
-        self.add_nodes(self.num_nodes, extra_args=self.extra_args, versions=[
-            None,
-            170200, # 0.17.2 Does not have the key metadata upgrade
-        ])
+        self.add_nodes(
+            self.num_nodes,
+            extra_args=self.extra_args,
+            versions=[
+                None,
+                170200,  # 0.17.2 Does not have the key metadata upgrade
+            ],
+        )
 
         self.start_nodes()
         self.init_wallet(node=0)
@@ -145,5 +150,5 @@ class InactiveHDChainsTest(BitcoinTestFramework):
         self.test_without_upgraded_keymeta()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     InactiveHDChainsTest(__file__).main()

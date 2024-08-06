@@ -23,14 +23,15 @@ from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import assert_equal, assert_raises_rpc_error
 from test_framework.wallet import MiniWallet
 
+
 class MempoolCoinbaseTest(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 2
         self.extra_args = [
             [
-                '-whitelist=noban@127.0.0.1',  # immediate tx relay
+                "-whitelist=noban@127.0.0.1",  # immediate tx relay
             ],
-            []
+            [],
         ]
 
     def test_reorg_relay(self):
@@ -73,7 +74,9 @@ class MempoolCoinbaseTest(BitcoinTestFramework):
         # request very recent, unanounced transactions.
         assert_equal(len(peer1.get_invs()), 0)
         # It's too early to request these two transactions
-        requests_too_recent = msg_getdata([CInv(t=MSG_WTX, h=int(tx["tx"].getwtxid(), 16)) for tx in [tx_before_reorg, tx_child]])
+        requests_too_recent = msg_getdata(
+            [CInv(t=MSG_WTX, h=int(tx["tx"].getwtxid(), 16)) for tx in [tx_before_reorg, tx_child]]
+        )
         peer1.send_and_ping(requests_too_recent)
         for _ in range(len(requests_too_recent.inv)):
             peer1.sync_with_ping()
@@ -90,7 +93,7 @@ class MempoolCoinbaseTest(BitcoinTestFramework):
         assert_equal(len(peer1.get_invs()), 0)
         with p2p_lock:
             # However, the node will answer requests for the tx from the recently-disconnected block.
-            assert_equal(peer1.last_message["tx"].tx.getwtxid(),tx_disconnected["tx"].getwtxid())
+            assert_equal(peer1.last_message["tx"].tx.getwtxid(), tx_disconnected["tx"].getwtxid())
 
         self.nodes[1].setmocktime(int(time.time()) + 300)
         peer1.sync_with_ping()
@@ -125,8 +128,8 @@ class MempoolCoinbaseTest(BitcoinTestFramework):
         # 3. Indirect (coinbase and child both in chain) : spend_3 and spend_3_1
         # Use invalidateblock to make all of the above coinbase spends invalid (immature coinbase),
         # and make sure the mempool code behaves correctly.
-        b = [self.nodes[0].getblockhash(n) for n in range(first_block, first_block+4)]
-        coinbase_txids = [self.nodes[0].getblock(h)['tx'][0] for h in b]
+        b = [self.nodes[0].getblockhash(n) for n in range(first_block, first_block + 4)]
+        coinbase_txids = [self.nodes[0].getblock(h)["tx"][0] for h in b]
         utxo_1 = wallet.get_utxo(txid=coinbase_txids[1])
         utxo_2 = wallet.get_utxo(txid=coinbase_txids[2])
         utxo_3 = wallet.get_utxo(txid=coinbase_txids[3])
@@ -140,25 +143,25 @@ class MempoolCoinbaseTest(BitcoinTestFramework):
         timelock_tx = wallet.create_self_transfer(
             utxo_to_spend=utxo,
             locktime=self.nodes[0].getblockcount() + 2,
-        )['hex']
+        )["hex"]
 
         self.log.info("Check that the time-locked transaction is too immature to spend")
         assert_raises_rpc_error(-26, "non-final", self.nodes[0].sendrawtransaction, timelock_tx)
 
         self.log.info("Broadcast and mine spend_2 and spend_3")
-        wallet.sendrawtransaction(from_node=self.nodes[0], tx_hex=spend_2['hex'])
-        wallet.sendrawtransaction(from_node=self.nodes[0], tx_hex=spend_3['hex'])
+        wallet.sendrawtransaction(from_node=self.nodes[0], tx_hex=spend_2["hex"])
+        wallet.sendrawtransaction(from_node=self.nodes[0], tx_hex=spend_3["hex"])
         self.log.info("Generate a block")
         self.generate(self.nodes[0], 1)
         self.log.info("Check that time-locked transaction is still too immature to spend")
-        assert_raises_rpc_error(-26, 'non-final', self.nodes[0].sendrawtransaction, timelock_tx)
+        assert_raises_rpc_error(-26, "non-final", self.nodes[0].sendrawtransaction, timelock_tx)
 
         self.log.info("Create spend_2_1 and spend_3_1")
         spend_2_1 = wallet.create_self_transfer(utxo_to_spend=spend_2["new_utxo"])
         spend_3_1 = wallet.create_self_transfer(utxo_to_spend=spend_3["new_utxo"])
 
         self.log.info("Broadcast and mine spend_3_1")
-        spend_3_1_id = self.nodes[0].sendrawtransaction(spend_3_1['hex'])
+        spend_3_1_id = self.nodes[0].sendrawtransaction(spend_3_1["hex"])
         self.log.info("Generate a block")
         last_block = self.generate(self.nodes[0], 1)
         # generate() implicitly syncs blocks, so that peer 1 gets the block before timelock_tx
@@ -168,8 +171,8 @@ class MempoolCoinbaseTest(BitcoinTestFramework):
         timelock_tx_id = self.nodes[0].sendrawtransaction(timelock_tx)
 
         self.log.info("Add spend_1 and spend_2_1 to the mempool")
-        spend_1_id = self.nodes[0].sendrawtransaction(spend_1['hex'])
-        spend_2_1_id = self.nodes[0].sendrawtransaction(spend_2_1['hex'])
+        spend_1_id = self.nodes[0].sendrawtransaction(spend_1["hex"])
+        spend_2_1_id = self.nodes[0].sendrawtransaction(spend_2_1["hex"])
 
         assert_equal(set(self.nodes[0].getrawmempool()), {spend_1_id, spend_2_1_id, timelock_tx_id})
         self.sync_all()
@@ -193,5 +196,5 @@ class MempoolCoinbaseTest(BitcoinTestFramework):
         self.test_reorg_relay()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     MempoolCoinbaseTest(__file__).main()

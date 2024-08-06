@@ -89,5 +89,5 @@ class InvalidateTest(BitcoinTestFramework):
         assert_equal(self.nodes[1].getbestblockhash(), blocks[-1])
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     InvalidateTest(__file__).main()

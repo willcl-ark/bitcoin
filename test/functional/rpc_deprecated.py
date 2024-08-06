@@ -3,13 +3,15 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test deprecation of RPC calls."""
+
 from test_framework.test_framework import BitcoinTestFramework
+
 
 class DeprecatedRpcTest(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 2
         self.setup_clean_chain = True
-        self.extra_args = [[], ['-deprecatedrpc=bumpfee']]
+        self.extra_args = [[], ["-deprecatedrpc=bumpfee"]]
 
     def run_test(self):
         # This test should be used to verify correct behaviour of deprecated
@@ -25,5 +27,6 @@ class DeprecatedRpcTest(BitcoinTestFramework):
 
         self.log.info("No tested deprecated RPC methods")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     DeprecatedRpcTest(__file__).main()

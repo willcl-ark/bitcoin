@@ -19,11 +19,14 @@ FALSE_POSITIVES = [
     ("src/netbase.cpp", "LogConnectFailure(bool manual_connection, const char* fmt, const Args&... args)"),
     ("src/clientversion.cpp", "strprintf(_(COPYRIGHT_HOLDERS).translated, COPYRIGHT_HOLDERS_SUBSTITUTION)"),
     ("src/test/translation_tests.cpp", "strprintf(format, arg)"),
-    ("src/validationinterface.cpp", "LogPrint(BCLog::VALIDATION, fmt \"\\n\", __VA_ARGS__)"),
+    ("src/validationinterface.cpp", 'LogPrint(BCLog::VALIDATION, fmt "\\n", __VA_ARGS__)'),
     ("src/wallet/wallet.h", "WalletLogPrintf(const char* fmt, Params... parameters)"),
-    ("src/wallet/wallet.h", "LogPrintf((\"%s \" + std::string{fmt}).c_str(), GetDisplayName(), parameters...)"),
+    ("src/wallet/wallet.h", 'LogPrintf(("%s " + std::string{fmt}).c_str(), GetDisplayName(), parameters...)'),
     ("src/wallet/scriptpubkeyman.h", "WalletLogPrintf(const char* fmt, Params... parameters)"),
-    ("src/wallet/scriptpubkeyman.h", "LogPrintf((\"%s \" + std::string{fmt}).c_str(), m_storage.GetDisplayName(), parameters...)"),
+    (
+        "src/wallet/scriptpubkeyman.h",
+        'LogPrintf(("%s " + std::string{fmt}).c_str(), m_storage.GetDisplayName(), parameters...)',
+    ),
 ]
 
 
@@ -43,9 +46,7 @@ def parse_function_calls(function_name, source_code):
     0
     """
     assert type(function_name) is str and type(source_code) is str and function_name
-    lines = [re.sub("// .*", " ", line).strip()
-             for line in source_code.split("\n")
-             if not line.strip().startswith("#")]
+    lines = [re.sub("// .*", " ", line).strip() for line in source_code.split("\n") if not line.strip().startswith("#")]
     return re.findall(r"[^a-zA-Z_](?=({}\(.*).*)".format(function_name), " " + " ".join(lines))
 
 
@@ -67,7 +68,7 @@ def normalize(s):
 ESCAPE_MAP = {
     r"\n": "[escaped-newline]",
     r"\t": "[escaped-tab]",
-    r'\"': "[escaped-quote]",
+    r"\"": "[escaped-quote]",
 }
 
 
@@ -159,14 +160,14 @@ def parse_function_call_and_arguments(function_name, function_call):
     expected_function_call = "{}(".format(function_name)
     assert remaining.startswith(expected_function_call)
     parts = [expected_function_call]
-    remaining = remaining[len(expected_function_call):]
+    remaining = remaining[len(expected_function_call) :]
     open_parentheses = 1
     open_template_arguments = 0
     in_string = False
     parts.append("")
     for i, char in enumerate(remaining):
         parts.append(parts.pop() + char)
-        if char == "\"":
+        if char == '"':
             in_string = not in_string
             continue
         if in_string:
@@ -187,7 +188,12 @@ def parse_function_call_and_arguments(function_name, function_call):
         if char == "<" and next_char not in [" ", "<", "="] and prev_char not in [" ", "<"]:
             open_template_arguments += 1
             continue
-        if char == ">" and next_char not in [" ", ">", "="] and prev_char not in [" ", ">"] and open_template_arguments > 0:
+        if (
+            char == ">"
+            and next_char not in [" ", ">", "="]
+            and prev_char not in [" ", ">"]
+            and open_template_arguments > 0
+        ):
             open_template_arguments -= 1
         if open_template_arguments > 0:
             continue
@@ -220,7 +226,7 @@ def parse_string_content(argument):
     string_content = ""
     in_string = False
     for char in normalize(escape(argument)):
-        if char == "\"":
+        if char == '"':
             in_string = not in_string
         elif in_string:
             string_content += char
@@ -248,12 +254,12 @@ def count_format_specifiers(format_string):
     7
     """
     assert type(format_string) is str
-    format_string = format_string.replace('%%', 'X')
+    format_string = format_string.replace("%%", "X")
     n = max_pos = 0
     for m in re.finditer("%(.*?)[aAcdeEfFgGinopsuxX]", format_string, re.DOTALL):
         # Increase the max position if the argument has a position number like
         # "5$", otherwise increment the argument count.
-        pos_num, = re.match(r"(?:(^\d+)\$)?", m.group(1)).groups()
+        (pos_num,) = re.match(r"(?:(^\d+)\$)?", m.group(1)).groups()
         if pos_num is not None:
             max_pos = max(max_pos, int(pos_num))
         else:
@@ -271,11 +277,17 @@ def count_format_specifiers(format_string):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="This program checks that the number of arguments passed "
-                                     "to a variadic format string function matches the number of format "
-                                     "specifiers in the format string.")
-    parser.add_argument("--skip-arguments", type=int, help="number of arguments before the format string "
-                        "argument (e.g. 1 in the case of fprintf)", default=0)
+    parser = argparse.ArgumentParser(
+        description="This program checks that the number of arguments passed "
+        "to a variadic format string function matches the number of format "
+        "specifiers in the format string."
+    )
+    parser.add_argument(
+        "--skip-arguments",
+        type=int,
+        help="number of arguments before the format string " "argument (e.g. 1 in the case of fprintf)",
+        default=0,
+    )
     parser.add_argument("function_name", help="function name (e.g. fprintf)", default=None)
     parser.add_argument("file", nargs="*", help="C++ source code file (e.g. foo.cpp)")
     args = parser.parse_args()
@@ -289,14 +301,22 @@ def main():
                     continue
                 if len(parts) < 3 + args.skip_arguments:
                     exit_code = 1
-                    print("{}: Could not parse function call string \"{}(...)\": {}".format(f.name, args.function_name, relevant_function_call_str))
+                    print(
+                        '{}: Could not parse function call string "{}(...)": {}'.format(
+                            f.name, args.function_name, relevant_function_call_str
+                        )
+                    )
                     continue
                 argument_count = len(parts) - 3 - args.skip_arguments
                 format_str = parse_string_content(parts[1 + args.skip_arguments])
                 format_specifier_count = count_format_specifiers(format_str)
                 if format_specifier_count != argument_count:
                     exit_code = 1
-                    print("{}: Expected {} argument(s) after format string but found {} argument(s): {}".format(f.name, format_specifier_count, argument_count, relevant_function_call_str))
+                    print(
+                        "{}: Expected {} argument(s) after format string but found {} argument(s): {}".format(
+                            f.name, format_specifier_count, argument_count, relevant_function_call_str
+                        )
+                    )
                     continue
     sys.exit(exit_code)
 

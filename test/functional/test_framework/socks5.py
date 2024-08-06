@@ -11,14 +11,17 @@ import logging
 
 logger = logging.getLogger("TestFramework.socks5")
 
+
 # Protocol constants
 class Command:
     CONNECT = 0x01
+
 
 class AddressType:
     IPV4 = 0x01
     DOMAINNAME = 0x03
     IPV6 = 0x04
+
 
 # Utility functions
 def recvall(s, n):
@@ -27,34 +30,47 @@ def recvall(s, n):
     while n > 0:
         d = s.recv(n)
         if not d:
-            raise IOError('Unexpected end of stream')
+            raise IOError("Unexpected end of stream")
         rv.extend(d)
         n -= len(d)
     return rv
 
+
 # Implementation classes
-class Socks5Configuration():
+class Socks5Configuration:
     """Proxy configuration."""
+
     def __init__(self):
-        self.addr = None # Bind address (must be set)
-        self.af = socket.AF_INET # Bind address family
+        self.addr = None  # Bind address (must be set)
+        self.af = socket.AF_INET  # Bind address family
         self.unauth = False  # Support unauthenticated
         self.auth = False  # Support authentication
         self.keep_alive = False  # Do not automatically close connections
 
-class Socks5Command():
+
+class Socks5Command:
     """Information about an incoming socks5 command."""
+
     def __init__(self, cmd, atyp, addr, port, username, password):
-        self.cmd = cmd # Command (one of Command.*)
-        self.atyp = atyp # Address type (one of AddressType.*)
-        self.addr = addr # Address
-        self.port = port # Port to connect to
+        self.cmd = cmd  # Command (one of Command.*)
+        self.atyp = atyp  # Address type (one of AddressType.*)
+        self.addr = addr  # Address
+        self.port = port  # Port to connect to
         self.username = username
         self.password = password
-    def __repr__(self):
-        return 'Socks5Command(%s,%s,%s,%s,%s,%s)' % (self.cmd, self.atyp, self.addr, self.port, self.username, self.password)
 
-class Socks5Connection():
+    def __repr__(self):
+        return "Socks5Command(%s,%s,%s,%s,%s,%s)" % (
+            self.cmd,
+            self.atyp,
+            self.addr,
+            self.port,
+            self.username,
+            self.password,
+        )
+
+
+class Socks5Connection:
     def __init__(self, serv, conn):
         self.serv = serv
         self.conn = conn
@@ -65,17 +81,17 @@ class Socks5Connection():
             # Verify socks version
             ver = recvall(self.conn, 1)[0]
             if ver != 0x05:
-                raise IOError('Invalid socks version %i' % ver)
+                raise IOError("Invalid socks version %i" % ver)
             # Choose authentication method
             nmethods = recvall(self.conn, 1)[0]
             methods = bytearray(recvall(self.conn, nmethods))
             method = None
             if 0x02 in methods and self.serv.conf.auth:
-                method = 0x02 # username/password
+                method = 0x02  # username/password
             elif 0x00 in methods and self.serv.conf.unauth:
-                method = 0x00 # unauthenticated
+                method = 0x00  # unauthenticated
             if method is None:
-                raise IOError('No supported authentication method was offered')
+                raise IOError("No supported authentication method was offered")
             # Send response
             self.conn.sendall(bytearray([0x05, method]))
             # Read authentication (optional)
@@ -84,7 +100,7 @@ class Socks5Connection():
             if method == 0x02:
                 ver = recvall(self.conn, 1)[0]
                 if ver != 0x01:
-                    raise IOError('Invalid auth packet version %i' % ver)
+                    raise IOError("Invalid auth packet version %i" % ver)
                 ulen = recvall(self.conn, 1)[0]
                 username = str(recvall(self.conn, ulen))
                 plen = recvall(self.conn, 1)[0]
@@ -95,9 +111,9 @@ class Socks5Connection():
             # Read connect request
             ver, cmd, _, atyp = recvall(self.conn, 4)
             if ver != 0x05:
-                raise IOError('Invalid socks version %i in connect request' % ver)
+                raise IOError("Invalid socks version %i in connect request" % ver)
             if cmd != Command.CONNECT:
-                raise IOError('Unhandled command %i in connect request' % cmd)
+                raise IOError("Unhandled command %i in connect request" % cmd)
 
             if atyp == AddressType.IPV4:
                 addr = recvall(self.conn, 4)
@@ -107,8 +123,8 @@ class Socks5Connection():
             elif atyp == AddressType.IPV6:
                 addr = recvall(self.conn, 16)
             else:
-                raise IOError('Unknown address type %i' % atyp)
-            port_hi,port_lo = recvall(self.conn, 2)
+                raise IOError("Unknown address type %i" % atyp)
+            port_hi, port_lo = recvall(self.conn, 2)
             port = (port_hi << 8) | port_lo
 
             # Send dummy response
@@ -116,7 +132,7 @@ class Socks5Connection():
 
             cmdin = Socks5Command(cmd, atyp, addr, port, username, password)
             self.serv.queue.put(cmdin)
-            logger.debug('Proxy: %s', cmdin)
+            logger.debug("Proxy: %s", cmdin)
             # Fall through to disconnect
         except Exception as e:
             logger.exception("socks5 request handling failed.")
@@ -125,7 +141,8 @@ class Socks5Connection():
             if not self.serv.keep_alive:
                 self.conn.close()
 
-class Socks5Server():
+
+class Socks5Server:
     def __init__(self, conf):
         self.conf = conf
         self.s = socket.socket(conf.af)
@@ -134,7 +151,7 @@ class Socks5Server():
         self.s.listen(5)
         self.running = False
         self.thread = None
-        self.queue = queue.Queue() # report connections and exceptions to client
+        self.queue = queue.Queue()  # report connections and exceptions to client
         self.keep_alive = conf.keep_alive
 
     def run(self):

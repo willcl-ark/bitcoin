@@ -8,6 +8,7 @@ This implements SipHash-2-4. For convenience, an interface taking 256-bit
 integers is provided in addition to the one accepting generic data.
 """
 
+
 def rotl64(n, b):
     return n >> (64 - b) | (n & ((1 << (64 - b)) - 1)) << b
 
@@ -32,15 +33,15 @@ def siphash_round(v0, v1, v2, v3):
 
 def siphash(k0, k1, data):
     assert type(data) is bytes
-    v0 = 0x736f6d6570736575 ^ k0
-    v1 = 0x646f72616e646f6d ^ k1
-    v2 = 0x6c7967656e657261 ^ k0
+    v0 = 0x736F6D6570736575 ^ k0
+    v1 = 0x646F72616E646F6D ^ k1
+    v2 = 0x6C7967656E657261 ^ k0
     v3 = 0x7465646279746573 ^ k1
     c = 0
     t = 0
     for d in data:
         t |= d << (8 * (c % 8))
-        c = (c + 1) & 0xff
+        c = (c + 1) & 0xFF
         if (c & 7) == 0:
             v3 ^= t
             v0, v1, v2, v3 = siphash_round(v0, v1, v2, v3)
@@ -52,7 +53,7 @@ def siphash(k0, k1, data):
     v0, v1, v2, v3 = siphash_round(v0, v1, v2, v3)
     v0, v1, v2, v3 = siphash_round(v0, v1, v2, v3)
     v0 ^= t
-    v2 ^= 0xff
+    v2 ^= 0xFF
     v0, v1, v2, v3 = siphash_round(v0, v1, v2, v3)
     v0, v1, v2, v3 = siphash_round(v0, v1, v2, v3)
     v0, v1, v2, v3 = siphash_round(v0, v1, v2, v3)
@@ -62,4 +63,4 @@ def siphash(k0, k1, data):
 
 def siphash256(k0, k1, num):
     assert type(num) is int
-    return siphash(k0, k1, num.to_bytes(32, 'little'))
+    return siphash(k0, k1, num.to_bytes(32, "little"))

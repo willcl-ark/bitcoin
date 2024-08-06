@@ -11,21 +11,22 @@
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import assert_raises_rpc_error
 
-class DisableWalletTest (BitcoinTestFramework):
+
+class DisableWalletTest(BitcoinTestFramework):
     def set_test_params(self):
         self.setup_clean_chain = True
         self.num_nodes = 1
         self.extra_args = [["-disablewallet"]]
         self.wallet_names = []
 
-    def run_test (self):
+    def run_test(self):
         # Make sure wallet is really disabled
-        assert_raises_rpc_error(-32601, 'Method not found', self.nodes[0].getwalletinfo)
-        x = self.nodes[0].validateaddress('3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy')
-        assert x['isvalid'] is False
-        x = self.nodes[0].validateaddress('mneYUmWYsuk7kySiURxCi3AGxrAqZxLgPZ')
-        assert x['isvalid'] is True
+        assert_raises_rpc_error(-32601, "Method not found", self.nodes[0].getwalletinfo)
+        x = self.nodes[0].validateaddress("3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy")
+        assert x["isvalid"] is False
+        x = self.nodes[0].validateaddress("mneYUmWYsuk7kySiURxCi3AGxrAqZxLgPZ")
+        assert x["isvalid"] is True
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     DisableWalletTest(__file__).main()

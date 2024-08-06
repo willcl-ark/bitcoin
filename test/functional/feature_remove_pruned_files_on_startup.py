@@ -8,6 +8,7 @@ import platform
 import os
 from test_framework.test_framework import BitcoinTestFramework
 
+
 class FeatureRemovePrunedFilesOnStartupTest(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 1
@@ -33,7 +34,7 @@ class FeatureRemovePrunedFilesOnStartupTest(BitcoinTestFramework):
         self.nodes[0].pruneblockchain(600)
 
         # Windows systems will not remove files with an open fd
-        if platform.system() != 'Windows':
+        if platform.system() != "Windows":
             assert not os.path.exists(blk0)
             assert not os.path.exists(rev0)
             assert not os.path.exists(blk1)
@@ -51,5 +52,6 @@ class FeatureRemovePrunedFilesOnStartupTest(BitcoinTestFramework):
         assert not os.path.exists(blk0)
         assert not os.path.exists(rev1)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     FeatureRemovePrunedFilesOnStartupTest(__file__).main()

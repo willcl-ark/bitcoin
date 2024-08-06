@@ -26,26 +26,32 @@ def main():
     # Aborting the whole process is undesirable for RPC code. So nonfatal
     # checks should be used over assert. See: src/util/check.h
     # src/rpc/server.cpp is excluded from this check since it's mostly meta-code.
-    exit_code = git_grep([
-        "--line-number",
-        "--extended-regexp",
-        r"\<(A|a)ss(ume|ert)\(",
-        "--",
-        "src/rpc/",
-        "src/wallet/rpc*",
-        ":(exclude)src/rpc/server.cpp",
-    ], "CHECK_NONFATAL(condition) or NONFATAL_UNREACHABLE should be used instead of assert for RPC code.")
+    exit_code = git_grep(
+        [
+            "--line-number",
+            "--extended-regexp",
+            r"\<(A|a)ss(ume|ert)\(",
+            "--",
+            "src/rpc/",
+            "src/wallet/rpc*",
+            ":(exclude)src/rpc/server.cpp",
+        ],
+        "CHECK_NONFATAL(condition) or NONFATAL_UNREACHABLE should be used instead of assert for RPC code.",
+    )
 
     # The `BOOST_ASSERT` macro requires to `#include boost/assert.hpp`,
     # which is an unnecessary Boost dependency.
-    exit_code |= git_grep([
-        "--line-number",
-        "--extended-regexp",
-        r"BOOST_ASSERT\(",
-        "--",
-        "*.cpp",
-        "*.h",
-    ], "BOOST_ASSERT must be replaced with Assert, BOOST_REQUIRE, or BOOST_CHECK.")
+    exit_code |= git_grep(
+        [
+            "--line-number",
+            "--extended-regexp",
+            r"BOOST_ASSERT\(",
+            "--",
+            "*.cpp",
+            "*.h",
+        ],
+        "BOOST_ASSERT must be replaced with Assert, BOOST_REQUIRE, or BOOST_CHECK.",
+    )
 
     sys.exit(exit_code)
 

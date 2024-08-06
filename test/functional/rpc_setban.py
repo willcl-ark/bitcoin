@@ -11,14 +11,15 @@ from test_framework.util import (
     assert_equal,
 )
 
+
 class SetBanTests(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 2
         self.setup_clean_chain = True
-        self.extra_args = [[],[]]
+        self.extra_args = [[], []]
 
     def is_banned(self, node, addr):
-        return any(e['address'] == addr for e in node.listbanned())
+        return any(e["address"] == addr for e in node.listbanned())
 
     def run_test(self):
         # Node 0 connects to Node 1, check that the noban permission is not granted
@@ -31,17 +32,17 @@ class SetBanTests(BitcoinTestFramework):
 
         # Node 0 should not be able to reconnect
         context = ExitStack()
-        context.enter_context(self.nodes[1].assert_debug_log(expected_msgs=['dropped (banned)\n'], timeout=50))
+        context.enter_context(self.nodes[1].assert_debug_log(expected_msgs=["dropped (banned)\n"], timeout=50))
         # When disconnected right after connecting, a v2 node will attempt to reconnect with v1.
         # Wait for that to happen so that it cannot mess with later tests.
         if self.options.v2transport:
-            context.enter_context(self.nodes[0].assert_debug_log(expected_msgs=['trying v1 connection'], timeout=50))
+            context.enter_context(self.nodes[0].assert_debug_log(expected_msgs=["trying v1 connection"], timeout=50))
         with context:
             self.restart_node(1, [])
             self.nodes[0].addnode("127.0.0.1:" + str(p2p_port(1)), "onetry")
 
         # However, node 0 should be able to reconnect if it has noban permission
-        self.restart_node(1, ['-whitelist=127.0.0.1'])
+        self.restart_node(1, ["-whitelist=127.0.0.1"])
         self.connect_nodes(0, 1)
         peerinfo = self.nodes[1].getpeerinfo()[0]
         assert "noban" in peerinfo["permissions"]
@@ -72,7 +73,8 @@ class SetBanTests(BitcoinTestFramework):
         self.restart_node(1, ["-bantime=1234"])
         self.nodes[1].setban("127.0.0.1", "add")
         banned = self.nodes[1].listbanned()[0]
-        assert_equal(banned['ban_duration'], 1234)
+        assert_equal(banned["ban_duration"], 1234)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     SetBanTests(__file__).main()

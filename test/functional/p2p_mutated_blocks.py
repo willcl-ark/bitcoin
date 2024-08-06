@@ -27,13 +27,14 @@ from test_framework.util import assert_equal
 from test_framework.wallet import MiniWallet
 import copy
 
+
 class MutatedBlocksTest(BitcoinTestFramework):
     def set_test_params(self):
         self.setup_clean_chain = True
         self.num_nodes = 1
         self.extra_args = [
             [
-                "-testactivationheight=segwit@1", # causes unconnected headers/blocks to not have segwit considered deployed
+                "-testactivationheight=segwit@1",  # causes unconnected headers/blocks to not have segwit considered deployed
             ],
         ]
 
@@ -41,7 +42,9 @@ class MutatedBlocksTest(BitcoinTestFramework):
         self.wallet = MiniWallet(self.nodes[0])
         self.generate(self.wallet, COINBASE_MATURITY)
 
-        honest_relayer = self.nodes[0].add_outbound_p2p_connection(P2PInterface(), p2p_idx=0, connection_type="outbound-full-relay")
+        honest_relayer = self.nodes[0].add_outbound_p2p_connection(
+            P2PInterface(), p2p_idx=0, connection_type="outbound-full-relay"
+        )
         attacker = self.nodes[0].add_p2p_connection(P2PInterface())
 
         # Create new block with two transactions (coinbase + 1 self-transfer).
@@ -64,17 +67,20 @@ class MutatedBlocksTest(BitcoinTestFramework):
 
         # Wait for a `getblocktxn` that attempts to fetch the self-transfer
         def self_transfer_requested():
-            if not honest_relayer.last_message.get('getblocktxn'):
+            if not honest_relayer.last_message.get("getblocktxn"):
                 return False
 
-            get_block_txn = honest_relayer.last_message['getblocktxn']
-            return get_block_txn.block_txn_request.blockhash == block.sha256 and \
-                   get_block_txn.block_txn_request.indexes == [1]
+            get_block_txn = honest_relayer.last_message["getblocktxn"]
+            return (
+                get_block_txn.block_txn_request.blockhash == block.sha256
+                and get_block_txn.block_txn_request.indexes == [1]
+            )
+
         honest_relayer.wait_until(self_transfer_requested, timeout=5)
 
         # Block at height 101 should be the only one in flight from peer 0
         peer_info_prior_to_attack = self.nodes[0].getpeerinfo()
-        assert_equal(peer_info_prior_to_attack[0]['id'], 0)
+        assert_equal(peer_info_prior_to_attack[0]["id"], 0)
         assert_equal([101], peer_info_prior_to_attack[0]["inflight"])
 
         # Attempt to clear the honest relayer's download request by sending the
@@ -87,7 +93,7 @@ class MutatedBlocksTest(BitcoinTestFramework):
         # Block at height 101 should *still* be the only block in-flight from
         # peer 0
         peer_info_after_attack = self.nodes[0].getpeerinfo()
-        assert_equal(peer_info_after_attack[0]['id'], 0)
+        assert_equal(peer_info_after_attack[0]["id"], 0)
         assert_equal([101], peer_info_after_attack[0]["inflight"])
 
         # The honest relayer should be able to complete relaying the block by
@@ -111,5 +117,5 @@ class MutatedBlocksTest(BitcoinTestFramework):
         attacker.wait_for_disconnect(timeout=5)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     MutatedBlocksTest(__file__).main()

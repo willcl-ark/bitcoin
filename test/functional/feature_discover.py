@@ -34,18 +34,16 @@ class DiscoverTest(BitcoinTestFramework):
 
     def validate_addresses(self, addresses_obj):
         for address_obj in addresses_obj:
-            address = address_obj['address']
+            address = address_obj["address"]
             self.log.info(f"Validating {address}")
-            valid = (is_valid_ipv4_address(address)
-                     or is_valid_ipv6_address(address))
+            valid = is_valid_ipv4_address(address) or is_valid_ipv6_address(address)
             assert_equal(valid, True)
 
     def test_local_addresses(self, test_case, *, expect_empty=False):
         self.log.info(f"Restart node with {test_case}")
         self.restart_node(0, test_case)
         network_info = self.nodes[0].getnetworkinfo()
-        network_enabled = [n for n in network_info['networks']
-                           if n['reachable'] and n['name'] in ['ipv4', 'ipv6']]
+        network_enabled = [n for n in network_info["networks"] if n["reachable"] and n["name"] in ["ipv4", "ipv6"]]
         local_addrs = list(network_info["localaddresses"])
         if expect_empty or not network_enabled:
             assert_equal(local_addrs, [])
@@ -71,5 +69,5 @@ class DiscoverTest(BitcoinTestFramework):
             self.test_local_addresses(test_case, expect_empty=True)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     DiscoverTest(__file__).main()

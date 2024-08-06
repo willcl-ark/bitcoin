@@ -21,11 +21,7 @@ class WalletChangeAddressTest(BitcoinTestFramework):
         self.setup_clean_chain = True
         self.num_nodes = 3
         # discardfee is used to make change outputs less likely in the change_pos test
-        self.extra_args = [
-            [],
-            ["-discardfee=1"],
-            ["-avoidpartialspends", "-discardfee=1"]
-        ]
+        self.extra_args = [[], ["-discardfee=1"], ["-avoidpartialspends", "-discardfee=1"]]
 
     def skip_test_if_missing_module(self):
         self.skip_if_no_wallet()
@@ -34,8 +30,8 @@ class WalletChangeAddressTest(BitcoinTestFramework):
         change_index = None
         for vout in tx["vout"]:
             info = node.getaddressinfo(vout["scriptPubKey"]["address"])
-            if (info["ismine"] and info["ischange"]):
-                change_index = int(re.findall(r'\d+', info["hdkeypath"])[-1])
+            if info["ismine"] and info["ischange"]:
+                change_index = int(re.findall(r"\d+", info["hdkeypath"])[-1])
                 break
         assert_equal(change_index, index)
 
@@ -43,7 +39,7 @@ class WalletChangeAddressTest(BitcoinTestFramework):
         change_pos = None
         for index, output in enumerate(tx["vout"]):
             info = wallet.getaddressinfo(output["scriptPubKey"]["address"])
-            if (info["ismine"] and info["ischange"]):
+            if info["ismine"] and info["ischange"]:
                 change_pos = index
                 break
         assert_equal(change_pos, pos)
@@ -104,5 +100,6 @@ class WalletChangeAddressTest(BitcoinTestFramework):
         # that the random change position passes the test
         self.assert_change_pos(w1, tx, 0)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     WalletChangeAddressTest(__file__).main()

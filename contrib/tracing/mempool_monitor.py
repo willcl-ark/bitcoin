@@ -3,8 +3,8 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-""" Example logging Bitcoin Core mempool events using the mempool:added,
-    mempool:removed, mempool:replaced, and mempool:rejected tracepoints. """
+"""Example logging Bitcoin Core mempool events using the mempool:added,
+mempool:removed, mempool:replaced, and mempool:rejected tracepoints."""
 
 import curses
 import sys
@@ -203,9 +203,7 @@ class Dashboard:
 
     def _init_info_win(self):
         """Create and populate the info window."""
-        self._info_win = Dashboard.create_win(
-            x=0, y=1, height=Dashboard.INFO_WIN_HEIGHT, width=22
-        )
+        self._info_win = Dashboard.create_win(x=0, y=1, height=Dashboard.INFO_WIN_HEIGHT, width=22)
         self._info_win.addstr(0, 0, "Mempool Monitor", curses.A_REVERSE)
         self._info_win.addstr(1, 0, "Press CTRL-C to stop.", curses.A_NORMAL)
         self._info_win.refresh()
@@ -216,9 +214,7 @@ class Dashboard:
             x=3, y=1, height=Dashboard.EVENT_WIN_HEIGHT, width=37, title="Event count"
         )
         header = " {:<8} {:>8} {:>7} {:>7} "
-        self._event_count_win.addstr(
-            1, 1, header.format("Event", "total", "1 min", "10 min"), curses.A_UNDERLINE
-        )
+        self._event_count_win.addstr(1, 1, header.format("Event", "total", "1 min", "10 min"), curses.A_UNDERLINE)
         self._event_count_win.refresh()
 
     def _init_event_rate_win(self):
@@ -227,9 +223,7 @@ class Dashboard:
             x=3, y=40, height=Dashboard.EVENT_WIN_HEIGHT, width=42, title="Event rate"
         )
         header = " {:<8} {:>9} {:>9} {:>9} "
-        self._event_rate_win.addstr(
-            1, 1, header.format("Event", "total", "1 min", "10 min"), curses.A_UNDERLINE
-        )
+        self._event_rate_win.addstr(1, 1, header.format("Event", "total", "1 min", "10 min"), curses.A_UNDERLINE)
         self._event_rate_win.refresh()
 
     def _init_event_log_win(self):
@@ -267,9 +261,7 @@ class Dashboard:
             # remove timestamps older than ten minutes but keep track of their
             # count for the 'total' metric
             #
-            self._event_history[event_type] += len(
-                [t for t in ts if Dashboard.timestamp_age(t) >= 600]
-            )
+            self._event_history[event_type] += len([t for t in ts if Dashboard.timestamp_age(t) >= 600])
             ts = [t for t in ts if Dashboard.timestamp_age(t) < 600]
             self._timestamps[event_type] = ts
             # count metric
@@ -339,10 +331,7 @@ class Dashboard:
             )
 
         if type_ == "rejected":
-            return (
-                f"{ts} rejected {bytes(data.hash)[::-1].hex()}"
-                f": {data.reason.decode('UTF-8')}"
-            )
+            return f"{ts} rejected {bytes(data.hash)[::-1].hex()}" f": {data.reason.decode('UTF-8')}"
 
         if type_ == "replaced":
             return (

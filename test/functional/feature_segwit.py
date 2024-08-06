@@ -67,8 +67,8 @@ def getutxo(txid):
 
 
 def find_spendable_utxo(node, min_value):
-    for utxo in node.listunspent(query_options={'minimumAmount': min_value}):
-        if utxo['spendable']:
+    for utxo in node.listunspent(query_options={"minimumAmount": min_value}):
+        if utxo["spendable"]:
             return utxo
 
     raise AssertionError(f"Unspent output equal or higher than {min_value} not found")
@@ -119,20 +119,32 @@ class SegWitTest(BitcoinTestFramework):
         self.sync_blocks()
 
     def fail_accept(self, node, error_msg, txid, sign, redeem_script=""):
-        assert_raises_rpc_error(-26, error_msg, send_to_witness, use_p2wsh=1, node=node, utxo=getutxo(txid), pubkey=self.pubkey[0], encode_p2sh=False, amount=Decimal("49.998"), sign=sign, insert_redeem_script=redeem_script)
+        assert_raises_rpc_error(
+            -26,
+            error_msg,
+            send_to_witness,
+            use_p2wsh=1,
+            node=node,
+            utxo=getutxo(txid),
+            pubkey=self.pubkey[0],
+            encode_p2sh=False,
+            amount=Decimal("49.998"),
+            sign=sign,
+            insert_redeem_script=redeem_script,
+        )
 
     def run_test(self):
         self.generate(self.nodes[0], 161)  # block 161
 
         self.log.info("Verify sigops are counted in GBT with pre-BIP141 rules before the fork")
         txid = self.nodes[0].sendtoaddress(self.nodes[0].getnewaddress(), 1)
-        tmpl = self.nodes[0].getblocktemplate({'rules': ['segwit']})
-        assert_equal(tmpl['sizelimit'], 1000000)
-        assert 'weightlimit' not in tmpl
-        assert_equal(tmpl['sigoplimit'], 20000)
-        assert_equal(tmpl['transactions'][0]['hash'], txid)
-        assert_equal(tmpl['transactions'][0]['sigops'], 2)
-        assert '!segwit' not in tmpl['rules']
+        tmpl = self.nodes[0].getblocktemplate({"rules": ["segwit"]})
+        assert_equal(tmpl["sizelimit"], 1000000)
+        assert "weightlimit" not in tmpl
+        assert_equal(tmpl["sigoplimit"], 20000)
+        assert_equal(tmpl["transactions"][0]["hash"], txid)
+        assert_equal(tmpl["transactions"][0]["sigops"], 2)
+        assert "!segwit" not in tmpl["rules"]
         self.generate(self.nodes[0], 1)  # block 162
 
         balance_presetup = self.nodes[0].getbalance()
@@ -144,8 +156,8 @@ class SegWitTest(BitcoinTestFramework):
             self.pubkey.append(key.pubkey)
 
             multiscript = keys_to_multisig_script([self.pubkey[-1]])
-            p2sh_ms_addr = self.nodes[i].createmultisig(1, [self.pubkey[-1]], 'p2sh-segwit')['address']
-            bip173_ms_addr = self.nodes[i].createmultisig(1, [self.pubkey[-1]], 'bech32')['address']
+            p2sh_ms_addr = self.nodes[i].createmultisig(1, [self.pubkey[-1]], "p2sh-segwit")["address"]
+            bip173_ms_addr = self.nodes[i].createmultisig(1, [self.pubkey[-1]], "bech32")["address"]
             assert_equal(p2sh_ms_addr, script_to_p2sh_p2wsh(multiscript))
             assert_equal(bip173_ms_addr, script_to_p2wsh(multiscript))
 
@@ -160,17 +172,21 @@ class SegWitTest(BitcoinTestFramework):
             assert_equal(self.nodes[i].deriveaddresses(wpkh_desc)[0], key.p2wpkh_addr)
 
             if self.options.descriptors:
-                res = self.nodes[i].importdescriptors([
-                {"desc": p2sh_ms_desc, "timestamp": "now"},
-                {"desc": bip173_ms_desc, "timestamp": "now"},
-                {"desc": sh_wpkh_desc, "timestamp": "now"},
-                {"desc": wpkh_desc, "timestamp": "now"},
-            ])
+                res = self.nodes[i].importdescriptors(
+                    [
+                        {"desc": p2sh_ms_desc, "timestamp": "now"},
+                        {"desc": bip173_ms_desc, "timestamp": "now"},
+                        {"desc": sh_wpkh_desc, "timestamp": "now"},
+                        {"desc": wpkh_desc, "timestamp": "now"},
+                    ]
+                )
             else:
                 # The nature of the legacy wallet is that this import results in also adding all of the necessary scripts
-                res = self.nodes[i].importmulti([
-                    {"desc": p2sh_ms_desc, "timestamp": "now"},
-                ])
+                res = self.nodes[i].importmulti(
+                    [
+                        {"desc": p2sh_ms_desc, "timestamp": "now"},
+                    ]
+                )
             assert all([r["success"] for r in res])
 
             p2sh_ids.append([])
@@ -182,8 +198,26 @@ class SegWitTest(BitcoinTestFramework):
         for _ in range(5):
             for n in range(3):
                 for v in range(2):
-                    wit_ids[n][v].append(send_to_witness(v, self.nodes[0], find_spendable_utxo(self.nodes[0], 50), self.pubkey[n], False, Decimal("49.999")))
-                    p2sh_ids[n][v].append(send_to_witness(v, self.nodes[0], find_spendable_utxo(self.nodes[0], 50), self.pubkey[n], True, Decimal("49.999")))
+                    wit_ids[n][v].append(
+                        send_to_witness(
+                            v,
+                            self.nodes[0],
+                            find_spendable_utxo(self.nodes[0], 50),
+                            self.pubkey[n],
+                            False,
+                            Decimal("49.999"),
+                        )
+                    )
+                    p2sh_ids[n][v].append(
+                        send_to_witness(
+                            v,
+                            self.nodes[0],
+                            find_spendable_utxo(self.nodes[0], 50),
+                            self.pubkey[n],
+                            True,
+                            Decimal("49.999"),
+                        )
+                    )
 
         self.generate(self.nodes[0], 1)  # block 163
 
@@ -193,17 +227,59 @@ class SegWitTest(BitcoinTestFramework):
         assert_equal(self.nodes[2].getbalance(), 20 * Decimal("49.999"))
 
         self.log.info("Verify unsigned p2sh witness txs without a redeem script are invalid")
-        self.fail_accept(self.nodes[2], "mandatory-script-verify-flag-failed (Operation not valid with the current stack size)", p2sh_ids[NODE_2][P2WPKH][1], sign=False)
-        self.fail_accept(self.nodes[2], "mandatory-script-verify-flag-failed (Operation not valid with the current stack size)", p2sh_ids[NODE_2][P2WSH][1], sign=False)
+        self.fail_accept(
+            self.nodes[2],
+            "mandatory-script-verify-flag-failed (Operation not valid with the current stack size)",
+            p2sh_ids[NODE_2][P2WPKH][1],
+            sign=False,
+        )
+        self.fail_accept(
+            self.nodes[2],
+            "mandatory-script-verify-flag-failed (Operation not valid with the current stack size)",
+            p2sh_ids[NODE_2][P2WSH][1],
+            sign=False,
+        )
 
         self.generate(self.nodes[0], 1)  # block 164
 
         self.log.info("Verify witness txs are mined as soon as segwit activates")
 
-        send_to_witness(1, self.nodes[2], getutxo(wit_ids[NODE_2][P2WPKH][0]), self.pubkey[0], encode_p2sh=False, amount=Decimal("49.998"), sign=True)
-        send_to_witness(1, self.nodes[2], getutxo(wit_ids[NODE_2][P2WSH][0]), self.pubkey[0], encode_p2sh=False, amount=Decimal("49.998"), sign=True)
-        send_to_witness(1, self.nodes[2], getutxo(p2sh_ids[NODE_2][P2WPKH][0]), self.pubkey[0], encode_p2sh=False, amount=Decimal("49.998"), sign=True)
-        send_to_witness(1, self.nodes[2], getutxo(p2sh_ids[NODE_2][P2WSH][0]), self.pubkey[0], encode_p2sh=False, amount=Decimal("49.998"), sign=True)
+        send_to_witness(
+            1,
+            self.nodes[2],
+            getutxo(wit_ids[NODE_2][P2WPKH][0]),
+            self.pubkey[0],
+            encode_p2sh=False,
+            amount=Decimal("49.998"),
+            sign=True,
+        )
+        send_to_witness(
+            1,
+            self.nodes[2],
+            getutxo(wit_ids[NODE_2][P2WSH][0]),
+            self.pubkey[0],
+            encode_p2sh=False,
+            amount=Decimal("49.998"),
+            sign=True,
+        )
+        send_to_witness(
+            1,
+            self.nodes[2],
+            getutxo(p2sh_ids[NODE_2][P2WPKH][0]),
+            self.pubkey[0],
+            encode_p2sh=False,
+            amount=Decimal("49.998"),
+            sign=True,
+        )
+        send_to_witness(
+            1,
+            self.nodes[2],
+            getutxo(p2sh_ids[NODE_2][P2WSH][0]),
+            self.pubkey[0],
+            encode_p2sh=False,
+            amount=Decimal("49.998"),
+            sign=True,
+        )
 
         assert_equal(len(self.nodes[2].getrawmempool()), 4)
         blockhash = self.generate(self.nodes[2], 1)[0]  # block 165 (first block with new rules)
@@ -213,27 +289,81 @@ class SegWitTest(BitcoinTestFramework):
 
         self.log.info("Verify default node can't accept txs with missing witness")
         # unsigned, no scriptsig
-        self.fail_accept(self.nodes[0], "mandatory-script-verify-flag-failed (Witness program hash mismatch)", wit_ids[NODE_0][P2WPKH][0], sign=False)
-        self.fail_accept(self.nodes[0], "mandatory-script-verify-flag-failed (Witness program was passed an empty witness)", wit_ids[NODE_0][P2WSH][0], sign=False)
-        self.fail_accept(self.nodes[0], "mandatory-script-verify-flag-failed (Operation not valid with the current stack size)", p2sh_ids[NODE_0][P2WPKH][0], sign=False)
-        self.fail_accept(self.nodes[0], "mandatory-script-verify-flag-failed (Operation not valid with the current stack size)", p2sh_ids[NODE_0][P2WSH][0], sign=False)
+        self.fail_accept(
+            self.nodes[0],
+            "mandatory-script-verify-flag-failed (Witness program hash mismatch)",
+            wit_ids[NODE_0][P2WPKH][0],
+            sign=False,
+        )
+        self.fail_accept(
+            self.nodes[0],
+            "mandatory-script-verify-flag-failed (Witness program was passed an empty witness)",
+            wit_ids[NODE_0][P2WSH][0],
+            sign=False,
+        )
+        self.fail_accept(
+            self.nodes[0],
+            "mandatory-script-verify-flag-failed (Operation not valid with the current stack size)",
+            p2sh_ids[NODE_0][P2WPKH][0],
+            sign=False,
+        )
+        self.fail_accept(
+            self.nodes[0],
+            "mandatory-script-verify-flag-failed (Operation not valid with the current stack size)",
+            p2sh_ids[NODE_0][P2WSH][0],
+            sign=False,
+        )
         # unsigned with redeem script
-        self.fail_accept(self.nodes[0], "mandatory-script-verify-flag-failed (Witness program hash mismatch)", p2sh_ids[NODE_0][P2WPKH][0], sign=False, redeem_script=witness_script(False, self.pubkey[0]))
-        self.fail_accept(self.nodes[0], "mandatory-script-verify-flag-failed (Witness program was passed an empty witness)", p2sh_ids[NODE_0][P2WSH][0], sign=False, redeem_script=witness_script(True, self.pubkey[0]))
+        self.fail_accept(
+            self.nodes[0],
+            "mandatory-script-verify-flag-failed (Witness program hash mismatch)",
+            p2sh_ids[NODE_0][P2WPKH][0],
+            sign=False,
+            redeem_script=witness_script(False, self.pubkey[0]),
+        )
+        self.fail_accept(
+            self.nodes[0],
+            "mandatory-script-verify-flag-failed (Witness program was passed an empty witness)",
+            p2sh_ids[NODE_0][P2WSH][0],
+            sign=False,
+            redeem_script=witness_script(True, self.pubkey[0]),
+        )
 
         # Coinbase contains the witness commitment nonce, check that RPC shows us
-        coinbase_txid = self.nodes[2].getblock(blockhash)['tx'][0]
+        coinbase_txid = self.nodes[2].getblock(blockhash)["tx"][0]
         coinbase_tx = self.nodes[2].gettransaction(txid=coinbase_txid, verbose=True)
         witnesses = coinbase_tx["decoded"]["vin"][0]["txinwitness"]
         assert_equal(len(witnesses), 1)
         assert_is_hex_string(witnesses[0])
-        assert_equal(witnesses[0], '00' * 32)
+        assert_equal(witnesses[0], "00" * 32)
 
         self.log.info("Verify witness txs without witness data are invalid after the fork")
-        self.fail_accept(self.nodes[2], 'mandatory-script-verify-flag-failed (Witness program hash mismatch)', wit_ids[NODE_2][P2WPKH][2], sign=False)
-        self.fail_accept(self.nodes[2], 'mandatory-script-verify-flag-failed (Witness program was passed an empty witness)', wit_ids[NODE_2][P2WSH][2], sign=False)
-        self.fail_accept(self.nodes[2], 'mandatory-script-verify-flag-failed (Witness program hash mismatch)', p2sh_ids[NODE_2][P2WPKH][2], sign=False, redeem_script=witness_script(False, self.pubkey[2]))
-        self.fail_accept(self.nodes[2], 'mandatory-script-verify-flag-failed (Witness program was passed an empty witness)', p2sh_ids[NODE_2][P2WSH][2], sign=False, redeem_script=witness_script(True, self.pubkey[2]))
+        self.fail_accept(
+            self.nodes[2],
+            "mandatory-script-verify-flag-failed (Witness program hash mismatch)",
+            wit_ids[NODE_2][P2WPKH][2],
+            sign=False,
+        )
+        self.fail_accept(
+            self.nodes[2],
+            "mandatory-script-verify-flag-failed (Witness program was passed an empty witness)",
+            wit_ids[NODE_2][P2WSH][2],
+            sign=False,
+        )
+        self.fail_accept(
+            self.nodes[2],
+            "mandatory-script-verify-flag-failed (Witness program hash mismatch)",
+            p2sh_ids[NODE_2][P2WPKH][2],
+            sign=False,
+            redeem_script=witness_script(False, self.pubkey[2]),
+        )
+        self.fail_accept(
+            self.nodes[2],
+            "mandatory-script-verify-flag-failed (Witness program was passed an empty witness)",
+            p2sh_ids[NODE_2][P2WSH][2],
+            sign=False,
+            redeem_script=witness_script(True, self.pubkey[2]),
+        )
 
         self.log.info("Verify default node can now use witness txs")
         self.success_mine(self.nodes[0], wit_ids[NODE_0][P2WPKH][0], True)
@@ -244,14 +374,16 @@ class SegWitTest(BitcoinTestFramework):
         self.log.info("Verify sigops are counted in GBT with BIP141 rules after the fork")
         txid = self.nodes[0].sendtoaddress(self.nodes[0].getnewaddress(), 1)
         raw_tx = self.nodes[0].getrawtransaction(txid, True)
-        tmpl = self.nodes[0].getblocktemplate({'rules': ['segwit']})
-        assert_greater_than_or_equal(tmpl['sizelimit'], 3999577)  # actual maximum size is lower due to minimum mandatory non-witness data
-        assert_equal(tmpl['weightlimit'], 4000000)
-        assert_equal(tmpl['sigoplimit'], 80000)
-        assert_equal(tmpl['transactions'][0]['txid'], txid)
-        expected_sigops = 9 if 'txinwitness' in raw_tx["vin"][0] else 8
-        assert_equal(tmpl['transactions'][0]['sigops'], expected_sigops)
-        assert '!segwit' in tmpl['rules']
+        tmpl = self.nodes[0].getblocktemplate({"rules": ["segwit"]})
+        assert_greater_than_or_equal(
+            tmpl["sizelimit"], 3999577
+        )  # actual maximum size is lower due to minimum mandatory non-witness data
+        assert_equal(tmpl["weightlimit"], 4000000)
+        assert_equal(tmpl["sigoplimit"], 80000)
+        assert_equal(tmpl["transactions"][0]["txid"], txid)
+        expected_sigops = 9 if "txinwitness" in raw_tx["vin"][0] else 8
+        assert_equal(tmpl["transactions"][0]["sigops"], expected_sigops)
+        assert "!segwit" in tmpl["rules"]
 
         self.generate(self.nodes[0], 1)  # Mine a block to clear the gbt cache
 
@@ -260,10 +392,12 @@ class SegWitTest(BitcoinTestFramework):
         #                      tx2 (segwit input, paying to a non-segwit output) ->
         #                      tx3 (non-segwit input, paying to a non-segwit output).
         # tx1 is allowed to appear in the block, but no others.
-        txid1 = send_to_witness(1, self.nodes[0], find_spendable_utxo(self.nodes[0], 50), self.pubkey[0], False, Decimal("49.996"))
+        txid1 = send_to_witness(
+            1, self.nodes[0], find_spendable_utxo(self.nodes[0], 50), self.pubkey[0], False, Decimal("49.996")
+        )
         assert txid1 in self.nodes[0].getrawmempool()
 
-        tx1_hex = self.nodes[0].gettransaction(txid1)['hex']
+        tx1_hex = self.nodes[0].gettransaction(txid1)["hex"]
         tx1 = tx_from_hex(tx1_hex)
 
         # Check that wtxid is properly reported in mempool entry (txid1)
@@ -275,9 +409,9 @@ class SegWitTest(BitcoinTestFramework):
 
         # Now create tx2, which will spend from txid1.
         tx = CTransaction()
-        tx.vin.append(CTxIn(COutPoint(int(txid1, 16), 0), b''))
+        tx.vin.append(CTxIn(COutPoint(int(txid1, 16), 0), b""))
         tx.vout.append(CTxOut(int(49.99 * COIN), CScript([OP_TRUE, OP_DROP] * 15 + [OP_TRUE])))
-        tx2_hex = self.nodes[0].signrawtransactionwithwallet(tx.serialize().hex())['hex']
+        tx2_hex = self.nodes[0].signrawtransactionwithwallet(tx.serialize().hex())["hex"]
         txid2 = self.nodes[0].sendrawtransaction(tx2_hex)
         tx = tx_from_hex(tx2_hex)
         assert not tx.wit.is_null()
@@ -300,7 +434,7 @@ class SegWitTest(BitcoinTestFramework):
 
         # Check that getblocktemplate includes all transactions.
         template = self.nodes[0].getblocktemplate({"rules": ["segwit"]})
-        template_txids = [t['txid'] for t in template['transactions']]
+        template_txids = [t["txid"] for t in template["transactions"]]
         assert txid1 in template_txids
         assert txid2 in template_txids
         assert txid3 in template_txids
@@ -334,8 +468,8 @@ class SegWitTest(BitcoinTestFramework):
             uncompressed_spendable_address = ["mvozP4UwyGD2mGZU4D2eMvMLPB9WkMmMQu"]
             self.nodes[0].importprivkey("cNC8eQ5dg3mFAVePDX4ddmPYpPbw41r9bm2jd1nLJT77e6RrzTRR")
             compressed_spendable_address = ["mmWQubrDomqpgSYekvsU7HWEVjLFHAakLe"]
-            assert not self.nodes[0].getaddressinfo(uncompressed_spendable_address[0])['iscompressed']
-            assert self.nodes[0].getaddressinfo(compressed_spendable_address[0])['iscompressed']
+            assert not self.nodes[0].getaddressinfo(uncompressed_spendable_address[0])["iscompressed"]
+            assert self.nodes[0].getaddressinfo(compressed_spendable_address[0])["iscompressed"]
 
             self.nodes[0].importpubkey(pubkeys[0])
             compressed_solvable_address = [key_to_p2pkh(pubkeys[0])]
@@ -353,24 +487,48 @@ class SegWitTest(BitcoinTestFramework):
             unseen_anytime = []                         # These outputs should never be seen
             # fmt: on
 
-            uncompressed_spendable_address.append(self.nodes[0].addmultisigaddress(2, [uncompressed_spendable_address[0], compressed_spendable_address[0]])['address'])
-            uncompressed_spendable_address.append(self.nodes[0].addmultisigaddress(2, [uncompressed_spendable_address[0], uncompressed_spendable_address[0]])['address'])
-            compressed_spendable_address.append(self.nodes[0].addmultisigaddress(2, [compressed_spendable_address[0], compressed_spendable_address[0]])['address'])
-            uncompressed_solvable_address.append(self.nodes[0].addmultisigaddress(2, [compressed_spendable_address[0], uncompressed_solvable_address[0]])['address'])
-            compressed_solvable_address.append(self.nodes[0].addmultisigaddress(2, [compressed_spendable_address[0], compressed_solvable_address[0]])['address'])
-            compressed_solvable_address.append(self.nodes[0].addmultisigaddress(2, [compressed_solvable_address[0], compressed_solvable_address[1]])['address'])
+            uncompressed_spendable_address.append(
+                self.nodes[0].addmultisigaddress(
+                    2, [uncompressed_spendable_address[0], compressed_spendable_address[0]]
+                )["address"]
+            )
+            uncompressed_spendable_address.append(
+                self.nodes[0].addmultisigaddress(
+                    2, [uncompressed_spendable_address[0], uncompressed_spendable_address[0]]
+                )["address"]
+            )
+            compressed_spendable_address.append(
+                self.nodes[0].addmultisigaddress(2, [compressed_spendable_address[0], compressed_spendable_address[0]])[
+                    "address"
+                ]
+            )
+            uncompressed_solvable_address.append(
+                self.nodes[0].addmultisigaddress(
+                    2, [compressed_spendable_address[0], uncompressed_solvable_address[0]]
+                )["address"]
+            )
+            compressed_solvable_address.append(
+                self.nodes[0].addmultisigaddress(2, [compressed_spendable_address[0], compressed_solvable_address[0]])[
+                    "address"
+                ]
+            )
+            compressed_solvable_address.append(
+                self.nodes[0].addmultisigaddress(2, [compressed_solvable_address[0], compressed_solvable_address[1]])[
+                    "address"
+                ]
+            )
 
             # Test multisig_without_privkey
             # We have 2 public keys without private keys, use addmultisigaddress to add to wallet.
             # Money sent to P2SH of multisig of this should only be seen after importaddress with the BASE58 P2SH address.
 
-            multisig_without_privkey_address = self.nodes[0].addmultisigaddress(2, [pubkeys[3], pubkeys[4]])['address']
+            multisig_without_privkey_address = self.nodes[0].addmultisigaddress(2, [pubkeys[3], pubkeys[4]])["address"]
             script = keys_to_multisig_script([pubkeys[3], pubkeys[4]])
             solvable_after_importaddress.append(script_to_p2sh_script(script))
 
             for i in compressed_spendable_address:
                 v = self.nodes[0].getaddressinfo(i)
-                if v['isscript']:
+                if v["isscript"]:
                     [bare, p2sh, p2wsh, p2sh_p2wsh] = self.p2sh_address_to_script(v)
                     # p2sh multisig with compressed keys should always be spendable
                     spendable_anytime.extend([p2sh])
@@ -379,17 +537,30 @@ class SegWitTest(BitcoinTestFramework):
                     # P2WSH and P2SH(P2WSH) multisig with compressed keys are spendable after direct importaddress
                     spendable_after_importaddress.extend([p2wsh, p2sh_p2wsh])
                 else:
-                    [p2wpkh, p2sh_p2wpkh, p2pk, p2pkh, p2sh_p2pk, p2sh_p2pkh, p2wsh_p2pk, p2wsh_p2pkh, p2sh_p2wsh_p2pk, p2sh_p2wsh_p2pkh] = self.p2pkh_address_to_script(v)
+                    [
+                        p2wpkh,
+                        p2sh_p2wpkh,
+                        p2pk,
+                        p2pkh,
+                        p2sh_p2pk,
+                        p2sh_p2pkh,
+                        p2wsh_p2pk,
+                        p2wsh_p2pkh,
+                        p2sh_p2wsh_p2pk,
+                        p2sh_p2wsh_p2pkh,
+                    ] = self.p2pkh_address_to_script(v)
                     # normal P2PKH and P2PK with compressed keys should always be spendable
                     spendable_anytime.extend([p2pkh, p2pk])
                     # P2SH_P2PK, P2SH_P2PKH with compressed keys are spendable after direct importaddress
-                    spendable_after_importaddress.extend([p2sh_p2pk, p2sh_p2pkh, p2wsh_p2pk, p2wsh_p2pkh, p2sh_p2wsh_p2pk, p2sh_p2wsh_p2pkh])
+                    spendable_after_importaddress.extend(
+                        [p2sh_p2pk, p2sh_p2pkh, p2wsh_p2pk, p2wsh_p2pkh, p2sh_p2wsh_p2pk, p2sh_p2wsh_p2pkh]
+                    )
                     # P2WPKH and P2SH_P2WPKH with compressed keys should always be spendable
                     spendable_anytime.extend([p2wpkh, p2sh_p2wpkh])
 
             for i in uncompressed_spendable_address:
                 v = self.nodes[0].getaddressinfo(i)
-                if v['isscript']:
+                if v["isscript"]:
                     [bare, p2sh, p2wsh, p2sh_p2wsh] = self.p2sh_address_to_script(v)
                     # p2sh multisig with uncompressed keys should always be spendable
                     spendable_anytime.extend([p2sh])
@@ -398,43 +569,82 @@ class SegWitTest(BitcoinTestFramework):
                     # P2WSH and P2SH(P2WSH) multisig with uncompressed keys are never seen
                     unseen_anytime.extend([p2wsh, p2sh_p2wsh])
                 else:
-                    [p2wpkh, p2sh_p2wpkh, p2pk, p2pkh, p2sh_p2pk, p2sh_p2pkh, p2wsh_p2pk, p2wsh_p2pkh, p2sh_p2wsh_p2pk, p2sh_p2wsh_p2pkh] = self.p2pkh_address_to_script(v)
+                    [
+                        p2wpkh,
+                        p2sh_p2wpkh,
+                        p2pk,
+                        p2pkh,
+                        p2sh_p2pk,
+                        p2sh_p2pkh,
+                        p2wsh_p2pk,
+                        p2wsh_p2pkh,
+                        p2sh_p2wsh_p2pk,
+                        p2sh_p2wsh_p2pkh,
+                    ] = self.p2pkh_address_to_script(v)
                     # normal P2PKH and P2PK with uncompressed keys should always be spendable
                     spendable_anytime.extend([p2pkh, p2pk])
                     # P2SH_P2PK and P2SH_P2PKH are spendable after direct importaddress
                     spendable_after_importaddress.extend([p2sh_p2pk, p2sh_p2pkh])
                     # Witness output types with uncompressed keys are never seen
-                    unseen_anytime.extend([p2wpkh, p2sh_p2wpkh, p2wsh_p2pk, p2wsh_p2pkh, p2sh_p2wsh_p2pk, p2sh_p2wsh_p2pkh])
+                    unseen_anytime.extend(
+                        [p2wpkh, p2sh_p2wpkh, p2wsh_p2pk, p2wsh_p2pkh, p2sh_p2wsh_p2pk, p2sh_p2wsh_p2pkh]
+                    )
 
             for i in compressed_solvable_address:
                 v = self.nodes[0].getaddressinfo(i)
-                if v['isscript']:
+                if v["isscript"]:
                     # Multisig without private is not seen after addmultisigaddress, but seen after importaddress
                     [bare, p2sh, p2wsh, p2sh_p2wsh] = self.p2sh_address_to_script(v)
                     solvable_after_importaddress.extend([bare, p2sh, p2wsh, p2sh_p2wsh])
                 else:
-                    [p2wpkh, p2sh_p2wpkh, p2pk, p2pkh, p2sh_p2pk, p2sh_p2pkh, p2wsh_p2pk, p2wsh_p2pkh, p2sh_p2wsh_p2pk, p2sh_p2wsh_p2pkh] = self.p2pkh_address_to_script(v)
+                    [
+                        p2wpkh,
+                        p2sh_p2wpkh,
+                        p2pk,
+                        p2pkh,
+                        p2sh_p2pk,
+                        p2sh_p2pkh,
+                        p2wsh_p2pk,
+                        p2wsh_p2pkh,
+                        p2sh_p2wsh_p2pk,
+                        p2sh_p2wsh_p2pkh,
+                    ] = self.p2pkh_address_to_script(v)
                     # normal P2PKH, P2PK, P2WPKH and P2SH_P2WPKH with compressed keys should always be seen
                     solvable_anytime.extend([p2pkh, p2pk, p2wpkh, p2sh_p2wpkh])
                     # P2SH_P2PK, P2SH_P2PKH with compressed keys are seen after direct importaddress
-                    solvable_after_importaddress.extend([p2sh_p2pk, p2sh_p2pkh, p2wsh_p2pk, p2wsh_p2pkh, p2sh_p2wsh_p2pk, p2sh_p2wsh_p2pkh])
+                    solvable_after_importaddress.extend(
+                        [p2sh_p2pk, p2sh_p2pkh, p2wsh_p2pk, p2wsh_p2pkh, p2sh_p2wsh_p2pk, p2sh_p2wsh_p2pkh]
+                    )
 
             for i in uncompressed_solvable_address:
                 v = self.nodes[0].getaddressinfo(i)
-                if v['isscript']:
+                if v["isscript"]:
                     [bare, p2sh, p2wsh, p2sh_p2wsh] = self.p2sh_address_to_script(v)
                     # Base uncompressed multisig without private is not seen after addmultisigaddress, but seen after importaddress
                     solvable_after_importaddress.extend([bare, p2sh])
                     # P2WSH and P2SH(P2WSH) multisig with uncompressed keys are never seen
                     unseen_anytime.extend([p2wsh, p2sh_p2wsh])
                 else:
-                    [p2wpkh, p2sh_p2wpkh, p2pk, p2pkh, p2sh_p2pk, p2sh_p2pkh, p2wsh_p2pk, p2wsh_p2pkh, p2sh_p2wsh_p2pk, p2sh_p2wsh_p2pkh] = self.p2pkh_address_to_script(v)
+                    [
+                        p2wpkh,
+                        p2sh_p2wpkh,
+                        p2pk,
+                        p2pkh,
+                        p2sh_p2pk,
+                        p2sh_p2pkh,
+                        p2wsh_p2pk,
+                        p2wsh_p2pkh,
+                        p2sh_p2wsh_p2pk,
+                        p2sh_p2wsh_p2pkh,
+                    ] = self.p2pkh_address_to_script(v)
                     # normal P2PKH and P2PK with uncompressed keys should always be seen
                     solvable_anytime.extend([p2pkh, p2pk])
                     # P2SH_P2PK, P2SH_P2PKH with uncompressed keys are seen after direct importaddress
                     solvable_after_importaddress.extend([p2sh_p2pk, p2sh_p2pkh])
                     # Witness output types with uncompressed keys are never seen
-                    unseen_anytime.extend([p2wpkh, p2sh_p2wpkh, p2wsh_p2pk, p2wsh_p2pkh, p2sh_p2wsh_p2pk, p2sh_p2wsh_p2pkh])
+                    unseen_anytime.extend(
+                        [p2wpkh, p2sh_p2wpkh, p2wsh_p2pk, p2wsh_p2pkh, p2sh_p2wsh_p2pk, p2sh_p2wsh_p2pkh]
+                    )
 
             op1 = CScript([OP_1])
             op0 = CScript([OP_0])
@@ -455,17 +665,28 @@ class SegWitTest(BitcoinTestFramework):
             solvable_txid = []
             spendable_txid.append(self.mine_and_test_listunspent(spendable_anytime, 2))
             solvable_txid.append(self.mine_and_test_listunspent(solvable_anytime, 1))
-            self.mine_and_test_listunspent(spendable_after_importaddress + solvable_after_importaddress + unseen_anytime + unsolvable_after_importaddress, 0)
+            self.mine_and_test_listunspent(
+                spendable_after_importaddress
+                + solvable_after_importaddress
+                + unseen_anytime
+                + unsolvable_after_importaddress,
+                0,
+            )
 
             importlist = []
-            for i in compressed_spendable_address + uncompressed_spendable_address + compressed_solvable_address + uncompressed_solvable_address:
+            for i in (
+                compressed_spendable_address
+                + uncompressed_spendable_address
+                + compressed_solvable_address
+                + uncompressed_solvable_address
+            ):
                 v = self.nodes[0].getaddressinfo(i)
-                if v['isscript']:
-                    bare = bytes.fromhex(v['hex'])
+                if v["isscript"]:
+                    bare = bytes.fromhex(v["hex"])
                     importlist.append(bare.hex())
                     importlist.append(script_to_p2wsh_script(bare).hex())
                 else:
-                    pubkey = bytes.fromhex(v['pubkey'])
+                    pubkey = bytes.fromhex(v["pubkey"])
                     p2pk = key_to_p2pk_script(pubkey)
                     p2pkh = key_to_p2pkh_script(pubkey)
                     importlist.append(p2pk.hex())
@@ -482,7 +703,15 @@ class SegWitTest(BitcoinTestFramework):
             for i in importlist:
                 # import all generated addresses. The wallet already has the private keys for some of these, so catch JSON RPC
                 # exceptions and continue.
-                try_rpc(-4, "The wallet already contains the private key for this address or script", self.nodes[0].importaddress, i, "", False, True)
+                try_rpc(
+                    -4,
+                    "The wallet already contains the private key for this address or script",
+                    self.nodes[0].importaddress,
+                    i,
+                    "",
+                    False,
+                    True,
+                )
 
             self.nodes[0].importaddress(script_to_p2sh(op0))  # import OP_0 as address only
             self.nodes[0].importaddress(multisig_without_privkey_address)  # Test multisig_without_privkey
@@ -515,42 +744,95 @@ class SegWitTest(BitcoinTestFramework):
             unseen_anytime = []                         # These outputs should never be seen
             # fmt: on
 
-            uncompressed_spendable_address.append(self.nodes[0].addmultisigaddress(2, [uncompressed_spendable_address[0], compressed_spendable_address[0]])['address'])
-            uncompressed_spendable_address.append(self.nodes[0].addmultisigaddress(2, [uncompressed_spendable_address[0], uncompressed_spendable_address[0]])['address'])
-            compressed_spendable_address.append(self.nodes[0].addmultisigaddress(2, [compressed_spendable_address[0], compressed_spendable_address[0]])['address'])
-            uncompressed_solvable_address.append(self.nodes[0].addmultisigaddress(2, [compressed_solvable_address[0], uncompressed_solvable_address[0]])['address'])
-            compressed_solvable_address.append(self.nodes[0].addmultisigaddress(2, [compressed_spendable_address[0], compressed_solvable_address[0]])['address'])
+            uncompressed_spendable_address.append(
+                self.nodes[0].addmultisigaddress(
+                    2, [uncompressed_spendable_address[0], compressed_spendable_address[0]]
+                )["address"]
+            )
+            uncompressed_spendable_address.append(
+                self.nodes[0].addmultisigaddress(
+                    2, [uncompressed_spendable_address[0], uncompressed_spendable_address[0]]
+                )["address"]
+            )
+            compressed_spendable_address.append(
+                self.nodes[0].addmultisigaddress(2, [compressed_spendable_address[0], compressed_spendable_address[0]])[
+                    "address"
+                ]
+            )
+            uncompressed_solvable_address.append(
+                self.nodes[0].addmultisigaddress(2, [compressed_solvable_address[0], uncompressed_solvable_address[0]])[
+                    "address"
+                ]
+            )
+            compressed_solvable_address.append(
+                self.nodes[0].addmultisigaddress(2, [compressed_spendable_address[0], compressed_solvable_address[0]])[
+                    "address"
+                ]
+            )
 
             premature_witaddress = []
 
             for i in compressed_spendable_address:
                 v = self.nodes[0].getaddressinfo(i)
-                if v['isscript']:
+                if v["isscript"]:
                     [bare, p2sh, p2wsh, p2sh_p2wsh] = self.p2sh_address_to_script(v)
                     premature_witaddress.append(script_to_p2sh(p2wsh))
                 else:
-                    [p2wpkh, p2sh_p2wpkh, p2pk, p2pkh, p2sh_p2pk, p2sh_p2pkh, p2wsh_p2pk, p2wsh_p2pkh, p2sh_p2wsh_p2pk, p2sh_p2wsh_p2pkh] = self.p2pkh_address_to_script(v)
+                    [
+                        p2wpkh,
+                        p2sh_p2wpkh,
+                        p2pk,
+                        p2pkh,
+                        p2sh_p2pk,
+                        p2sh_p2pkh,
+                        p2wsh_p2pk,
+                        p2wsh_p2pkh,
+                        p2sh_p2wsh_p2pk,
+                        p2sh_p2wsh_p2pkh,
+                    ] = self.p2pkh_address_to_script(v)
                     # P2WPKH, P2SH_P2WPKH are always spendable
                     spendable_anytime.extend([p2wpkh, p2sh_p2wpkh])
 
             for i in uncompressed_spendable_address + uncompressed_solvable_address:
                 v = self.nodes[0].getaddressinfo(i)
-                if v['isscript']:
+                if v["isscript"]:
                     [bare, p2sh, p2wsh, p2sh_p2wsh] = self.p2sh_address_to_script(v)
                     # P2WSH and P2SH(P2WSH) multisig with uncompressed keys are never seen
                     unseen_anytime.extend([p2wsh, p2sh_p2wsh])
                 else:
-                    [p2wpkh, p2sh_p2wpkh, p2pk, p2pkh, p2sh_p2pk, p2sh_p2pkh, p2wsh_p2pk, p2wsh_p2pkh, p2sh_p2wsh_p2pk, p2sh_p2wsh_p2pkh] = self.p2pkh_address_to_script(v)
+                    [
+                        p2wpkh,
+                        p2sh_p2wpkh,
+                        p2pk,
+                        p2pkh,
+                        p2sh_p2pk,
+                        p2sh_p2pkh,
+                        p2wsh_p2pk,
+                        p2wsh_p2pkh,
+                        p2sh_p2wsh_p2pk,
+                        p2sh_p2wsh_p2pkh,
+                    ] = self.p2pkh_address_to_script(v)
                     # P2WPKH, P2SH_P2WPKH with uncompressed keys are never seen
                     unseen_anytime.extend([p2wpkh, p2sh_p2wpkh])
 
             for i in compressed_solvable_address:
                 v = self.nodes[0].getaddressinfo(i)
-                if v['isscript']:
+                if v["isscript"]:
                     [bare, p2sh, p2wsh, p2sh_p2wsh] = self.p2sh_address_to_script(v)
                     premature_witaddress.append(script_to_p2sh(p2wsh))
                 else:
-                    [p2wpkh, p2sh_p2wpkh, p2pk, p2pkh, p2sh_p2pk, p2sh_p2pkh, p2wsh_p2pk, p2wsh_p2pkh, p2sh_p2wsh_p2pk, p2sh_p2wsh_p2pkh] = self.p2pkh_address_to_script(v)
+                    [
+                        p2wpkh,
+                        p2sh_p2wpkh,
+                        p2pk,
+                        p2pkh,
+                        p2sh_p2pk,
+                        p2sh_p2pkh,
+                        p2wsh_p2pk,
+                        p2wsh_p2pkh,
+                        p2sh_p2wsh_p2pk,
+                        p2sh_p2wsh_p2pkh,
+                    ] = self.p2pkh_address_to_script(v)
                     # P2SH_P2PK, P2SH_P2PKH with compressed keys are always solvable
                     solvable_anytime.extend([p2wpkh, p2sh_p2wpkh])
 
@@ -562,8 +844,8 @@ class SegWitTest(BitcoinTestFramework):
             v1_addr = program_to_witness(1, [3, 5])
             v1_tx = self.nodes[0].createrawtransaction([getutxo(spendable_txid[0])], {v1_addr: 1})
             v1_decoded = self.nodes[1].decoderawtransaction(v1_tx)
-            assert_equal(v1_decoded['vout'][0]['scriptPubKey']['address'], v1_addr)
-            assert_equal(v1_decoded['vout'][0]['scriptPubKey']['hex'], "51020305")
+            assert_equal(v1_decoded["vout"][0]["scriptPubKey"]["address"], v1_addr)
+            assert_equal(v1_decoded["vout"][0]["scriptPubKey"]["hex"], "51020305")
 
             # Check that spendable outputs are really spendable
             self.create_and_mine_tx_from_txids(spendable_txid)
@@ -587,7 +869,7 @@ class SegWitTest(BitcoinTestFramework):
                     transaction = "01000000000100e1f5050000000017a9142f8c469c2f0084c48e11f998ffbe7efa7549f26d8700000000"
 
                 self.nodes[1].importaddress(scriptPubKey, "", False)
-                rawtxfund = self.nodes[1].fundrawtransaction(transaction)['hex']
+                rawtxfund = self.nodes[1].fundrawtransaction(transaction)["hex"]
                 rawtxfund = self.nodes[1].signrawtransactionwithwallet(rawtxfund)["hex"]
                 txid = self.nodes[1].sendrawtransaction(rawtxfund)
 
@@ -602,19 +884,19 @@ class SegWitTest(BitcoinTestFramework):
     def mine_and_test_listunspent(self, script_list, ismine):
         utxo = find_spendable_utxo(self.nodes[0], 50)
         tx = CTransaction()
-        tx.vin.append(CTxIn(COutPoint(int('0x' + utxo['txid'], 0), utxo['vout'])))
+        tx.vin.append(CTxIn(COutPoint(int("0x" + utxo["txid"], 0), utxo["vout"])))
         for i in script_list:
             tx.vout.append(CTxOut(10000000, i))
         tx.rehash()
-        signresults = self.nodes[0].signrawtransactionwithwallet(tx.serialize_without_witness().hex())['hex']
+        signresults = self.nodes[0].signrawtransactionwithwallet(tx.serialize_without_witness().hex())["hex"]
         txid = self.nodes[0].sendrawtransaction(hexstring=signresults, maxfeerate=0)
         txs_mined[txid] = self.generate(self.nodes[0], 1)[0]
         watchcount = 0
         spendcount = 0
         for i in self.nodes[0].listunspent():
-            if i['txid'] == txid:
+            if i["txid"] == txid:
                 watchcount += 1
-                if i['spendable']:
+                if i["spendable"]:
                     spendcount += 1
         if ismine == 2:
             assert_equal(spendcount, len(script_list))
@@ -626,25 +908,36 @@ class SegWitTest(BitcoinTestFramework):
         return txid
 
     def p2sh_address_to_script(self, v):
-        bare = CScript(bytes.fromhex(v['hex']))
-        p2sh = CScript(bytes.fromhex(v['scriptPubKey']))
+        bare = CScript(bytes.fromhex(v["hex"]))
+        p2sh = CScript(bytes.fromhex(v["scriptPubKey"]))
         p2wsh = script_to_p2wsh_script(bare)
         p2sh_p2wsh = script_to_p2sh_script(p2wsh)
         return [bare, p2sh, p2wsh, p2sh_p2wsh]
 
     def p2pkh_address_to_script(self, v):
-        pubkey = bytes.fromhex(v['pubkey'])
+        pubkey = bytes.fromhex(v["pubkey"])
         p2wpkh = key_to_p2wpkh_script(pubkey)
         p2sh_p2wpkh = script_to_p2sh_script(p2wpkh)
         p2pk = key_to_p2pk_script(pubkey)
-        p2pkh = CScript(bytes.fromhex(v['scriptPubKey']))
+        p2pkh = CScript(bytes.fromhex(v["scriptPubKey"]))
         p2sh_p2pk = script_to_p2sh_script(p2pk)
         p2sh_p2pkh = script_to_p2sh_script(p2pkh)
         p2wsh_p2pk = script_to_p2wsh_script(p2pk)
         p2wsh_p2pkh = script_to_p2wsh_script(p2pkh)
         p2sh_p2wsh_p2pk = script_to_p2sh_script(p2wsh_p2pk)
         p2sh_p2wsh_p2pkh = script_to_p2sh_script(p2wsh_p2pkh)
-        return [p2wpkh, p2sh_p2wpkh, p2pk, p2pkh, p2sh_p2pk, p2sh_p2pkh, p2wsh_p2pk, p2wsh_p2pkh, p2sh_p2wsh_p2pk, p2sh_p2wsh_p2pkh]
+        return [
+            p2wpkh,
+            p2sh_p2wpkh,
+            p2pk,
+            p2pkh,
+            p2sh_p2pk,
+            p2sh_p2pkh,
+            p2wsh_p2pk,
+            p2wsh_p2pkh,
+            p2sh_p2wsh_p2pk,
+            p2sh_p2wsh_p2pkh,
+        ]
 
     def create_and_mine_tx_from_txids(self, txids, success=True):
         tx = CTransaction()
@@ -652,13 +945,13 @@ class SegWitTest(BitcoinTestFramework):
             txraw = self.nodes[0].getrawtransaction(i, 0, txs_mined[i])
             txtmp = tx_from_hex(txraw)
             for j in range(len(txtmp.vout)):
-                tx.vin.append(CTxIn(COutPoint(int('0x' + i, 0), j)))
+                tx.vin.append(CTxIn(COutPoint(int("0x" + i, 0), j)))
         tx.vout.append(CTxOut(0, CScript()))
         tx.rehash()
-        signresults = self.nodes[0].signrawtransactionwithwallet(tx.serialize_without_witness().hex())['hex']
+        signresults = self.nodes[0].signrawtransactionwithwallet(tx.serialize_without_witness().hex())["hex"]
         self.nodes[0].sendrawtransaction(hexstring=signresults, maxfeerate=0)
         self.generate(self.nodes[0], 1)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     SegWitTest(__file__).main()

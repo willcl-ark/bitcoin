@@ -3,6 +3,7 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test dust limit mempool policy (`-dustrelayfee` parameter)"""
+
 from decimal import Decimal
 
 from test_framework.messages import (
@@ -40,10 +41,9 @@ DUST_RELAY_TX_FEE = 3000  # default setting [sat/kvB]
 class DustRelayFeeTest(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 1
-        self.extra_args = [['-permitbaremultisig']]
+        self.extra_args = [["-permitbaremultisig"]]
 
-    def test_dust_output(self, node: TestNode, dust_relay_fee: Decimal,
-                         output_script: CScript, type_desc: str) -> None:
+    def test_dust_output(self, node: TestNode, dust_relay_fee: Decimal, output_script: CScript, type_desc: str) -> None:
         # determine dust threshold (see `GetDustThreshold`)
         if output_script[0] == OP_RETURN:
             dust_threshold = 0
@@ -59,14 +59,14 @@ class DustRelayFeeTest(BitcoinTestFramework):
         tx.vout[0].nValue -= dust_threshold  # keep total output value constant
         tx_good_hex = tx.serialize().hex()
         res = node.testmempoolaccept([tx_good_hex])[0]
-        assert_equal(res['allowed'], True)
+        assert_equal(res["allowed"], True)
 
         # amount just below the dust threshold should fail
         if dust_threshold > 0:
             tx.vout[1].nValue -= 1
             res = node.testmempoolaccept([tx.serialize().hex()])[0]
-            assert_equal(res['allowed'], False)
-            assert_equal(res['reject-reason'], 'dust')
+            assert_equal(res["allowed"], False)
+            assert_equal(res["reject-reason"], "dust")
 
         # finally send the transaction to avoid running out of MiniWallet UTXOs
         self.wallet.sendrawtransaction(from_node=node, tx_hex=tx_good_hex)
@@ -111,5 +111,5 @@ class DustRelayFeeTest(BitcoinTestFramework):
             self.generate(self.nodes[0], 1)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     DustRelayFeeTest(__file__).main()

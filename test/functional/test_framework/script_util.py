@@ -3,6 +3,7 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Useful Script constants and utils."""
+
 import unittest
 
 from test_framework.script import (
@@ -44,6 +45,7 @@ DUMMY_MIN_OP_RETURN_SCRIPT = CScript([OP_RETURN] + ([OP_0] * (MIN_PADDING - 1)))
 assert len(DUMMY_MIN_OP_RETURN_SCRIPT) == MIN_PADDING
 
 PAY_TO_ANCHOR = CScript([OP_1, bytes.fromhex("4e73")])
+
 
 def key_to_p2pk_script(key):
     key = check_key(key)
@@ -133,15 +135,15 @@ def check_script(script):
 
 class TestFrameworkScriptUtil(unittest.TestCase):
     def test_multisig(self):
-        fake_pubkey = bytes([0]*33)
+        fake_pubkey = bytes([0] * 33)
         # check correct encoding of P2MS script with n,k <= 16
-        normal_ms_script = keys_to_multisig_script([fake_pubkey]*16, k=15)
-        self.assertEqual(len(normal_ms_script), 1 + 16*34 + 1 + 1)
+        normal_ms_script = keys_to_multisig_script([fake_pubkey] * 16, k=15)
+        self.assertEqual(len(normal_ms_script), 1 + 16 * 34 + 1 + 1)
         self.assertTrue(normal_ms_script.startswith(bytes([OP_15])))
         self.assertTrue(normal_ms_script.endswith(bytes([OP_16, OP_CHECKMULTISIG])))
 
         # check correct encoding of P2MS script with n,k > 16
-        max_ms_script = keys_to_multisig_script([fake_pubkey]*20, k=19)
-        self.assertEqual(len(max_ms_script), 2 + 20*34 + 2 + 1)
+        max_ms_script = keys_to_multisig_script([fake_pubkey] * 20, k=19)
+        self.assertEqual(len(max_ms_script), 2 + 20 * 34 + 2 + 1)
         self.assertTrue(max_ms_script.startswith(bytes([1, 19])))  # using OP_PUSH1
         self.assertTrue(max_ms_script.endswith(bytes([1, 20, OP_CHECKMULTISIG])))

@@ -8,12 +8,14 @@ import unittest
 
 from .chacha20 import chacha20_block
 
+
 def data_to_num3072(data):
     """Hash a 32-byte array data to a 3072-bit number using 6 Chacha20 operations."""
     bytes384 = b""
     for counter in range(6):
         bytes384 += chacha20_block(data, bytes(12), counter)
-    return int.from_bytes(bytes384, 'little')
+    return int.from_bytes(bytes384, "little")
+
 
 class MuHash3072:
     """Class representing the MuHash3072 computation of a set.
@@ -41,15 +43,16 @@ class MuHash3072:
     def digest(self):
         """Extract the final hash. Does not modify this object."""
         val = (self.numerator * pow(self.denominator, -1, self.MODULUS)) % self.MODULUS
-        bytes384 = val.to_bytes(384, 'little')
+        bytes384 = val.to_bytes(384, "little")
         return hashlib.sha256(bytes384).digest()
+
 
 class TestFrameworkMuhash(unittest.TestCase):
     def test_muhash(self):
         muhash = MuHash3072()
-        muhash.insert(b'\x00' * 32)
-        muhash.insert((b'\x01' + b'\x00' * 31))
-        muhash.remove((b'\x02' + b'\x00' * 31))
+        muhash.insert(b"\x00" * 32)
+        muhash.insert((b"\x01" + b"\x00" * 31))
+        muhash.remove((b"\x02" + b"\x00" * 31))
         finalized = muhash.digest()
         # This mirrors the result in the C++ MuHash3072 unit test
         self.assertEqual(finalized[::-1].hex(), "10d312b100cbd32ada024a6646e40d3482fcff103668d2625f10002a607d5863")

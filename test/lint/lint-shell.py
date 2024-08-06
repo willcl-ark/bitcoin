@@ -14,60 +14,63 @@ import sys
 
 # Disabled warnings:
 DISABLED = [
-    'SC2162', # read without -r will mangle backslashes.
+    "SC2162",  # read without -r will mangle backslashes.
 ]
+
 
 def check_shellcheck_install():
     try:
-        subprocess.run(['shellcheck', '--version'], stdout=subprocess.DEVNULL, check=True)
+        subprocess.run(["shellcheck", "--version"], stdout=subprocess.DEVNULL, check=True)
     except FileNotFoundError:
-        print('Skipping shell linting since shellcheck is not installed.')
+        print("Skipping shell linting since shellcheck is not installed.")
         sys.exit(0)
+
 
 def get_files(command):
     output = subprocess.run(command, stdout=subprocess.PIPE, text=True)
-    files = output.stdout.split('\n')
+    files = output.stdout.split("\n")
 
     # remove whitespace element
     files = list(filter(None, files))
     return files
 
+
 def main():
     check_shellcheck_install()
 
     # build the `exclude` flag
-    exclude = '--exclude=' + ','.join(DISABLED)
+    exclude = "--exclude=" + ",".join(DISABLED)
 
     # build the `sourced files` list
     sourced_files_cmd = [
-        'git',
-        'grep',
-        '-El',
-        r'^# shellcheck shell=',
+        "git",
+        "grep",
+        "-El",
+        r"^# shellcheck shell=",
     ]
     sourced_files = get_files(sourced_files_cmd)
 
     # build the `guix files` list
     guix_files_cmd = [
-        'git',
-        'grep',
-        '-El',
-        r'^#!\/usr\/bin\/env bash',
-        '--',
-        'contrib/guix',
-        'contrib/shell',
+        "git",
+        "grep",
+        "-El",
+        r"^#!\/usr\/bin\/env bash",
+        "--",
+        "contrib/guix",
+        "contrib/shell",
     ]
     guix_files = get_files(guix_files_cmd)
 
     # build the other script files list
     files_cmd = [
-        'git',
-        'ls-files',
-        '--',
-        '*.sh',
+        "git",
+        "ls-files",
+        "--",
+        "*.sh",
     ]
     files = get_files(files_cmd)
-    reg = re.compile(r'src/[leveldb,secp256k1,minisketch]')
+    reg = re.compile(r"src/[leveldb,secp256k1,minisketch]")
 
     def should_exclude(fname: str) -> bool:
         return bool(reg.match(fname))
@@ -77,10 +80,10 @@ def main():
 
     # build the `shellcheck` command
     shellcheck_cmd = [
-        'shellcheck',
-        '--external-sources',
-        '--check-sourced',
-        '--source-path=SCRIPTDIR',
+        "shellcheck",
+        "--external-sources",
+        "--check-sourced",
+        "--source-path=SCRIPTDIR",
     ]
     shellcheck_cmd.append(exclude)
     shellcheck_cmd.extend(sourced_files)
@@ -93,5 +96,6 @@ def main():
     except subprocess.CalledProcessError:
         sys.exit(1)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

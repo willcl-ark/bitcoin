@@ -32,9 +32,9 @@ logger = logging.getLogger("TestFramework.utils")
 def assert_approx(v, vexp, vspan=0.00001):
     """Assert that `v` is within `vspan` of `vexp`"""
     if isinstance(v, Decimal) or isinstance(vexp, Decimal):
-        v=Decimal(v)
-        vexp=Decimal(vexp)
-        vspan=Decimal(vspan)
+        v = Decimal(v)
+        vexp = Decimal(vexp)
+        vspan = Decimal(vspan)
     if v < vexp - vspan:
         raise AssertionError("%s < [%s..%s]" % (str(v), str(vexp - vspan), str(vexp + vspan)))
     if v > vexp + vspan:
@@ -67,9 +67,10 @@ def summarise_dict_differences(thing1, thing2):
             d2[k] = thing2[k]
     return d1, d2
 
+
 def assert_equal(thing1, thing2, *args):
     if thing1 != thing2 and not args and isinstance(thing1, dict) and isinstance(thing2, dict):
-        d1,d2 = summarise_dict_differences(thing1, thing2)
+        d1, d2 = summarise_dict_differences(thing1, thing2)
         raise AssertionError("not(%s == %s)\n  in particular not(%s == %s)" % (thing1, thing2, d1, d2))
     if thing1 != thing2 or any(thing1 != arg for arg in args):
         raise AssertionError("not(%s)" % " == ".join(str(arg) for arg in (thing1, thing2) + args))
@@ -95,10 +96,12 @@ def assert_raises_message(exc, message, fun, *args, **kwds):
     except JSONRPCException:
         raise AssertionError("Use assert_raises_rpc_error() to test RPC failures")
     except exc as e:
-        if message is not None and message not in e.error['message']:
+        if message is not None and message not in e.error["message"]:
             raise AssertionError(
                 "Expected substring not found in error message:\nsubstring: '{}'\nerror message: '{}'.".format(
-                    message, e.error['message']))
+                    message, e.error["message"]
+                )
+            )
     except Exception as e:
         raise AssertionError("Unexpected exception raised: " + type(e).__name__)
     else:
@@ -160,10 +163,12 @@ def try_rpc(code, message, fun, *args, **kwds):
         # JSONRPCException was thrown as expected. Check the code and message values are correct.
         if (code is not None) and (code != e.error["code"]):
             raise AssertionError("Unexpected JSONRPC error code %i" % e.error["code"])
-        if (message is not None) and (message not in e.error['message']):
+        if (message is not None) and (message not in e.error["message"]):
             raise AssertionError(
                 "Expected substring not found in error message:\nsubstring: '{}'\nerror message: '{}'.".format(
-                    message, e.error['message']))
+                    message, e.error["message"]
+                )
+            )
         return True
     except Exception as e:
         raise AssertionError("Unexpected exception raised: " + type(e).__name__)
@@ -183,18 +188,18 @@ def assert_is_hash_string(string, length=64):
         raise AssertionError("Expected a string, got type %r" % type(string))
     elif length and len(string) != length:
         raise AssertionError("String of length %d expected; got %d" % (length, len(string)))
-    elif not re.match('[abcdef0-9]+$', string):
+    elif not re.match("[abcdef0-9]+$", string):
         raise AssertionError("String %r contains invalid characters for a hash." % string)
 
 
 def assert_array_result(object_array, to_match, expected, should_not_find=False):
     """
-        Pass in array of JSON objects, a dictionary with key/value pairs
-        to match against, and another dictionary with expected key/value
-        pairs.
-        If the should_not_find flag is true, to_match should not be found
-        in object_array
-        """
+    Pass in array of JSON objects, a dictionary with key/value pairs
+    to match against, and another dictionary with expected key/value
+    pairs.
+    If the should_not_find flag is true, to_match should not be found
+    in object_array
+    """
     if should_not_find:
         assert_equal(expected, {})
     num_matched = 0
@@ -234,7 +239,7 @@ def count_bytes(hex_string):
 
 
 def str_to_b64str(string):
-    return b64encode(string.encode('utf-8')).decode('ascii')
+    return b64encode(string.encode("utf-8")).decode("ascii")
 
 
 def ceildiv(a, b):
@@ -250,22 +255,24 @@ def ceildiv(a, b):
 
 def random_bitflip(data):
     data = list(data)
-    data[random.randrange(len(data))] ^= (1 << (random.randrange(8)))
+    data[random.randrange(len(data))] ^= 1 << (random.randrange(8))
     return bytes(data)
 
 
 def get_fee(tx_size, feerate_btc_kvb):
     """Calculate the fee in BTC given a feerate is BTC/kvB. Reflects CFeeRate::GetFee"""
-    feerate_sat_kvb = int(feerate_btc_kvb * Decimal(1e8)) # Fee in sat/kvb as an int to avoid float precision errors
-    target_fee_sat = ceildiv(feerate_sat_kvb * tx_size, 1000) # Round calculated fee up to nearest sat
-    return target_fee_sat / Decimal(1e8) # Return result in  BTC
+    feerate_sat_kvb = int(feerate_btc_kvb * Decimal(1e8))  # Fee in sat/kvb as an int to avoid float precision errors
+    target_fee_sat = ceildiv(feerate_sat_kvb * tx_size, 1000)  # Round calculated fee up to nearest sat
+    return target_fee_sat / Decimal(1e8)  # Return result in  BTC
 
 
 def satoshi_round(amount):
-    return Decimal(amount).quantize(Decimal('0.00000001'), rounding=ROUND_DOWN)
+    return Decimal(amount).quantize(Decimal("0.00000001"), rounding=ROUND_DOWN)
 
 
-def wait_until_helper_internal(predicate, *, attempts=float('inf'), timeout=float('inf'), lock=None, timeout_factor=1.0):
+def wait_until_helper_internal(
+    predicate, *, attempts=float("inf"), timeout=float("inf"), lock=None, timeout_factor=1.0
+):
     """Sleep until the predicate resolves to be True.
 
     Warning: Note that this method is not recommended to be used in tests as it is
@@ -274,7 +281,7 @@ def wait_until_helper_internal(predicate, *, attempts=float('inf'), timeout=floa
     properly scaled. Furthermore, `wait_until()` from `P2PInterface` class in
     `p2p.py` has a preset lock.
     """
-    if attempts == float('inf') and timeout == float('inf'):
+    if attempts == float("inf") and timeout == float("inf"):
         timeout = 60
     timeout = timeout * timeout_factor
     attempt = 0
@@ -298,12 +305,12 @@ def wait_until_helper_internal(predicate, *, attempts=float('inf'), timeout=floa
         raise AssertionError("Predicate {} not true after {} attempts".format(predicate_source, attempts))
     elif time.time() >= time_end:
         raise AssertionError("Predicate {} not true after {} seconds".format(predicate_source, timeout))
-    raise RuntimeError('Unreachable')
+    raise RuntimeError("Unreachable")
 
 
 def sha256sum_file(filename):
     h = hashlib.sha256()
-    with open(filename, 'rb') as f:
+    with open(filename, "rb") as f:
         d = f.read(4096)
         while len(d) > 0:
             h.update(d)
@@ -317,7 +324,7 @@ def sha256sum_file(filename):
 # The maximum number of nodes a single test can spawn
 MAX_NODES = 12
 # Don't assign p2p, rpc or tor ports lower than this
-PORT_MIN = int(os.getenv('TEST_RUNNER_PORT_MIN', default=11000))
+PORT_MIN = int(os.getenv("TEST_RUNNER_PORT_MIN", default=11000))
 # The number of ports to "reserve" for p2p, rpc and tor, each
 PORT_RANGE = 5000
 
@@ -327,7 +334,9 @@ class PortSeed:
     n = None
 
 
-def get_rpc_proxy(url: str, node_number: int, *, timeout: Optional[int]=None, coveragedir: Optional[str]=None) -> coverage.AuthServiceProxyWrapper:
+def get_rpc_proxy(
+    url: str, node_number: int, *, timeout: Optional[int] = None, coveragedir: Optional[str] = None
+) -> coverage.AuthServiceProxyWrapper:
     """
     Args:
         url: URL of the RPC server to call
@@ -343,7 +352,7 @@ def get_rpc_proxy(url: str, node_number: int, *, timeout: Optional[int]=None, co
     """
     proxy_kwargs = {}
     if timeout is not None:
-        proxy_kwargs['timeout'] = int(timeout)
+        proxy_kwargs["timeout"] = int(timeout)
 
     proxy = AuthServiceProxy(url, **proxy_kwargs)
 
@@ -367,10 +376,10 @@ def tor_port(n):
 
 def rpc_url(datadir, i, chain, rpchost):
     rpc_u, rpc_p = get_auth_cookie(datadir, chain)
-    host = '127.0.0.1'
+    host = "127.0.0.1"
     port = rpc_port(i)
     if rpchost:
-        parts = rpchost.split(':')
+        parts = rpchost.split(":")
         if len(parts) == 2:
             host, port = parts
         else:
@@ -387,20 +396,20 @@ def initialize_datadir(dirname, n, chain, disable_autoconnect=True):
     if not os.path.isdir(datadir):
         os.makedirs(datadir)
     write_config(os.path.join(datadir, "bitcoin.conf"), n=n, chain=chain, disable_autoconnect=disable_autoconnect)
-    os.makedirs(os.path.join(datadir, 'stderr'), exist_ok=True)
-    os.makedirs(os.path.join(datadir, 'stdout'), exist_ok=True)
+    os.makedirs(os.path.join(datadir, "stderr"), exist_ok=True)
+    os.makedirs(os.path.join(datadir, "stdout"), exist_ok=True)
     return datadir
 
 
 def write_config(config_path, *, n, chain, extra_config="", disable_autoconnect=True):
     # Translate chain subdirectory name to config name
-    if chain == 'testnet3':
-        chain_name_conf_arg = 'testnet'
-        chain_name_conf_section = 'test'
+    if chain == "testnet3":
+        chain_name_conf_arg = "testnet"
+        chain_name_conf_section = "test"
     else:
         chain_name_conf_arg = chain
         chain_name_conf_section = chain
-    with open(config_path, 'w', encoding='utf8') as f:
+    with open(config_path, "w", encoding="utf8") as f:
         if chain_name_conf_arg:
             f.write("{}=1\n".format(chain_name_conf_arg))
         if chain_name_conf_section:
@@ -455,7 +464,7 @@ def get_temp_default_datadir(temp_dir: pathlib.Path) -> tuple[dict, pathlib.Path
 
 
 def append_config(datadir, options):
-    with open(os.path.join(datadir, "bitcoin.conf"), 'a', encoding='utf8') as f:
+    with open(os.path.join(datadir, "bitcoin.conf"), "a", encoding="utf8") as f:
         for option in options:
             f.write(option + "\n")
 
@@ -464,7 +473,7 @@ def get_auth_cookie(datadir, chain):
     user = None
     password = None
     if os.path.isfile(os.path.join(datadir, "bitcoin.conf")):
-        with open(os.path.join(datadir, "bitcoin.conf"), 'r', encoding='utf8') as f:
+        with open(os.path.join(datadir, "bitcoin.conf"), "r", encoding="utf8") as f:
             for line in f:
                 if line.startswith("rpcuser="):
                     assert user is None  # Ensure that there is only one rpcuser line
@@ -473,9 +482,9 @@ def get_auth_cookie(datadir, chain):
                     assert password is None  # Ensure that there is only one rpcpassword line
                     password = line.split("=")[1].strip("\n")
     try:
-        with open(os.path.join(datadir, chain, ".cookie"), 'r', encoding="ascii") as f:
+        with open(os.path.join(datadir, chain, ".cookie"), "r", encoding="ascii") as f:
             userpass = f.read()
-            split_userpass = userpass.split(':')
+            split_userpass = userpass.split(":")
             user = split_userpass[0]
             password = split_userpass[1]
     except OSError:
@@ -494,7 +503,7 @@ def delete_cookie_file(datadir, chain):
 
 def softfork_active(node, key):
     """Return whether a softfork is active."""
-    return node.getdeploymentinfo()['deployments'][key]['active']
+    return node.getdeploymentinfo()["deployments"][key]["active"]
 
 
 def set_node_times(nodes, t):
@@ -518,7 +527,8 @@ def check_node_connections(*, node, num_in, num_out):
 def gen_return_txouts():
     from .messages import CTxOut
     from .script import CScript, OP_RETURN
-    txouts = [CTxOut(nValue=0, scriptPubKey=CScript([OP_RETURN, b'\x01'*67437]))]
+
+    txouts = [CTxOut(nValue=0, scriptPubKey=CScript([OP_RETURN, b"\x01" * 67437]))]
     assert_equal(sum([len(txout.serialize()) for txout in txouts]), 67456)
     return txouts
 
@@ -535,7 +545,7 @@ def create_lots_of_big_transactions(mini_wallet, node, fee, tx_batch_size, txout
         )["tx"]
         tx.vout.extend(txouts)
         res = node.testmempoolaccept([tx.serialize().hex()])[0]
-        assert_equal(res['fees']['base'], fee)
+        assert_equal(res["fees"]["base"], fee)
         txids.append(node.sendrawtransaction(tx.serialize().hex()))
     return txids
 

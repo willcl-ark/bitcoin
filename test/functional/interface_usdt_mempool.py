@@ -3,8 +3,8 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-"""  Tests the mempool:* tracepoint API interface.
-     See https://github.com/bitcoin/bitcoin/blob/master/doc/tracing.md#context-mempool
+"""Tests the mempool:* tracepoint API interface.
+See https://github.com/bitcoin/bitcoin/blob/master/doc/tracing.md#context-mempool
 """
 
 from decimal import Decimal
@@ -144,7 +144,12 @@ class MempoolTracepointTest(BitcoinTestFramework):
         node = self.nodes[0]
         ctx = USDT(pid=node.process.pid)
         ctx.enable_probe(probe="mempool:added", fn_name="trace_added")
-        bpf = BPF(text=MEMPOOL_TRACEPOINTS_PROGRAM, usdt_contexts=[ctx], debug=0, cflags=["-Wno-error=implicit-function-declaration"])
+        bpf = BPF(
+            text=MEMPOOL_TRACEPOINTS_PROGRAM,
+            usdt_contexts=[ctx],
+            debug=0,
+            cflags=["-Wno-error=implicit-function-declaration"],
+        )
 
         def handle_added_event(_, data, __):
             events.append(bpf["added_events"].event(data))
@@ -181,7 +186,12 @@ class MempoolTracepointTest(BitcoinTestFramework):
         node = self.nodes[0]
         ctx = USDT(pid=node.process.pid)
         ctx.enable_probe(probe="mempool:removed", fn_name="trace_removed")
-        bpf = BPF(text=MEMPOOL_TRACEPOINTS_PROGRAM, usdt_contexts=[ctx], debug=0, cflags=["-Wno-error=implicit-function-declaration"])
+        bpf = BPF(
+            text=MEMPOOL_TRACEPOINTS_PROGRAM,
+            usdt_contexts=[ctx],
+            debug=0,
+            cflags=["-Wno-error=implicit-function-declaration"],
+        )
 
         def handle_removed_event(_, data, __):
             events.append(bpf["removed_events"].event(data))
@@ -227,7 +237,12 @@ class MempoolTracepointTest(BitcoinTestFramework):
         node = self.nodes[0]
         ctx = USDT(pid=node.process.pid)
         ctx.enable_probe(probe="mempool:replaced", fn_name="trace_replaced")
-        bpf = BPF(text=MEMPOOL_TRACEPOINTS_PROGRAM, usdt_contexts=[ctx], debug=0, cflags=["-Wno-error=implicit-function-declaration"])
+        bpf = BPF(
+            text=MEMPOOL_TRACEPOINTS_PROGRAM,
+            usdt_contexts=[ctx],
+            debug=0,
+            cflags=["-Wno-error=implicit-function-declaration"],
+        )
 
         def handle_replaced_event(_, data, __):
             events.append(bpf["replaced_events"].event(data))
@@ -237,16 +252,12 @@ class MempoolTracepointTest(BitcoinTestFramework):
         self.log.info("Sending RBF transaction...")
         utxo = self.wallet.get_utxo(mark_as_spent=True)
         original_fee = Decimal(40000)
-        original_tx = self.wallet.send_self_transfer(
-            from_node=node, utxo_to_spend=utxo, fee=original_fee / COIN
-        )
+        original_tx = self.wallet.send_self_transfer(from_node=node, utxo_to_spend=utxo, fee=original_fee / COIN)
         entry_time = node.getmempoolentry(original_tx["txid"])["time"]
 
         self.log.info("Sending replacement transaction...")
         replacement_fee = Decimal(45000)
-        replacement_tx = self.wallet.send_self_transfer(
-            from_node=node, utxo_to_spend=utxo, fee=replacement_fee / COIN
-        )
+        replacement_tx = self.wallet.send_self_transfer(from_node=node, utxo_to_spend=utxo, fee=replacement_fee / COIN)
 
         self.log.info("Polling buffer...")
         bpf.perf_buffer_poll(timeout=200)
@@ -278,7 +289,12 @@ class MempoolTracepointTest(BitcoinTestFramework):
         self.log.info("Hooking into mempool:rejected tracepoint...")
         ctx = USDT(pid=node.process.pid)
         ctx.enable_probe(probe="mempool:rejected", fn_name="trace_rejected")
-        bpf = BPF(text=MEMPOOL_TRACEPOINTS_PROGRAM, usdt_contexts=[ctx], debug=0, cflags=["-Wno-error=implicit-function-declaration"])
+        bpf = BPF(
+            text=MEMPOOL_TRACEPOINTS_PROGRAM,
+            usdt_contexts=[ctx],
+            debug=0,
+            cflags=["-Wno-error=implicit-function-declaration"],
+        )
 
         def handle_rejected_event(_, data, __):
             events.append(bpf["rejected_events"].event(data))
@@ -299,7 +315,7 @@ class MempoolTracepointTest(BitcoinTestFramework):
         # The next test is already known to fail, so disable it to avoid
         # wasting CPU time and developer time. See
         # https://github.com/bitcoin/bitcoin/issues/27380
-        #assert_equal(event.reason.decode("UTF-8"), "min relay fee not met")
+        # assert_equal(event.reason.decode("UTF-8"), "min relay fee not met")
 
         bpf.cleanup()
         self.generate(self.wallet, 1)

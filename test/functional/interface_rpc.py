@@ -14,10 +14,10 @@ from typing import Optional
 import subprocess
 
 
-RPC_INVALID_PARAMETER      = -8
-RPC_METHOD_NOT_FOUND       = -32601
-RPC_INVALID_REQUEST        = -32600
-RPC_PARSE_ERROR            = -32700
+RPC_INVALID_PARAMETER = -8
+RPC_METHOD_NOT_FOUND = -32601
+RPC_INVALID_REQUEST = -32600
+RPC_PARSE_ERROR = -32700
 
 
 @dataclass
@@ -69,7 +69,9 @@ def send_json_rpc(node, body: object) -> tuple[object, int]:
     return send_raw_rpc(node, raw)
 
 
-def expect_http_rpc_status(expected_http_status, expected_rpc_error_code, node, method, params, version=1, notification=False):
+def expect_http_rpc_status(
+    expected_http_status, expected_rpc_error_code, node, method, params, version=1, notification=False
+):
     req = format_request(BatchOptions(version, notification), 0, {"method": method, "params": params})
     response, status = send_json_rpc(node, req)
 
@@ -84,7 +86,7 @@ def test_work_queue_getblock(node, got_exceeded_error):
         try:
             node.cli("waitfornewblock", "500").send_cli()
         except subprocess.CalledProcessError as e:
-            assert_equal(e.output, 'error: Server response: Work queue depth exceeded\n')
+            assert_equal(e.output, "error: Server response: Work queue depth exceeded\n")
             got_exceeded_error.append(True)
 
 
@@ -98,12 +100,12 @@ class RPCInterfaceTest(BitcoinTestFramework):
         self.log.info("Testing getrpcinfo...")
 
         info = self.nodes[0].getrpcinfo()
-        assert_equal(len(info['active_commands']), 1)
+        assert_equal(len(info["active_commands"]), 1)
 
-        command = info['active_commands'][0]
-        assert_equal(command['method'], 'getrpcinfo')
-        assert_greater_than_or_equal(command['duration'], 0)
-        assert_equal(info['logpath'], os.path.join(self.nodes[0].chain_path, 'debug.log'))
+        command = info["active_commands"][0]
+        assert_equal(command["method"], "getrpcinfo")
+        assert_greater_than_or_equal(command["duration"], 0)
+        assert_equal(info["logpath"], os.path.join(self.nodes[0].chain_path, "debug.log"))
 
     def test_batch_request(self, call_options):
         calls = [
@@ -115,7 +117,7 @@ class RPCInterfaceTest(BitcoinTestFramework):
             # Another call that should succeed.
             {"method": "getblockhash", "params": [0]},
             # Invalid request format
-            {"pizza": "sausage"}
+            {"pizza": "sausage"},
         ]
         results = [
             {"result": 0},
@@ -173,38 +175,54 @@ class RPCInterfaceTest(BitcoinTestFramework):
         self.test_batch_request(lambda idx: BatchOptions(request_fields={"jsonrpc": "1.0"}))
 
         self.log.info("Testing unrecognized jsonrpc version number is rejected...")
-        self.test_batch_request(lambda idx: BatchOptions(
-            request_fields={"jsonrpc": "2.1"},
-            response_fields={"result": None, "error": {"code": RPC_INVALID_REQUEST, "message": "JSON-RPC version not supported"}}))
+        self.test_batch_request(
+            lambda idx: BatchOptions(
+                request_fields={"jsonrpc": "2.1"},
+                response_fields={
+                    "result": None,
+                    "error": {"code": RPC_INVALID_REQUEST, "message": "JSON-RPC version not supported"},
+                },
+            )
+        )
 
     def test_http_status_codes(self):
         self.log.info("Testing HTTP status codes for JSON-RPC 1.1 requests...")
         # OK
-        expect_http_rpc_status(200, None,                  self.nodes[0], "getblockhash", [0])
+        expect_http_rpc_status(200, None, self.nodes[0], "getblockhash", [0])
         # Errors
-        expect_http_rpc_status(404, RPC_METHOD_NOT_FOUND,  self.nodes[0], "invalidmethod", [])
+        expect_http_rpc_status(404, RPC_METHOD_NOT_FOUND, self.nodes[0], "invalidmethod", [])
         expect_http_rpc_status(500, RPC_INVALID_PARAMETER, self.nodes[0], "getblockhash", [42])
         # force-send empty request
         response, status = send_raw_rpc(self.nodes[0], b"")
-        assert_equal(response, {"id": None, "result": None, "error": {"code": RPC_PARSE_ERROR, "message": "Parse error"}})
+        assert_equal(
+            response, {"id": None, "result": None, "error": {"code": RPC_PARSE_ERROR, "message": "Parse error"}}
+        )
         assert_equal(status, 500)
         # force-send invalidly formatted request
         response, status = send_raw_rpc(self.nodes[0], b"this is bad")
-        assert_equal(response, {"id": None, "result": None, "error": {"code": RPC_PARSE_ERROR, "message": "Parse error"}})
+        assert_equal(
+            response, {"id": None, "result": None, "error": {"code": RPC_PARSE_ERROR, "message": "Parse error"}}
+        )
         assert_equal(status, 500)
 
         self.log.info("Testing HTTP status codes for JSON-RPC 2.0 requests...")
         # OK
-        expect_http_rpc_status(200, None,                   self.nodes[0], "getblockhash", [0],  2, False)
+        expect_http_rpc_status(200, None, self.nodes[0], "getblockhash", [0], 2, False)
         # RPC errors but not HTTP errors
-        expect_http_rpc_status(200, RPC_METHOD_NOT_FOUND,   self.nodes[0], "invalidmethod", [],  2, False)
-        expect_http_rpc_status(200, RPC_INVALID_PARAMETER,  self.nodes[0], "getblockhash", [42], 2, False)
+        expect_http_rpc_status(200, RPC_METHOD_NOT_FOUND, self.nodes[0], "invalidmethod", [], 2, False)
+        expect_http_rpc_status(200, RPC_INVALID_PARAMETER, self.nodes[0], "getblockhash", [42], 2, False)
         # force-send invalidly formatted requests
         response, status = send_json_rpc(self.nodes[0], {"jsonrpc": 2, "method": "getblockcount"})
-        assert_equal(response, {"result": None, "error": {"code": RPC_INVALID_REQUEST, "message": "jsonrpc field must be a string"}})
+        assert_equal(
+            response,
+            {"result": None, "error": {"code": RPC_INVALID_REQUEST, "message": "jsonrpc field must be a string"}},
+        )
         assert_equal(status, 400)
         response, status = send_json_rpc(self.nodes[0], {"jsonrpc": "3.0", "method": "getblockcount"})
-        assert_equal(response, {"result": None, "error": {"code": RPC_INVALID_REQUEST, "message": "JSON-RPC version not supported"}})
+        assert_equal(
+            response,
+            {"result": None, "error": {"code": RPC_INVALID_REQUEST, "message": "JSON-RPC version not supported"}},
+        )
         assert_equal(status, 400)
 
         self.log.info("Testing HTTP status codes for JSON-RPC 2.0 notifications...")
@@ -213,12 +231,14 @@ class RPCInterfaceTest(BitcoinTestFramework):
         assert_equal(response["result"], 0)
         assert_equal(status, 200)
         # Not notification: JSON 1.1
-        expect_http_rpc_status(200, None,                   self.nodes[0], "getblockcount", [],  1)
+        expect_http_rpc_status(200, None, self.nodes[0], "getblockcount", [], 1)
         # Not notification: has "id" field
-        expect_http_rpc_status(200, None,                   self.nodes[0], "getblockcount", [],  2, False)
+        expect_http_rpc_status(200, None, self.nodes[0], "getblockcount", [], 2, False)
         block_count = self.nodes[0].getblockcount()
         # Notification response status code: HTTP_NO_CONTENT
-        expect_http_rpc_status(204, None,                   self.nodes[0], "generatetoaddress", [1, "bcrt1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqdku202"],  2, True)
+        expect_http_rpc_status(
+            204, None, self.nodes[0], "generatetoaddress", [1, "bcrt1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqdku202"], 2, True
+        )
         # The command worked even though there was no response
         assert_equal(block_count + 1, self.nodes[0].getblockcount())
         # No error response for notifications even if they are invalid
@@ -228,7 +248,7 @@ class RPCInterfaceTest(BitcoinTestFramework):
 
     def test_work_queue_exceeded(self):
         self.log.info("Testing work queue exceeded...")
-        self.restart_node(0, ['-rpcworkqueue=1', '-rpcthreads=1'])
+        self.restart_node(0, ["-rpcworkqueue=1", "-rpcthreads=1"])
         got_exceeded_error = []
         threads = []
         for _ in range(3):
@@ -245,5 +265,5 @@ class RPCInterfaceTest(BitcoinTestFramework):
         self.test_work_queue_exceeded()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     RPCInterfaceTest(__file__).main()

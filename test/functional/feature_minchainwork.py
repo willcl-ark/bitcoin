@@ -24,6 +24,7 @@ from test_framework.util import assert_equal
 # 2 hashes required per regtest block (with no difficulty adjustment)
 REGTEST_WORK_PER_BLOCK = 2
 
+
 class MinimumChainWorkTest(BitcoinTestFramework):
     def set_test_params(self):
         self.setup_clean_chain = True
@@ -39,16 +40,16 @@ class MinimumChainWorkTest(BitcoinTestFramework):
         # peers, so ensure that we're mining on an outbound peer and testing
         # block relay to inbound peers.
         self.setup_nodes()
-        for i in range(self.num_nodes-1):
-            self.connect_nodes(i+1, i)
+        for i in range(self.num_nodes - 1):
+            self.connect_nodes(i + 1, i)
 
         # Set clock of node2 2 days ahead, to keep it in IBD during this test.
-        self.nodes[2].setmocktime(int(time.time()) + 48*60*60)
+        self.nodes[2].setmocktime(int(time.time()) + 48 * 60 * 60)
 
     def run_test(self):
         # Start building a chain on node0.  node2 shouldn't be able to sync until node1's
         # minchainwork is exceeded
-        starting_chain_work = REGTEST_WORK_PER_BLOCK # Genesis block's work
+        starting_chain_work = REGTEST_WORK_PER_BLOCK  # Genesis block's work
         self.log.info(f"Testing relay across node 1 (minChainWork = {self.node_min_work[1]})")
 
         starting_blockcount = self.nodes[2].getblockcount()
@@ -70,7 +71,7 @@ class MinimumChainWorkTest(BitcoinTestFramework):
         # Node2 shouldn't have any new headers yet, because node1 should not
         # have relayed anything.
         assert_equal(len(self.nodes[2].getchaintips()), 1)
-        assert_equal(self.nodes[2].getchaintips()[0]['height'], 0)
+        assert_equal(self.nodes[2].getchaintips()[0]["height"], 0)
 
         assert self.nodes[1].getbestblockhash() != self.nodes[0].getbestblockhash()
         assert_equal(self.nodes[2].getblockcount(), starting_blockcount)
@@ -104,15 +105,15 @@ class MinimumChainWorkTest(BitcoinTestFramework):
 
         # Verify that node2 is in fact still in IBD (otherwise this test may
         # not be exercising the logic we want!)
-        assert_equal(self.nodes[2].getblockchaininfo()['initialblockdownload'], True)
+        assert_equal(self.nodes[2].getblockchaininfo()["initialblockdownload"], True)
 
         self.log.info("Test -minimumchainwork with a non-hex value")
         self.stop_node(0)
         self.nodes[0].assert_start_raises_init_error(
             ["-minimumchainwork=test"],
-            expected_msg='Error: Invalid non-hex (test) minimum chain work value specified',
+            expected_msg="Error: Invalid non-hex (test) minimum chain work value specified",
         )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     MinimumChainWorkTest(__file__).main()

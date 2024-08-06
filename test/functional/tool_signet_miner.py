@@ -16,7 +16,7 @@ from test_framework.util import assert_equal
 from test_framework.wallet_util import bytes_to_wif
 
 
-CHALLENGE_PRIVATE_KEY = (42).to_bytes(32, 'big')
+CHALLENGE_PRIVATE_KEY = (42).to_bytes(32, "big")
 
 
 class SignetMinerTest(BitcoinTestFramework):
@@ -33,7 +33,7 @@ class SignetMinerTest(BitcoinTestFramework):
         privkey.set(CHALLENGE_PRIVATE_KEY, True)
         pubkey = privkey.get_pubkey().get_bytes()
         challenge = key_to_p2wpkh_script(pubkey)
-        self.extra_args = [[f'-signetchallenge={challenge.hex()}']]
+        self.extra_args = [[f"-signetchallenge={challenge.hex()}"]]
 
     def skip_test_if_missing_module(self):
         self.skip_if_no_cli()
@@ -48,16 +48,20 @@ class SignetMinerTest(BitcoinTestFramework):
         # generate block with signet miner tool
         base_dir = self.config["environment"]["SRCDIR"]
         signet_miner_path = os.path.join(base_dir, "contrib", "signet", "miner")
-        subprocess.run([
+        subprocess.run(
+            [
                 sys.executable,
                 signet_miner_path,
-                f'--cli={node.cli.binary} -datadir={node.cli.datadir}',
-                'generate',
-                f'--address={node.getnewaddress()}',
-                f'--grind-cmd={self.options.bitcoinutil} grind',
-                '--nbits=1d00ffff',
-                f'--set-block-time={int(time.time())}',
-            ], check=True, stderr=subprocess.STDOUT)
+                f"--cli={node.cli.binary} -datadir={node.cli.datadir}",
+                "generate",
+                f"--address={node.getnewaddress()}",
+                f"--grind-cmd={self.options.bitcoinutil} grind",
+                "--nbits=1d00ffff",
+                f"--set-block-time={int(time.time())}",
+            ],
+            check=True,
+            stderr=subprocess.STDOUT,
+        )
         assert_equal(node.getblockcount(), 1)
 
 

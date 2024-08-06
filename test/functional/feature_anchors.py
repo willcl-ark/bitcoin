@@ -31,9 +31,7 @@ class AnchorsTest(BitcoinTestFramework):
         self.log.info(f"Add {BLOCK_RELAY_CONNECTIONS} block-relay-only connections to node")
         for i in range(BLOCK_RELAY_CONNECTIONS):
             self.log.debug(f"block-relay-only: {i}")
-            self.nodes[0].add_outbound_p2p_connection(
-                P2PInterface(), p2p_idx=i, connection_type="block-relay-only"
-            )
+            self.nodes[0].add_outbound_p2p_connection(P2PInterface(), p2p_idx=i, connection_type="block-relay-only")
 
         self.log.info(f"Add {INBOUND_CONNECTIONS} inbound connections to node")
         for i in range(INBOUND_CONNECTIONS):
@@ -78,7 +76,7 @@ class AnchorsTest(BitcoinTestFramework):
         with self.nodes[0].assert_debug_log(["0 block-relay-only anchors will be tried for connections."]):
             with open(node_anchors_path, "wb") as out_file_handler:
                 tweaked_contents = bytearray(anchors)
-                tweaked_contents[20:20] = b'1'
+                tweaked_contents[20:20] = b"1"
                 out_file_handler.write(bytes(tweaked_contents))
 
             self.log.debug("Start node")
@@ -92,17 +90,19 @@ class AnchorsTest(BitcoinTestFramework):
         onion_conf = Socks5Configuration()
         onion_conf.auth = True
         onion_conf.unauth = True
-        onion_conf.addr = ('127.0.0.1', p2p_port(self.num_nodes))
+        onion_conf.addr = ("127.0.0.1", p2p_port(self.num_nodes))
         onion_conf.keep_alive = True
         onion_proxy = Socks5Server(onion_conf)
         onion_proxy.start()
         self.restart_node(0, extra_args=[f"-onion={onion_conf.addr[0]}:{onion_conf.addr[1]}"])
 
         self.log.info("Add 256-bit-address block-relay-only connections to node")
-        self.nodes[0].addconnection(ONION_ADDR, 'block-relay-only', v2transport=False)
+        self.nodes[0].addconnection(ONION_ADDR, "block-relay-only", v2transport=False)
 
         self.log.debug("Stop node")
-        with self.nodes[0].assert_debug_log(["DumpAnchors: Flush 1 outbound block-relay-only peer addresses to anchors.dat"]):
+        with self.nodes[0].assert_debug_log(
+            ["DumpAnchors: Flush 1 outbound block-relay-only peer addresses to anchors.dat"]
+        ):
             self.stop_node(0)
         # Manually close keep_alive proxy connection
         onion_proxy.stop()

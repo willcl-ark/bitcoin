@@ -20,6 +20,8 @@ from test_framework.wallet import MiniWallet
 from test_framework.address import ADDRESS_BCRT1_UNSPENDABLE
 
 MAX_REPLACEMENT_LIMIT = 100
+
+
 class ReplaceByFeeTest(BitcoinTestFramework):
     def add_options(self, parser):
         self.add_wallet_options(parser)
@@ -95,7 +97,9 @@ class ReplaceByFeeTest(BitcoinTestFramework):
         confirmed - txout created will be confirmed in the blockchain;
                     unconfirmed otherwise.
         """
-        tx = self.wallet.send_to(from_node=node, scriptPubKey=scriptPubKey or self.wallet.get_scriptPubKey(), amount=amount)
+        tx = self.wallet.send_to(
+            from_node=node, scriptPubKey=scriptPubKey or self.wallet.get_scriptPubKey(), amount=amount
+        )
 
         if confirmed:
             mempool_size = len(node.getrawmempool())
@@ -203,10 +207,7 @@ class ReplaceByFeeTest(BitcoinTestFramework):
             _total_txs[0] += 1
 
             for utxo in tx["new_utxos"]:
-                for x in branch(utxo, txout_value,
-                                  max_txs,
-                                  tree_width=tree_width, fee=fee,
-                                  _total_txs=_total_txs):
+                for x in branch(utxo, txout_value, max_txs, tree_width=tree_width, fee=fee, _total_txs=_total_txs):
                     yield x
 
         fee = int(0.00001 * COIN)
@@ -250,7 +251,9 @@ class ReplaceByFeeTest(BitcoinTestFramework):
                 fee=2 * (Decimal(fee) / COIN) * n,
             )["hex"]
             # This will raise an exception
-            assert_raises_rpc_error(-26, "too many potential replacements", self.nodes[0].sendrawtransaction, dbl_tx_hex, 0)
+            assert_raises_rpc_error(
+                -26, "too many potential replacements", self.nodes[0].sendrawtransaction, dbl_tx_hex, 0
+            )
 
             for txid in tree_txs:
                 self.nodes[0].getrawtransaction(txid)
@@ -378,7 +381,9 @@ class ReplaceByFeeTest(BitcoinTestFramework):
         double_tx_hex = double_tx.serialize().hex()
 
         # This will raise an exception
-        assert_raises_rpc_error(-26, "too many potential replacements", self.nodes[0].sendrawtransaction, double_tx_hex, 0)
+        assert_raises_rpc_error(
+            -26, "too many potential replacements", self.nodes[0].sendrawtransaction, double_tx_hex, 0
+        )
 
         # If we remove an input, it should pass
         double_tx.vin.pop()
@@ -410,12 +415,11 @@ class ReplaceByFeeTest(BitcoinTestFramework):
             # Test the base case of evicting fewer than MAX_REPLACEMENT_LIMIT
             # transactions.
             ((MAX_REPLACEMENT_LIMIT // num_tx_graphs) - 1, False),
-
             # Test hitting the rule 5 eviction limit.
             (MAX_REPLACEMENT_LIMIT // num_tx_graphs, True),
         ]
 
-        for (txs_per_graph, failure_expected) in cases:
+        for txs_per_graph, failure_expected in cases:
             self.log.debug(f"txs_per_graph: {txs_per_graph}, failure: {failure_expected}")
             # "Root" utxos of each txn graph that we will attempt to double-spend with
             # an RBF replacement.
@@ -432,8 +436,8 @@ class ReplaceByFeeTest(BitcoinTestFramework):
                     utxos_to_spend=[root_utxos[graph_num]],
                     num_outputs=txs_per_graph,
                 )
-                assert_equal(True, normal_node.getmempoolentry(optin_parent_tx['txid'])['bip125-replaceable'])
-                new_utxos = optin_parent_tx['new_utxos']
+                assert_equal(True, normal_node.getmempoolentry(optin_parent_tx["txid"])["bip125-replaceable"])
+                new_utxos = optin_parent_tx["new_utxos"]
 
                 for utxo in new_utxos:
                     # Create spends for each output from the "root" of this graph.
@@ -442,7 +446,7 @@ class ReplaceByFeeTest(BitcoinTestFramework):
                         utxo_to_spend=utxo,
                     )
 
-                    assert normal_node.getmempoolentry(child_tx['txid'])
+                    assert normal_node.getmempoolentry(child_tx["txid"])
 
             num_txs_invalidated = len(root_utxos) + (num_tx_graphs * txs_per_graph)
 
@@ -460,7 +464,8 @@ class ReplaceByFeeTest(BitcoinTestFramework):
 
             if failure_expected:
                 assert_raises_rpc_error(
-                    -26, "too many potential replacements", normal_node.sendrawtransaction, tx_hex, 0)
+                    -26, "too many potential replacements", normal_node.sendrawtransaction, tx_hex, 0
+                )
             else:
                 txid = normal_node.sendrawtransaction(tx_hex, 0)
                 assert normal_node.getmempoolentry(txid)
@@ -483,7 +488,7 @@ class ReplaceByFeeTest(BitcoinTestFramework):
         )["new_utxo"]
 
         # This transaction isn't shown as replaceable
-        assert_equal(self.nodes[0].getmempoolentry(tx1a_utxo["txid"])['bip125-replaceable'], False)
+        assert_equal(self.nodes[0].getmempoolentry(tx1a_utxo["txid"])["bip125-replaceable"], False)
 
         # Shouldn't be able to double-spend
         tx1b_hex = self.wallet.create_self_transfer(
@@ -501,7 +506,7 @@ class ReplaceByFeeTest(BitcoinTestFramework):
         tx2a_utxo = self.wallet.send_self_transfer(
             from_node=self.nodes[0],
             utxo_to_spend=tx1_outpoint,
-            sequence=0xfffffffe,
+            sequence=0xFFFFFFFE,
             fee=Decimal("0.1"),
         )["new_utxo"]
 
@@ -522,12 +527,12 @@ class ReplaceByFeeTest(BitcoinTestFramework):
         tx3a_txid = self.wallet.send_self_transfer_multi(
             from_node=self.nodes[0],
             utxos_to_spend=[tx1a_utxo, tx2a_utxo],
-            sequence=[SEQUENCE_FINAL, 0xfffffffd],
+            sequence=[SEQUENCE_FINAL, 0xFFFFFFFD],
             fee_per_output=int(0.1 * COIN),
         )["txid"]
 
         # This transaction is shown as replaceable
-        assert_equal(self.nodes[0].getmempoolentry(tx3a_txid)['bip125-replaceable'], True)
+        assert_equal(self.nodes[0].getmempoolentry(tx3a_txid)["bip125-replaceable"], True)
 
         self.wallet.send_self_transfer(
             from_node=self.nodes[0],
@@ -624,8 +629,8 @@ class ReplaceByFeeTest(BitcoinTestFramework):
             frawtx2a = self.nodes[0].fundrawtransaction(rawtx2, {"replaceable": True})
             frawtx2b = self.nodes[0].fundrawtransaction(rawtx2, {"replaceable": False})
 
-            json0 = self.nodes[0].decoderawtransaction(frawtx2a['hex'])
-            json1 = self.nodes[0].decoderawtransaction(frawtx2b['hex'])
+            json0 = self.nodes[0].decoderawtransaction(frawtx2a["hex"])
+            json1 = self.nodes[0].decoderawtransaction(frawtx2b["hex"])
             assert_equal(json0["vin"][0]["sequence"], 4294967293)
             assert_equal(json1["vin"][0]["sequence"], 4294967294)
 
@@ -637,38 +642,38 @@ class ReplaceByFeeTest(BitcoinTestFramework):
             from_node=self.nodes[0],
             utxo_to_spend=confirmed_utxo,
             sequence=MAX_BIP125_RBF_SEQUENCE,
-            fee_rate=Decimal('0.01'),
+            fee_rate=Decimal("0.01"),
         )
-        assert_equal(True, self.nodes[0].getmempoolentry(optin_parent_tx['txid'])['bip125-replaceable'])
+        assert_equal(True, self.nodes[0].getmempoolentry(optin_parent_tx["txid"])["bip125-replaceable"])
 
         replacement_parent_tx = self.wallet.create_self_transfer(
             utxo_to_spend=confirmed_utxo,
             sequence=MAX_BIP125_RBF_SEQUENCE,
-            fee_rate=Decimal('0.02'),
+            fee_rate=Decimal("0.02"),
         )
 
         # Test if parent tx can be replaced.
-        res = self.nodes[0].testmempoolaccept(rawtxs=[replacement_parent_tx['hex']])[0]
+        res = self.nodes[0].testmempoolaccept(rawtxs=[replacement_parent_tx["hex"]])[0]
 
         # Parent can be replaced.
-        assert_equal(res['allowed'], True)
+        assert_equal(res["allowed"], True)
 
         # Create an opt-out child tx spending the opt-in parent
-        parent_utxo = self.wallet.get_utxo(txid=optin_parent_tx['txid'])
+        parent_utxo = self.wallet.get_utxo(txid=optin_parent_tx["txid"])
         optout_child_tx = self.wallet.send_self_transfer(
             from_node=self.nodes[0],
             utxo_to_spend=parent_utxo,
             sequence=SEQUENCE_FINAL,
-            fee_rate=Decimal('0.01'),
+            fee_rate=Decimal("0.01"),
         )
 
         # Reports true due to inheritance
-        assert_equal(True, self.nodes[0].getmempoolentry(optout_child_tx['txid'])['bip125-replaceable'])
+        assert_equal(True, self.nodes[0].getmempoolentry(optout_child_tx["txid"])["bip125-replaceable"])
 
         replacement_child_tx = self.wallet.create_self_transfer(
             utxo_to_spend=parent_utxo,
             sequence=SEQUENCE_FINAL,
-            fee_rate=Decimal('0.02'),
+            fee_rate=Decimal("0.02"),
         )
 
         # Broadcast replacement child tx
@@ -678,22 +683,26 @@ class ReplaceByFeeTest(BitcoinTestFramework):
         # The original transaction (`optout_child_tx`) doesn't signal RBF but its parent (`optin_parent_tx`) does.
         # The replacement transaction (`replacement_child_tx`) should be able to replace the original transaction.
         # See CVE-2021-31876 for further explanations.
-        assert_equal(True, self.nodes[0].getmempoolentry(optin_parent_tx['txid'])['bip125-replaceable'])
-        assert_raises_rpc_error(-26, 'txn-mempool-conflict', self.nodes[0].sendrawtransaction, replacement_child_tx["hex"], 0)
+        assert_equal(True, self.nodes[0].getmempoolentry(optin_parent_tx["txid"])["bip125-replaceable"])
+        assert_raises_rpc_error(
+            -26, "txn-mempool-conflict", self.nodes[0].sendrawtransaction, replacement_child_tx["hex"], 0
+        )
 
-        self.log.info('Check that the child tx can still be replaced (via a tx that also replaces the parent)')
+        self.log.info("Check that the child tx can still be replaced (via a tx that also replaces the parent)")
         replacement_parent_tx = self.wallet.send_self_transfer(
             from_node=self.nodes[0],
             utxo_to_spend=confirmed_utxo,
             sequence=SEQUENCE_FINAL,
-            fee_rate=Decimal('0.03'),
+            fee_rate=Decimal("0.03"),
         )
         # Check that child is removed and update wallet utxo state
-        assert_raises_rpc_error(-5, 'Transaction not in mempool', self.nodes[0].getmempoolentry, optout_child_tx['txid'])
-        self.wallet.get_utxo(txid=optout_child_tx['txid'])
+        assert_raises_rpc_error(
+            -5, "Transaction not in mempool", self.nodes[0].getmempoolentry, optout_child_tx["txid"]
+        )
+        self.wallet.get_utxo(txid=optout_child_tx["txid"])
 
     def test_replacement_relay_fee(self):
-        tx = self.wallet.send_self_transfer(from_node=self.nodes[0])['tx']
+        tx = self.wallet.send_self_transfer(from_node=self.nodes[0])["tx"]
 
         # Higher fee, higher feerate, different txid, but the replacement does not provide a relay
         # fee conforming to node's `incrementalrelayfee` policy of 1000 sat per KB.
@@ -702,7 +711,6 @@ class ReplaceByFeeTest(BitcoinTestFramework):
         assert_raises_rpc_error(-26, "insufficient fee", self.nodes[0].sendrawtransaction, tx.serialize().hex())
 
     def test_fullrbf(self):
-
         confirmed_utxo = self.make_utxo(self.nodes[0], int(2 * COIN))
         self.restart_node(0, extra_args=["-mempoolfullrbf=1"])
         assert self.nodes[0].getmempoolinfo()["fullrbf"]
@@ -712,22 +720,23 @@ class ReplaceByFeeTest(BitcoinTestFramework):
             from_node=self.nodes[0],
             utxo_to_spend=confirmed_utxo,
             sequence=MAX_BIP125_RBF_SEQUENCE + 1,
-            fee_rate=Decimal('0.01'),
+            fee_rate=Decimal("0.01"),
         )
-        assert_equal(False, self.nodes[0].getmempoolentry(optout_tx['txid'])['bip125-replaceable'])
+        assert_equal(False, self.nodes[0].getmempoolentry(optout_tx["txid"])["bip125-replaceable"])
 
         conflicting_tx = self.wallet.create_self_transfer(
-                utxo_to_spend=confirmed_utxo,
-                sequence=SEQUENCE_FINAL,
-                fee_rate=Decimal('0.02'),
+            utxo_to_spend=confirmed_utxo,
+            sequence=SEQUENCE_FINAL,
+            fee_rate=Decimal("0.02"),
         )
 
         # Send the replacement transaction, conflicting with the optout_tx.
-        self.nodes[0].sendrawtransaction(conflicting_tx['hex'], 0)
+        self.nodes[0].sendrawtransaction(conflicting_tx["hex"], 0)
 
         # Optout_tx is not anymore in the mempool.
-        assert optout_tx['txid'] not in self.nodes[0].getrawmempool()
-        assert conflicting_tx['txid'] in self.nodes[0].getrawmempool()
+        assert optout_tx["txid"] not in self.nodes[0].getrawmempool()
+        assert conflicting_tx["txid"] in self.nodes[0].getrawmempool()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     ReplaceByFeeTest(__file__).main()

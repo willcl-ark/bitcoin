@@ -20,9 +20,7 @@ CMD_SHEBANG_FILES = ["git", "grep", "--full-name", "--line-number", "-I", "^#!"]
 ALL_SOURCE_FILENAMES_REGEXP = r"^.*\.(cpp|h|py|sh)$"
 ALLOWED_FILENAME_REGEXP = "^[a-zA-Z0-9/_.@][a-zA-Z0-9/_.@-]*$"
 ALLOWED_SOURCE_FILENAME_REGEXP = "^[a-z0-9_./-]+$"
-ALLOWED_SOURCE_FILENAME_EXCEPTION_REGEXP = (
-    "^src/(secp256k1/|minisketch/|test/fuzz/FuzzedDataProvider.h)"
-)
+ALLOWED_SOURCE_FILENAME_EXCEPTION_REGEXP = "^src/(secp256k1/|minisketch/|test/fuzz/FuzzedDataProvider.h)"
 ALLOWED_PERMISSION_NON_EXECUTABLES = 0o644
 ALLOWED_PERMISSION_EXECUTABLES = 0o755
 ALLOWED_EXECUTABLE_SHEBANG = {
@@ -33,9 +31,9 @@ ALLOWED_EXECUTABLE_SHEBANG = {
 
 class FileMeta(object):
     def __init__(self, file_spec: str):
-        '''Parse a `git ls files --stage` output line.'''
+        """Parse a `git ls files --stage` output line."""
         # 100755 5a150d5f8031fcd75e80a4dd9843afa33655f579 0       ci/test/00_setup_env.sh
-        meta, self.file_path = file_spec.split('\t', 2)
+        meta, self.file_path = file_spec.split("\t", 2)
         meta = meta.split()
         # The octal file permission of the file. Internally, git only
         # keeps an 'executable' bit, so this will always be 0o644 or 0o755.
@@ -70,15 +68,16 @@ class FileMeta(object):
 
 
 def get_git_file_metadata() -> dict[str, FileMeta]:
-    '''
+    """
     Return a dictionary mapping the name of all files in the repository to git tree metadata.
-    '''
+    """
     files_raw = check_output(CMD_ALL_FILES).decode("utf8").rstrip("\0").split("\0")
     files = {}
     for file_spec in files_raw:
         meta = FileMeta(file_spec)
         files[meta.file_path] = meta
     return files
+
 
 def check_all_filenames(files) -> int:
     """
@@ -104,7 +103,9 @@ def check_source_filenames(files) -> int:
 
     Additionally there is an exception regexp for directories or files which are excepted from matching this regexp.
     """
-    filenames = [filename for filename in files.keys() if re.match(ALL_SOURCE_FILENAMES_REGEXP, filename, re.IGNORECASE)]
+    filenames = [
+        filename for filename in files.keys() if re.match(ALL_SOURCE_FILENAMES_REGEXP, filename, re.IGNORECASE)
+    ]
     filename_regex = re.compile(ALLOWED_SOURCE_FILENAME_REGEXP)
     filename_exception_regex = re.compile(ALLOWED_SOURCE_FILENAME_EXCEPTION_REGEXP)
     failed_tests = 0
@@ -142,12 +143,7 @@ def check_all_file_permissions(files) -> int:
                 if shebang not in ALLOWED_EXECUTABLE_SHEBANG[file_meta.extension]:
                     print(
                         f"""File "{filename}" is missing expected shebang """
-                        + " or ".join(
-                            [
-                                x.decode("utf-8")
-                                for x in ALLOWED_EXECUTABLE_SHEBANG[file_meta.extension]
-                            ]
-                        )
+                        + " or ".join([x.decode("utf-8") for x in ALLOWED_EXECUTABLE_SHEBANG[file_meta.extension]])
                     )
                     failed_tests += 1
 
