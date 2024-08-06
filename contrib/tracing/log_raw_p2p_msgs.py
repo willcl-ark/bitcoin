@@ -117,9 +117,9 @@ int trace_outbound_message(struct pt_regs *ctx) {
 
 
 def print_message(event, inbound):
-    print(f"%s %s msg '%s' from peer %d (%s, %s) with %d bytes: %s" %
+    print("%s %s msg '%s' from peer %d (%s, %s) with %d bytes: %s" %
           (
-              f"Warning: incomplete message (only %d out of %d bytes)!" % (
+              "Warning: incomplete message (only %d out of %d bytes)!" % (
                   len(event.msg), event.msg_size) if len(event.msg) < event.msg_size else "",
               "inbound" if inbound else "outbound",
               event.msg_type.decode("utf-8"),
