@@ -20,22 +20,24 @@ from test_framework.util import assert_equal, p2p_port
 ADDR = '1.1.1.1'
 
 # array of tuples [arguments, expected port in localaddresses]
+# fmt: off
 EXPECTED = [
-    [['-externalip=2.2.2.2',       '-port=30001'],                        30001],
-    [['-externalip=2.2.2.2',       '-port=30002', f'-bind={ADDR}'],       30002],
-    [['-externalip=2.2.2.2',                      f'-bind={ADDR}'],       'default_p2p_port'],
-    [['-externalip=2.2.2.2',       '-port=30003', f'-bind={ADDR}:30004'], 30004],
-    [['-externalip=2.2.2.2',                      f'-bind={ADDR}:30005'], 30005],
-    [['-externalip=2.2.2.2:30006', '-port=30007'],                        30006],
-    [['-externalip=2.2.2.2:30008', '-port=30009', f'-bind={ADDR}'],       30008],
-    [['-externalip=2.2.2.2:30010',                f'-bind={ADDR}'],       30010],
-    [['-externalip=2.2.2.2:30011', '-port=30012', f'-bind={ADDR}:30013'], 30011],
-    [['-externalip=2.2.2.2:30014',                f'-bind={ADDR}:30015'], 30014],
-    [['-externalip=2.2.2.2',       '-port=30016', f'-bind={ADDR}:30017',
-                                             f'-whitebind={ADDR}:30018'], 30017],
-    [['-externalip=2.2.2.2',       '-port=30019',
-                                             f'-whitebind={ADDR}:30020'], 30020],
+    [["-externalip=2.2.2.2",       "-port=30001"],                        30001],
+    [["-externalip=2.2.2.2",       "-port=30002", f"-bind={ADDR}"],       30002],
+    [["-externalip=2.2.2.2",                      f"-bind={ADDR}"],       "default_p2p_port"],
+    [["-externalip=2.2.2.2",       "-port=30003", f"-bind={ADDR}:30004"], 30004],
+    [["-externalip=2.2.2.2",                      f"-bind={ADDR}:30005"], 30005],
+    [["-externalip=2.2.2.2:30006", "-port=30007"],                        30006],
+    [["-externalip=2.2.2.2:30008", "-port=30009", f"-bind={ADDR}"],       30008],
+    [["-externalip=2.2.2.2:30010",                f"-bind={ADDR}"],       30010],
+    [["-externalip=2.2.2.2:30011", "-port=30012", f"-bind={ADDR}:30013"], 30011],
+    [["-externalip=2.2.2.2:30014",                f"-bind={ADDR}:30015"], 30014],
+    [["-externalip=2.2.2.2",       "-port=30016", f"-bind={ADDR}:30017",
+                                             f"-whitebind={ADDR}:30018"], 30017],
+    [["-externalip=2.2.2.2",       "-port=30019",
+                                             f"-whitebind={ADDR}:30020"], 30020],
 ]
+# fmt: off
 
 class BindPortExternalIPTest(BitcoinTestFramework):
     def set_test_params(self):

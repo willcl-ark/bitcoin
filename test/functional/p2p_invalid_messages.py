@@ -222,14 +222,18 @@ class InvalidMessagesTest(BitcoinTestFramework):
                 'ProcessMessages(addrv2, 525 bytes): Exception',
                 'Address too long: 513 > 512',
             ],
+            # fmt: off
             bytes.fromhex(
-                '01' +       # number of entries
-                '61bc6649' + # time, Fri Jan  9 02:54:25 UTC 2009
-                '00' +       # service flags, COMPACTSIZE(NODE_NONE)
-                '01' +       # network type (IPv4)
-                'fd0102' +   # address length (COMPACTSIZE(513))
-                'ab' * 513 + # address
-                '208d'))     # port
+                "01" +       # number of entries
+                "61bc6649" + # time, Fri Jan  9 02:54:25 UTC 2009
+                "00" +       # service flags, COMPACTSIZE(NODE_NONE)
+                "01" +       # network type (IPv4)
+                "fd0102" +   # address length (COMPACTSIZE(513))
+                "ab" * 513 + # address
+                "208d"       # port
+            ),
+            # fmt: on
+        )
 
     def test_addrv2_unrecognized_network(self):
         now_hex = int(time.time()).to_bytes(4, "little").hex()
@@ -239,22 +243,26 @@ class InvalidMessagesTest(BitcoinTestFramework):
                 '9.9.9.9:8333',
                 'Added 1 addresses',
             ],
+            # fmt: off
             bytes.fromhex(
-                '02' +     # number of entries
+                "02" +     # number of entries
                 # this should be ignored without impeding acceptance of subsequent ones
                 now_hex +  # time
-                '01' +     # service flags, COMPACTSIZE(NODE_NETWORK)
-                '99' +     # network type (unrecognized)
-                '02' +     # address length (COMPACTSIZE(2))
-                'ab' * 2 + # address
-                '208d' +   # port
+                "01" +     # service flags, COMPACTSIZE(NODE_NETWORK)
+                "99" +     # network type (unrecognized)
+                "02" +     # address length (COMPACTSIZE(2))
+                "ab" * 2 + # address
+                "208d" +   # port
                 # this should be added:
                 now_hex +  # time
-                '01' +     # service flags, COMPACTSIZE(NODE_NETWORK)
-                '01' +     # network type (IPv4)
-                '04' +     # address length (COMPACTSIZE(4))
-                '09' * 4 + # address
-                '208d'))   # port
+                "01" +     # service flags, COMPACTSIZE(NODE_NETWORK)
+                "01" +     # network type (IPv4)
+                "04" +     # address length (COMPACTSIZE(4))
+                "09" * 4 + # address
+                "208d"     # port
+            ),
+            # fmt: on
+        )
 
     def test_oversized_msg(self, msg, size):
         msg_type = msg.msgtype.decode('ascii')

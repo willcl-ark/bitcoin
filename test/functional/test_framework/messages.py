@@ -247,6 +247,7 @@ class CAddress:
     NET_I2P = 5
     NET_CJDNS = 6
 
+    # fmt: off
     ADDRV2_NET_NAME = {
         NET_IPV4: "IPv4",
         NET_IPV6: "IPv6",
@@ -262,6 +263,7 @@ class CAddress:
         NET_I2P: 32,
         NET_CJDNS: 16
     }
+    # fmt: on
 
     I2P_PAD = "===="
 

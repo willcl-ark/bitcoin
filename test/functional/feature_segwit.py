@@ -344,12 +344,14 @@ class SegWitTest(BitcoinTestFramework):
             self.nodes[0].importpubkey(pubkeys[2])
             uncompressed_solvable_address = [key_to_p2pkh(pubkeys[2])]
 
+            # fmt: off
             spendable_anytime = []                      # These outputs should be seen anytime after importprivkey and addmultisigaddress
             spendable_after_importaddress = []          # These outputs should be seen after importaddress
             solvable_after_importaddress = []           # These outputs should be seen after importaddress but not spendable
             unsolvable_after_importaddress = []         # These outputs should be unsolvable after importaddress
             solvable_anytime = []                       # These outputs should be solvable after importpubkey
             unseen_anytime = []                         # These outputs should never be seen
+            # fmt: on
 
             uncompressed_spendable_address.append(self.nodes[0].addmultisigaddress(2, [uncompressed_spendable_address[0], compressed_spendable_address[0]])['address'])
             uncompressed_spendable_address.append(self.nodes[0].addmultisigaddress(2, [uncompressed_spendable_address[0], uncompressed_spendable_address[0]])['address'])
@@ -507,9 +509,11 @@ class SegWitTest(BitcoinTestFramework):
             self.nodes[0].importpubkey(pubkeys[6])
             uncompressed_solvable_address = [key_to_p2pkh(pubkeys[6])]
 
+            # fmt: off
             unseen_anytime = []                         # These outputs should never be seen
             solvable_anytime = []                       # These outputs should be solvable after importpubkey
             unseen_anytime = []                         # These outputs should never be seen
+            # fmt: on
 
             uncompressed_spendable_address.append(self.nodes[0].addmultisigaddress(2, [uncompressed_spendable_address[0], compressed_spendable_address[0]])['address'])
             uncompressed_spendable_address.append(self.nodes[0].addmultisigaddress(2, [uncompressed_spendable_address[0], uncompressed_spendable_address[0]])['address'])

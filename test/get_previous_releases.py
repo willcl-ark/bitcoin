@@ -19,6 +19,7 @@ import subprocess
 import sys
 import hashlib
 
+# fmt: off
 SHA256_SUMS = {
     "0e2819135366f150d9906e294b61dff58fd1996ebd26c2f8e979d6c0b7a79580": {"tag": "v0.14.3", "tarball": "bitcoin-0.14.3-aarch64-linux-gnu.tar.gz"},
     "d86fc90824a85c38b25c8488115178d5785dbc975f5ff674f9f5716bc8ad6e65": {"tag": "v0.14.3", "tarball": "bitcoin-0.14.3-arm-linux-gnueabihf.tar.gz"},
@@ -99,6 +100,7 @@ SHA256_SUMS = {
     "5708fc639cdfc27347cccfd50db9b73b53647b36fb5f3a4a93537cbe8828c27f": {"tag": "v25.0", "tarball": "bitcoin-25.0-x86_64-apple-darwin.tar.gz"},
     "33930d432593e49d58a9bff4c30078823e9af5d98594d2935862788ce8a20aec": {"tag": "v25.0", "tarball": "bitcoin-25.0-x86_64-linux-gnu.tar.gz"},
 }
+# fmt: on
 
 
 @contextlib.contextmanager

@@ -47,6 +47,7 @@ class LazyPeer(P2PInterface):
     def on_open(self):
         self.ever_connected = True
 
+    # fmt: off
     # Does not respond to "version" with "verack"
     def on_version(self, message): self.bad_message(message)
     def on_verack(self, message): self.bad_message(message)
@@ -70,6 +71,7 @@ class LazyPeer(P2PInterface):
     def on_blocktxn(self, message): self.bad_message(message)
     def on_wtxidrelay(self, message): self.got_wtxidrelay = True
     def on_sendaddrv2(self, message): self.got_sendaddrv2 = True
+    # fmt: on
 
 
 # Peer that sends a version but not a verack.
