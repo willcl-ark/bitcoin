@@ -138,6 +138,7 @@ class AssumeutxoTest(BitcoinTestFramework):
             expected_error(msg="Bad snapshot - coins left over after deserializing 298 coins." if off == -1 else "Bad snapshot format or truncated snapshot after deserializing 299 coins.")
 
         self.log.info("  - snapshot file with alternated but parsable UTXO data results in different hash")
+        # fmt: off
         cases = [
             # (content, offset, wrong_hash, custom_message)
             [b"\xff" * 32, 0, "77874d48d932a5cb7a7f770696f5224ff05746fdcf732a58270b45da0f665934", None],  # wrong outpoint hash
@@ -156,6 +157,7 @@ class AssumeutxoTest(BitcoinTestFramework):
                 "Bad snapshot data after deserializing 0 coins - bad tx out value"
             ],  # Amount exceeds MAX_MONEY
         ]
+        # fmt: on
 
         for content, offset, wrong_hash, custom_message in cases:
             with open(bad_snapshot_path, "wb") as f:

@@ -530,6 +530,7 @@ class P2PInterface(P2PConnection):
     def on_close(self):
         pass
 
+    # fmt: off
     def on_addr(self, message): pass
     def on_addrv2(self, message): pass
     def on_block(self, message): pass
@@ -558,6 +559,7 @@ class P2PInterface(P2PConnection):
     def on_sendtxrcncl(self, message): pass
     def on_tx(self, message): pass
     def on_wtxidrelay(self, message): pass
+    # fmt: on
 
     def on_inv(self, message):
         want = msg_getdata()

@@ -5,6 +5,7 @@
 
 import unittest
 
+# fmt: off
 # Message schedule indexes for the left path.
 ML = [
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
@@ -46,6 +47,7 @@ KL = [0, 0x5a827999, 0x6ed9eba1, 0x8f1bbcdc, 0xa953fd4e]
 
 # K constants for the right path.
 KR = [0x50a28be6, 0x5c4dd124, 0x6d703ef3, 0x7a6d76e9, 0]
+# fmt: on
 
 
 def fi(x, y, z, i):

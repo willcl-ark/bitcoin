@@ -57,6 +57,7 @@ def cltv_invalidate(tx, failure_reason):
     # 4) the top stack item is greater than the transaction's nLockTime field
     # 5) the nSequence field of the txin is 0xffffffff (SEQUENCE_FINAL)
     assert failure_reason in range(5)
+    # fmt: off
     scheme = [
         # | Script to prepend to scriptSig                  | nSequence  | nLockTime    |
         # +-------------------------------------------------+------------+--------------+
@@ -66,6 +67,7 @@ def cltv_invalidate(tx, failure_reason):
         [[CScriptNum(100), OP_CHECKLOCKTIMEVERIFY, OP_DROP],  0,          50],
         [[CScriptNum(50),  OP_CHECKLOCKTIMEVERIFY, OP_DROP],  SEQUENCE_FINAL, 50],
     ][failure_reason]
+    # fmt: on
 
     cltv_modify_tx(tx, prepend_scriptsig=scheme[0], nsequence=scheme[1], nlocktime=scheme[2])
 

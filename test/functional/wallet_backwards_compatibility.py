@@ -34,6 +34,7 @@ class BackwardsCompatibilityTest(BitcoinTestFramework):
         self.setup_clean_chain = True
         self.num_nodes = 8
         # Add new version after each release:
+        # fmt: off
         self.extra_args = [
             ["-addresstype=bech32", "-whitelist=noban@127.0.0.1"], # Pre-release: use to mine blocks. noban for immediate tx relay
             ["-nowallet", "-walletrbf=1", "-addresstype=bech32", "-whitelist=noban@127.0.0.1"], # Pre-release: use to receive coins, swap wallets, etc
@@ -44,6 +45,7 @@ class BackwardsCompatibilityTest(BitcoinTestFramework):
             ["-nowallet", "-walletrbf=1", "-addresstype=bech32", "-whitelist=noban@127.0.0.1"], # v0.21.0
             ["-nowallet", "-walletrbf=1", "-addresstype=bech32", "-whitelist=noban@127.0.0.1"], # v0.20.1
         ]
+        # fmt: on
         self.wallet_names = [self.default_wallet_name]
 
     def skip_test_if_missing_module(self):

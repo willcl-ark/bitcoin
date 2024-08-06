@@ -108,6 +108,7 @@ class DustRelayFeeTest(BitcoinTestFramework):
         _, uncompressed_pubkey = generate_keypair(compressed=False)
         _, pubkey = generate_keypair(compressed=True)
 
+        # fmt: off
         output_scripts = (
             (key_to_p2pk_script(uncompressed_pubkey),          "P2PK (uncompressed)"),
             (key_to_p2pk_script(pubkey),                       "P2PK (compressed)"),
@@ -117,12 +118,13 @@ class DustRelayFeeTest(BitcoinTestFramework):
             (script_to_p2wsh_script(CScript([OP_TRUE])),       "P2WSH"),
             (output_key_to_p2tr_script(pubkey[1:]),            "P2TR"),
             # witness programs for segwitv2+ can be between 2 and 40 bytes
-            (program_to_witness_script(2,  b'\x66' * 2),       "P2?? (future witness version 2)"),
-            (program_to_witness_script(16, b'\x77' * 40),      "P2?? (future witness version 16)"),
+            (program_to_witness_script(2,  b"\x66" * 2),       "P2?? (future witness version 2)"),
+            (program_to_witness_script(16, b"\x77" * 40),      "P2?? (future witness version 16)"),
             # largest possible output script considered standard
             (keys_to_multisig_script([uncompressed_pubkey]*3), "bare multisig (m-of-3)"),
-            (CScript([OP_RETURN, b'superimportanthash']),      "null data (OP_RETURN)"),
+            (CScript([OP_RETURN, b"superimportanthash"]),      "null data (OP_RETURN)"),
         )
+        # fmt: on
 
         # test default (no parameter), disabled (=0) and a bunch of arbitrary dust fee rates [sat/kvB]
         for dustfee_sat_kvb in (DUST_RELAY_TX_FEE, 0, 1, 66, 500, 1337, 12345, 21212, 333333):
