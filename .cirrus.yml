@@ -169,17 +169,17 @@ compute_credits_template: &CREDITS_TEMPLATE
 #       type: medium
 #   env:
 #     FILE_ENV: "./ci/test/00_setup_env_native_tsan.sh"
-
-task:
-  name: 'MSan, depends'
-  << : *GLOBAL_TASK_TEMPLATE
-  persistent_worker:
-    labels:
-      type: ax52_x86-64
-  timeout_in: 300m  # Use longer timeout for the *rare* case where a full build (llvm + msan + depends + ...) needs to be done.
-  env:
-    FILE_ENV: "./ci/test/00_setup_env_native_msan.sh"
-
+#
+# task:
+#   name: 'MSan, depends'
+#   << : *GLOBAL_TASK_TEMPLATE
+#   persistent_worker:
+#     labels:
+#       type: ax52_x86-64
+#   timeout_in: 300m  # Use longer timeout for the *rare* case where a full build (llvm + msan + depends + ...) needs to be done.
+#   env:
+#     FILE_ENV: "./ci/test/00_setup_env_native_msan.sh"
+#
 # task:
 #   name: 'fuzzer,address,undefined,integer, no depends'
 #   << : *GLOBAL_TASK_TEMPLATE
@@ -198,14 +198,14 @@ task:
 #   env:
 #     FILE_ENV: "./ci/test/00_setup_env_i686_multiprocess.sh"
 #
-# task:
-#   name: 'no wallet, libbitcoinkernel'
-#   << : *GLOBAL_TASK_TEMPLATE
-#   persistent_worker:
-#     labels:
-#       type: small
-#   env:
-#     FILE_ENV: "./ci/test/00_setup_env_native_nowallet_libbitcoinkernel.sh"
+task:
+  name: 'no wallet, libbitcoinkernel'
+  << : *GLOBAL_TASK_TEMPLATE
+  persistent_worker:
+    labels:
+      type: ax52_x86-64
+  env:
+    FILE_ENV: "./ci/test/00_setup_env_native_nowallet_libbitcoinkernel.sh"
 #
 # task:
 #   name: 'macOS-cross, gui, no tests'
