@@ -87,10 +87,12 @@ void setupFontOptions(QComboBox* cb, QLabel* preview)
 }
 
 OptionsDialog::OptionsDialog(QWidget* parent, bool enableWallet)
-    : QDialog(parent, GUIUtil::dialog_flags),
+    : QDialog(parent, GUIUtil::dialog_flags | Qt::WindowMaximizeButtonHint),
       ui(new Ui::OptionsDialog)
 {
     ui->setupUi(this);
+
+    ui->verticalLayout->setStretchFactor(ui->tabWidget, 1);
 
     /* Main elements init */
     ui->databaseCache->setMinimum(nMinDbCache);
@@ -440,7 +442,7 @@ void OptionsDialog::updateProxyValidationState()
     QValidatedLineEdit *otherProxyWidget = (pUiProxyIp == ui->proxyIpTor) ? ui->proxyIp : ui->proxyIpTor;
     if (pUiProxyIp->isValid() && (!ui->proxyPort->isEnabled() || ui->proxyPort->text().toInt() > 0) && (!ui->proxyPortTor->isEnabled() || ui->proxyPortTor->text().toInt() > 0))
     {
-        setOkButtonState(otherProxyWidget->isValid()); //only enable ok button if both proxys are valid
+        setOkButtonState(otherProxyWidget->isValid()); //only enable ok button if both proxies are valid
         clearStatusLabel();
     }
     else

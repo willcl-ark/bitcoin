@@ -5,11 +5,13 @@
 #include <bench/bench.h>
 #include <logging.h>
 #include <test/util/setup_common.h>
-#include <util/chaintype.h>
+
+#include <functional>
+#include <vector>
 
 // All but 2 of the benchmarks should have roughly similar performance:
 //
-// LogPrintWithoutCategory should be ~3 orders of magnitude faster, as nothing is logged.
+// LogWithoutDebug should be ~3 orders of magnitude faster, as nothing is logged.
 //
 // LogWithoutWriteToFile should be ~2 orders of magnitude faster, as it avoids disk writes.
 
@@ -20,7 +22,7 @@ static void Logging(benchmark::Bench& bench, const std::vector<const char*>& ext
 
     TestingSetup test_setup{
         ChainType::REGTEST,
-        extra_args,
+        {.extra_args = extra_args},
     };
 
     bench.run([&] { log(); });
@@ -38,14 +40,14 @@ static void LogPrintLevelWithoutThreadNames(benchmark::Bench& bench)
         LogPrintLevel(BCLog::NET, BCLog::Level::Error, "%s\n", "test"); });
 }
 
-static void LogPrintWithCategory(benchmark::Bench& bench)
+static void LogWithDebug(benchmark::Bench& bench)
 {
-    Logging(bench, {"-logthreadnames=0", "-debug=net"}, [] { LogPrint(BCLog::NET, "%s\n", "test"); });
+    Logging(bench, {"-logthreadnames=0", "-debug=net"}, [] { LogDebug(BCLog::NET, "%s\n", "test"); });
 }
 
-static void LogPrintWithoutCategory(benchmark::Bench& bench)
+static void LogWithoutDebug(benchmark::Bench& bench)
 {
-    Logging(bench, {"-logthreadnames=0", "-debug=0"}, [] { LogPrint(BCLog::NET, "%s\n", "test"); });
+    Logging(bench, {"-logthreadnames=0", "-debug=0"}, [] { LogDebug(BCLog::NET, "%s\n", "test"); });
 }
 
 static void LogPrintfCategoryWithThreadNames(benchmark::Bench& bench)
@@ -77,14 +79,14 @@ static void LogWithoutWriteToFile(benchmark::Bench& bench)
     // Disable writing the log to a file, as used for unit tests and fuzzing in `MakeNoLogFileContext`.
     Logging(bench, {"-nodebuglogfile", "-debug=1"}, [] {
         LogPrintf("%s\n", "test");
-        LogPrint(BCLog::NET, "%s\n", "test");
+        LogDebug(BCLog::NET, "%s\n", "test");
     });
 }
 
 BENCHMARK(LogPrintLevelWithThreadNames, benchmark::PriorityLevel::HIGH);
 BENCHMARK(LogPrintLevelWithoutThreadNames, benchmark::PriorityLevel::HIGH);
-BENCHMARK(LogPrintWithCategory, benchmark::PriorityLevel::HIGH);
-BENCHMARK(LogPrintWithoutCategory, benchmark::PriorityLevel::HIGH);
+BENCHMARK(LogWithDebug, benchmark::PriorityLevel::HIGH);
+BENCHMARK(LogWithoutDebug, benchmark::PriorityLevel::HIGH);
 BENCHMARK(LogPrintfCategoryWithThreadNames, benchmark::PriorityLevel::HIGH);
 BENCHMARK(LogPrintfCategoryWithoutThreadNames, benchmark::PriorityLevel::HIGH);
 BENCHMARK(LogPrintfWithThreadNames, benchmark::PriorityLevel::HIGH);

@@ -13,7 +13,6 @@ Developer Notes
     - [Development tips and tricks](#development-tips-and-tricks)
         - [Compiling for debugging](#compiling-for-debugging)
         - [Show sources in debugging](#show-sources-in-debugging)
-        - [Compiling for gprof profiling](#compiling-for-gprof-profiling)
         - [`debug.log`](#debuglog)
         - [Signet, testnet, and regtest modes](#signet-testnet-and-regtest-modes)
         - [DEBUG_LOCKORDER](#debug_lockorder)
@@ -215,14 +214,14 @@ int main()
 To run clang-tidy on Ubuntu/Debian, install the dependencies:
 
 ```sh
-apt install clang-tidy bear clang
+apt install clang-tidy clang
 ```
 
-Then, pass clang as compiler to configure, and use bear to produce the `compile_commands.json`:
+Configure with clang as the compiler:
 
 ```sh
-./autogen.sh && ./configure CC=clang CXX=clang++
-make clean && bear --config src/.bear-tidy-config -- make -j $(nproc)
+cmake -B build -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+cmake --build build -j $(nproc)
 ```
 
 The output is denoised of errors from external dependencies.
@@ -230,13 +229,13 @@ The output is denoised of errors from external dependencies.
 To run clang-tidy on all source files:
 
 ```sh
-( cd ./src/ && run-clang-tidy  -j $(nproc) )
+( cd ./src/ && run-clang-tidy -p ../build -j $(nproc) )
 ```
 
 To run clang-tidy on the changed source lines:
 
 ```sh
-git diff | ( cd ./src/ && clang-tidy-diff -p2 -j $(nproc) )
+git diff | ( cd ./src/ && clang-tidy-diff -p2 -path ../build -j $(nproc) )
 ```
 
 Coding Style (Python)
@@ -339,11 +338,11 @@ Recommendations:
 
 ### Generating Documentation
 
-The documentation can be generated with `make docs` and cleaned up with `make
-clean-docs`. The resulting files are located in `doc/doxygen/html`; open
+The documentation can be generated with `cmake --build <build_dir> --target docs`.
+The resulting files are located in `<build_dir>/doc/doxygen/html`; open
 `index.html` in that directory to view the homepage.
 
-Before running `make docs`, you'll need to install these dependencies:
+Before building the `docs` target, you'll need to install these dependencies:
 
 Linux: `sudo apt install doxygen graphviz`
 
@@ -385,10 +384,6 @@ ln -s /path/to/project/root/src src
 ```
 
 3. Use `debugedit` to modify debug information in the binary.
-
-### Compiling for gprof profiling
-
-Run configure with the `--enable-gprof` option, then make.
 
 ### `debug.log`
 
@@ -481,20 +476,33 @@ $ ./test/functional/test_runner.py --valgrind
 
 ### Compiling for test coverage
 
-LCOV can be used to generate a test coverage report based upon `make check`
+LCOV can be used to generate a test coverage report based upon `ctest`
 execution. LCOV must be installed on your system (e.g. the `lcov` package
 on Debian/Ubuntu).
 
 To enable LCOV report generation during test runs:
 
 ```shell
-./configure --enable-lcov
-make
-make cov
+cmake -B build -DCMAKE_BUILD_TYPE=Coverage
+cmake --build build
+cmake -P build/Coverage.cmake
 
-# A coverage report will now be accessible at `./test_bitcoin.coverage/index.html`,
-# which covers unit tests, and `./total.coverage/index.html`, which covers
+# A coverage report will now be accessible at `./build/test_bitcoin.coverage/index.html`,
+# which covers unit tests, and `./build/total.coverage/index.html`, which covers
 # unit and functional tests.
+```
+
+Additional LCOV options can be specified using `LCOV_OPTS`, but may be dependent
+on the version of LCOV. For example, when using LCOV `2.x`, branch coverage can be
+enabled by setting `LCOV_OPTS="--rc branch_coverage=1"`:
+
+```
+cmake -DLCOV_OPTS="--rc branch_coverage=1" -P build/Coverage.cmake
+```
+
+To enable test parallelism:
+```
+cmake -DJOBS=$(nproc) -P build/Coverage.cmake
 ```
 
 ### Performance profiling with perf
@@ -733,8 +741,6 @@ logging messages. They should be used as follows:
   useful for debugging and can reasonably be enabled on a production
   system (that has sufficient free storage space). They will be logged
   if the program is started with `-debug=category` or `-debug=1`.
-  Note that `LogPrint(BCLog::CATEGORY, fmt, params...)` is a deprecated
-  alias for `LogDebug`.
 
 - `LogInfo(fmt, params...)` should only be used rarely, e.g. for startup
   messages or for infrequent and important events such as a new block tip
@@ -1458,8 +1464,9 @@ independent (node, wallet, GUI), are defined in
 there are [`interfaces::Chain`](../src/interfaces/chain.h), used by wallet to
 access the node's latest chain state,
 [`interfaces::Node`](../src/interfaces/node.h), used by the GUI to control the
-node, and [`interfaces::Wallet`](../src/interfaces/wallet.h), used by the GUI
-to control an individual wallet. There are also more specialized interface
+node, [`interfaces::Wallet`](../src/interfaces/wallet.h), used by the GUI
+to control an individual wallet and [`interfaces::Mining`](../src/interfaces/mining.h),
+used by RPC to generate block templates. There are also more specialized interface
 types like [`interfaces::Handler`](../src/interfaces/handler.h)
 [`interfaces::ChainClient`](../src/interfaces/chain.h) passed to and from
 various interface methods.

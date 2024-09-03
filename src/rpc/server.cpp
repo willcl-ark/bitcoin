@@ -27,6 +27,8 @@
 #include <mutex>
 #include <unordered_map>
 
+using util::SplitString;
+
 static GlobalMutex g_rpc_warmup_mutex;
 static std::atomic<bool> g_rpc_running{false};
 static bool fRPCInWarmup GUARDED_BY(g_rpc_warmup_mutex) = true;
@@ -241,15 +243,15 @@ static RPCHelpMan getrpcinfo()
         UniValue entry(UniValue::VOBJ);
         entry.pushKV("method", info.method);
         entry.pushKV("duration", int64_t{Ticks<std::chrono::microseconds>(SteadyClock::now() - info.start)});
-        active_commands.push_back(entry);
+        active_commands.push_back(std::move(entry));
     }
 
     UniValue result(UniValue::VOBJ);
-    result.pushKV("active_commands", active_commands);
+    result.pushKV("active_commands", std::move(active_commands));
 
     const std::string path = LogInstance().m_file_path.utf8string();
     UniValue log_path(UniValue::VSTR, path);
-    result.pushKV("logpath", log_path);
+    result.pushKV("logpath", std::move(log_path));
 
     return result;
 }
@@ -293,7 +295,7 @@ bool CRPCTable::removeCommand(const std::string& name, const CRPCCommand* pcmd)
 
 void StartRPC()
 {
-    LogPrint(BCLog::RPC, "Starting RPC\n");
+    LogDebug(BCLog::RPC, "Starting RPC\n");
     g_rpc_running = true;
     g_rpcSignals.Started();
 }
@@ -303,7 +305,7 @@ void InterruptRPC()
     static std::once_flag g_rpc_interrupt_flag;
     // This function could be called twice if the GUI has been started with -server=1.
     std::call_once(g_rpc_interrupt_flag, []() {
-        LogPrint(BCLog::RPC, "Interrupting RPC\n");
+        LogDebug(BCLog::RPC, "Interrupting RPC\n");
         // Interrupt e.g. running longpolls
         g_rpc_running = false;
     });
@@ -315,7 +317,7 @@ void StopRPC()
     // This function could be called twice if the GUI has been started with -server=1.
     assert(!g_rpc_running);
     std::call_once(g_rpc_stop_flag, []() {
-        LogPrint(BCLog::RPC, "Stopping RPC\n");
+        LogDebug(BCLog::RPC, "Stopping RPC\n");
         WITH_LOCK(g_deadline_timers_mutex, deadlineTimers.clear());
         DeleteAuthCookie();
         g_rpcSignals.Stopped();
@@ -360,36 +362,22 @@ bool IsDeprecatedRPCEnabled(const std::string& method)
     return find(enabled_methods.begin(), enabled_methods.end(), method) != enabled_methods.end();
 }
 
-static UniValue JSONRPCExecOne(JSONRPCRequest jreq, const UniValue& req)
+UniValue JSONRPCExec(const JSONRPCRequest& jreq, bool catch_errors)
 {
-    UniValue rpc_result(UniValue::VOBJ);
-
-    try {
-        jreq.parse(req);
-
-        UniValue result = tableRPC.execute(jreq);
-        rpc_result = JSONRPCReplyObj(result, NullUniValue, jreq.id);
-    }
-    catch (const UniValue& objError)
-    {
-        rpc_result = JSONRPCReplyObj(NullUniValue, objError, jreq.id);
-    }
-    catch (const std::exception& e)
-    {
-        rpc_result = JSONRPCReplyObj(NullUniValue,
-                                     JSONRPCError(RPC_PARSE_ERROR, e.what()), jreq.id);
+    UniValue result;
+    if (catch_errors) {
+        try {
+            result = tableRPC.execute(jreq);
+        } catch (UniValue& e) {
+            return JSONRPCReplyObj(NullUniValue, std::move(e), jreq.id, jreq.m_json_version);
+        } catch (const std::exception& e) {
+            return JSONRPCReplyObj(NullUniValue, JSONRPCError(RPC_MISC_ERROR, e.what()), jreq.id, jreq.m_json_version);
+        }
+    } else {
+        result = tableRPC.execute(jreq);
     }
 
-    return rpc_result;
-}
-
-std::string JSONRPCExecBatch(const JSONRPCRequest& jreq, const UniValue& vReq)
-{
-    UniValue ret(UniValue::VARR);
-    for (unsigned int reqIdx = 0; reqIdx < vReq.size(); reqIdx++)
-        ret.push_back(JSONRPCExecOne(jreq, vReq[reqIdx]));
-
-    return ret.write() + "\n";
+    return JSONRPCReplyObj(std::move(result), NullUniValue, jreq.id, jreq.m_json_version);
 }
 
 /**
@@ -595,7 +583,7 @@ void RPCRunLater(const std::string& name, std::function<void()> func, int64_t nS
         throw JSONRPCError(RPC_INTERNAL_ERROR, "No timer handler registered for RPC");
     LOCK(g_deadline_timers_mutex);
     deadlineTimers.erase(name);
-    LogPrint(BCLog::RPC, "queue run of timer %s in %i seconds (using %s)\n", name, nSeconds, timerInterface->Name());
+    LogDebug(BCLog::RPC, "queue run of timer %s in %i seconds (using %s)\n", name, nSeconds, timerInterface->Name());
     deadlineTimers.emplace(name, std::unique_ptr<RPCTimerBase>(timerInterface->NewTimer(func, nSeconds*1000)));
 }
 

@@ -101,10 +101,6 @@ host_os+=$(findstring netbsd,$(full_host_os))
 host_os+=$(findstring openbsd,$(full_host_os))
 host_os+=$(findstring mingw32,$(full_host_os))
 
-ifeq (android,$(findstring android,$(full_host_os)))
-host_os:=android
-endif
-
 host_os:=$(strip $(host_os))
 ifeq ($(host_os),)
 host_os=$(full_host_os)
@@ -185,12 +181,9 @@ all_packages = $(packages) $(native_packages)
 
 meta_depends = Makefile config.guess config.sub funcs.mk builders/default.mk hosts/default.mk hosts/$(host_os).mk builders/$(build_os).mk
 
-$(host_arch)_$(host_os)_native_binutils?=$($(host_os)_native_binutils)
-$(host_arch)_$(host_os)_native_toolchain?=$($(host_os)_native_toolchain)
-
 include funcs.mk
 
-final_build_id_long+=$(shell $(build_SHA256SUM) config.site.in)
+final_build_id_long+=$(shell $(build_SHA256SUM) toolchain.cmake.in)
 final_build_id+=$(shell echo -n "$(final_build_id_long)" | $(build_SHA256SUM) | cut -c-$(HASH_LENGTH))
 $(host_prefix)/.stamp_$(final_build_id): $(native_packages) $(packages)
 	rm -rf $(@D)
@@ -200,63 +193,52 @@ $(host_prefix)/.stamp_$(final_build_id): $(native_packages) $(packages)
 	cd $(@D); $(foreach package,$^, $(build_TAR) xf $($(package)_cached); )
 	touch $@
 
-# $PATH is not preserved between ./configure and make by convention. Its
-# modification and overriding at ./configure time is (as I understand it)
-# supposed to be captured by the AC_{PROG_{,OBJ}CXX,PATH_{PROG,TOOL}} macros,
-# which will expand the program names to their full absolute paths. The notable
-# exception is command line overriding: ./configure CC=clang, which skips the
-# program name expansion step, and works because the user implicitly indicates
-# with CC=clang that clang will be available in $PATH at all times, and is most
-# likely part of the user's system.
-#
-# Therefore, when we "seed the autoconf cache"/"override well-known program
-# vars" by setting AR=<blah> in our config.site, either one of two things needs
-# to be true for the build system to work correctly:
-#
-#   1. If we refer to the program by name (e.g. AR=riscv64-gnu-linux-ar), the
-#      tool needs to be available in $PATH at all times.
-#
-#   2. If the tool is _**not**_ expected to be available in $PATH at all times
-#      (such as is the case for our native_cctools binutils tools), it needs to
-#      be referred to by its absolute path, such as would be output by the
-#      AC_PATH_{PROG,TOOL} macros.
-#
-# Minor note: it is also okay to refer to tools by their absolute path even if
-# we expect them to be available in $PATH at all times, more specificity does
-# not hurt.
-$(host_prefix)/share/config.site : config.site.in $(host_prefix)/.stamp_$(final_build_id)
+ifeq ($(host),$(build))
+  crosscompiling=FALSE
+else
+  crosscompiling=TRUE
+endif
+
+$(host_prefix)/toolchain.cmake : toolchain.cmake.in $(host_prefix)/.stamp_$(final_build_id)
 	@mkdir -p $(@D)
-	sed -e 's|@HOST@|$(host)|' \
+	sed -e 's|@depends_crosscompiling@|$(crosscompiling)|' \
+            -e 's|@host_system_name@|$($(host_os)_cmake_system_name)|' \
+            -e 's|@host_system_version@|$($(host_os)_cmake_system_version)|' \
+            -e 's|@host_arch@|$(host_arch)|' \
             -e 's|@CC@|$(host_CC)|' \
             -e 's|@CXX@|$(host_CXX)|' \
+            -e 's|@OSX_SDK@|$(OSX_SDK)|' \
             -e 's|@AR@|$(host_AR)|' \
             -e 's|@RANLIB@|$(host_RANLIB)|' \
-            -e 's|@NM@|$(host_NM)|' \
             -e 's|@STRIP@|$(host_STRIP)|' \
+            -e 's|@OBJCOPY@|$(host_OBJCOPY)|' \
             -e 's|@OBJDUMP@|$(host_OBJDUMP)|' \
-            -e 's|@DSYMUTIL@|$(host_DSYMUTIL)|' \
-            -e 's|@build_os@|$(build_os)|' \
-            -e 's|@host_os@|$(host_os)|' \
-            -e 's|@CFLAGS@|$(strip $(host_CFLAGS) $(host_$(release_type)_CFLAGS))|' \
-            -e 's|@CXXFLAGS@|$(strip $(host_CXXFLAGS) $(host_$(release_type)_CXXFLAGS))|' \
-            -e 's|@CPPFLAGS@|$(strip $(host_CPPFLAGS) $(host_$(release_type)_CPPFLAGS))|' \
-            -e 's|@LDFLAGS@|$(strip $(host_LDFLAGS) $(host_$(release_type)_LDFLAGS))|' \
-            -e 's|@no_qt@|$(NO_QT)|' \
-            -e 's|@no_qr@|$(NO_QR)|' \
-            -e 's|@no_zmq@|$(NO_ZMQ)|' \
-            -e 's|@no_wallet@|$(NO_WALLET)|' \
-            -e 's|@no_bdb@|$(NO_BDB)|' \
-            -e 's|@no_sqlite@|$(NO_SQLITE)|' \
-            -e 's|@no_upnp@|$(NO_UPNP)|' \
-            -e 's|@no_usdt@|$(NO_USDT)|' \
-            -e 's|@no_natpmp@|$(NO_NATPMP)|' \
-            -e 's|@multiprocess@|$(MULTIPROCESS)|' \
-            -e 's|@lto@|$(LTO)|' \
+            -e 's|@depends_prefix@|$(host_prefix)|' \
+            -e 's|@CFLAGS@|$(strip $(host_CFLAGS))|' \
+            -e 's|@CFLAGS_RELEASE@|$(strip $(host_release_CFLAGS))|' \
+            -e 's|@CFLAGS_DEBUG@|$(strip $(host_debug_CFLAGS))|' \
+            -e 's|@CXXFLAGS@|$(strip $(host_CXXFLAGS))|' \
+            -e 's|@CXXFLAGS_RELEASE@|$(strip $(host_release_CXXFLAGS))|' \
+            -e 's|@CXXFLAGS_DEBUG@|$(strip $(host_debug_CXXFLAGS))|' \
+            -e 's|@CPPFLAGS@|$(strip $(host_CPPFLAGS))|' \
+            -e 's|@CPPFLAGS_RELEASE@|$(strip $(host_release_CPPFLAGS))|' \
+            -e 's|@CPPFLAGS_DEBUG@|$(strip $(host_debug_CPPFLAGS))|' \
+            -e 's|@LDFLAGS@|$(strip $(host_LDFLAGS))|' \
+            -e 's|@LDFLAGS_RELEASE@|$(strip $(host_release_LDFLAGS))|' \
+            -e 's|@LDFLAGS_DEBUG@|$(strip $(host_debug_LDFLAGS))|' \
+            -e 's|@qt_packages@|$(qt_packages_)|' \
+            -e 's|@qrencode_packages@|$(qrencode_packages_)|' \
+            -e 's|@zmq_packages@|$(zmq_packages_)|' \
+            -e 's|@wallet_packages@|$(wallet_packages_)|' \
+            -e 's|@bdb_packages@|$(bdb_packages_)|' \
+            -e 's|@sqlite_packages@|$(sqlite_packages_)|' \
+            -e 's|@upnp_packages@|$(upnp_packages_)|' \
+            -e 's|@natpmp_packages@|$(natpmp_packages_)|' \
+            -e 's|@usdt_packages@|$(usdt_packages_)|' \
             -e 's|@no_harden@|$(NO_HARDEN)|' \
-            -e 's|@debug@|$(DEBUG)|' \
+            -e 's|@multiprocess@|$(MULTIPROCESS)|' \
             $< > $@
 	touch $@
-
 
 define check_or_remove_cached
   mkdir -p $(BASE_CACHE)/$(host)/$(package) && cd $(BASE_CACHE)/$(host)/$(package); \
@@ -277,7 +259,7 @@ check-packages:
 check-sources:
 	@$(foreach package,$(all_packages),$(call check_or_remove_sources,$(package));)
 
-$(host_prefix)/share/config.site: check-packages
+$(host_prefix)/toolchain.cmake: check-packages
 
 check-packages: check-sources
 
@@ -287,7 +269,7 @@ clean-all: clean
 clean:
 	@rm -rf $(WORK_PATH) $(BASE_CACHE) $(BUILD) *.log
 
-install: check-packages $(host_prefix)/share/config.site
+install: check-packages $(host_prefix)/toolchain.cmake
 
 
 download-one: check-sources $(all_sources)

@@ -15,8 +15,8 @@ class ArgsManager;
 class AddrMan;
 class BanMan;
 class BaseIndex;
-class CBlockPolicyEstimator;
 class CConnman;
+class FeeEstimator;
 class ValidationSignals;
 class CScheduler;
 class CTxMemPool;
@@ -27,6 +27,7 @@ class PeerManager;
 namespace interfaces {
 class Chain;
 class ChainClient;
+class Mining;
 class Init;
 class WalletLoader;
 } // namespace interfaces
@@ -39,6 +40,7 @@ class SignalInterrupt;
 
 namespace node {
 class KernelNotifications;
+class Warnings;
 
 //! NodeContext struct containing references to chain state and connection
 //! state.
@@ -62,7 +64,7 @@ struct NodeContext {
     std::unique_ptr<CConnman> connman;
     std::unique_ptr<CTxMemPool> mempool;
     std::unique_ptr<const NetGroupManager> netgroupman;
-    std::unique_ptr<CBlockPolicyEstimator> fee_estimator;
+    std::unique_ptr<FeeEstimator> fee_estimator;
     std::unique_ptr<PeerManager> peerman;
     std::unique_ptr<ChainstateManager> chainman;
     std::unique_ptr<BanMan> banman;
@@ -73,6 +75,7 @@ struct NodeContext {
     std::vector<std::unique_ptr<interfaces::ChainClient>> chain_clients;
     //! Reference to chain client that should used to load or create wallets
     //! opened by the gui.
+    std::unique_ptr<interfaces::Mining> mining;
     interfaces::WalletLoader* wallet_loader{nullptr};
     std::unique_ptr<CScheduler> scheduler;
     std::function<void()> rpc_interruption_point = [] {};
@@ -81,6 +84,8 @@ struct NodeContext {
     //! Issues calls about blocks and transactions
     std::unique_ptr<ValidationSignals> validation_signals;
     std::atomic<int> exit_status{EXIT_SUCCESS};
+    //! Manages all the node warnings
+    std::unique_ptr<node::Warnings> warnings;
 
     //! Declare default constructor and destructor that are not inline, so code
     //! instantiating the NodeContext struct doesn't need to #include class
