@@ -523,23 +523,29 @@ def main():
 
     # Remove the test cases that the user has explicitly asked to exclude.
     # The user can specify a test case with or without the .py extension.
+    excluded_tests = []
     if args.exclude:
         def print_warning_missing_test(test_name):
             print("{}WARNING!{} Test '{}' not found in current test list.".format(BOLD[1], BOLD[0], test_name))
         def remove_tests(exclude_list):
+            removed = []
             if not exclude_list:
                 print_warning_missing_test(exclude_test)
             for exclude_item in exclude_list:
-                test_list.remove(exclude_item)
+                if exclude_item in test_list:
+                    test_list.remove(exclude_item)
+                    removed.append(exclude_item)
+            return removed
 
         exclude_tests = [test.strip() for test in args.exclude.split(",")]
         for exclude_test in exclude_tests:
             # A space in the name indicates it has arguments such as "wallet_basic.py --descriptors"
             if ' ' in exclude_test:
-                remove_tests([test for test in test_list if test.replace('.py', '') == exclude_test.replace('.py', '')])
+                excluded = remove_tests([test for test in test_list if test.replace('.py', '') == exclude_test.replace('.py', '')])
             else:
                 # Exclude all variants of a test
-                remove_tests([test for test in test_list if test.split('.py')[0] == exclude_test.split('.py')[0]])
+                excluded = remove_tests([test for test in test_list if test.split('.py')[0] == exclude_test.split('.py')[0]])
+            excluded_tests.extend(excluded)
 
     if args.filter:
         test_list = list(filter(re.compile(args.filter).search, test_list))
@@ -570,6 +576,7 @@ def main():
 
     run_tests(
         test_list=test_list,
+        excluded_tests=excluded_tests,
         src_dir=config["environment"]["SRCDIR"],
         build_dir=config["environment"]["BUILDDIR"],
         tmpdir=tmpdir,
@@ -582,7 +589,7 @@ def main():
         results_filepath=results_filepath,
     )
 
-def run_tests(*, test_list, src_dir, build_dir, tmpdir, jobs=1, enable_coverage=False, args=None, combined_logs_len=0, failfast=False, use_term_control, results_filepath=None):
+def run_tests(*, test_list, excluded_tests, src_dir, build_dir, tmpdir, jobs=1, enable_coverage=False, args=None, combined_logs_len=0, failfast=False, use_term_control, results_filepath=None):
     args = args or []
 
     # Warn if bitcoind is already running
@@ -638,6 +645,9 @@ def run_tests(*, test_list, src_dir, build_dir, tmpdir, jobs=1, enable_coverage=
     )
     start_time = time.time()
     test_results = []
+
+    for excluded_test in excluded_tests:
+        test_results.append(TestResult(excluded_test, "Excluded", 0))
 
     max_len_name = len(max(test_list, key=len))
     test_count = len(test_list)
@@ -817,6 +827,14 @@ class TestHandler:
 
 
 class TestResult():
+
+    STATUS_INFO = { # sort key, colour, glyph
+        "Passed": (0, GREEN, TICK),
+        "Skipped": (1, DEFAULT, CIRCLE),
+        "Excluded": (2, DEFAULT, CIRCLE),
+        "Failed": (3, RED, CROSS),
+    }
+
     def __init__(self, name, status, time):
         self.name = name
         self.status = status
@@ -824,25 +842,18 @@ class TestResult():
         self.padding = 0
 
     def sort_key(self):
-        if self.status == "Passed":
-            return 0, self.name.lower()
-        elif self.status == "Failed":
-            return 2, self.name.lower()
-        elif self.status == "Skipped":
-            return 1, self.name.lower()
+        try:
+            priority, _, _ = self.STATUS_INFO[self.status]
+            return priority, self.name.lower()
+        except KeyError:
+            raise KeyError(f"Test status unknown: {self.status}")
 
     def __repr__(self):
-        if self.status == "Passed":
-            color = GREEN
-            glyph = TICK
-        elif self.status == "Failed":
-            color = RED
-            glyph = CROSS
-        elif self.status == "Skipped":
-            color = DEFAULT
-            glyph = CIRCLE
-
-        return color[1] + "%s | %s%s | %s s\n" % (self.name.ljust(self.padding), glyph, self.status.ljust(7), self.time) + color[0]
+        try:
+            _, color, glyph = self.STATUS_INFO[self.status]
+            return f"{color[1]}{self.name:<{self.padding}} | {glyph}{self.status:<7} | {self.time} s\n{color[0]}"
+        except KeyError:
+            raise KeyError(f"Test status unknown: {self.status}")
 
     @property
     def was_successful(self):
