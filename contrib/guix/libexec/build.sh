@@ -324,6 +324,10 @@ mkdir -p "$DISTSRC"
             *linux*)
                 cp "${DISTSRC}/README.md" "${DISTNAME}/"
                 ;;
+            *darwin*)
+                # Script to help users with signing their MacOS binaries
+                cp "${DISTSRC}/contrib/devtools/codesign-macos.sh" "${DISTNAME}/codesign-macos.sh"
+                ;;
         esac
 
         # copy over the example bitcoin.conf file. if contrib/devtools/gen-bitcoin-conf.sh
