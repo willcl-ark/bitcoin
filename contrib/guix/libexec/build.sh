@@ -325,6 +325,7 @@ mkdir -p "$DISTSRC"
                 cp "${DISTSRC}/README.md" "${DISTNAME}/"
                 ;;
             *darwin*)
+                cp "${DISTSRC}/doc/README_macos.txt" "${DISTNAME}/"
                 # Script to help users with signing their MacOS binaries
                 cp "${DISTSRC}/contrib/devtools/codesign-macos.sh" "${DISTNAME}/codesign-macos.sh"
                 ;;
