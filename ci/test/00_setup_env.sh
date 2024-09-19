@@ -58,7 +58,8 @@ export CCACHE_TEMPDIR=${CCACHE_TEMPDIR:-/tmp/.ccache-temp}
 export CCACHE_COMPRESS=${CCACHE_COMPRESS:-1}
 # The cache dir.
 # This folder exists only on the ci guest, and on the ci host as a volume.
-export CCACHE_DIR="${CCACHE_DIR:-$BASE_SCRATCH_DIR/ccache}"
+# Use a per-container (name) cache dir to share ccache between all jobs of this type
+export CCACHE_DIR="${CCACHE_DIR:-$BASE_SCRATCH_DIR/ccache/$CONTAINER_NAME}"
 # Folder where the build result is put (bin and lib).
 export BASE_OUTDIR=${BASE_OUTDIR:-$BASE_SCRATCH_DIR/out}
 # The folder for previous release binaries.
