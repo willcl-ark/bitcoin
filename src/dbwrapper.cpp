@@ -34,20 +34,26 @@
 
 static auto CharCast(const std::byte* data) { return reinterpret_cast<const char*>(data); }
 
-bool DestroyDB(const std::string& path_str)
+bool CDBWrapper::DestroyDB(const std::string& path_str)
 {
     return leveldb::DestroyDB(path_str, {}).ok();
 }
 
+struct CDBWrapper::StatusImpl
+{
+    const leveldb::Status status;
+};
+
 /** Handle database error by throwing dbwrapper_error exception.
  */
-static void HandleError(const leveldb::Status& status)
+void CDBWrapper::HandleError(const CDBWrapper::StatusImpl& _status)
 {
+    const leveldb::Status& status = _status.status;
     if (status.ok())
         return;
     const std::string errmsg = "Fatal LevelDB error: " + status.ToString();
-    LogPrintf("%s\n", errmsg);
-    LogPrintf("You can use -debug=leveldb to get more complete diagnostic messages\n");
+    LogWarning("%s\n", errmsg);
+    LogWarning("You can use -debug=leveldb to get more complete diagnostic messages\n");
     throw dbwrapper_error(errmsg);
 }
 
@@ -155,23 +161,17 @@ struct CDBBatch::WriteBatchImpl {
     leveldb::WriteBatch batch;
 };
 
-CDBBatch::CDBBatch(const CDBWrapper& _parent)
-    : parent{_parent},
+CDBBatch::CDBBatch(const CDBWrapperBase& _parent)
+    : CDBBatchBase(_parent),
       m_impl_batch{std::make_unique<CDBBatch::WriteBatchImpl>()} {};
 
 CDBBatch::~CDBBatch() = default;
 
-void CDBBatch::Clear()
-{
-    m_impl_batch->batch.Clear();
-    size_estimate = 0;
-}
-
-void CDBBatch::WriteImpl(Span<const std::byte> key, DataStream& ssValue)
+void CDBBatch::WriteImpl(Span<const std::byte> key, DataStream& value)
 {
     leveldb::Slice slKey(CharCast(key.data()), key.size());
-    ssValue.Xor(dbwrapper_private::GetObfuscateKey(parent));
-    leveldb::Slice slValue(CharCast(ssValue.data()), ssValue.size());
+    value.Xor(m_parent.GetObfuscateKey());
+    leveldb::Slice slValue(CharCast(value.data()), value.size());
     m_impl_batch->batch.Put(slKey, slValue);
     // LevelDB serializes writes as:
     // - byte: header
@@ -219,7 +219,8 @@ struct LevelDBContext {
 };
 
 CDBWrapper::CDBWrapper(const DBParams& params)
-    : m_db_context{std::make_unique<LevelDBContext>()}, m_name{fs::PathToString(params.path.stem())}, m_path{params.path}, m_is_memory{params.memory_only}
+    : CDBWrapperBase(params),
+    m_db_context{std::make_unique<LevelDBContext>()}
 {
     DBContext().penv = nullptr;
     DBContext().readoptions.verify_checksums = true;
@@ -234,7 +235,7 @@ CDBWrapper::CDBWrapper(const DBParams& params)
     } else {
         if (params.wipe_data) {
             LogPrintf("Wiping LevelDB in %s\n", fs::PathToString(params.path));
-            leveldb::Status result = leveldb::DestroyDB(fs::PathToString(params.path), DBContext().options);
+            StatusImpl result{leveldb::DestroyDB(fs::PathToString(params.path), DBContext().options)};
             HandleError(result);
         }
         TryCreateDirectories(params.path);
@@ -244,7 +245,7 @@ CDBWrapper::CDBWrapper(const DBParams& params)
     // because on POSIX leveldb passes the byte string directly to ::open(), and
     // on Windows it converts from UTF-8 to UTF-16 before calling ::CreateFileW
     // (see env_posix.cc and env_windows.cc).
-    leveldb::Status status = leveldb::DB::Open(DBContext().options, fs::PathToString(params.path), &DBContext().pdb);
+    StatusImpl status{leveldb::DB::Open(DBContext().options, fs::PathToString(params.path), &DBContext().pdb)};
     HandleError(status);
     LogPrintf("Opened LevelDB successfully\n");
 
@@ -253,25 +254,10 @@ CDBWrapper::CDBWrapper(const DBParams& params)
         DBContext().pdb->CompactRange(nullptr, nullptr);
         LogPrintf("Finished database compaction of %s\n", fs::PathToString(params.path));
     }
-
-    // The base-case obfuscation key, which is a noop.
-    obfuscate_key = std::vector<unsigned char>(OBFUSCATE_KEY_NUM_BYTES, '\000');
-
-    bool key_exists = Read(OBFUSCATE_KEY_KEY, obfuscate_key);
-
-    if (!key_exists && params.obfuscate && IsEmpty()) {
-        // Initialize non-degenerate obfuscation if it won't upset
-        // existing, non-obfuscated data.
-        std::vector<unsigned char> new_key = CreateObfuscateKey();
-
-        // Write `new_key` so we don't obfuscate the key with itself
-        Write(OBFUSCATE_KEY_KEY, new_key);
-        obfuscate_key = new_key;
-
-        LogPrintf("Wrote new obfuscate key for %s: %s\n", fs::PathToString(params.path), HexStr(obfuscate_key));
+    if(params.obfuscate && WriteObfuscateKeyIfNotExists()){
+        LogInfo("Wrote new obfuscate key for %s: %s\n", fs::PathToString(params.path), HexStr(obfuscate_key));
     }
-
-    LogPrintf("Using obfuscation key for %s: %s\n", fs::PathToString(params.path), HexStr(obfuscate_key));
+    LogInfo("Using obfuscation key for %s: %s\n", fs::PathToString(params.path), HexStr(GetObfuscateKey()));
 }
 
 CDBWrapper::~CDBWrapper()
@@ -288,14 +274,15 @@ CDBWrapper::~CDBWrapper()
     DBContext().options.env = nullptr;
 }
 
-bool CDBWrapper::WriteBatch(CDBBatch& batch, bool fSync)
+bool CDBWrapper::WriteBatch(CDBBatchBase& _batch, bool fSync)
 {
+    CDBBatch& batch = static_cast<CDBBatch&>(_batch);
     const bool log_memory = LogAcceptCategory(BCLog::LEVELDB, BCLog::Level::Debug);
     double mem_before = 0;
     if (log_memory) {
         mem_before = DynamicMemoryUsage() / 1024.0 / 1024;
     }
-    leveldb::Status status = DBContext().pdb->Write(fSync ? DBContext().syncoptions : DBContext().writeoptions, &batch.m_impl_batch->batch);
+    StatusImpl status{DBContext().pdb->Write(fSync ? DBContext().syncoptions : DBContext().writeoptions, &batch.m_impl_batch->batch)};
     HandleError(status);
     if (log_memory) {
         double mem_after = DynamicMemoryUsage() / 1024.0 / 1024;
@@ -320,20 +307,43 @@ size_t CDBWrapper::DynamicMemoryUsage() const
 //
 // We must use a string constructor which specifies length so that we copy
 // past the null-terminator.
-const std::string CDBWrapper::OBFUSCATE_KEY_KEY("\000obfuscate_key", 14);
+const std::string CDBWrapperBase::OBFUSCATE_KEY_KEY("\000obfuscate_key", 14);
 
-const unsigned int CDBWrapper::OBFUSCATE_KEY_NUM_BYTES = 8;
+const unsigned int CDBWrapperBase::OBFUSCATE_KEY_NUM_BYTES = 8;
 
 /**
  * Returns a string (consisting of 8 random bytes) suitable for use as an
  * obfuscating XOR key.
  */
-std::vector<unsigned char> CDBWrapper::CreateObfuscateKey() const
+std::vector<unsigned char> CDBWrapperBase::CreateObfuscateKey() const
 {
     std::vector<uint8_t> ret(OBFUSCATE_KEY_NUM_BYTES);
     GetRandBytes(ret);
     return ret;
 }
+
+bool CDBWrapperBase::WriteObfuscateKeyIfNotExists()
+{
+    // The base-case obfuscation key, which is a noop.
+    obfuscate_key = std::vector<unsigned char>(OBFUSCATE_KEY_NUM_BYTES, '\000');
+
+    bool key_exists = Read(OBFUSCATE_KEY_KEY, obfuscate_key);
+
+    if (!key_exists && IsEmpty()) {
+        // Initialize non-degenerate obfuscation if it won't upset
+        // existing, non-obfuscated data.
+        std::vector<unsigned char> new_key = CreateObfuscateKey();
+
+        // Write `new_key` so we don't obfuscate the key with itself
+        Write(OBFUSCATE_KEY_KEY, new_key);
+        obfuscate_key = new_key;
+        return true;
+    }
+    else {
+        return false;
+    }
+}
+
 
 std::optional<std::string> CDBWrapper::ReadImpl(Span<const std::byte> key) const
 {
@@ -344,7 +354,7 @@ std::optional<std::string> CDBWrapper::ReadImpl(Span<const std::byte> key) const
         if (status.IsNotFound())
             return std::nullopt;
         LogPrintf("LevelDB read failure: %s\n", status.ToString());
-        HandleError(status);
+        HandleError(StatusImpl{status});
     }
     return strValue;
 }
@@ -359,7 +369,7 @@ bool CDBWrapper::ExistsImpl(Span<const std::byte> key) const
         if (status.IsNotFound())
             return false;
         LogPrintf("LevelDB read failure: %s\n", status.ToString());
-        HandleError(status);
+        HandleError(StatusImpl{status});
     }
     return true;
 }
@@ -374,9 +384,10 @@ size_t CDBWrapper::EstimateSizeImpl(Span<const std::byte> key1, Span<const std::
     return size;
 }
 
+// TODO: IsEmpty shouldn't be virtual in CDBWrapperBase
 bool CDBWrapper::IsEmpty()
 {
-    std::unique_ptr<CDBIterator> it(NewIterator());
+    std::unique_ptr<CDBIterator> it(static_cast<CDBIterator*>(CDBWrapper::NewIterator()));
     it->SeekToFirst();
     return !(it->Valid());
 }
@@ -387,10 +398,10 @@ struct CDBIterator::IteratorImpl {
     explicit IteratorImpl(leveldb::Iterator* _iter) : iter{_iter} {}
 };
 
-CDBIterator::CDBIterator(const CDBWrapper& _parent, std::unique_ptr<IteratorImpl> _piter) : parent(_parent),
+CDBIterator::CDBIterator(const CDBWrapperBase& _parent, std::unique_ptr<IteratorImpl> _piter): CDBIteratorBase(_parent),
                                                                                             m_impl_iter(std::move(_piter)) {}
 
-CDBIterator* CDBWrapper::NewIterator()
+CDBIteratorBase* CDBWrapper::NewIterator()
 {
     return new CDBIterator{*this, std::make_unique<CDBIterator::IteratorImpl>(DBContext().pdb->NewIterator(DBContext().iteroptions))};
 }
@@ -423,4 +434,7 @@ const std::vector<unsigned char>& GetObfuscateKey(const CDBWrapper &w)
     return w.obfuscate_key;
 }
 
-} // namespace dbwrapper_private
+const std::vector<unsigned char>& CDBWrapperBase::GetObfuscateKey() const
+{
+    return obfuscate_key;
+}

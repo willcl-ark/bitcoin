@@ -27,7 +27,7 @@ static constexpr uint8_t DB_COINS{'c'};
 
 bool CCoinsViewDB::NeedsUpgrade()
 {
-    std::unique_ptr<CDBIterator> cursor{m_db->NewIterator()};
+    std::unique_ptr<CDBIteratorBase> cursor{m_db->NewIterator()};
     // DB_COINS was deprecated in v0.15.0, commit
     // 1088b02f0ccd7358d2b7076bb9e122d59d502d02
     cursor->Seek(std::make_pair(DB_COINS, uint256{}));
@@ -162,7 +162,7 @@ class CCoinsViewDBCursor: public CCoinsViewCursor
 public:
     // Prefer using CCoinsViewDB::Cursor() since we want to perform some
     // cache warmup on instantiation.
-    CCoinsViewDBCursor(CDBIterator* pcursorIn, const uint256&hashBlockIn):
+    CCoinsViewDBCursor(CDBIteratorBase* pcursorIn, const uint256&hashBlockIn):
         CCoinsViewCursor(hashBlockIn), pcursor(pcursorIn) {}
     ~CCoinsViewDBCursor() = default;
 
@@ -173,7 +173,7 @@ public:
     void Next() override;
 
 private:
-    std::unique_ptr<CDBIterator> pcursor;
+    std::unique_ptr<CDBIteratorBase> pcursor;
     std::pair<char, COutPoint> keyTmp;
 
     friend class CCoinsViewDB;
@@ -182,7 +182,7 @@ private:
 std::unique_ptr<CCoinsViewCursor> CCoinsViewDB::Cursor() const
 {
     auto i = std::make_unique<CCoinsViewDBCursor>(
-        const_cast<CDBWrapper&>(*m_db).NewIterator(), GetBestBlock());
+        m_db->NewIterator(), GetBestBlock());
     /* It seems that there are no "const iterators" for LevelDB.  Since we
        only need read operations on it, use a const-cast to get around
        that restriction.  */
