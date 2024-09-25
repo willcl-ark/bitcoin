@@ -5334,6 +5334,10 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
 
     // Ignore unknown commands for extensibility
     LogPrint(BCLog::NET, "Unknown command \"%s\" from peer=%d\n", SanitizeString(msg_type), pfrom.GetId());
+    if (pfrom.nVersion >= PROTOCOL_VERSION) {
+        LogPrintf("Unknown p2p message from recent version peer recieved\n");
+        assert(false);
+    };
     return;
 }
 
