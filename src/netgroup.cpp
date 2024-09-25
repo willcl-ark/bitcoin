@@ -47,6 +47,8 @@ std::vector<unsigned char> NetGroupManager::GetGroup(const CNetAddr& address) co
         uint32_t ipv4 = address.GetLinkedIPv4();
         vchRet.push_back((ipv4 >> 24) & 0xFF);
         vchRet.push_back((ipv4 >> 16) & 0xFF);
+        vchRet.push_back((ipv4 >> 8) & 0xFF);
+        vchRet.push_back(ipv4 & 0xFF);
         return vchRet;
     } else if (address.IsTor() || address.IsI2P()) {
         nBits = 4;
