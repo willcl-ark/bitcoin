@@ -53,7 +53,7 @@ static constexpr uint8_t DB_LAST_BLOCK{'l'};
 
 BlockTreeDB::BlockTreeDB(DBParams db_params) :
     m_db_params(std::move(db_params)),
-    m_db(std::make_unique<CDBWrapper>(m_db_params)) { }
+    m_db(std::make_unique<MDBXWrapper>(m_db_params)) { }
 
 bool BlockTreeDB::ReadBlockFileInfo(int nFile, CBlockFileInfo& info)
 {
@@ -81,7 +81,7 @@ bool BlockTreeDB::ReadLastBlockFile(int& nFile)
 
 bool BlockTreeDB::WriteBatchSync(const std::vector<std::pair<int, const CBlockFileInfo*>>& fileInfo, int nLastFile, const std::vector<const CBlockIndex*>& blockinfo)
 {
-    CDBBatch batch(*m_db);
+    MDBXBatch batch(*m_db);
     for (const auto& [file, info] : fileInfo) {
         batch.Write(std::make_pair(DB_BLOCK_FILES, file), *info);
     }
