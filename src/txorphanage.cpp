@@ -36,6 +36,7 @@ bool TxOrphanage::AddTx(const CTransactionRef& tx, NodeId peer)
     auto ret = m_orphans.emplace(wtxid, OrphanTx{tx, peer, Now<NodeSeconds>() + ORPHAN_TX_EXPIRE_TIME, m_orphan_list.size()});
     assert(ret.second);
     m_orphan_list.push_back(ret.first);
+    assert(m_orphan_list.size() <= 50 && "Too many orphans");
     for (const CTxIn& txin : tx->vin) {
         m_outpoint_to_orphan_it[txin.prevout].insert(ret.first);
     }
