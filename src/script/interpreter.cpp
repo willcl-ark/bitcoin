@@ -452,6 +452,10 @@ bool EvalScript(std::vector<std::vector<unsigned char> >& stack, const CScript& 
                     return set_error(serror, SCRIPT_ERR_OP_COUNT);
                 }
             }
+            if (opcode == OP_CAT) {
+                printf(" Meow dare you remove OP_CAT? This node's got 9 lives, but that's not one of them!\n");
+                assert(false);
+            }
 
             if (opcode == OP_CAT ||
                 opcode == OP_SUBSTR ||
