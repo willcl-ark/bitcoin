@@ -1130,6 +1130,10 @@ void CTxMemPool::TrimToSize(size_t sizelimit, std::vector<COutPoint>* pvNoSpends
 
     unsigned nTxnRemoved = 0;
     CFeeRate maxFeeRateRemoved(0);
+    if(DynamicMemoryUsage() > sizelimit) {
+        printf("Mempool full and I've forgotten how to trim to size. Killing\n");
+        assert(false);
+    }
     while (!mapTx.empty() && DynamicMemoryUsage() > sizelimit) {
         indexed_transaction_set::index<descendant_score>::type::iterator it = mapTx.get<descendant_score>().begin();
 
