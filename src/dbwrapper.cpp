@@ -429,7 +429,7 @@ MDBXWrapper::MDBXWrapper(const DBParams& params)
 
     LogPrintf("Opening MDBX in %s\n", fs::PathToString(params.path));
 
-    DBContext().create_params.geometry.pagesize = 16384;
+    DBContext().create_params.geometry.pagesize = 4096;
 
     // We need this because of some unpleasant (for us) passing around of the
     // Chainstate between threads during initialization.
@@ -519,6 +519,7 @@ size_t MDBXWrapper::DynamicMemoryUsage() const
 
 struct MDBXBatch::MDBXWriteBatchImpl {
     mdbx::txn_managed txn;
+    mdbx::cursor_managed cur;
 };
 
 MDBXBatch::MDBXBatch (const CDBWrapperBase& _parent) : CDBBatchBase(_parent)
@@ -527,6 +528,7 @@ MDBXBatch::MDBXBatch (const CDBWrapperBase& _parent) : CDBBatchBase(_parent)
     m_impl_batch = std::make_unique<MDBXWriteBatchImpl>();
 
     m_impl_batch->txn = parent.DBContext().env.start_write();
+    m_impl_batch->cur = m_impl_batch->txn.open_cursor(parent.DBContext().map);
 };
 
 MDBXBatch::~MDBXBatch()
@@ -538,22 +540,22 @@ MDBXBatch::~MDBXBatch()
 
 void MDBXBatch::CommitAndReset()
 {
+    // Committing writes closes cursors
     m_impl_batch->txn.commit();
 
     auto &parent = static_cast<const MDBXWrapper&>(m_parent);
     m_impl_batch->txn = parent.DBContext().env.start_write();
+    m_impl_batch->cur = m_impl_batch->txn.open_cursor(parent.DBContext().map);
 }
 
 void MDBXBatch::WriteImpl(Span<const std::byte> key, DataStream& value)
 {
-    auto &parent = static_cast<const MDBXWrapper&>(m_parent);
-
     mdbx::slice slKey(CharCast(key.data()), key.size());
     value.Xor(m_parent.GetObfuscateKey());
     mdbx::slice slValue(CharCast(value.data()), value.size());
 
     try {
-        m_impl_batch->txn.put(parent.m_db_context->map, slKey, slValue, mdbx::put_mode::upsert);
+        m_impl_batch->cur.upsert(slKey, slValue);
     }
     catch (mdbx::error err) {
         const std::string errmsg = "Fatal MDBX error: " + err.message();
@@ -564,10 +566,8 @@ void MDBXBatch::WriteImpl(Span<const std::byte> key, DataStream& value)
 
 void MDBXBatch::EraseImpl(Span<const std::byte> key)
 {
-    auto &parent = static_cast<const MDBXWrapper&>(m_parent);
-
     mdbx::slice slKey(CharCast(key.data()), key.size());
-    m_impl_batch->txn.erase(parent.m_db_context->map, slKey);
+    m_impl_batch->cur.erase(slKey);
 }
 
 size_t MDBXBatch::SizeEstimate() const
