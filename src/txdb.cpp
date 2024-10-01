@@ -133,7 +133,7 @@ bool CCoinsViewDB::BatchWrite(CoinsViewCacheCursor& cursor, const uint256 &hashB
         // since any size we choose that is a multiple of the page size
         // we will end up committing before we hit the maximum number of
         // writes at that page size.
-        if (batch.SizeEstimate() >= 4*m_options.batch_write_bytes) {
+        if (changed % 262144 == 0) {
             LogDebug(BCLog::COINDB, "Writing partial batch of %.2f MiB\n", batch.SizeEstimate() * (1.0 / 1048576.0));
             m_db->WriteBatch(batch);
         }
@@ -144,7 +144,9 @@ bool CCoinsViewDB::BatchWrite(CoinsViewCacheCursor& cursor, const uint256 &hashB
     batch.Write(DB_BEST_BLOCK, hashBlock);
 
     LogDebug(BCLog::COINDB, "Writing final batch of %.2f MiB\n", batch.SizeEstimate() * (1.0 / 1048576.0));
-    bool ret = m_db->WriteBatch(batch);
+
+    // We need to force a sync on the final write.
+    bool ret = m_db->WriteBatch(batch, true);
     LogDebug(BCLog::COINDB, "Committed %u changed transaction outputs (out of %u) to coin database...\n", (unsigned int)changed, (unsigned int)count);
     return ret;
 }
