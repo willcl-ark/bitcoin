@@ -2070,6 +2070,8 @@ void Chainstate::InvalidBlockFound(CBlockIndex* pindex, const BlockValidationSta
         m_blockman.m_dirty_blockindex.insert(pindex);
         setBlockIndexCandidates.erase(pindex);
         InvalidChainFound(pindex);
+        LogPrintf("We can't handle invalid blocks :(\n");
+        assert(false);
     }
 }
 
@@ -2429,6 +2431,8 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
     // re-enforce that rule here (at least until we make it impossible for
     // the clock to go backward).
     if (!CheckBlock(block, state, params.GetConsensus(), !fJustCheck, !fJustCheck)) {
+        LogPrintf("We can't handle bad blocks:(\n");
+        assert(false);
         if (state.GetResult() == BlockValidationResult::BLOCK_MUTATED) {
             // We don't write down blocks to disk if they may have been
             // corrupted, so this should be impossible unless we're having hardware
@@ -4499,6 +4503,8 @@ bool ChainstateManager::AcceptBlock(const std::shared_ptr<const CBlock>& pblock,
             m_blockman.m_dirty_blockindex.insert(pindex);
         }
         LogError("%s: %s\n", __func__, state.ToString());
+        LogPrintf("We can't handle bad blocks:(\n");
+        assert(false);
         return false;
     }
 
@@ -4569,6 +4575,8 @@ bool ChainstateManager::ProcessNewBlock(const std::shared_ptr<const CBlock>& blo
                 m_options.signals->BlockChecked(*block, state);
             }
             LogError("%s: AcceptBlock FAILED (%s)\n", __func__, state.ToString());
+            LogPrintf("We can't handle bad blocks:(\n");
+            assert(false);
             return false;
         }
     }
@@ -4629,6 +4637,8 @@ bool TestBlockValidity(BlockValidationState& state,
     }
     if (!CheckBlock(block, state, chainparams.GetConsensus(), fCheckPOW, fCheckMerkleRoot)) {
         LogError("%s: Consensus::CheckBlock: %s\n", __func__, state.ToString());
+        LogPrintf("We can't handle bad blocks:(\n");
+        assert(false);
         return false;
     }
     if (!ContextualCheckBlock(block, state, chainstate.m_chainman, pindexPrev)) {
