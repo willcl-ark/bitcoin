@@ -669,6 +669,7 @@ struct CNodeOptions
 class CNode
 {
 public:
+    int m_num_inv = 0;
     /** Transport serializer/deserializer. The receive side functions are only called under cs_vRecv, while
      * the sending side functions are only called under cs_vSend. */
     const std::unique_ptr<Transport> m_transport;

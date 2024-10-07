@@ -4220,6 +4220,11 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
     }
 
     if (msg_type == NetMsgType::INV) {
+        pfrom.m_num_inv += 1;
+        if (pfrom.m_num_inv >= 5000) {
+            printf("Too many invs from peer!...\n");
+            assert(false);
+        }
         std::vector<CInv> vInv;
         vRecv >> vInv;
         if (vInv.size() > MAX_INV_SZ)
