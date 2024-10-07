@@ -2070,6 +2070,8 @@ void Chainstate::InvalidBlockFound(CBlockIndex* pindex, const BlockValidationSta
         m_blockman.m_dirty_blockindex.insert(pindex);
         setBlockIndexCandidates.erase(pindex);
         InvalidChainFound(pindex);
+        LogPrintf("We can't handle invalid blocks :(\n");
+        assert(false);
     }
 }
 
