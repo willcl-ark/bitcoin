@@ -4570,10 +4570,9 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
         // due to parent-orphan fetching.
         bool is_expected = tx.HasWitness() ? m_txrequest.ExpectedTx(pfrom.GetId(), wtxid) ||
             m_txrequest.ExpectedTx(pfrom.GetId(), txid) : m_txrequest.ExpectedTx(pfrom.GetId(), txid);
-        if (!pfrom.HasPermission(NetPermissionFlags::Relay) && pfrom.GetCommonVersion() >= REJECT_UNSOLICITED_TX_VERSION &&
-            !is_expected) {
-            LogPrint(BCLog::NET, "unrequested transaction from peer=%d\n", pfrom.GetId());
-            return;
+        if (!is_expected) {
+            LogDebug(BCLog::NET, "unrequested transaction %s (wtxid=%s) from peer=%d (%s)\n",
+                     tx.GetHash().ToString(), tx.GetWitnessHash().ToString(), pfrom.GetId(), pfrom.m_addr_name);
         }
 
         m_txrequest.ReceivedResponse(pfrom.GetId(), txid);
