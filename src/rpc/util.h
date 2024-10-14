@@ -34,9 +34,14 @@
 class JSONRPCRequest;
 enum ServiceFlags : uint64_t;
 enum class OutputType;
-enum class TransactionError;
 struct FlatSigningProvider;
 struct bilingual_str;
+namespace common {
+enum class PSBTError;
+} // namespace common
+namespace node {
+enum class TransactionError;
+} // namespace node
 
 static constexpr bool DEFAULT_RPC_DOC_CHECK{
 #ifdef RPC_DOC_CHECK
@@ -96,6 +101,15 @@ std::vector<unsigned char> ParseHexV(const UniValue& v, std::string_view name);
 std::vector<unsigned char> ParseHexO(const UniValue& o, std::string_view strKey);
 
 /**
+ * Parses verbosity from provided UniValue.
+ *
+ * @param[in] arg The verbosity argument as a bool (true) or int (0, 1, 2,...)
+ * @param[in] default_verbosity The value to return if verbosity argument is null
+ * @returns An integer describing the verbosity level (e.g. 0, 1, 2, etc.)
+ */
+int ParseVerbosity(const UniValue& arg, int default_verbosity);
+
+/**
  * Validate and return a CAmount from a UniValue number or string.
  *
  * @param[in] value     UniValue number or string to parse.
@@ -117,7 +131,7 @@ std::string HelpExampleRpcNamed(const std::string& methodname, const RPCArgList&
 
 CPubKey HexToPubKey(const std::string& hex_in);
 CPubKey AddrToPubKey(const FillableSigningProvider& keystore, const std::string& addr_in);
-CTxDestination AddAndGetMultisigDestination(const int required, const std::vector<CPubKey>& pubkeys, OutputType type, FillableSigningProvider& keystore, CScript& script_out);
+CTxDestination AddAndGetMultisigDestination(const int required, const std::vector<CPubKey>& pubkeys, OutputType type, FlatSigningProvider& keystore, CScript& script_out);
 
 UniValue DescribeAddress(const CTxDestination& dest);
 
@@ -127,8 +141,9 @@ int ParseSighashString(const UniValue& sighash);
 //! Parse a confirm target option and raise an RPC error if it is invalid.
 unsigned int ParseConfirmTarget(const UniValue& value, unsigned int max_target);
 
-RPCErrorCode RPCErrorFromTransactionError(TransactionError terr);
-UniValue JSONRPCTransactionError(TransactionError terr, const std::string& err_string = "");
+RPCErrorCode RPCErrorFromTransactionError(node::TransactionError terr);
+UniValue JSONRPCPSBTError(common::PSBTError err);
+UniValue JSONRPCTransactionError(node::TransactionError terr, const std::string& err_string = "");
 
 //! Parse a JSON range specified as int64, or [int64, int64]
 std::pair<int64_t, int64_t> ParseDescriptorRange(const UniValue& value);
@@ -414,19 +429,16 @@ public:
      * argument isNull() and parses (from JSON) and returns the user-passed argument,
      * or the default value derived from the RPCArg documentation.
      *
-     * There are two overloads of this function:
-     * - Use Arg<Type>(size_t i) to get the argument (or the default value) by index.
-     * - Use Arg<Type>(const std::string& key) to get the argument (or the default value) by key.
+     * The instantiation of this helper for type R must match the corresponding RPCArg::Type.
      *
-     * The Type passed to this helper must match the corresponding RPCArg::Type.
-     *
-     * @return The value of the RPC argument (or the default value) cast to type Type.
+     * @return The value of the RPC argument (or the default value) cast to type R.
      *
      * @see MaybeArg for handling optional arguments without default values.
      */
     template <typename R>
-    auto Arg(size_t i) const
+    auto Arg(std::string_view key) const
     {
+        auto i{GetParamIndex(key)};
         // Return argument (required or with default value).
         if constexpr (std::is_integral_v<R> || std::is_floating_point_v<R>) {
             // Return numbers by value.
@@ -435,11 +447,6 @@ public:
             // Return everything else by reference.
             return ArgValue<const R&>(i);
         }
-    }
-    template<typename R>
-    auto Arg(std::string_view key) const
-    {
-        return Arg<R>(GetParamIndex(key));
     }
     /**
      * @brief Helper to get an optional request argument.
@@ -452,21 +459,18 @@ public:
      * argument isNull() and parses (from JSON) and returns the user-passed argument,
      * or a falsy value if no argument was passed.
      *
-     * There are two overloads of this function:
-     * - Use MaybeArg<Type>(size_t i) to get the optional argument by index.
-     * - Use MaybeArg<Type>(const std::string& key) to get the optional argument by key.
+     * The instantiation of this helper for type R must match the corresponding RPCArg::Type.
      *
-     * The Type passed to this helper must match the corresponding RPCArg::Type.
+     * @return For integral and floating-point types, a std::optional<R> is returned.
+     *         For other types, a R* pointer to the argument is returned. If the
+     *         argument is not provided, std::nullopt or a null pointer is returned.
      *
-     * @return For integral and floating-point types, a std::optional<Type> is returned.
-    *          For other types, a Type* pointer to the argument is returned. If the
-    *          argument is not provided, std::nullopt or a null pointer is returned.
-    *
      * @see Arg for handling arguments that are required or have a default value.
      */
     template <typename R>
-    auto MaybeArg(size_t i) const
+    auto MaybeArg(std::string_view key) const
     {
+        auto i{GetParamIndex(key)};
         // Return optional argument (without default).
         if constexpr (std::is_integral_v<R> || std::is_floating_point_v<R>) {
             // Return numbers by value, wrapped in optional.
@@ -475,11 +479,6 @@ public:
             // Return other types by pointer.
             return ArgValue<const R*>(i);
         }
-    }
-    template<typename R>
-    auto MaybeArg(std::string_view key) const
-    {
-        return MaybeArg<R>(GetParamIndex(key));
     }
     std::string ToString() const;
     /** Return the named args that need to be converted from string to another JSON type */
@@ -512,7 +511,5 @@ private:
  */
 void PushWarnings(const UniValue& warnings, UniValue& obj);
 void PushWarnings(const std::vector<bilingual_str>& warnings, UniValue& obj);
-
-UniValue GetNodeWarnings(bool use_deprecated);
 
 #endif // BITCOIN_RPC_UTIL_H

@@ -3,10 +3,14 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <common/messages.h>
 #include <core_io.h>
 #include <node/context.h>
+#include <policy/fee_estimator.h>
 #include <policy/feerate.h>
 #include <policy/fees.h>
+#include <policy/forecaster.h>
+#include <policy/forecaster_util.h>
 #include <rpc/protocol.h>
 #include <rpc/request.h>
 #include <rpc/server.h>
@@ -14,7 +18,6 @@
 #include <rpc/util.h>
 #include <txmempool.h>
 #include <univalue.h>
-#include <util/fees.h>
 #include <validationinterface.h>
 
 #include <algorithm>
@@ -22,6 +25,9 @@
 #include <cmath>
 #include <string>
 
+using common::FeeModeFromString;
+using common::FeeModesDetail;
+using common::InvalidEstimateModeErrorMessage;
 using node::NodeContext;
 
 static RPCHelpMan estimatesmartfee()
@@ -33,13 +39,8 @@ static RPCHelpMan estimatesmartfee()
         "in BIP 141 (witness data is discounted).\n",
         {
             {"conf_target", RPCArg::Type::NUM, RPCArg::Optional::NO, "Confirmation target in blocks (1 - 1008)"},
-            {"estimate_mode", RPCArg::Type::STR, RPCArg::Default{"conservative"}, "The fee estimate mode.\n"
-            "Whether to return a more conservative estimate which also satisfies\n"
-            "a longer history. A conservative estimate potentially returns a\n"
-            "higher feerate and is more likely to be sufficient for the desired\n"
-            "target, but is not as responsive to short term drops in the\n"
-            "prevailing fee market. Must be one of (case insensitive):\n"
-             "\"" + FeeModes("\"\n\"") + "\""},
+            {"estimate_mode", RPCArg::Type::STR, RPCArg::Default{"economical"}, "The fee estimate mode.\n"
+              + FeeModesDetail(std::string("default mode will be used"))},
         },
         RPCResult{
             RPCResult::Type::OBJ, "", "",
@@ -68,13 +69,13 @@ static RPCHelpMan estimatesmartfee()
             CHECK_NONFATAL(mempool.m_opts.signals)->SyncWithValidationInterfaceQueue();
             unsigned int max_target = fee_estimator.HighestTargetTracked(FeeEstimateHorizon::LONG_HALFLIFE);
             unsigned int conf_target = ParseConfirmTarget(request.params[0], max_target);
-            bool conservative = true;
+            bool conservative = false;
             if (!request.params[1].isNull()) {
                 FeeEstimateMode fee_mode;
                 if (!FeeModeFromString(request.params[1].get_str(), fee_mode)) {
                     throw JSONRPCError(RPC_INVALID_PARAMETER, InvalidEstimateModeErrorMessage());
                 }
-                if (fee_mode == FeeEstimateMode::ECONOMICAL) conservative = false;
+                if (fee_mode == FeeEstimateMode::CONSERVATIVE) conservative = true;
             }
 
             UniValue result(UniValue::VOBJ);
@@ -88,9 +89,62 @@ static RPCHelpMan estimatesmartfee()
                 result.pushKV("feerate", ValueFromAmount(feeRate.GetFeePerK()));
             } else {
                 errors.push_back("Insufficient data or no feerate found");
-                result.pushKV("errors", errors);
+                result.pushKV("errors", std::move(errors));
             }
             result.pushKV("blocks", feeCalc.returnedTarget);
+            return result;
+        },
+    };
+}
+
+static RPCHelpMan estimatefee()
+{
+    return RPCHelpMan{
+        "estimatefee",
+        "\nEstimates the approximate fee per kilobyte needed for a transaction to begin\n"
+        "confirmation within conf_target blocks if possible Uses virtual transaction size as defined\n"
+        "in BIP 141 (witness data is discounted).\n",
+        {
+            {"conf_target", RPCArg::Type::NUM, RPCArg::Optional::NO, "Confirmation target in blocks"},
+        },
+        RPCResult{
+            RPCResult::Type::OBJ, "", "", {
+                {RPCResult::Type::NUM, "minrelayfee", /*optional=*/true, "Minimum fee rate in " + CURRENCY_UNIT + "/kvB that a transaction has to pay to be relayed in the network"},
+                {RPCResult::Type::NUM, "low", /*optional=*/true, "fee rate estimate in " + CURRENCY_UNIT + "/kvB for economical users"},
+                {RPCResult::Type::NUM, "high", /*optional=*/true, "fee rate estimate in " + CURRENCY_UNIT + "/kvB for conservative users"},
+                {RPCResult::Type::STR, "forecaster", /*optional=*/true, "the forecaster that provide the fee rate estimate"},
+                {RPCResult::Type::ARR, "errors", /*optional=*/true, "Errors encountered during processing (if there are any)", {
+                    {RPCResult::Type::STR, "", "error"},
+                }},
+            }},
+        RPCExamples{HelpExampleCli("estimatefee", "2") + HelpExampleRpc("estimatefee", "2")},
+        [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue {
+            const auto targetBlocks = request.params[0].getInt<int>();
+            UniValue result(UniValue::VOBJ);
+            UniValue errors(UniValue::VARR);
+            if (targetBlocks <= 0) {
+                errors.push_back("confirmation target must be greater than 0");
+                result.pushKV("errors", errors);
+                return result;
+            }
+            const NodeContext& node = EnsureAnyNodeContext(request.context);
+            const CTxMemPool& mempool = EnsureMemPool(node);
+            FeeEstimator& fee_estimator = EnsureAnyFeeForecasters(request.context);
+            std::pair<ForecastResult, std::vector<std::string>> forecast_result = fee_estimator.GetFeeEstimateFromForecasters(/*targetBlocks=*/targetBlocks);
+            CFeeRate min_relay_feerate{mempool.m_opts.min_relay_feerate};
+            result.pushKV("minrelayfee", ValueFromAmount(min_relay_feerate.GetFeePerK()));
+            if (!forecast_result.first.empty()) {
+                result.pushKV("low", ValueFromAmount(forecast_result.first.m_opt.low_priority.GetFeePerK()));
+                result.pushKV("high", ValueFromAmount(forecast_result.first.m_opt.high_priority.GetFeePerK()));
+                result.pushKV("forecaster", forecastTypeToString(forecast_result.first.m_opt.forecaster));
+            } else {
+                errors.push_back("Failed to get estimate from forecasters");
+            }
+
+            for (auto& err : forecast_result.second) {
+                errors.push_back(err);
+            }
+            result.pushKV("errors", errors);
             return result;
         },
     };
@@ -198,18 +252,18 @@ static RPCHelpMan estimaterawfee()
                     horizon_result.pushKV("feerate", ValueFromAmount(feeRate.GetFeePerK()));
                     horizon_result.pushKV("decay", buckets.decay);
                     horizon_result.pushKV("scale", (int)buckets.scale);
-                    horizon_result.pushKV("pass", passbucket);
+                    horizon_result.pushKV("pass", std::move(passbucket));
                     // buckets.fail.start == -1 indicates that all buckets passed, there is no fail bucket to output
-                    if (buckets.fail.start != -1) horizon_result.pushKV("fail", failbucket);
+                    if (buckets.fail.start != -1) horizon_result.pushKV("fail", std::move(failbucket));
                 } else {
                     // Output only information that is still meaningful in the event of error
                     horizon_result.pushKV("decay", buckets.decay);
                     horizon_result.pushKV("scale", (int)buckets.scale);
-                    horizon_result.pushKV("fail", failbucket);
+                    horizon_result.pushKV("fail", std::move(failbucket));
                     errors.push_back("Insufficient data or no feerate found which meets threshold");
-                    horizon_result.pushKV("errors", errors);
+                    horizon_result.pushKV("errors", std::move(errors));
                 }
-                result.pushKV(StringForFeeEstimateHorizon(horizon), horizon_result);
+                result.pushKV(StringForFeeEstimateHorizon(horizon), std::move(horizon_result));
             }
             return result;
         },
@@ -220,6 +274,7 @@ void RegisterFeeRPCCommands(CRPCTable& t)
 {
     static const CRPCCommand commands[]{
         {"util", &estimatesmartfee},
+        {"util", &estimatefee},
         {"hidden", &estimaterawfee},
     };
     for (const auto& c : commands) {

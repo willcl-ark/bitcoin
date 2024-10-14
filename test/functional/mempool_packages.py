@@ -31,10 +31,8 @@ class MempoolPackagesTest(BitcoinTestFramework):
         self.noban_tx_relay = True
         self.extra_args = [
             [
-                "-maxorphantx=1000",
             ],
             [
-                "-maxorphantx=1000",
                 "-limitancestorcount={}".format(CUSTOM_ANCESTOR_LIMIT),
                 "-limitdescendantcount={}".format(CUSTOM_DESCENDANT_LIMIT),
             ],
@@ -300,4 +298,4 @@ class MempoolPackagesTest(BitcoinTestFramework):
         self.sync_blocks()
 
 if __name__ == '__main__':
-    MempoolPackagesTest().main()
+    MempoolPackagesTest(__file__).main()

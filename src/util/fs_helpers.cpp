@@ -5,7 +5,7 @@
 
 #include <util/fs_helpers.h>
 
-#include <config/bitcoin-config.h> // IWYU pragma: keep
+#include <bitcoin-build-config.h> // IWYU pragma: keep
 
 #include <logging.h>
 #include <sync.h>
@@ -16,12 +16,13 @@
 #include <fstream>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <system_error>
 #include <utility>
 
 #ifndef WIN32
-// for posix_fallocate, in configure.ac we check if it is present after this
+// for posix_fallocate, in cmake/introspection.cmake we check if it is present after this
 #ifdef __linux__
 
 #ifdef _POSIX_C_SOURCE
@@ -268,4 +269,43 @@ bool TryCreateDirectories(const fs::path& p)
 
     // create_directories didn't create the directory, it had to have existed already
     return false;
+}
+
+std::string PermsToSymbolicString(fs::perms p)
+{
+    std::string perm_str(9, '-');
+
+    auto set_perm = [&](size_t pos, fs::perms required_perm, char letter) {
+        if ((p & required_perm) != fs::perms::none) {
+            perm_str[pos] = letter;
+        }
+    };
+
+    set_perm(0, fs::perms::owner_read,   'r');
+    set_perm(1, fs::perms::owner_write,  'w');
+    set_perm(2, fs::perms::owner_exec,   'x');
+    set_perm(3, fs::perms::group_read,   'r');
+    set_perm(4, fs::perms::group_write,  'w');
+    set_perm(5, fs::perms::group_exec,   'x');
+    set_perm(6, fs::perms::others_read,  'r');
+    set_perm(7, fs::perms::others_write, 'w');
+    set_perm(8, fs::perms::others_exec,  'x');
+
+    return perm_str;
+}
+
+std::optional<fs::perms> InterpretPermString(const std::string& s)
+{
+    if (s == "owner") {
+        return fs::perms::owner_read | fs::perms::owner_write;
+    } else if (s == "group") {
+        return fs::perms::owner_read | fs::perms::owner_write |
+               fs::perms::group_read;
+    } else if (s == "all") {
+        return fs::perms::owner_read | fs::perms::owner_write |
+               fs::perms::group_read |
+               fs::perms::others_read;
+    } else {
+        return std::nullopt;
+    }
 }

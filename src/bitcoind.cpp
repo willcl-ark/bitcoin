@@ -3,7 +3,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <config/bitcoin-config.h> // IWYU pragma: keep
+#include <bitcoin-build-config.h> // IWYU pragma: keep
 
 #include <chainparams.h>
 #include <clientversion.h>
@@ -17,6 +17,7 @@
 #include <kernel/context.h>
 #include <node/context.h>
 #include <node/interface_ui.h>
+#include <node/warnings.h>
 #include <noui.h>
 #include <util/check.h>
 #include <util/exception.h>
@@ -108,10 +109,11 @@ int fork_daemon(bool nochdir, bool noclose, TokenPipeEnd& endpoint)
 
 #endif
 
-static bool ParseArgs(ArgsManager& args, int argc, char* argv[])
+static bool ParseArgs(NodeContext& node, int argc, char* argv[])
 {
+    ArgsManager& args{*Assert(node.args)};
     // If Qt is used, parameters/bitcoin.conf are parsed in qt/bitcoin.cpp's main()
-    SetupServerArgs(args);
+    SetupServerArgs(args, node.init->canListenIpc());
     std::string error;
     if (!args.ParseParameters(argc, argv, error)) {
         return InitError(Untranslated(strprintf("Error parsing command line arguments: %s", error)));
@@ -180,6 +182,8 @@ static bool AppInit(NodeContext& node)
             // InitError will have been called with detailed error, which ends up on console
             return false;
         }
+
+        node.warnings = std::make_unique<node::Warnings>();
 
         node.kernel = std::make_unique<kernel::Context>();
         node.ecc_context = std::make_unique<ECC_Context>();
@@ -265,12 +269,12 @@ MAIN_FUNCTION
 
     // Interpret command line arguments
     ArgsManager& args = *Assert(node.args);
-    if (!ParseArgs(args, argc, argv)) return EXIT_FAILURE;
+    if (!ParseArgs(node, argc, argv)) return EXIT_FAILURE;
     // Process early info return commands such as -help or -version
     if (ProcessInitCommands(args)) return EXIT_SUCCESS;
 
     // Start application
-    if (!AppInit(node) || !Assert(node.shutdown)->wait()) {
+    if (!AppInit(node) || !Assert(node.shutdown_signal)->wait()) {
         node.exit_status = EXIT_FAILURE;
     }
     Interrupt(node);

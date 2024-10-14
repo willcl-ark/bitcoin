@@ -95,6 +95,7 @@ struct FeeCalculation
     FeeReason reason = FeeReason::NONE;
     int desiredTarget = 0;
     int returnedTarget = 0;
+    unsigned int bestheight{0};
 };
 
 /** \class CBlockPolicyEstimator
@@ -283,7 +284,7 @@ private:
     {
         unsigned int blockHeight{0};
         unsigned int bucketIndex{0};
-        TxStatsInfo() {}
+        TxStatsInfo() = default;
     };
 
     // map of txids to information about that transaction

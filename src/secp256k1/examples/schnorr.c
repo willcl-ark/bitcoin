@@ -18,9 +18,9 @@
 #include "examples_util.h"
 
 int main(void) {
-    unsigned char msg[12] = "Hello World!";
+    unsigned char msg[] = {'H', 'e', 'l', 'l', 'o', ' ', 'W', 'o', 'r', 'l', 'd', '!'};
     unsigned char msg_hash[32];
-    unsigned char tag[17] = "my_fancy_protocol";
+    unsigned char tag[] = {'m', 'y', '_', 'f', 'a', 'n', 'c', 'y', '_', 'p', 'r', 'o', 't', 'o', 'c', 'o', 'l'};
     unsigned char seckey[32];
     unsigned char randomize[32];
     unsigned char auxiliary_rand[32];
@@ -146,7 +146,7 @@ int main(void) {
 
     /* It's best practice to try to clear secrets from memory after using them.
      * This is done because some bugs can allow an attacker to leak memory, for
-     * example through "out of bounds" array access (see Heartbleed), Or the OS
+     * example through "out of bounds" array access (see Heartbleed), or the OS
      * swapping them to disk. Hence, we overwrite the secret key buffer with zeros.
      *
      * Here we are preventing these writes from being optimized out, as any good compiler
