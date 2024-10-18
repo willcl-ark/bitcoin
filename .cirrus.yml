@@ -71,8 +71,6 @@ filter_template: &FILTER_TEMPLATE
 base_template: &BASE_TEMPLATE
   << : *FILTER_TEMPLATE
   merge_base_script:
-    # Require git (used in fingerprint_script).
-    - git --version || ( apt-get update && apt-get install -y git )
     - if [ "$CIRRUS_PR" = "" ]; then exit 0; fi
     - git fetch --depth=1 $CIRRUS_REPO_CLONE_URL "pull/${CIRRUS_PR}/merge"
     - git checkout FETCH_HEAD  # Use merged changes to detect silent merge conflicts
