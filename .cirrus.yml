@@ -197,7 +197,11 @@ task:
   << : *GLOBAL_TASK_TEMPLATE
   persistent_worker:
     labels:
-      type: ax52_x86-64
+      arch: "amd64"
+    resources:
+      cpu: 1
+      memory: 2000
+
   env:
     FILE_ENV: "./ci/test/00_setup_env_native_nowallet_libbitcoinkernel.sh"
 
