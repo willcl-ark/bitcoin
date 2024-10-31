@@ -64,6 +64,8 @@ alias t := test
 # ```
 
 ################################################################################
+default:
+    just --list
 
 # Build default project
 [group('build')]
@@ -77,6 +79,11 @@ build-dev *args: clean
     cmake -B build --preset dev-mode {{ args }}
     cmake --build build -j {{ num_cpus() }}
 
+# Build for the CI, including bench_bitcoin
+[group('ci')]
+build-ci: clean
+    cmake -B build -DBUILD_BENCH=ON
+    cmake --build build -j {{ num_cpus() }}
 # Re-build current config
 [group('build')]
 rebuild:
@@ -292,3 +299,7 @@ guix-codesign:
 [group('guix')]
 guix-verify:
     contrib/guix/guix-verify
+
+# Run the CI workflow
+[group('ci')]
+run-ci: build-ci && bench
