@@ -1,0 +1,78 @@
+name: Nightly Upstream Rebase
+on:
+  schedule:
+    # Run at 00:00 every day
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  rebase:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Configure Git
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+      - name: Add Bitcoin upstream remote
+        run: |
+          git remote add upstream https://github.com/bitcoin/bitcoin.git
+          git remote -v
+      - name: Fetch upstream
+        run: |
+          git fetch upstream
+          git fetch origin
+      - name: Check for conflicts
+        id: check_conflicts
+        continue-on-error: true
+        run: |
+          git checkout master
+          git rebase upstream/master
+          echo "rebase_status=$?" >> $GITHUB_OUTPUT
+      - name: Handle rebase failure
+        if: steps.check_conflicts.outcome == 'failure'
+        run: |
+          git rebase --abort
+          echo "Rebase failed - conflicts detected"
+          exit 1
+      - name: Push changes
+        if: steps.check_conflicts.outcome == 'success'
+        run: |
+          git push origin master --force-with-lease
+      - name: Notify on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issueBody = `❌ Rebase failed!
+
+            The automatic rebase of the master branch failed. This might be due to:
+            1. Merge conflicts that need manual resolution
+            2. Network issues while fetching upstream
+            3. Permission issues with the repository
+
+            Please check the [workflow run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}) for details.
+
+            Manual intervention required:
+            \`\`\`bash
+            git fetch upstream
+            git checkout master
+            git rebase upstream/master
+            # Resolve any conflicts
+            git push origin master --force-with-lease
+            \`\`\``;
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: '🚨 Automatic rebase failed',
+              body: issueBody,
+              labels: ['automation-failure']
+            });
