@@ -5,16 +5,6 @@ os := os()
 default:
     just --list
 
-[private]
-check-build:
-    #!/usr/bin/env bash
-    set -euxo pipefail
-
-    # If no build, then build it!
-    if [ ! -d "build" ]; then
-        just build
-    fi
-
 # Build default project
 [group('build')]
 build *args: clean
@@ -55,7 +45,7 @@ test-func:
 
 # Run all unit and functional tests
 [group('test')]
-test: check-build test-unit test-func
+test: test-unit test-func
 
 # Run a single functional test (filename.py)
 [group('test')]
@@ -74,4 +64,4 @@ bench:
 
 # Run the CI workflow
 [group('ci')]
-run-ci: build-ci && bench
+run-ci: build-ci bench test
