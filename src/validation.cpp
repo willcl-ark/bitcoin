@@ -6464,6 +6464,12 @@ void ChainstateManager::RecalculateBestHeader()
     }
 }
 
+bool ChainstateManager::BackgroundSyncInProgress() const EXCLUSIVE_LOCKS_REQUIRED(GetMutex()) {
+    if (!IsUsable(m_snapshot_chainstate.get())) return false;
+    if (!IsUsable(m_ibd_chainstate.get())) return false;
+    return !m_options.pause_background_sync;
+}
+
 bool ChainstateManager::ValidatedSnapshotCleanup()
 {
     AssertLockHeld(::cs_main);
