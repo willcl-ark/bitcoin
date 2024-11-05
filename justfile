@@ -23,6 +23,7 @@ build-dev *args: clean
 build-ci: clean
     cmake -B build -DBUILD_BENCH=ON
     cmake --build build -j {{ num_cpus() }}
+
 # Re-build current config
 [group('build')]
 rebuild:
@@ -74,3 +75,11 @@ lint:
 # Run the CI workflow
 [group('ci')]
 run-ci: build-ci bench test
+
+# Run assumeutxo CI workflow
+[group('ci')]
+run-assumeutxo-signet DATADIR: build-ci
+    # TODO: add a -connect param using dedicated node
+    build/src/bitcoind -datadir={{DATADIR}} -daemon=0 -signet -stopatheight=1
+    -build/src/bitcoind -datadir={{DATADIR}} -daemon=0 -signet -dbcache=16000 -pausebackgroundsync=1 -loadutxosnapshot=$UTXO_PATH
+    build/src/bitcoind -datadir={{DATADIR}} -daemon=0 -signet -stopatheight=170000

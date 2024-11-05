@@ -1,15 +1,17 @@
 name: CI
 on:
-  pull_request:
   push:
     branches:
-      - '**'
-    tags-ignore:
-      - '**'
+      - master
+  pull_request:
+    branches:
+      - master
 jobs:
   lint:
     runs-on: [self-hosted, linux, x64]
     timeout-minutes: 5
+    env:
+      NIX_PATH: nixpkgs=channel:nixos-unstable
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -17,24 +19,42 @@ jobs:
           fetch-depth: 0
       - uses: cachix/install-nix-action@v27
         with:
-          nix_path: nixpkgs=channel:nixos-unstable
+          nix_path: $NIX_PATH
       - name: Build & test release
-        env:
-          NIX_PATH: nixpkgs=channel:nixos-unstable
         run: |
           nix-shell --command "just lint"
   build-and-test:
     needs: lint
     runs-on: [self-hosted, linux, x64]
     timeout-minutes: 20
+    env:
+      NIX_PATH: nixpkgs=channel:nixos-unstable
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
       - uses: cachix/install-nix-action@v27
         with:
-          nix_path: nixpkgs=channel:nixos-unstable
+          nix_path: $NIX_PATH
       - name: Build & test release
-        env:
-          NIX_PATH: nixpkgs=channel:nixos-unstable
         run: |
           nix-shell --command "just run-ci"
+  assumeutxo-signet:
+    needs: [lint, build-and-test]
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 120
+    env:
+      NIX_PATH: nixpkgs=channel:nixos-unstable
+      # utxo.dat should be outside any $HOME dir due to NixOS service security settings
+      UTXO_PATH: /var/lib/bitcoin/utxo-signet-160000.dat
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v27
+        with:
+          nix_path: $NIX_PATH
+      - name: Run AssumeUTXO
+        env:
+          DATADIR: "${{ runner.temp }}/bitcoin-datadir"
+        run: |
+          mkdir -p "$DATADIR"
+          nix-shell --command "just run-assumeutxo-signet $DATADIR"
