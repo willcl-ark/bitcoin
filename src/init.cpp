@@ -54,6 +54,7 @@
 #include <node/mempool_persist_args.h>
 #include <node/miner.h>
 #include <node/peerman_args.h>
+#include <node/utxo_snapshot.h>
 #include <policy/feerate.h>
 #include <policy/fees.h>
 #include <policy/fees_args.h>
@@ -140,6 +141,7 @@ using node::VerifyLoadedChainstate;
 using util::Join;
 using util::ReplaceAll;
 using util::ToString;
+using node::SnapshotMetadata;
 
 static constexpr bool DEFAULT_PROXYRANDOMIZE{true};
 static constexpr bool DEFAULT_REST_ENABLE{false};
@@ -157,6 +159,44 @@ static constexpr bool DEFAULT_STOPAFTERBLOCKIMPORT{false};
 
 static constexpr int MIN_CORE_FDS = MIN_LEVELDB_FDS + NUM_FDS_MESSAGE_CAPTURE;
 static const char* DEFAULT_ASMAP_FILENAME="ip_asn.map";
+
+bool LoadUTXOSnapshot(NodeContext& node, const fs::path& snapshot_path) {
+    ChainstateManager& chainman = *node.chainman;
+
+    FILE* file{fsbridge::fopen(snapshot_path, "rb")};
+    AutoFile afile{file};
+    if (afile.IsNull()) {
+        LogPrintf("Error: Couldn't open UTXO snapshot file %s for reading\n", snapshot_path.utf8string());
+        return false;
+    }
+
+    SnapshotMetadata metadata{chainman.GetParams().MessageStart()};
+    try {
+        afile >> metadata;
+    } catch (const std::ios_base::failure& e) {
+        LogPrintf("Error: Unable to parse snapshot metadata: %s\n", e.what());
+        return false;
+    }
+
+    auto activation_result{chainman.ActivateSnapshot(afile, metadata, false)};
+    if (!activation_result) {
+        LogPrintf("Error: Unable to load UTXO snapshot: %s\n",
+                  util::ErrorString(activation_result).original);
+        return false;
+    }
+
+    // Update services to reflect limited peer capabilities during sync
+    node.connman->RemoveLocalServices(NODE_NETWORK);
+    node.connman->AddLocalServices(NODE_NETWORK_LIMITED);
+
+    CBlockIndex& snapshot_index{*CHECK_NONFATAL(*activation_result)};
+    LogPrintf("Loaded UTXO snapshot: coins=%d, height=%d, hash=%s\n",
+              metadata.m_coins_count,
+              snapshot_index.nHeight,
+              snapshot_index.GetBlockHash().ToString());
+
+    return true;
+}
 
 /**
  * The PID file facilities.
@@ -495,6 +535,12 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-minimumchainwork=<hex>", strprintf("Minimum work assumed to exist on a valid chain in hex (default: %s, testnet3: %s, testnet4: %s, signet: %s)", defaultChainParams->GetConsensus().nMinimumChainWork.GetHex(), testnetChainParams->GetConsensus().nMinimumChainWork.GetHex(), testnet4ChainParams->GetConsensus().nMinimumChainWork.GetHex(), signetChainParams->GetConsensus().nMinimumChainWork.GetHex()), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::OPTIONS);
     argsman.AddArg("-par=<n>", strprintf("Set the number of script verification threads (0 = auto, up to %d, <0 = leave that many cores free, default: %d)",
         MAX_SCRIPTCHECK_THREADS, DEFAULT_SCRIPTCHECK_THREADS), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-pausebackgroundsync", strprintf("When a UTXO snapshot is loaded, pause the verification of historical blocks in the background (default: %u)", DEFAULT_PAUSE_BACKGROUND_SYNC), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    gArgs.AddArg("-loadutxosnapshot=<path>",
+                 "Load UTXO set from snapshot file at startup. "
+                 "This allows fast synchronization by loading a pre-built UTXO "
+                 "snapshot while the full chain validation happens in background.",
+                 ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-persistmempool", strprintf("Whether to save the mempool on shutdown and load on restart (default: %u)", DEFAULT_PERSIST_MEMPOOL), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-persistmempoolv1",
                    strprintf("Whether a mempool.dat file created by -persistmempool or the savemempool RPC will be written in the legacy format "
@@ -1660,6 +1706,15 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
 
     ChainstateManager& chainman = *Assert(node.chainman);
 
+    if (args.IsArgSet("-loadutxosnapshot")) {
+        fs::path snapshot_path = fs::u8path(args.GetArg("-loadutxosnapshot", ""));
+        snapshot_path = AbsPathForConfigVal(args, snapshot_path);
+
+        if (!LoadUTXOSnapshot(node, snapshot_path)) {
+            LogPrintf("Failed to load UTXO snapshot from %s", snapshot_path.utf8string());
+        }
+    }
+
     assert(!node.peerman);
     node.peerman = PeerManager::make(*node.connman, *node.addrman,
                                      node.banman.get(), chainman,
@@ -1799,7 +1854,9 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         });
     }
 
-    if (ShutdownRequested(node)) {
+    // if loadutxosnapshot is set, we want to load the snapshot then shut down so that only
+    // syncing to chaintip is benchmarked
+    if (ShutdownRequested(node) || args.IsArgSet("-loadutxosnapshot")) {
         return false;
     }
 
