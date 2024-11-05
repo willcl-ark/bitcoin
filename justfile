@@ -68,7 +68,8 @@ lint:
     cd test/lint/test_runner/
     cargo fmt
     cargo clippy
-    COMMIT_RANGE="$( git rev-list --max-count=1 --merges HEAD )..HEAD" cargo run
+    export COMMIT_RANGE="$( git rev-list --max-count=1 --merges HEAD )..HEAD"
+    RUST_BACKTRACE=1 cargo run
 
 # Run the CI workflow
 [group('ci')]
