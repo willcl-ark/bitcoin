@@ -12,6 +12,8 @@ class ArgsManager;
 
 /** -par default (number of script-checking threads, 0 = auto) */
 static constexpr int DEFAULT_SCRIPTCHECK_THREADS{0};
+/** -pausebackgroundsync default */
+static const bool DEFAULT_PAUSE_BACKGROUND_SYNC{false};
 
 namespace node {
 [[nodiscard]] util::Result<void> ApplyArgsManOptions(const ArgsManager& args, ChainstateManager::Options& opts);
