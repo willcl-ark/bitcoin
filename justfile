@@ -21,7 +21,7 @@ build-dev *args: clean
 [private]
 [group('ci')]
 build-ci: clean
-    cmake -B build -DBUILD_BENCH=ON
+    cmake -B build -DBUILD_BENCH=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo -DAPPEND_CPPFLAGS="-fno-omit-frame-pointer"
     cmake --build build -j {{ num_cpus() }}
 
 # Re-build current config
