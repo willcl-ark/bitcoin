@@ -121,6 +121,9 @@ in pkgs.mkShell {
       # Benchmarking
       hyperfine
       hyper-wrapper
+      perf-tools
+      flamegraph
+      linuxKernel.packages.linux_6_6.perf
     ];
 
     # Modifies the Nix clang++ wrapper to avoid warning:
