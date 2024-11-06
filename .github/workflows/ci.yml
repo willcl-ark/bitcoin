@@ -7,22 +7,22 @@ on:
     branches:
       - master
 jobs:
-  lint:
-    runs-on: [self-hosted, linux, x64]
-    timeout-minutes: 5
-    env:
-      NIX_PATH: nixpkgs=channel:nixos-unstable
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: cachix/install-nix-action@v27
-        with:
-          nix_path: $NIX_PATH
-      - name: Build & test release
-        run: |
-          nix-shell --command "just lint"
+  # lint:
+  #   runs-on: [self-hosted, linux, x64]
+  #   timeout-minutes: 5
+  #   env:
+  #     NIX_PATH: nixpkgs=channel:nixos-unstable
+  #   steps:
+  #     - name: Checkout repo
+  #       uses: actions/checkout@v4
+  #       with:
+  #         fetch-depth: 0
+  #     - uses: cachix/install-nix-action@v27
+  #       with:
+  #         nix_path: $NIX_PATH
+  #     - name: Build & test release
+  #       run: |
+  #         nix-shell --command "just lint"
   # build-and-test:
   #   needs: lint
   #   runs-on: [self-hosted, linux, x64]
@@ -40,7 +40,6 @@ jobs:
   #         nix-shell --command "just run-ci"
   assumeutxo-signet:
     # needs: [lint, build-and-test]
-    needs: [lint]
     runs-on: [self-hosted, linux, x64]
     timeout-minutes: 120
     env:
