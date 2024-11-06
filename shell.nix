@@ -1,5 +1,4 @@
 # Copyright 0xB10C
-
 { pkgs ? import (fetchTarball "https://github.com/nixos/nixpkgs/archive/nixos-unstable.tar.gz") {},
   bdbVersion ? "",
   spareCores ? 0,
@@ -14,6 +13,23 @@ let
   mlcBinary = pkgs.fetchurl {
     url = "https://github.com/becheran/mlc/releases/download/v0.18.0/mlc-x86_64-linux";
     sha256 = "sha256-jbdp+UlFybBE+o567L398hbcWHsG8aQGqYYf5h9JRkw=";
+  };
+
+  # Hyper-wrapper
+  # This doesn't install to PATH
+  hyper-wrapper = pkgs.rustPlatform.buildRustPackage rec {
+    pname = "hyper-wrapper";
+    version = "0.1.0";
+    src = pkgs.fetchCrate {
+      inherit pname version;
+      sha256 = "sha256-11HJdxUshs+qfAqw4uqmY7z+XIGkdeUD9O4zl4fvDdE=";
+    };
+    cargoHash = "sha256-ffChU1z8VC2y7l6Pb/eX2XXdFDChMwnroSfsHIVChds=";
+    meta = with pkgs.lib; {
+      description = "Hyperfine wrapper";
+      homepage = "https://github.com/bitcoin-dev-tools/hyper-wrapper";
+      license = licenses.mit;
+    };
   };
 
   # Create a derivation for mlc
@@ -101,6 +117,10 @@ in pkgs.mkShell {
       shellcheck
       python310
       uv
+
+      # Benchmarking
+      hyperfine
+      hyper-wrapper
     ];
 
     # Modifies the Nix clang++ wrapper to avoid warning:
