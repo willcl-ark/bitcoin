@@ -7,39 +7,7 @@ on:
     branches:
       - master
 jobs:
-  # lint:
-  #   runs-on: [self-hosted, linux, x64]
-  #   timeout-minutes: 5
-  #   env:
-  #     NIX_PATH: nixpkgs=channel:nixos-unstable
-  #   steps:
-  #     - name: Checkout repo
-  #       uses: actions/checkout@v4
-  #       with:
-  #         fetch-depth: 0
-  #     - uses: cachix/install-nix-action@v27
-  #       with:
-  #         nix_path: $NIX_PATH
-  #     - name: Build & test release
-  #       run: |
-  #         nix-shell --command "just lint"
-  # build-and-test:
-  #   needs: lint
-  #   runs-on: [self-hosted, linux, x64]
-  #   timeout-minutes: 20
-  #   env:
-  #     NIX_PATH: nixpkgs=channel:nixos-unstable
-  #   steps:
-  #     - name: Checkout repo
-  #       uses: actions/checkout@v4
-  #     - uses: cachix/install-nix-action@v27
-  #       with:
-  #         nix_path: $NIX_PATH
-  #     - name: Build & test release
-  #       run: |
-  #         nix-shell --command "just run-ci"
   assumeutxo-signet:
-    # needs: [lint, build-and-test]
     runs-on: [self-hosted, linux, x64]
     timeout-minutes: 120
     env:
@@ -62,3 +30,16 @@ jobs:
         with:
           name: result
           path: results.json
+      - name: Write GitHub and runner context files
+        env:
+          GITHUB_CONTEXT: ${{ toJSON(github) }}
+          RUNNER_CONTEXT: ${{ toJSON(runner) }}
+        run: |
+          mkdir contexts
+          echo '${{ toJSON(github) }}' | jq 'del(.token)' > contexts/github.json
+          echo "$RUNNER_CONTEXT" > contexts/runner.json
+      - name: Upload context metadata as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-metadata
+          path: ./contexts/
