@@ -62,3 +62,7 @@ jobs:
         with:
           name: result
           path: results.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flamegraph
+          path: flamegraph.html

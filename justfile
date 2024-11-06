@@ -79,7 +79,7 @@ run-ci: build-ci bench test
 # Run assumeutxo CI workflow
 [group('ci')]
 run-assumeutxo-signet DATADIR: build-ci
-    build/src/bitcoind -datadir={{DATADIR}} -connect=148.251.128.115:55555 -daemon=0 -signet -stopatheight=1
-    -build/src/bitcoind -datadir={{DATADIR}} -connect=148.251.128.115:55555 -daemon=0 -signet -dbcache=16000 -pausebackgroundsync=1 -loadutxosnapshot=$UTXO_PATH
+    perf script flamegraph build/src/bitcoind -datadir={{DATADIR}} -connect=148.251.128.115:55555 -daemon=0 -signet -stopatheight=1
+    perf script flamegraph -build/src/bitcoind -datadir={{DATADIR}} -connect=148.251.128.115:55555 -daemon=0 -signet -dbcache=16000 -pausebackgroundsync=1 -loadutxosnapshot=$UTXO_PATH
     hyper-wrapper ./hyperfine-config.json
     # build/src/bitcoind -datadir={{DATADIR}} -connect=148.251.128.115:55555 -daemon=0 -signet -stopatheight=170000
