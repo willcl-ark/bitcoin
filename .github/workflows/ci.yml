@@ -39,7 +39,8 @@ jobs:
   #       run: |
   #         nix-shell --command "just run-ci"
   assumeutxo-signet:
-    needs: [lint, build-and-test]
+    # needs: [lint, build-and-test]
+    needs: [lint]
     runs-on: [self-hosted, linux, x64]
     timeout-minutes: 120
     env:
@@ -58,3 +59,7 @@ jobs:
         run: |
           mkdir -p "$DATADIR"
           nix-shell --command "just run-assumeutxo-signet $DATADIR"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: result
+          path: results.json
