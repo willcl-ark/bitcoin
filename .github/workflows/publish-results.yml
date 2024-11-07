@@ -7,12 +7,12 @@ on:
       - '**'
 
 jobs:
-  publish:
+  build:
     runs-on: ubuntu-latest
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     permissions:
-      contents: write
-      pull-requests: write
+      actions: read
+      contents: read
     env:
       RESULT_FILE: "results.json"
       GITHUB_CONTEXT_FILE: "github.json"
@@ -22,14 +22,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: gh-pages
           fetch-depth: 0
 
       - name: Download artifacts
         uses: actions/github-script@v7
         with:
           script: |
-            // Get artifacts directly from the workflow run that triggered this
             const run_id = context.payload.workflow_run.id;
 
             const artifacts = await github.rest.actions.listWorkflowRunArtifacts({
@@ -92,26 +90,24 @@ jobs:
                 fs.copyFileSync(file, targetFile);
               }
             });
-            if (fs.existsSync("flamegraph/${process.env.FLAMEGRAPH_FILE}")) {
-              fs.copyFileSync("flamegraph/${process.env.FLAMEGRAPH_FILE}", `${resultDir}/${process.env.FLAMEGRAPH_FILE}`);
+
+            if (fs.existsSync(`flamegraph/${process.env.FLAMEGRAPH_FILE}`)) {
+              fs.copyFileSync(`flamegraph/${process.env.FLAMEGRAPH_FILE}`, `${resultDir}/${process.env.FLAMEGRAPH_FILE}`);
             }
 
             // Create index.html for this run
-            const resultData = JSON.parse(fs.readFileSync("result/$RESULT_FILE", 'utf8'));
-            const indexHtml = `
-            <!DOCTYPE html>
+            const resultData = JSON.parse(fs.readFileSync(`result/${process.env.RESULT_FILE}`, 'utf8'));
+            const indexHtml = `<!DOCTYPE html>
             <html>
-              <!-- ... header remains the same ... -->
+              <head>
+                <title>Benchmark Results</title>
+                <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+              </head>
               <body class="bg-gray-100 p-8">
                 <div class="max-w-4xl mx-auto">
                   <h1 class="text-3xl font-bold mb-8">Benchmark Results</h1>
-                  ${fs.existsSync(`${resultDir}/${process.env.FLAMEGRAPH_FILE}`) ? `
-                    <div class="bg-white rounded-lg shadow p-6 mb-8">
-                      <h2 class="text-xl font-semibold mb-4">Flamegraph</h2>
-                      <a href="${process.env.FLAMEGRAPH_FILE}" class="text-blue-600 hover:underline">View Flamegraph</a>
-                    </div>
-                  ` : ''}
-                  <div class="bg-white rounded-lg shadow p-6">
+
+                  <div class="bg-white rounded-lg shadow p-6 mb-8">
                     <h2 class="text-xl font-semibold mb-4">PR #${prNumber} - Run ${runId}</h2>
                     <div class="overflow-x-auto">
                       <table class="min-w-full table-auto">
@@ -138,6 +134,13 @@ jobs:
                       </table>
                     </div>
                   </div>
+
+                  ${fs.existsSync(`flamegraph/${process.env.FLAMEGRAPH_FILE}`) ? `
+                    <div class="bg-white rounded-lg shadow p-6">
+                      <h2 class="text-xl font-semibold mb-4">Flamegraph</h2>
+                      <iframe src="${process.env.FLAMEGRAPH_FILE}" width="100%" height="800px" frameborder="0"></iframe>
+                    </div>
+                  ` : ''}
                 </div>
               </body>
             </html>`;
@@ -145,8 +148,14 @@ jobs:
             fs.writeFileSync(`${resultDir}/index.html`, indexHtml);
 
             // Update main index.html
-            let mainIndexHtml = `
-            <!DOCTYPE html>
+            const prs = fs.readdirSync('results')
+              .filter(dir => dir.startsWith('pr-'))
+              .map(dir => ({
+                pr: dir.replace('pr-', ''),
+                runs: fs.readdirSync(`results/${dir}`)
+              }));
+
+            const mainIndexHtml = `<!DOCTYPE html>
             <html>
               <head>
                 <title>Bitcoin Benchmark Results</title>
@@ -158,41 +167,20 @@ jobs:
                   <div class="bg-white rounded-lg shadow p-6">
                     <h2 class="text-xl font-semibold mb-4">Available Results</h2>
                     <ul class="space-y-2">
-            `;
-
-            // List all PR directories
-            const prs = fs.readdirSync('results')
-              .filter(dir => dir.startsWith('pr-'))
-              .map(dir => ({
-                pr: dir.replace('pr-', ''),
-                runs: fs.readdirSync(`results/${dir}`)
-              }));
-
-            prs.forEach(({pr, runs}) => {
-              mainIndexHtml += `
-                <li class="font-semibold">PR #${pr}
-                  <ul class="ml-8 space-y-1">
-              `;
-
-              runs.forEach(run => {
-                mainIndexHtml += `
-                    <li><a href="pr-${pr}/${run}/index.html" class="text-blue-600 hover:underline">Run ${run}</a></li>
-                `;
-              });
-
-              mainIndexHtml += `
-                  </ul>
-                </li>
-              `;
-            });
-
-            mainIndexHtml += `
+                      ${prs.map(({pr, runs}) => `
+                        <li class="font-semibold">PR #${pr}
+                          <ul class="ml-8 space-y-1">
+                            ${runs.map(run => `
+                              <li><a href="pr-${pr}/${run}/index.html" class="text-blue-600 hover:underline">Run ${run}</a></li>
+                            `).join('')}
+                          </ul>
+                        </li>
+                      `).join('')}
                     </ul>
                   </div>
                 </div>
               </body>
-            </html>
-            `;
+            </html>`;
 
             fs.writeFileSync('results/index.html', mainIndexHtml);
 
@@ -201,29 +189,86 @@ jobs:
             core.setOutput('result-url', resultUrl);
             return resultUrl;
 
-      - name: Commit and push results
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add results/
-          git commit -m "Add benchmark results for run ${{ github.event.workflow_run.id }}"
-          git push
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: results
+
+  deploy:
+    needs: build
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  comment-pr:
+    needs: deploy
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      actions: read
+    env:
+      RESULT_FILE: "results.json"
+      GITHUB_CONTEXT_FILE: "github.json"
+      RUN_CONTEXT_FILE: "runner.json"
+      FLAMEGRAPH_FILE: "flamegraph.html"
+    steps:
+      - name: Download metadata artifact
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const run_id = context.payload.workflow_run.id;
+
+            const artifacts = await github.rest.actions.listWorkflowRunArtifacts({
+              owner: context.repo.owner,
+              repo: context.repo.name,
+              run_id: run_id
+            });
+
+            const metadataArtifact = artifacts.data.artifacts.find(
+              artifact => artifact.name === "run-metadata"
+            );
+
+            if (metadataArtifact) {
+              const download = await github.rest.actions.downloadArtifact({
+                owner: context.repo.owner,
+                repo: context.repo.name,
+                artifact_id: metadataArtifact.id,
+                archive_format: 'zip'
+              });
+
+              const fs = require('fs');
+              fs.writeFileSync('metadata.zip', Buffer.from(download.data));
+            }
 
       - name: Comment on PR
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            const metadata = JSON.parse(fs.readFileSync(`run-metadata/${process.env.GITHUB_CONTEXT_FILE}`, 'utf8'));
+
+            // Extract metadata
+            const exec = require('child_process').execSync;
+            exec('unzip metadata.zip');
+
+            const metadata = JSON.parse(fs.readFileSync('github.json', 'utf8'));
             const prNumber = metadata.event.pull_request?.number;
 
             if (prNumber) {
-              const resultUrl = '${{ steps.organize.outputs.result-url }}';
+              const baseUrl = `https://${context.repo.owner}.github.io/${context.repo.name}`;
+              const resultUrl = `${baseUrl}/results/pr-${prNumber}/${metadata.run_id}/index.html`;
+
               let comment = `📊 Benchmark results for this run are available at: ${resultUrl}`;
 
-              const resultDir = `results/pr-${prNumber}/${metadata.run_id}`;
-              if (fs.existsSync(`${resultDir}/${process.env.FLAMEGRAPH_FILE}`)) {
-                const flamegraphUrl = resultUrl.replace('index.html', `${process.env.FLAMEGRAPH_FILE}`);
+              if (fs.existsSync(`flamegraph/${process.env.FLAMEGRAPH_FILE}`)) {
+                const flamegraphUrl = resultUrl.replace('index.html', process.env.FLAMEGRAPH_FILE);
                 comment += `\n🔥 Flamegraph available at: ${flamegraphUrl}`;
               }
 
