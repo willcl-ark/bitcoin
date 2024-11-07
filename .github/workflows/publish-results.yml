@@ -159,7 +159,7 @@ jobs:
                         <li class="font-semibold">PR #${pr}
                           <ul class="ml-8 space-y-1">
                             ${runs.map(run => `
-                              <li><a href="pr-${pr}/${run}/index.html" class="text-blue-600 hover:underline">Run ${run}</a></li>
+                              <li><a href="results/pr-${pr}/${run}/index.html" class="text-blue-600 hover:underline">Run ${run}</a></li>
                             `).join('')}
                           </ul>
                         </li>
@@ -170,7 +170,7 @@ jobs:
               </body>
             </html>`;
 
-            fs.writeFileSync('results/index.html', mainIndexHtml);
+            fs.writeFileSync('index.html', mainIndexHtml);
 
             // Return the URL for the PR comment
             const resultUrl = `https://${context.repo.owner}.github.io/${context.repo.name}/results/pr-${prNumber}/${runId}/index.html`;
@@ -190,22 +190,7 @@ jobs:
           git commit -m "Update benchmark results from run ${{ github.event.workflow_run.id }}"
           git push origin gh-pages
 
-  deploy:
-    needs: build
-    permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
-
   comment-pr:
-    needs: deploy
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
