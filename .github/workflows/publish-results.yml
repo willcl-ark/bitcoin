@@ -3,8 +3,6 @@ on:
   workflow_run:
     workflows: ["CI"]
     types: [completed]
-    branches:
-      - '**'
 
 jobs:
   build:
@@ -13,6 +11,7 @@ jobs:
     permissions:
       actions: read
       contents: read
+      checks: read
     env:
       RESULT_FILE: "results.json"
       GITHUB_CONTEXT_FILE: "github.json"
@@ -24,42 +23,30 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download artifacts
-        uses: actions/github-script@v7
+      - name: Download result artifact
+        uses: actions/download-artifact@v4
         with:
-          script: |
-            const run_id = context.payload.workflow_run.id;
+          name: result
+          github-token: ${{ secrets.GH_PAT }}
+          run-id: ${{ github.event.workflow_run.id }}
+          path: result
 
-            const artifacts = await github.rest.actions.listWorkflowRunArtifacts({
-              owner: context.repo.owner,
-              repo: context.repo.name,
-              run_id: run_id
-            });
+      - name: Download metadata artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: run-metadata
+          github-token: ${{ secrets.GH_PAT }}
+          run-id: ${{ github.event.workflow_run.id }}
+          path: run-metadata
 
-            const matchArtifact = artifacts.data.artifacts.filter((artifact) => {
-              return ["result", "run-metadata", "flamegraph"].includes(artifact.name)
-            });
-
-            for (const artifact of matchArtifact) {
-              const download = await github.rest.actions.downloadArtifact({
-                owner: context.repo.owner,
-                repo: context.repo.name,
-                artifact_id: artifact.id,
-                archive_format: 'zip'
-              });
-
-              const fs = require('fs');
-              fs.writeFileSync(`${artifact.name}.zip`, Buffer.from(download.data));
-            }
-
-      - name: Unzip artifacts
-        run: |
-          for zip in *.zip
-          do
-            dirname="${zip%.zip}"
-            mkdir -p "$dirname"
-            unzip -d "$dirname" "$zip"
-          done
+      - name: Download flamegraph artifact
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: flamegraph
+          github-token: ${{ secrets.GH_PAT }}
+          run-id: ${{ github.event.workflow_run.id }}
+          path: flamegraph
 
       - name: Organize results
         id: organize
@@ -221,43 +208,18 @@ jobs:
       FLAMEGRAPH_FILE: "flamegraph.html"
     steps:
       - name: Download metadata artifact
-        uses: actions/github-script@v7
+        uses: actions/download-artifact@v4
         with:
-          script: |
-            const run_id = context.payload.workflow_run.id;
-
-            const artifacts = await github.rest.actions.listWorkflowRunArtifacts({
-              owner: context.repo.owner,
-              repo: context.repo.name,
-              run_id: run_id
-            });
-
-            const metadataArtifact = artifacts.data.artifacts.find(
-              artifact => artifact.name === "run-metadata"
-            );
-
-            if (metadataArtifact) {
-              const download = await github.rest.actions.downloadArtifact({
-                owner: context.repo.owner,
-                repo: context.repo.name,
-                artifact_id: metadataArtifact.id,
-                archive_format: 'zip'
-              });
-
-              const fs = require('fs');
-              fs.writeFileSync('metadata.zip', Buffer.from(download.data));
-            }
+          name: run-metadata
+          github-token: ${{ secrets.GH_PAT }}
+          run-id: ${{ github.event.workflow_run.id }}
+          path: .
 
       - name: Comment on PR
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-
-            // Extract metadata
-            const exec = require('child_process').execSync;
-            exec('unzip metadata.zip');
-
             const metadata = JSON.parse(fs.readFileSync('github.json', 'utf8'));
             const prNumber = metadata.event.pull_request?.number;
 
