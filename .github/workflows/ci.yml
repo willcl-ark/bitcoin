@@ -19,10 +19,9 @@ jobs:
           nix_path: $NIX_PATH
       - name: Run AssumeUTXO
         env:
-          DATADIR: "${{ runner.temp }}/bitcoin-datadir"
+          TMP_DATADIR: "${{ runner.temp }}/base_datadir"
         run: |
-          mkdir -p "$DATADIR"
-          nix-shell --command "just run-assumeutxo-signet $DATADIR ${{ github.event.pull_request.base.sha }} ${{github.event.pull_request.head.sha}}"
+          nix-shell --command "just run-assumeutxo-signet-ci $TMP_DATADIR ${{ github.event.pull_request.base.sha }} ${{github.event.pull_request.head.sha}}"
       - uses: actions/upload-artifact@v4
         with:
           name: result

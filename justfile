@@ -76,10 +76,39 @@ lint:
 [group('ci')]
 run-ci: build-ci bench test
 
+[private]
+[confirm("Are you sure you want to delete everything in TMP_DATADIR?")]
+_confirm-clean-datadir TMP_DATADIR:
+    rm -Rf {{TMP_DATADIR}}/*
+
+[private]
+_clean-datadir TMP_DATADIR:
+    rm -Rf {{TMP_DATADIR}}/*
+
+# Check we aren't about to nuke a live datadir
+[private]
+check-datadir TMP_DATADIR:
+    #!/usr/bin/env bash
+
+    # Create the directory
+    mkdir -p {{TMP_DATADIR}}
+
+    # Check if the "CI" env var is set
+    if [ -n "$CI" ]; then
+        # If it is, call _clean-datadir
+        just _clean-datadir {{TMP_DATADIR}}
+    else
+        # If not, call _confirm-clean-datadir
+        just _confirm-clean-datadir {{TMP_DATADIR}}
+    fi
+
+[private]
+prepare-assumeutxo-snapshot-run TMP_DATADIR: build-ci
+    just check-datadir {{TMP_DATADIR}}
+    build/src/bitcoind -datadir={{TMP_DATADIR}} -connect=148.251.128.115:55555 -daemon=0 -signet -stopatheight=1
+    -build/src/bitcoind -datadir={{TMP_DATADIR}} -connect=148.251.128.115:55555 -daemon=0 -signet -dbcache=16000 -pausebackgroundsync=1 -loadutxosnapshot=$UTXO_PATH
+
 # Run assumeutxo CI workflow
 [group('ci')]
-run-assumeutxo-signet DATADIR base_commit head_commit: build-ci
-    build/src/bitcoind -datadir={{DATADIR}} -connect=148.251.128.115:55555 -daemon=0 -signet -stopatheight=1
-    -build/src/bitcoind -datadir={{DATADIR}} -connect=148.251.128.115:55555 -daemon=0 -signet -dbcache=16000 -pausebackgroundsync=1 -loadutxosnapshot=$UTXO_PATH
+run-assumeutxo-signet-ci $TMP_DATADIR base_commit head_commit:
     hyper-wrapper ./hyperfine-config.json {{base_commit}} {{head_commit}}
-    # build/src/bitcoind -datadir={{DATADIR}} -connect=148.251.128.115:55555 -daemon=0 -signet -stopatheight=170000
