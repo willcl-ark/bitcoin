@@ -1,8 +1,5 @@
 name: CI
 on:
-  push:
-    branches:
-      - master
   pull_request:
     branches:
       - master
@@ -25,7 +22,7 @@ jobs:
           DATADIR: "${{ runner.temp }}/bitcoin-datadir"
         run: |
           mkdir -p "$DATADIR"
-          nix-shell --command "just run-assumeutxo-signet $DATADIR"
+          nix-shell --command "just run-assumeutxo-signet $DATADIR ${{ github.event.pull_request.base.sha }} ${{github.event.pull_request.head.sha}}"
       - uses: actions/upload-artifact@v4
         with:
           name: result
@@ -36,7 +33,7 @@ jobs:
           RUNNER_CONTEXT: ${{ toJSON(runner) }}
         run: |
           mkdir contexts
-          echo '${{ toJSON(github) }}' | jq 'del(.token)' > contexts/github.json
+          echo '${{ toJSON(github) }}' | nix-shell -p jq --command "jq 'del(.token)' > contexts/github.json"
           echo "$RUNNER_CONTEXT" > contexts/runner.json
       - name: Upload context metadata as artifact
         uses: actions/upload-artifact@v4

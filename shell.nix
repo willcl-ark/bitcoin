@@ -19,12 +19,12 @@ let
   # This doesn't install to PATH
   hyper-wrapper = pkgs.rustPlatform.buildRustPackage rec {
     pname = "hyper-wrapper";
-    version = "0.1.0";
+    version = "0.1.1";
     src = pkgs.fetchCrate {
       inherit pname version;
-      sha256 = "sha256-11HJdxUshs+qfAqw4uqmY7z+XIGkdeUD9O4zl4fvDdE=";
+      sha256 = "sha256-EjDIvCmW0q7ddjAR8hY0v/HFkWZil88gQuJrLbSssck=";
     };
-    cargoHash = "sha256-ffChU1z8VC2y7l6Pb/eX2XXdFDChMwnroSfsHIVChds=";
+    cargoHash = "sha256-TCaDh5yay1u+nS2iWnp0kGF/dTvxVteIFKxU8Ae1DrI=";
     meta = with pkgs.lib; {
       description = "Hyperfine wrapper";
       homepage = "https://github.com/bitcoin-dev-tools/hyper-wrapper";
@@ -119,11 +119,12 @@ in pkgs.mkShell {
       uv
 
       # Benchmarking
-      hyperfine
-      hyper-wrapper
-      perf-tools
       flamegraph
+      hyper-wrapper
+      hyperfine
+      jq
       linuxKernel.packages.linux_6_6.perf
+      perf-tools
     ];
 
     # Modifies the Nix clang++ wrapper to avoid warning:

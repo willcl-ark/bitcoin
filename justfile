@@ -78,8 +78,8 @@ run-ci: build-ci bench test
 
 # Run assumeutxo CI workflow
 [group('ci')]
-run-assumeutxo-signet DATADIR: build-ci
+run-assumeutxo-signet DATADIR base_commit head_commit: build-ci
     build/src/bitcoind -datadir={{DATADIR}} -connect=148.251.128.115:55555 -daemon=0 -signet -stopatheight=1
     -build/src/bitcoind -datadir={{DATADIR}} -connect=148.251.128.115:55555 -daemon=0 -signet -dbcache=16000 -pausebackgroundsync=1 -loadutxosnapshot=$UTXO_PATH
-    hyper-wrapper ./hyperfine-config.json
+    hyper-wrapper ./hyperfine-config.json {{base_commit}} {{head_commit}}
     # build/src/bitcoind -datadir={{DATADIR}} -connect=148.251.128.115:55555 -daemon=0 -signet -stopatheight=170000
