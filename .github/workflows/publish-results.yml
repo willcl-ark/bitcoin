@@ -10,7 +10,7 @@ jobs:
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     permissions:
       actions: read
-      contents: read
+      contents: write
       checks: read
     env:
       RESULT_FILE: "results.json"
@@ -22,6 +22,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: gh-pages
 
       - name: Download result artifact
         uses: actions/download-artifact@v4
@@ -180,6 +181,14 @@ jobs:
         uses: actions/upload-pages-artifact@v3
         with:
           path: results
+
+      - name: Commit and push to gh-pages
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add results/
+          git commit -m "Update benchmark results from run ${{ github.event.workflow_run.id }}"
+          git push origin gh-pages
 
   deploy:
     needs: build
