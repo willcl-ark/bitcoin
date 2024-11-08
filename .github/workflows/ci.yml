@@ -12,12 +12,19 @@ jobs:
       # utxo.dat should be outside any $HOME dir due to NixOS service security settings
       UTXO_PATH: /var/lib/bitcoin/utxo-signet-160000.dat
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
-      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_MERGE_REF: ${{ github.ref }}
     steps:
-      - name: Checkout repo
+      - name: Checkout PR head
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
+      - name: Fetch base commit
+        run: |
+          git fetch --depth=1 origin ${{ github.event.pull_request.base.sha }}
+
+          # Export the checked out commit hash for use in later steps
+          echo "CHECKOUT_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
       - uses: cachix/install-nix-action@v27
         with:
           nix_path: $NIX_PATH
@@ -27,7 +34,7 @@ jobs:
         run: |
           env
           mkdir -p "$TMP_DATADIR"
-          nix-shell --command "just run-assumeutxo-signet-ci $TMP_DATADIR $UTXO_PATH $BASE_SHA $HEAD_SHA ${{ runner.temp }}/results.json"
+          nix-shell --command "just run-assumeutxo-signet-ci $TMP_DATADIR $UTXO_PATH $BASE_SHA ${{ env.CHECKOUT_COMMIT }} ${{ runner.temp }}/results.json"
       - uses: actions/upload-artifact@v4
         with:
           name: result
