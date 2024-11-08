@@ -102,13 +102,43 @@ check-datadir TMP_DATADIR:
         just _confirm-clean-datadir {{TMP_DATADIR}}
     fi
 
-[private]
-prepare-assumeutxo-snapshot-run commit TMP_DATADIR UTXO_PATH:
+[group('ci')]
+setup-assumeutxo-snapshot-run commit TMP_DATADIR:
     git checkout {{commit}}
     just build-ci
     just check-datadir {{TMP_DATADIR}}
+
+[group('ci')]
+prepare-assumeutxo-snapshot-run commit TMP_DATADIR UTXO_PATH:
+    #!/usr/bin/env bash
+    # Handle last_commit tracking and flamegraph movement
+    if [ -e last_commit.txt ]; then
+        LAST_COMMIT=$(cat last_commit.txt)
+        if [ -e flamegraph.html ]; then
+            mv flamegraph.html ${LAST_COMMIT}-flamegraph.html
+        fi
+    fi
+
+    # Store current commit
+    echo {{commit}} > last_commit.txt
+
+    # Run the actual preparation steps
+    just check-datadir {{TMP_DATADIR}}
     build/src/bitcoind -datadir={{TMP_DATADIR}} -connect=148.251.128.115:55555 -daemon=0 -signet -stopatheight=1
-    -build/src/bitcoind -datadir={{TMP_DATADIR}} -connect=148.251.128.115:55555 -daemon=0 -signet -dbcache=16000 -pausebackgroundsync=1 -loadutxosnapshot={{UTXO_PATH}}
+    # TODO: remove the or true here. It's a hack as we currently get unclean exit
+    build/src/bitcoind -datadir={{TMP_DATADIR}} -connect=148.251.128.115:55555 -daemon=0 -signet -dbcache=16000 -pausebackgroundsync=1 -loadutxosnapshot={{UTXO_PATH}} || true
+
+[group('ci')]
+cleanup-assumeutxo-snapshot-run TMP_DATADIR:
+    #!/usr/bin/env bash
+    # Move current flamegraph if it exists
+    if [ -e flamegraph.html ]; then
+        CURRENT_COMMIT=$(cat last_commit.txt)
+        mv flamegraph.html ${CURRENT_COMMIT}-flamegraph.html
+    fi
+
+    # Clean up the datadir
+    just check-datadir {{TMP_DATADIR}}
 
 # Run assumeutxo CI workflow
 [group('ci')]
