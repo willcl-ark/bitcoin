@@ -1,0 +1,232 @@
+name: Publish Results
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    permissions:
+      actions: read
+      contents: write
+      checks: read
+    env:
+      RESULT_FILE: "results.json"
+      GITHUB_CONTEXT_FILE: "github.json"
+      RUN_CONTEXT_FILE: "runner.json"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+
+      - name: Download result artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: result
+          github-token: ${{ secrets.GH_PAT }}
+          run-id: ${{ github.event.workflow_run.id }}
+          path: result
+
+      - name: Download metadata artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: run-metadata
+          github-token: ${{ secrets.GH_PAT }}
+          run-id: ${{ github.event.workflow_run.id }}
+          path: run-metadata
+
+      - name: Download flamegraph artifact
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: flamegraph
+          github-token: ${{ secrets.GH_PAT }}
+          run-id: ${{ github.event.workflow_run.id }}
+          path: flamegraph
+
+      - name: Organize results
+        id: organize
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const metadata = JSON.parse(fs.readFileSync(`run-metadata/${process.env.GITHUB_CONTEXT_FILE}`, 'utf8'));
+
+            // Extract PR number and run ID
+            const prNumber = metadata.event.pull_request?.number || 'main';
+            const runId = metadata.run_id;
+
+            // Create directory structure
+            const resultDir = `results/pr-${prNumber}/${runId}`;
+            fs.mkdirSync(resultDir, { recursive: true });
+
+            // Move files to appropriate directory
+            const filesToMove = [
+              `result/${process.env.RESULT_FILE}`,
+              `run-metadata/${process.env.GITHUB_CONTEXT_FILE}`,
+              `run-metadata/${process.env.RUN_CONTEXT_FILE}`
+            ];
+
+            filesToMove.forEach(file => {
+              if (fs.existsSync(file)) {
+                const targetFile = `${resultDir}/${file.split('/').pop()}`;
+                fs.copyFileSync(file, targetFile);
+              }
+            });
+
+            // Move all files from flamegraphs folder
+            if (fs.existsSync('flamegraph')) {
+              fs.readdirSync('flamegraph').forEach(file => {
+                const sourceFile = `flamegraph/${file}`;
+                const targetFile = `${resultDir}/${file}`;
+                fs.copyFileSync(sourceFile, targetFile);
+              });
+            }
+
+            // Create index.html for this run
+            const resultData = JSON.parse(fs.readFileSync(`result/${process.env.RESULT_FILE}`, 'utf8'));
+            const indexHtml = `<!DOCTYPE html>
+            <html>
+              <head>
+                <title>Benchmark Results</title>
+                <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+              </head>
+              <body class="bg-gray-100 p-8">
+                <div class="max-w-4xl mx-auto">
+                  <h1 class="text-3xl font-bold mb-8">Benchmark Results</h1>
+                  <div class="bg-white rounded-lg shadow p-6 mb-8">
+                    <h2 class="text-xl font-semibold mb-4">PR #${prNumber} - Run ${runId}</h2>
+                    <div class="overflow-x-auto">
+                      ${resultData.results.map(result => {
+                        const commitShortId = result.parameters.commit.slice(0, 8)
+                        const flameGraphFile = `${result.parameters.commit}-flamegraph.html`
+                        const flameGraphPath = `${resultDir}/${flameGraphFile}`
+
+                        return `
+                          <table class="min-w-full table-auto">
+                            <thead>
+                              <tr class="bg-gray-50">
+                                <th class="px-4 py-2">Branch</th>
+                                <th class="px-4 py-2">Command</th>
+                                <th class="px-4 py-2">Mean (s)</th>
+                                <th class="px-4 py-2">Std Dev</th>
+                                <th class="px-4 py-2">User (s)</th>
+                                <th class="px-4 py-2">System (s)</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              <tr class="border-t">
+                                <td class="px-4 py-2 font-mono text-sm">
+                                  <a href="https://github.com/bitcoin-dev-tools/benchcoin/commit/${commitShortId}">${commitShortId}</a>
+                                </td>
+                                <td class="px-4 py-2 font-mono text-sm">${result.command}</td>
+                                <td class="px-4 py-2 text-right">${result.mean.toFixed(3)}</td>
+                                <td class="px-4 py-2 text-right">${result.stddev?.toFixed(3) || 'N/A'}</td>
+                                <td class="px-4 py-2 text-right">${result.user.toFixed(3)}</td>
+                                <td class="px-4 py-2 text-right">${result.system.toFixed(3)}</td>
+                              </tr>
+                            </tbody>
+                          </table>
+
+                          ${fs.existsSync(flameGraphPath) ? `
+                            <iframe src="${flameGraphFile}" width="100%" height="600px" frameborder="0"></iframe>
+                          ` : ''}
+                        `
+                      }).join('')}
+                    </div>
+                  </div>
+                </div>
+              </body>
+            </html>`;
+
+            fs.writeFileSync(`${resultDir}/index.html`, indexHtml);
+
+            // Update main index.html
+            const prs = fs.readdirSync('results')
+              .filter(dir => dir.startsWith('pr-'))
+              .map(dir => ({
+                pr: dir.replace('pr-', ''),
+                runs: fs.readdirSync(`results/${dir}`)
+              }));
+
+            const mainIndexHtml = `<!DOCTYPE html>
+            <html>
+              <head>
+                <title>Bitcoin Benchmark Results</title>
+                <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+              </head>
+              <body class="bg-gray-100 p-8">
+                <div class="max-w-4xl mx-auto">
+                  <h1 class="text-3xl font-bold mb-8">Bitcoin Benchmark Results</h1>
+                  <div class="bg-white rounded-lg shadow p-6">
+                    <h2 class="text-xl font-semibold mb-4">Available Results</h2>
+                    <ul class="space-y-2">
+                      ${prs.map(({pr, runs}) => `
+                        <li class="font-semibold">PR #${pr}
+                          <ul class="ml-8 space-y-1">
+                            ${runs.map(run => `
+                              <li><a href="results/pr-${pr}/${run}/index.html" class="text-blue-600 hover:underline">Run ${run}</a></li>
+                            `).join('')}
+                          </ul>
+                        </li>
+                      `).join('')}
+                    </ul>
+                  </div>
+                </div>
+              </body>
+            </html>`;
+
+            fs.writeFileSync('index.html', mainIndexHtml);
+
+            // Return the URL for the PR comment
+            const resultUrl = `https://${context.repo.owner}.github.io/${context.repo.name}/results/pr-${prNumber}/${runId}/index.html`;
+            core.setOutput('result-url', resultUrl);
+            return resultUrl;
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: results
+
+      - name: Commit and push to gh-pages
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add results/
+          git add index.html
+          git commit -m "Update benchmark results from run ${{ github.event.workflow_run.id }}"
+          git push origin gh-pages
+
+  comment-pr:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      actions: read
+    env:
+      GITHUB_CONTEXT_FILE: "github.json"
+    steps:
+      - name: Download metadata artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: run-metadata
+          github-token: ${{ secrets.GH_PAT }}
+          run-id: ${{ github.event.workflow_run.id }}
+          path: .
+
+      - name: Parse Pull Request Number
+        id: parse-pr
+        run: |
+          pr_number=$(jq -r '.event.pull_request.number' github.json)
+          echo "PR_NUMBER=$pr_number" >> "$GITHUB_ENV"
+
+      - name: Comment on PR
+        if: ${{ env.PR_NUMBER }}
+        uses: thollander/actions-comment-pull-request@v3.0.1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pr-number: ${{ env.PR_NUMBER }}
+          message: |
+            📊 Benchmark results for this run (${{ github.event.workflow_run.id }}) will be available at: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/results/pr-${{ env.PR_NUMBER }}/${{ github.event.workflow_run.id }}/index.html after the github pages "build and deployment" action has completed.
