@@ -206,10 +206,7 @@ jobs:
       pull-requests: write
       actions: read
     env:
-      RESULT_FILE: "results.json"
       GITHUB_CONTEXT_FILE: "github.json"
-      RUN_CONTEXT_FILE: "runner.json"
-      FLAMEGRAPH_FILE: "flamegraph.html"
     steps:
       - name: Download metadata artifact
         uses: actions/download-artifact@v4
@@ -219,29 +216,17 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
           path: .
 
+      - name: Parse Pull Request Number
+        id: parse-pr
+        run: |
+          pr_number=$(jq -r '.event.pull_request.number' github.json)
+          echo "PR_NUMBER=$pr_number" >> "$GITHUB_ENV"
+
       - name: Comment on PR
-        uses: actions/github-script@v7
+        if: ${{ env.PR_NUMBER }}
+        uses: thollander/actions-comment-pull-request@v3.0.1
         with:
-          script: |
-            const fs = require('fs');
-            const metadata = JSON.parse(fs.readFileSync('github.json', 'utf8'));
-            const prNumber = metadata.event.pull_request?.number;
-
-            if (prNumber) {
-              const baseUrl = `https://${context.repo.owner}.github.io/${context.repo.name}`;
-              const resultUrl = `${baseUrl}/results/pr-${prNumber}/${metadata.run_id}/index.html`;
-
-              let comment = `📊 Benchmark results for this run are available at: ${resultUrl}`;
-
-              if (fs.existsSync(`flamegraph/${process.env.FLAMEGRAPH_FILE}`)) {
-                const flamegraphUrl = resultUrl.replace('index.html', process.env.FLAMEGRAPH_FILE);
-                comment += `\n🔥 Flamegraph available at: ${flamegraphUrl}`;
-              }
-
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.name,
-                issue_number: prNumber,
-                body: comment
-              });
-            }
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          pr-number: ${{ env.PR_NUMBER }}
+          message: |
+            📊 Benchmark results for this run (${{ github.event.workflow_run.id }}) are available at: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/results/pr-${{ env.PR_NUMBER }}/${{ github.event.workflow_run.id }}/index.html
