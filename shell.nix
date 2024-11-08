@@ -17,12 +17,12 @@ let
   # This doesn't install to PATH
   hyper-wrapper = pkgs.rustPlatform.buildRustPackage rec {
     pname = "hyper-wrapper";
-    version = "0.1.3";
+    version = "0.1.4";
     src = pkgs.fetchCrate {
       inherit pname version;
-      sha256 = "sha256-uX2GFw+WuQGV9ZOK6/18Gz7EfudYvzGo6py2cfUQBSc=";
+      sha256 = "sha256-j0tcDnD52xoMyUwEAmn4mZ3Bb7Z3rtvKfYi6geGXTbc=";
     };
-    cargoHash = "sha256-KBHuP+ZwhThFjf06oKDOLdylk9DdXFLDJci6kG8jCYM=";
+    cargoHash = "sha256-8xHSTaCrpzxnwKzELIw0JCFwg6KhbbhXGcPlA/Dfn1s=";
     meta = with pkgs.lib; {
       description = "Hyperfine wrapper";
       homepage = "https://github.com/bitcoin-dev-tools/hyper-wrapper";
