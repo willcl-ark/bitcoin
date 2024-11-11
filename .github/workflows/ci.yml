@@ -60,8 +60,7 @@ jobs:
           echo "$GITHUB_CONTEXT" | nix-shell -p jq --command "jq 'del(.token)' > contexts/github.json"
           echo "$RUNNER_CONTEXT" > contexts/runner.json
       - name: Upload context metadata as artifact
-        if: matrix.network == 'mainnet'  # Only upload once as it's the same between runs
         uses: actions/upload-artifact@v4
         with:
-          name: run-metadata
+          name: run-metadata-${{ matrix.network }}
           path: ./contexts/
