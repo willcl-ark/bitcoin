@@ -24,8 +24,6 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
       - name: Extract artifacts
         run: |
-          # The artifacts are downloaded with their names as directories
-          # Move the results files to a consistent location
           for network in ${NETWORKS//,/ }; do
             if [ -d "result-${network}" ]; then
               mkdir -p "${network}-results"
@@ -36,14 +34,12 @@ jobs:
               mkdir -p "${network}-flamegraph"
               mv "flamegraph-${network}"/* "${network}-flamegraph/"
             fi
-          done
 
-          # Move run metadata
-          if [ -d "run-metadata" ]; then
-            mkdir -p "metadata"
-            mv run-metadata/* metadata/
-          fi
-      # Rest of the workflow remains the same from here
+            if [ -d "run-metadata-${network}" ]; then
+              mkdir -p "${network}-metadata"
+              mv "run-metadata-${network}"/* "${network}-metadata/"
+            fi
+          done
       - name: Organize results
         id: organize
         uses: actions/github-script@v7
@@ -51,15 +47,35 @@ jobs:
           script: |
             const fs = require('fs');
             const networks = process.env.NETWORKS.split(',');
+            let prNumber = 'main';
+            let runId;
 
-            // Read metadata
-            const metadata = JSON.parse(fs.readFileSync('metadata/github.json', 'utf8'));
-            const prNumber = metadata.event.pull_request?.number || 'main';
-            const runId = metadata.run_id;
+            // First, extract metadata and get PR number
+            for (const network of networks) {
+              if (fs.existsSync(`${network}-metadata/github.json`)) {
+                const metadata = JSON.parse(fs.readFileSync(`${network}-metadata/github.json`, 'utf8'));
+                prNumber = metadata.event.pull_request?.number || prNumber;
+                runId = metadata.run_id;
+              }
+            }
+
+            if (!runId) {
+              console.error('No valid metadata found for any network');
+              process.exit(1);
+            }
 
             // Create directory structure
             const resultDir = `results/pr-${prNumber}/${runId}`;
             fs.mkdirSync(resultDir, { recursive: true });
+
+            // Now copy metadata files
+            for (const network of networks) {
+              if (fs.existsSync(`${network}-metadata/github.json`)) {
+                const metadataDir = `${resultDir}/${network}-metadata`;
+                fs.mkdirSync(metadataDir, { recursive: true });
+                fs.copyFileSync(`${network}-metadata/github.json`, `${metadataDir}/github.json`);
+              }
+            }
 
             // Process each network's results
             const combinedResults = {
@@ -217,15 +233,19 @@ jobs:
       - name: Download metadata artifact
         uses: actions/download-artifact@v4
         with:
-          name: run-metadata
+          pattern: run-metadata-*
           github-token: ${{ secrets.GITHUB_TOKEN }}
           run-id: ${{ github.event.workflow_run.id }}
           path: metadata
       - name: Parse Pull Request Number
         id: parse-pr
         run: |
-          pr_number=$(jq -r '.event.pull_request.number' metadata/github.json)
-          echo "PR_NUMBER=$pr_number" >> "$GITHUB_ENV"
+          # Find the first github.json file in any of the metadata subdirectories
+          metadata_file=$(find metadata -name github.json | head -n1)
+          if [ -n "$metadata_file" ]; then
+            pr_number=$(jq -r '.event.pull_request.number' "$metadata_file")
+            echo "PR_NUMBER=$pr_number" >> "$GITHUB_ENV"
+          fi
       - name: Comment on PR
         if: ${{ env.PR_NUMBER }}
         uses: thollander/actions-comment-pull-request@v3.0.1
