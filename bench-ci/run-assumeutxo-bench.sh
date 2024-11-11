@@ -2,9 +2,6 @@
 
 set -euxo pipefail
 
-# Define the connect address as a variable
-CONNECT_ADDRESS="148.251.128.115:55555"
-
 # Helper function to check and clean datadir
 clean_datadir() {
   set -euxo pipefail
@@ -50,6 +47,7 @@ prepare_assumeutxo_snapshot_run() {
   local TMP_DATADIR="$2"
   local UTXO_PATH="$3"
   local CONNECT_ADDRESS="$4"
+  local chain="$5"
 
   # Handle last_commit tracking and flamegraph movement
   if [ -e last_commit.txt ]; then
@@ -64,9 +62,9 @@ prepare_assumeutxo_snapshot_run() {
 
   # Run the actual preparation steps
   clean_datadir "${TMP_DATADIR}"
-  build/src/bitcoind -datadir="${TMP_DATADIR}" -connect="${CONNECT_ADDRESS}" -daemon=0 -signet -stopatheight=1
+  build/src/bitcoind -datadir="${TMP_DATADIR}" -connect="${CONNECT_ADDRESS}" -daemon=0 -chain="${chain}" -stopatheight=1
   # TODO: remove the or true here. It's a hack as we currently get unclean exit
-  build/src/bitcoind -datadir="${TMP_DATADIR}" -connect="${CONNECT_ADDRESS}" -daemon=0 -signet -dbcache=16000 -pausebackgroundsync=1 -loadutxosnapshot="${UTXO_PATH}" || true
+  build/src/bitcoind -datadir="${TMP_DATADIR}" -connect="${CONNECT_ADDRESS}" -daemon=0 -chain="${chain}" -dbcache=16000 -pausebackgroundsync=1 -loadutxosnapshot="${UTXO_PATH}" || true
 }
 
 # Execute CMD after the completion of all benchmarking runs for each individual
@@ -92,6 +90,9 @@ run_benchmark() {
   local TMP_DATADIR="$3"
   local UTXO_PATH="$4"
   local results_file="$5"
+  local chain="$6"
+  local stop_at_height="$7"
+  local connect_address="$8"
 
   # Export functions so they can be used by hyperfine
   export -f setup_assumeutxo_snapshot_run
@@ -102,21 +103,21 @@ run_benchmark() {
   # Run hyperfine
   hyperfine \
     --setup "setup_assumeutxo_snapshot_run {commit} ${TMP_DATADIR}" \
-    --prepare "prepare_assumeutxo_snapshot_run {commit} ${TMP_DATADIR} ${UTXO_PATH} ${CONNECT_ADDRESS}" \
+    --prepare "prepare_assumeutxo_snapshot_run {commit} ${TMP_DATADIR} ${UTXO_PATH} ${connect_address} ${chain}" \
     --cleanup "cleanup_assumeutxo_snapshot_run ${TMP_DATADIR}" \
     --runs 1 \
     --show-output \
     --export-json "${results_file}" \
     --command-name "base (${base_commit})" \
     --command-name "head (${head_commit})" \
-    "perf script flamegraph build/src/bitcoind -datadir=${TMP_DATADIR} -connect=${CONNECT_ADDRESS} -daemon=0 -signet -stopatheight=170000" \
+    "perf script flamegraph build/src/bitcoind -datadir=${TMP_DATADIR} -connect=${connect_address} -daemon=0 -chain=${chain} -stopatheight=${stop_at_height}" \
     -L commit "${base_commit},${head_commit}"
 }
 
 # Main execution
-if [ "$#" -ne 5 ]; then
-  echo "Usage: $0 base_commit head_commit TMP_DATADIR UTXO_PATH results_dir"
+if [ "$#" -ne 8 ]; then
+  echo "Usage: $0 base_commit head_commit TMP_DATADIR UTXO_PATH results_dir chain stop_at_height connect_address"
   exit 1
 fi
 
-run_benchmark "$1" "$2" "$3" "$4" "$5"
+run_benchmark "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8"

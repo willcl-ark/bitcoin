@@ -4,13 +4,21 @@ on:
     branches:
       - master
 jobs:
-  assumeutxo-signet:
+  assumeutxo:
+    strategy:
+      matrix:
+        include:
+          - network: signet
+            timeout: 20
+            utxo_path: /var/lib/bitcoin/utxo-signet-160000.dat
+          - network: mainnet
+            timeout: 600
+            utxo_path: /var/lib/bitcoin/utxo-840000.dat
     runs-on: [self-hosted, linux, x64]
-    timeout-minutes: 120
+    timeout-minutes: ${{ matrix.timeout }}
     env:
       NIX_PATH: nixpkgs=channel:nixos-unstable
-      # utxo.dat should be outside any $HOME dir due to NixOS service security settings
-      UTXO_PATH: /var/lib/bitcoin/utxo-signet-160000.dat
+      UTXO_PATH: ${{ matrix.utxo_path }}
       BASE_SHA: ${{ github.event.pull_request.base.sha }}
     steps:
       - name: Checkout repo
@@ -28,20 +36,20 @@ jobs:
       - uses: cachix/install-nix-action@v27
         with:
           nix_path: $NIX_PATH
-      - name: Run AssumeUTXO
+      - name: Run AssumeUTXO ${{ matrix.network }}
         env:
           TMP_DATADIR: "${{ runner.temp }}/base_datadir"
         run: |
           env
           mkdir -p "$TMP_DATADIR"
-          nix-shell --command "just run-assumeutxo-signet-ci $BASE_SHA $CHECKOUT_COMMIT $TMP_DATADIR $UTXO_PATH ${{ runner.temp }}/results.json"
+          nix-shell --command "just run-assumeutxo-${{ matrix.network }}-ci $BASE_SHA $CHECKOUT_COMMIT $TMP_DATADIR $UTXO_PATH ${{ runner.temp }}/results.json"
       - uses: actions/upload-artifact@v4
         with:
-          name: result
+          name: result-${{ matrix.network }}
           path: "${{ runner.temp }}/results.json"
       - uses: actions/upload-artifact@v4
         with:
-          name: flamegraph
+          name: flamegraph-${{ matrix.network }}
           path: "**/*-flamegraph.html"
       - name: Write GitHub and runner context files
         env:
@@ -52,8 +60,8 @@ jobs:
           echo "$GITHUB_CONTEXT" | nix-shell -p jq --command "jq 'del(.token)' > contexts/github.json"
           echo "$RUNNER_CONTEXT" > contexts/runner.json
       - name: Upload context metadata as artifact
+        if: matrix.network == 'mainnet'  # Only upload once as it's the same between runs
         uses: actions/upload-artifact@v4
         with:
           name: run-metadata
           path: ./contexts/
-
