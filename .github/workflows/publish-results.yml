@@ -18,72 +18,32 @@ jobs:
         with:
           ref: gh-pages
       - name: Download artifacts
-        uses: actions/github-script@v7
+        uses: actions/download-artifact@v4
         with:
-          script: |
-            const networks = process.env.NETWORKS.split(',');
-            const artifacts = await github.rest.actions.listWorkflowRunArtifacts({
-              owner: context.repo.owner,
-              repo: context.repo.name,
-              run_id: context.payload.workflow_run.id
-            });
-
-            for (const network of networks) {
-              // Download result artifact
-              const resultArtifact = artifacts.data.artifacts.find(
-                artifact => artifact.name === `result-${network}`
-              );
-              if (resultArtifact) {
-                const download = await github.rest.actions.downloadArtifact({
-                  owner: context.repo.owner,
-                  repo: context.repo.name,
-                  artifact_id: resultArtifact.id,
-                  archive_format: 'zip'
-                });
-                require('fs').writeFileSync(`${network}-results.zip`, Buffer.from(download.data));
-              }
-
-              // Download flamegraph artifact
-              const flamegraphArtifact = artifacts.data.artifacts.find(
-                artifact => artifact.name === `flamegraph-${network}`
-              );
-              if (flamegraphArtifact) {
-                const download = await github.rest.actions.downloadArtifact({
-                  owner: context.repo.owner,
-                  repo: context.repo.name,
-                  artifact_id: flamegraphArtifact.id,
-                  archive_format: 'zip'
-                });
-                require('fs').writeFileSync(`${network}-flamegraph.zip`, Buffer.from(download.data));
-              }
-            }
-
-            // Download run metadata (only uploaded once)
-            const metadataArtifact = artifacts.data.artifacts.find(
-              artifact => artifact.name === 'run-metadata'
-            );
-            if (metadataArtifact) {
-              const download = await github.rest.actions.downloadArtifact({
-                owner: context.repo.owner,
-                repo: context.repo.name,
-                artifact_id: metadataArtifact.id,
-                archive_format: 'zip'
-              });
-              require('fs').writeFileSync('metadata.zip', Buffer.from(download.data));
-            }
+          github-token: ${{ secrets.GH_PAT }}
+          run-id: ${{ github.event.workflow_run.id }}
       - name: Extract artifacts
         run: |
+          # The artifacts are downloaded with their names as directories
+          # Move the results files to a consistent location
           for network in ${NETWORKS//,/ }; do
-            if [ -f "${network}-results.zip" ]; then
-              unzip -o "${network}-results.zip" -d "${network}-results"
+            if [ -d "result-${network}" ]; then
+              mkdir -p "${network}-results"
+              mv "result-${network}/results.json" "${network}-results/"
             fi
-            if [ -f "${network}-flamegraph.zip" ]; then
-              unzip -o "${network}-flamegraph.zip" -d "${network}-flamegraph"
+
+            if [ -d "flamegraph-${network}" ]; then
+              mkdir -p "${network}-flamegraph"
+              mv "flamegraph-${network}"/* "${network}-flamegraph/"
             fi
           done
-          if [ -f "metadata.zip" ]; then
-            unzip -o "metadata.zip" -d "metadata"
+
+          # Move run metadata
+          if [ -d "run-metadata" ]; then
+            mkdir -p "metadata"
+            mv run-metadata/* metadata/
           fi
+      # Rest of the workflow remains the same from here
       - name: Organize results
         id: organize
         uses: actions/github-script@v7
