@@ -61,4 +61,6 @@ struct ConfirmationTarget {
     ConfirmationTargetType type;
 };
 
+std::string forecastTypeToString(ForecastType forecastType);
+
 #endif // BITCOIN_POLICY_FORECASTER_UTIL_H

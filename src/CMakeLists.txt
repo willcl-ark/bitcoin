@@ -138,6 +138,7 @@ add_library(bitcoin_common STATIC EXCLUDE_FROM_ALL
   netbase.cpp
   outputtype.cpp
   policy/feerate.cpp
+  policy/forecaster_util.cpp
   policy/policy.cpp
   protocol.cpp
   psbt.cpp
