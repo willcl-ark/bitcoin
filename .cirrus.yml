@@ -196,6 +196,11 @@ task:
   name: 'no wallet, libbitcoinkernel'
   << : *GLOBAL_TASK_TEMPLATE
   persistent_worker:
+    isolation:
+      vetu:
+        image: ubuntu:noble
+        user: admin
+        password: admin
     labels:
       arch: "amd64"
 
