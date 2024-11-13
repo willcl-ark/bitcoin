@@ -196,6 +196,11 @@ task:
   name: 'no wallet, libbitcoinkernel'
   << : *GLOBAL_TASK_TEMPLATE
   persistent_worker:
+    isolation:
+      vetu:
+        image: ghcr.io/cirruslabs/ubuntu-runner-amd64:22.04
+        user: admin
+        password: admin
     labels:
       arch: "amd64"
 
