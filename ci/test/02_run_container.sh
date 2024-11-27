@@ -25,8 +25,7 @@ if [ -z "$DANGER_RUN_CI_ON_HOST" ]; then
   fi
   echo "Creating $CI_IMAGE_NAME_TAG container to run in"
 
-  # export $CI_IMAGE_BUILD_EXTRA_ARGS
-  echo $CI_IMAGE_BUILD_EXTRA_ARGS
+  echo "${!CI_IMAGE_BUILD_EXTRA_ARGS}"
 
   # shellcheck disable=SC2086
   DOCKER_BUILDKIT=1 docker build \
@@ -36,7 +35,7 @@ if [ -z "$DANGER_RUN_CI_ON_HOST" ]; then
       $MAYBE_CPUSET \
       --label="${CI_IMAGE_LABEL}" \
       --tag="${CONTAINER_NAME}" \
-      ${CI_IMAGE_BUILD_EXTRA_ARGS} \
+      ${!CI_IMAGE_BUILD_EXTRA_ARGS} \
       "${BASE_READ_ONLY_DIR}"
 
   docker volume create "${CONTAINER_NAME}_ccache" || true
