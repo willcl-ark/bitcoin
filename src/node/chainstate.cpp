@@ -41,12 +41,17 @@ static ChainstateLoadResult CompleteChainstateInitialization(
     // new BlockTreeDB tries to delete the existing file, which
     // fails if it's still open from the previous loop. Close it first:
     pblocktree.reset();
-    pblocktree = std::make_unique<BlockTreeDB>(DBParams{
-        .path = chainman.m_options.datadir / "blocks" / "index",
-        .cache_bytes = static_cast<size_t>(cache_sizes.block_tree_db),
-        .memory_only = options.block_tree_db_in_memory,
-        .wipe_data = options.wipe_block_tree_db,
-        .options = chainman.m_options.block_tree_db});
+    try {
+        pblocktree = std::make_unique<BlockTreeDB>(DBParams{
+            .path = chainman.m_options.datadir / "blocks" / "index",
+            .cache_bytes = static_cast<size_t>(cache_sizes.block_tree_db),
+            .memory_only = options.block_tree_db_in_memory,
+            .wipe_data = options.wipe_block_tree_db,
+            .options = chainman.m_options.block_tree_db});
+    } catch (dbwrapper_error& err) {
+        LogError("%s\n", err.what());
+        return {ChainstateLoadStatus::FAILURE, _("Error opening block database")};
+    }
 
     if (options.wipe_block_tree_db) {
         pblocktree->WriteReindexing(true);
@@ -95,11 +100,12 @@ static ChainstateLoadResult CompleteChainstateInitialization(
     assert(chainman.m_total_coinstip_cache > 0);
     assert(chainman.m_total_coinsdb_cache > 0);
 
-    // Conservative value which is arbitrarily chosen, as it will ultimately be changed
-    // by a call to `chainman.MaybeRebalanceCaches()`. We just need to make sure
-    // that the sum of the two caches (40%) does not exceed the allowable amount
-    // during this temporary initialization state.
-    double init_cache_fraction = 0.2;
+    // If running with multiple chainstates, limit the cache sizes with a
+    // discount factor. If discounted the actual cache size will be
+    // recalculated by `chainman.MaybeRebalanceCaches()`. The discount factor
+    // is conservatively chosen such that the sum of the caches does not exceed
+    // the allowable amount during this temporary initialization state.
+    double init_cache_fraction = chainman.GetAll().size() > 1 ? 0.2 : 1.0;
 
     // At this point we're either in reindex or we've loaded a useful
     // block tree into BlockIndex()!
@@ -107,10 +113,15 @@ static ChainstateLoadResult CompleteChainstateInitialization(
     for (Chainstate* chainstate : chainman.GetAll()) {
         LogPrintf("Initializing chainstate %s\n", chainstate->ToString());
 
-        chainstate->InitCoinsDB(
-            /*cache_size_bytes=*/chainman.m_total_coinsdb_cache * init_cache_fraction,
-            /*in_memory=*/options.coins_db_in_memory,
-            /*should_wipe=*/options.wipe_chainstate_db);
+        try {
+            chainstate->InitCoinsDB(
+                /*cache_size_bytes=*/chainman.m_total_coinsdb_cache * init_cache_fraction,
+                /*in_memory=*/options.coins_db_in_memory,
+                /*should_wipe=*/options.wipe_chainstate_db);
+        } catch (dbwrapper_error& err) {
+            LogError("%s\n", err.what());
+            return {ChainstateLoadStatus::FAILURE, _("Error opening coins database")};
+        }
 
         if (options.coins_error_cb) {
             chainstate->CoinsErrorCatcher().AddReadErrCallback(options.coins_error_cb);
@@ -236,7 +247,7 @@ ChainstateLoadResult LoadChainstate(ChainstateManager& chainman, const CacheSize
             return {init_status, init_error};
         }
     } else {
-        return {ChainstateLoadStatus::FAILURE, _(
+        return {ChainstateLoadStatus::FAILURE_FATAL, _(
            "UTXO snapshot failed to validate. "
            "Restart to resume normal initial block download, or try loading a different snapshot.")};
     }
