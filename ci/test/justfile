@@ -1,0 +1,9 @@
+[private]
+default:
+    @just --list
+
+base:
+    docker buildx bake base
+
+asan:
+    docker buildx bake asan

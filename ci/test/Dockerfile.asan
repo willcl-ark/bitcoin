@@ -1,0 +1,41 @@
+FROM bitcoin-core-base:latest
+
+# Add any additional environment variables
+RUN export BPFCC_PACKAGE="bpfcc-tools linux-headers-$(uname --kernel-release)"
+ENV LLVM_VERSION="19"
+ENV BITCOIN_CONFIG="\
+ -DWITH_USDT=ON -DWITH_ZMQ=ON -DWITH_BDB=ON -DWARN_INCOMPATIBLE_BDB=OFF -DBUILD_GUI=ON \
+ -DSANITIZERS=address,float-divide-by-zero,integer,undefined \
+ -DCMAKE_C_COMPILER=clang-${LLVM_VERSION} \
+ -DCMAKE_CXX_COMPILER=clang++-${LLVM_VERSION} \
+ -DCMAKE_C_FLAGS='-ftrivial-auto-var-init=pattern' \
+ -DCMAKE_CXX_FLAGS='-ftrivial-auto-var-init=pattern -Wno-error=deprecated-declarations' \
+ -DAPPEND_CXXFLAGS='-std=c++23' \
+ -DAPPEND_CPPFLAGS='-DARENA_DEBUG -DDEBUG_LOCKORDER' \
+"
+
+# For LLVM 19 sources
+RUN wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc \
+    && . /etc/os-release \
+    && echo "deb http://apt.llvm.org/${VERSION_CODENAME}/ llvm-toolchain-${VERSION_CODENAME}-${LLVM_VERSION} main" > "/etc/apt/sources.list.d/llvm-toolchain-${VERSION_CODENAME}-${LLVM_VERSION}.list"
+
+# Install specific packages
+RUN apt-get update && apt-get install --yes \
+    "${BPFCC_PACKAGE}" \
+    clang-${APT_LLVM_VERSION} \
+    libboost-dev \
+    libclang-rt-${LLVM_VERSION}-dev \
+    libdb5.3++-dev \
+    libevent-dev \
+    libqrencode-dev \
+    libsqlite3-dev \
+    libzmq3-dev \
+    llvm-${LLVM_VERSION} \
+    python3-zmq \
+    qtbase5-dev \
+    qttools5-dev \
+    qttools5-dev-tools \
+    systemtap-sdt-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+CMD ["bash"]
