@@ -30,6 +30,10 @@
              (guix packages)
              ((guix utils) #:select (cc-for-target substitute-keyword-arguments)))
 
+(use-modules (guix build-system pyproject))
+(use-modules (gnu packages python-science))
+(use-modules (gnu packages python-xyz)) ; For python-pydantic[-core]
+
 (define-syntax-rule (search-our-patches file-name ...)
   "Return the list of absolute file names corresponding to each
 FILE-NAME found in ./patches relative to the current file."
@@ -157,7 +161,7 @@ chain for " target " development."))
 (define-public python-lief
   (package
     (name "python-lief")
-    (version "0.13.2")
+    (version "0.16.2")
     (source (origin
               (method git-fetch)
               (uri (git-reference
@@ -165,9 +169,7 @@ chain for " target " development."))
                     (commit version)))
               (file-name (git-file-name name version))
               (modules '((guix build utils)))
-              (snippet
-               '(begin
-                  ;; Configure build for Python bindings.
+              (snippet '(begin
                   (substitute* "api/python/config-default.toml"
                     (("(ninja         = )true" all m)
                      (string-append m "false"))
@@ -175,19 +177,25 @@ chain for " target " development."))
                      (string-append m (number->string (parallel-job-count)))))))
               (sha256
                (base32
-                "0y48x358ppig5xp97ahcphfipx7cg9chldj2q5zrmn610fmi4zll"))))
-    (build-system python-build-system)
-    (native-inputs (list cmake-minimal python-tomli))
+                "1c6h8qzd8galm6b7bhjfqv5dq4zslp0gym41qqj3rpm6v57fagz5"))))
+    (build-system pyproject-build-system)
+    (native-inputs (list cmake-minimal
+                        python-tomli
+                        python-scikit-build-core
+                        python-pydantic-2
+                        python-pydantic-core))
     (arguments
      (list
       #:tests? #f                  ;needs network
       #:phases #~(modify-phases %standard-phases
-                   (add-before 'build 'change-directory
-                     (lambda _
-                       (chdir "api/python")))
-                   (replace 'build
-                     (lambda _
-                       (invoke "python" "setup.py" "build"))))))
+         (add-before 'build 'set-pythonpath
+           (lambda _
+             (setenv "PYTHONPATH"
+                     (string-append (string-append (getcwd) "/api/python/backend")
+                                  ":" (or (getenv "PYTHONPATH") "")))))
+         (add-after 'set-pythonpath 'change-directory
+           (lambda _
+             (chdir "api/python"))))))
     (home-page "https://github.com/lief-project/LIEF")
     (synopsis "Library to instrument executable formats")
     (description
