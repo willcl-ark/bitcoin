@@ -48,7 +48,7 @@ fi
 
 ${CI_RETRY_EXE} pip3 install \
   codespell==2.2.6 \
-  lief==0.13.2 \
+  lief==0.16.2 \
   mypy==1.4.1 \
   pyzmq==25.1.0 \
   ruff==0.5.5 \

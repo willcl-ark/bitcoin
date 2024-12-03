@@ -16,12 +16,15 @@
              (gnu packages pkg-config)
              ((gnu packages python) #:select (python-minimal))
              ((gnu packages python-build) #:select (python-tomli))
+             (gnu packages python-science) ; For lief
+             (gnu packages python-xyz) ; For lief (python-pydantic[-core])
              ((gnu packages python-crypto) #:select (python-asn1crypto))
              ((gnu packages tls) #:select (openssl))
              ((gnu packages version-control) #:select (git-minimal))
              (guix build-system cmake)
              (guix build-system gnu)
              (guix build-system python)
+             (guix build-system pyproject)
              (guix build-system trivial)
              (guix download)
              (guix gexp)
@@ -29,10 +32,6 @@
              ((guix licenses) #:prefix license:)
              (guix packages)
              ((guix utils) #:select (cc-for-target substitute-keyword-arguments)))
-
-(use-modules (guix build-system pyproject))
-(use-modules (gnu packages python-science))
-(use-modules (gnu packages python-xyz)) ; For python-pydantic[-core]
 
 (define-syntax-rule (search-our-patches file-name ...)
   "Return the list of absolute file names corresponding to each
