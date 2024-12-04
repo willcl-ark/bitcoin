@@ -25,16 +25,24 @@ curl --proto '=https' --tlsv1.2 -LsSf https://github.com/astral-sh/uv/releases/d
 source /root/.local/bin/env
 
 # Configure venv
-PYTHON_VENV="/.venv"
+export PYTHON_VENV="/.venv"
 uv venv $PYTHON_VENV
-export PATH="${PYTHON_VENV}/bin:${PATH}"
+
+# Set up permanent environment variables
+cat > /etc/profile.d/bitcoin-lint-env.sh << EOF
+export PATH="${PYTHON_VENV}/bin:/root/.local/bin:${PATH}"
+export LINT_RUNNER_PATH="/lint_test_runner"
+EOF
+chmod +x /etc/profile.d/bitcoin-lint-env.sh
+source /etc/profile.d/bitcoin-lint-env.sh
+
+# Test python
 command -v python3
 python3 --version
 
 # Install project dependencies
 uv pip install -r /pyproject.toml
 
-export LINT_RUNNER_PATH="/lint_test_runner"
 if [ ! -d "${LINT_RUNNER_PATH}" ]; then
   ${CI_RETRY_EXE} apt-get install -y cargo
   (
