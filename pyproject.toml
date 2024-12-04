@@ -1,0 +1,29 @@
+[project]
+name = "bitcoin-core"
+version = "0.1"
+dependencies = [
+  "codespell==2.2.6",
+  "lief==0.13.2",
+  "mypy==1.4.1",
+  "pyzmq==25.1.0",
+  "ruff==0.5.5",
+  "vulture==2.6",
+]
+requires-python = "==3.10.*"
+description = "Bitcoin Core test & lint dependencies"
+readme = "README.md"
+license = {file = "COPYING"}
+keywords = ["bitcoin", "core"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Programming Language :: Python :: 3",
+  "Intended Audience :: Developers",
+  "Topic :: Software Development :: Testing",
+  "License :: OSI Approved :: MIT License",
+]
+
+[project.urls]
+Homepage = "https://bitcoincore.org"
+Documentation = "https://readthedocs.org"
+Repository = "https://github.com/bitcoin/bitcoin.git"
+"Bug Tracker" = "https://github.com/bitcoin/bitcoin/issues"
