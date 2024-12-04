@@ -8,6 +8,8 @@ export LC_ALL=C
 
 export CI_RETRY_EXE="/ci_retry --"
 
+set -euxo pipefail
+
 pushd "/"
 
 ${CI_RETRY_EXE} apt-get update
@@ -17,23 +19,20 @@ ${CI_RETRY_EXE} apt-get update
 # - gpg (used by verify-commits)
 ${CI_RETRY_EXE} apt-get install -y curl xz-utils git gpg
 
-PYTHON_PATH="/python_build"
-if [ ! -d "${PYTHON_PATH}/bin" ]; then
-  (
-    ${CI_RETRY_EXE} git clone --depth=1 https://github.com/pyenv/pyenv.git
-    cd pyenv/plugins/python-build || exit 1
-    ./install.sh
-  )
-  # For dependencies see https://github.com/pyenv/pyenv/wiki#suggested-build-environment
-  ${CI_RETRY_EXE} apt-get install -y build-essential libssl-dev zlib1g-dev \
-    libbz2-dev libreadline-dev libsqlite3-dev curl llvm \
-    libncursesw5-dev xz-utils tk-dev libxml2-dev libxmlsec1-dev libffi-dev liblzma-dev \
-    clang
-  env CC=clang python-build "$(cat "/.python-version")" "${PYTHON_PATH}"
-fi
-export PATH="${PYTHON_PATH}/bin:${PATH}"
+# Install uv
+UV_VERSION=0.5.6
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-installer.sh | sh
+source /root/.local/bin/env
+
+# Configure venv
+PYTHON_VENV="/.venv"
+uv venv $PYTHON_VENV
+export PATH="${PYTHON_VENV}/bin:${PATH}"
 command -v python3
 python3 --version
+
+# Install project dependencies
+uv pip install -r /pyproject.toml
 
 export LINT_RUNNER_PATH="/lint_test_runner"
 if [ ! -d "${LINT_RUNNER_PATH}" ]; then
@@ -45,14 +44,6 @@ if [ ! -d "${LINT_RUNNER_PATH}" ]; then
     mv target/debug/test_runner "${LINT_RUNNER_PATH}"
   )
 fi
-
-${CI_RETRY_EXE} pip3 install \
-  codespell==2.2.6 \
-  lief==0.13.2 \
-  mypy==1.4.1 \
-  pyzmq==25.1.0 \
-  ruff==0.5.5 \
-  vulture==2.6
 
 SHELLCHECK_VERSION=v0.8.0
 curl -sL "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" | \

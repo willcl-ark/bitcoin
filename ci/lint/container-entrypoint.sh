@@ -10,7 +10,7 @@ export LC_ALL=C
 # of the mounted bitcoin src dir.
 git config --global --add safe.directory /bitcoin
 
-export PATH="/python_build/bin:${PATH}"
+export PATH="/.venv/bin:/root/.local/bin:${PATH}"
 export LINT_RUNNER_PATH="/lint_test_runner"
 
 if [ -z "$1" ]; then

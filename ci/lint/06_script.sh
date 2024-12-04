@@ -8,6 +8,10 @@ export LC_ALL=C
 
 set -ex
 
+echo "${PATH}"
+command -v python3
+python3 --version
+
 if [ -n "$CIRRUS_PR" ]; then
   COMMIT_RANGE="HEAD~..HEAD"
   if [ "$(git rev-list -1 HEAD)" != "$(git rev-list -1 --merges HEAD)" ]; then
