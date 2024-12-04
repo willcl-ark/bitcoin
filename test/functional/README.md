@@ -22,7 +22,7 @@ don't have test cases for.
 - Use a python linter like flake8 before submitting PRs to catch common style
   nits (eg trailing whitespace, unused imports, etc)
 - The oldest supported Python version is specified in [doc/dependencies.md](/doc/dependencies.md).
-  Consider using [pyenv](https://github.com/pyenv/pyenv), which checks [.python-version](/.python-version),
+  Consider using [uv](https://docs.astral.sh/uv/), which checks [pyproject.toml](/pyproject.toml),
   to prevent accidentally introducing modern syntax from an unsupported Python version.
   The CI linter job also checks this, but [possibly not in all cases](https://github.com/bitcoin/bitcoin/pull/14884#discussion_r239585126).
 - See [the python lint script](/test/lint/lint-python.py) that checks for violations that
