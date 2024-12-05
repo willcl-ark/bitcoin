@@ -8,6 +8,7 @@
 #include <logging.h>
 #include <tinyformat.h>
 #include <util/fs.h>
+#include <util/fs_helpers.h>
 #include <util/translation.h>
 
 #include <algorithm>
@@ -41,6 +42,31 @@ std::optional<ConfigError> InitConfig(ArgsManager& args, SettingsAbortFn setting
 
         // Check for chain settings (Params() calls are only valid after this clause)
         SelectParams(args.GetChainType());
+
+        // Check if we are trying to put the datadir on exFAT on MacOS
+        // This is an upstream issue known to cause bugs, see #28552
+#ifdef __APPLE__
+        struct PathCheck {
+            fs::path path;
+            const char* description;
+        };
+        std::vector<PathCheck> paths_to_check = {
+            {args.GetDataDirNet(), "data directory"},
+            {args.GetBlocksDirPath(), "blocks directory"}
+        };
+        for (const auto& check : paths_to_check) {
+            FSType fs_type = GetFilesystemType(check.path);
+            switch(fs_type) {
+                case FSType::EXFAT:
+                    return ConfigError{ConfigStatus::FAILED, strprintf(_("Specified %s \"%s\" is exFAT which is known to cause corruption on MacOS. See #28552"), check.description, fs::PathToString(check.path))};
+                case FSType::ERROR:
+                    LogPrintf("Warning: Failed to detect filesystem type of %s: %s\n", check.description, fs::PathToString(check.path));
+                    break;
+                default:
+                    break;
+            }
+        }
+#endif
 
         // Create datadir if it does not exist.
         const auto base_path{args.GetDataDirBase()};
