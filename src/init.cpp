@@ -908,6 +908,23 @@ bool AppInitParameterInteraction(const ArgsManager& args)
         InitWarning(warnings);
     }
 
+    // Check if we are running on exFAT on MacOS
+#ifdef __APPLE__
+    std::vector<fs::path> paths_to_check = {args.GetDataDirNet(), args.GetBlocksDirPath()};
+    for (const auto& path : paths_to_check) {
+        FSType fs_type = GetFilesystemType(path);
+        switch(fs_type) {
+            case FSType::EXFAT:
+                return InitError(strprintf(_("Specified directory \"%s\" is exFAT which is known to cause corruption on MacOS."), fs::PathToString(path)));
+            case FSType::ERROR:
+                LogPrintf("Warning: Failed to detect filesystem at %s\n", fs::PathToString(path));
+                break;
+            default:
+                break;
+        }
+    }
+#endif
+
     if (!fs::is_directory(args.GetBlocksDirPath())) {
         return InitError(strprintf(_("Specified blocks directory \"%s\" does not exist."), args.GetArg("-blocksdir", "")));
     }
