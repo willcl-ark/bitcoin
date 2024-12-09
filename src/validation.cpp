@@ -4555,18 +4555,32 @@ bool ChainstateManager::AcceptBlock(const std::shared_ptr<const CBlock>& pblock,
     if (fNewBlock) *fNewBlock = true;
     try {
         FlatFilePos blockPos{};
+        const uint256& block_hash = block.GetHash();
+        LogPrintf("AcceptBlock: Beginning write for block %s height=%d size=%u\n",
+            block_hash.ToString(), pindex->nHeight, ::GetSerializeSize(TX_WITH_WITNESS(block)));
+
         if (dbp) {
             blockPos = *dbp;
+            LogPrintf("AcceptBlock: Using existing blockPos file=%d pos=%d for block %s\n",
+                blockPos.nFile, blockPos.nPos, block_hash.ToString());
             m_blockman.UpdateBlockInfo(block, pindex->nHeight, blockPos);
         } else {
+            LogPrintf("AcceptBlock: Finding new position for block %s\n", block_hash.ToString());
             blockPos = m_blockman.SaveBlockToDisk(block, pindex->nHeight);
             if (blockPos.IsNull()) {
+                LogPrintf("AcceptBlock ERROR: SaveBlockToDisk returned null position for %s\n",
+                    block_hash.ToString());
                 state.Error(strprintf("%s: Failed to find position to write new block to disk", __func__));
                 return false;
             }
+            LogPrintf("AcceptBlock: Wrote block %s to file=%d pos=%d\n",
+                block_hash.ToString(), blockPos.nFile, blockPos.nPos);
         }
         ReceivedBlockTransactions(block, pindex, blockPos);
+        LogPrintf("AcceptBlock: Successfully recorded block %s transactions\n", block_hash.ToString());
+
     } catch (const std::runtime_error& e) {
+        LogPrintf("AcceptBlock ERROR: Runtime error writing block to disk: %s\n", e.what());
         return FatalError(GetNotifications(), state, strprintf(_("System error while saving block to disk: %s"), e.what()));
     }
 

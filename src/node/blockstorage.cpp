@@ -963,24 +963,44 @@ bool BlockManager::FindUndoPos(BlockValidationState& state, int nFile, FlatFileP
     return true;
 }
 
-bool BlockManager::WriteBlockToDisk(const CBlock& block, FlatFilePos& pos) const
-{
-    // Open history file to append
+bool BlockManager::WriteBlockToDisk(const CBlock& block, FlatFilePos& pos) const {
+    const uint256& hash = block.GetHash();
+    LogPrintf("WriteBlockToDisk: Opening file for block %s at %s\n",
+        hash.ToString(), pos.ToString());
+
     AutoFile fileout{OpenBlockFile(pos)};
     if (fileout.IsNull()) {
-        LogError("%s: OpenBlockFile failed\n", __func__);
+        LogPrintf("WriteBlockToDisk ERROR: OpenBlockFile failed for block %s at %s\n",
+            hash.ToString(), pos.ToString());
         return false;
     }
 
-    // Write index header
     unsigned int nSize = GetSerializeSize(TX_WITH_WITNESS(block));
-    fileout << GetParams().MessageStart() << nSize;
+    LogPrintf("WriteBlockToDisk: Writing header for block %s: magic=%s size=%u\n",
+        hash.ToString(), HexStr(GetParams().MessageStart()), nSize);
 
-    // Write block
+    try {
+        fileout << GetParams().MessageStart() << nSize;
+    } catch (const std::exception& e) {
+        LogPrintf("WriteBlockToDisk ERROR: Failed writing header for block %s: %s\n",
+            hash.ToString(), e.what());
+        return false;
+    }
+
     long fileOutPos = fileout.tell();
     pos.nPos = (unsigned int)fileOutPos;
-    fileout << TX_WITH_WITNESS(block);
+    LogPrintf("WriteBlockToDisk: Writing block %s data at file offset %ld\n",
+        hash.ToString(), fileOutPos);
 
+    try {
+        fileout << TX_WITH_WITNESS(block);
+    } catch (const std::exception& e) {
+        LogPrintf("WriteBlockToDisk ERROR: Failed writing block %s data: %s\n",
+            hash.ToString(), e.what());
+        return false;
+    }
+
+    LogPrintf("WriteBlockToDisk: Successfully wrote block %s to disk\n", hash.ToString());
     return true;
 }
 
@@ -1119,21 +1139,30 @@ bool BlockManager::ReadRawBlockFromDisk(std::vector<uint8_t>& block, const FlatF
     return true;
 }
 
-FlatFilePos BlockManager::SaveBlockToDisk(const CBlock& block, int nHeight)
-{
+FlatFilePos BlockManager::SaveBlockToDisk(const CBlock& block, int nHeight) {
+    const uint256& hash = block.GetHash();
     unsigned int nBlockSize = ::GetSerializeSize(TX_WITH_WITNESS(block));
-    // Account for the 4 magic message start bytes + the 4 length bytes (8 bytes total,
-    // defined as BLOCK_SERIALIZATION_HEADER_SIZE)
     nBlockSize += static_cast<unsigned int>(BLOCK_SERIALIZATION_HEADER_SIZE);
+
+    LogPrintf("SaveBlockToDisk: Finding position for block %s size=%u height=%d\n",
+        hash.ToString(), nBlockSize, nHeight);
+
     FlatFilePos blockPos{FindNextBlockPos(nBlockSize, nHeight, block.GetBlockTime())};
     if (blockPos.IsNull()) {
-        LogError("%s: FindNextBlockPos failed\n", __func__);
+        LogPrintf("SaveBlockToDisk ERROR: FindNextBlockPos failed for block %s\n", hash.ToString());
         return FlatFilePos();
     }
+    LogPrintf("SaveBlockToDisk: Got position file=%d pos=%d for block %s\n",
+        blockPos.nFile, blockPos.nPos, hash.ToString());
+
     if (!WriteBlockToDisk(block, blockPos)) {
+        LogPrintf("SaveBlockToDisk ERROR: WriteBlockToDisk failed for block %s at %s\n",
+            hash.ToString(), blockPos.ToString());
         m_opts.notifications.fatalError(_("Failed to write block."));
         return FlatFilePos();
     }
+    LogPrintf("SaveBlockToDisk: Successfully wrote block %s to %s\n",
+        hash.ToString(), blockPos.ToString());
     return blockPos;
 }
 
