@@ -110,6 +110,7 @@ in pkgs.mkShell {
       jq
       linuxKernel.packages.linux_6_6.perf
       perf-tools
+      util-linux
     ];
 
     # Modifies the Nix clang++ wrapper to avoid warning:
