@@ -1,5 +1,5 @@
 # Copyright 0xB10C, willcl-ark
-{ pkgs ? import (fetchTarball "https://github.com/nixos/nixpkgs/archive/nixos-unstable.tar.gz") {},
+{ pkgs ? import (fetchTarball "https://github.com/nixos/nixpkgs/archive/nixos-24.11.tar.gz") {},
   spareCores ? 0,
   withClang ? false,
   withDebug ? false,
