@@ -33,9 +33,6 @@ jobs:
           # Fetch down to the base SHA for the base benchmark comparison as we
           # only checked out to depth 1
           git fetch --depth=1 origin ${{ github.event.pull_request.base.sha }}
-      - uses: cachix/install-nix-action@v27
-        with:
-          nix_path: $NIX_PATH
       - name: Run AssumeUTXO ${{ matrix.network }}
         env:
           TMP_DATADIR: "${{ runner.temp }}/base_datadir"
