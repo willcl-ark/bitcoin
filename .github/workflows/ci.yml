@@ -33,13 +33,21 @@ jobs:
           # Fetch down to the base SHA for the base benchmark comparison as we
           # only checked out to depth 1
           git fetch --depth=1 origin ${{ github.event.pull_request.base.sha }}
+      - name: Setup ccache
+        run: |
+          mkdir -p /data/ccache
+          export CCACHE_DIR=/data/ccache
+          export CCACHE_MAXSIZE=50G
+          ccache -M 50G
+          ccache -s
       - name: Run AssumeUTXO ${{ matrix.network }}
         env:
           TMP_DATADIR: "${{ runner.temp }}/base_datadir"
+          CCACHE_DIR: /data/ccache
         run: |
           env
           mkdir -p "$TMP_DATADIR"
-          nix-shell --command "just run-assumeutxo-${{ matrix.network }}-ci $BASE_SHA $CHECKOUT_COMMIT $TMP_DATADIR $UTXO_PATH ${{ runner.temp }}/results.json"
+          nix-shell --command "CMAKE_C_COMPILER_LAUNCHER=ccache CMAKE_CXX_COMPILER_LAUNCHER=ccache just run-assumeutxo-${{ matrix.network }}-ci $BASE_SHA $CHECKOUT_COMMIT $TMP_DATADIR $UTXO_PATH ${{ runner.temp }}/results.json"
       - uses: actions/upload-artifact@v4
         with:
           name: result-${{ matrix.network }}
