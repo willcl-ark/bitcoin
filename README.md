@@ -1,79 +1,125 @@
-Bitcoin Core integration/staging tree
-=====================================
+# benchcoin
 
-https://bitcoincore.org
+A Bitcoin Core benchmarking fork
 
-For an immediately usable, binary version of the Bitcoin Core software, see
-https://bitcoincore.org/en/download/.
+This repository is a fork of Bitcoin Core that performs automated assumeutxo-based IBD benchmarking.
+It allows you to measure and compare the performance impact of certain types of changes to Bitcoin Core's codebase on a longer-running IBD benchmark, in a (pretty) reproducible fashion.
 
-What is Bitcoin Core?
----------------------
+## Features
 
-Bitcoin Core connects to the Bitcoin peer-to-peer network to download and fully
-validate blocks and transactions. It also includes a wallet and graphical user
-interface, which can be optionally built.
+- Automated IBD benchmarking on pull requests
+- Multiple configurations:
+  - Signet (fast fail test)
+  - Mainnet with default cache
+  - Mainnet with large cache
+- Performance visualizations including:
+  - Flamegraphs for CPU profiling
+  - Time series plots of various metrics
+  - Compare `base` (bitcoin/bitcoin:master) and `head` (PR)
 
-Further information about Bitcoin Core is available in the [doc folder](/doc).
+## Example Flamegraph
 
-License
--------
+Below is an example flamegraph showing CPU utilization during IBD:
 
-Bitcoin Core is released under the terms of the MIT license. See [COPYING](COPYING) for more
-information or see https://opensource.org/licenses/MIT.
+![Example Flamegraph](doc/flamegraph.svg)
 
-Development Process
--------------------
+## How to use it
 
-The `master` branch is regularly built (see `doc/build-*.md` for instructions) and tested, but it is not guaranteed to be
-completely stable. [Tags](https://github.com/bitcoin/bitcoin/tags) are created
-regularly from release branches to indicate new official, stable release versions of Bitcoin Core.
+1. Open a Pull Request against **this repo**
+2. Wait for the bot to comment on your PR after it's finished.
 
-The https://github.com/bitcoin-core/gui repository is used exclusively for the
-development of the GUI. Its master branch is identical in all monotree
-repositories. Release branches and tags do not exist, so please do not fork
-that repository unless it is for development reasons.
+## How it works
 
-The contribution workflow is described in [CONTRIBUTING.md](CONTRIBUTING.md)
-and useful hints for developers can be found in [doc/developer-notes.md](doc/developer-notes.md).
+When you open a pull request against this repository:
 
-Testing
--------
+1. The CI workflow automatically builds both the base and PR versions of bitcoind
+2. Runs IBD benchmarks using assumeutxo snapshots
+3. Records performance metrics and creates various visualizations
+4. Posts results as a comment on your PR
 
-Testing and code review is the bottleneck for development; we get more pull
-requests than we can review and test on short notice. Please be patient and help out by testing
-other people's pull requests, and remember this is a security-critical project where any mistake might cost people
-lots of money.
+The benchmarks test three configurations:
+- Signet
+  - From snapshot @ height 160,000 to height 220,000
+- Mainnet-default: with default (450 MB) dbcache
+  - From snapshot @ height 840,000 to height 855,000
+- Mainnet-large: with 32000 MB dbcache
+  - From snapshot @ height 840,000 to height 855,000
 
-### Automated Testing
+## Benchmark Outputs
 
-Developers are strongly encouraged to write [unit tests](src/test/README.md) for new code, and to
-submit new unit tests for old code. Unit tests can be compiled and run
-(assuming they weren't disabled during the generation of the build system) with: `ctest`. Further details on running
-and extending unit tests can be found in [/src/test/README.md](/src/test/README.md).
+For each benchmark run, you'll get a github pages page with:
 
-There are also [regression and integration tests](/test), written
-in Python.
-These tests can be run (if the [test dependencies](/test) are installed) with: `build/test/functional/test_runner.py`
-(assuming `build` is your build directory).
+- Timing comparisons between base and PR versions
+- CPU flamegraphs showing where time is spent
+- Time series plots showing:
+  - Block height vs time
+  - Cache size vs block height
+  - Cache size vs time
+  - Transaction count vs block height
+  - Coins cache size vs time
+  - LevelDB metrics
+  - Memory pool metrics
 
-The CI (Continuous Integration) systems make sure that every pull request is built for Windows, Linux, and macOS,
-and that unit/sanity tests are run automatically.
+## Local Development
 
-### Manual Quality Assurance (QA) Testing
+To run benchmarks locally (WIP, and Linux-only due to [shell.nix](shell.nix) limitations):
 
-Changes should be tested by somebody other than the developer who wrote the
-code. This is especially important for large or high-risk changes. It is useful
-to add a test plan to the pull request description if testing the changes is
-not straightforward.
+1. Make sure you have [Nix package manager](https://nixos.org/download/) installed
 
-Translations
-------------
+2. Setup the Nix development environment:
+```bash
+nix-shell
+```
 
-Changes to translations as well as new translations can be submitted to
-[Bitcoin Core's Transifex page](https://www.transifex.com/bitcoin/bitcoin/).
+3. Run a local benchmark:
+```bash
+just run-signet
+```
 
-Translations are periodically pulled from Transifex and merged into the git repository. See the
-[translation process](doc/translation_process.md) for details on how this works.
+This will:
+- Create a temporary directory for testing
+- Build both base and PR versions
+- Download the required UTXO snapshot if needed
+- Run the benchmark
+- Generate performance visualizations
 
-**Important**: We do not accept translation changes as GitHub pull requests because the next
-pull from Transifex would automatically overwrite them again.
+## Technical Details
+
+The benchmarking system uses:
+- [Hyperfine](https://github.com/sharkdp/hyperfine) for benchmark timing
+- [Flamegraph](https://github.com/willcl-ark/flamegraph) for CPU profiling
+- [matplotlib](https://matplotlib.org/) for metric visualization
+- [GitHub Actions](https://github.com/features/actions) for CI automation
+
+The system leverages assumeutxo to speed up IBD (to a more interesting height) by loading a snapshot.
+
+We use a custom assumeutxo patch which does introduces two commandline options for assumeutxo, specifically for
+benchmarking. these commands are:
+
+```
+-pausebackgroundsync     - pauses background verification of historical blocks in the background.
+-loadutxosnapshot=<path> - load an assumeutxo snapshot on startup, instead of needing to go through the rpc command.
+                           The node will shutdown immediately after the snapshot has been loaded.
+```
+
+### Runner & seed
+
+The CI runner is self-hosted on a Hetzner AX52 running at the bitcoin-dev-tools organsation level.
+It is running NixOS using configuration found in this repo: [nix-github-runner](https://github.com/bitcoin-dev-tools/nix-github-runner) for easier deployment and reproducibility.
+
+The runner host has 16 cores, with one used for system, one for `flamegraph` (i.e. `perf record`) and 14 dedicated to the Bitcoin Core node under test.
+
+The benchmarking peer on the runner is served blocks over the (real) "internet" (it may be LAN as it's within a single Hetzner region) via a single peer to exercise full IBD codepaths. This naturally may introduce some variance, but it was deemed preferable to running another bitcoin core on the same machine.
+
+This seed peer is another Hetzner VPS in the same region, and its configuration can be found here: [nix-seed-node](https://github.com/bitcoin-dev-tools/nix-seed-node)
+
+## Contributing
+
+1. Fork this repository (or bitcoin/bitcoin and add this as a remote)
+2. Make your changes to Bitcoin Core
+3. Open a pull request **against this repo. NOT bitcoin/bitcoin**
+4. Wait for benchmark results to be posted on your PR here
+
+## License
+
+This project is licensed under the same terms as Bitcoin Core - see the [COPYING](COPYING) file for details.
