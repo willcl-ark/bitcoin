@@ -3,6 +3,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include "sync.h"
 #include <bitcoin-build-config.h> // IWYU pragma: keep
 
 #include <validation.h>
@@ -4493,68 +4494,71 @@ bool ChainstateManager::AcceptBlock(const std::shared_ptr<const CBlock>& pblock,
     const CBlock& block = *pblock;
 
     if (fNewBlock) *fNewBlock = false;
-    AssertLockHeld(cs_main);
-
+    // AssertLockHeld(cs_main);
     CBlockIndex *pindexDummy = nullptr;
     CBlockIndex *&pindex = ppindex ? *ppindex : pindexDummy;
+    {
+        LOCK(cs_main);
 
-    bool accepted_header{AcceptBlockHeader(block, state, &pindex, min_pow_checked)};
-    CheckBlockIndex();
+        bool accepted_header{AcceptBlockHeader(block, state, &pindex, min_pow_checked)};
+        CheckBlockIndex();
 
-    if (!accepted_header)
-        return false;
+        if (!accepted_header)
+            return false;
 
-    // Check all requested blocks that we do not already have for validity and
-    // save them to disk. Skip processing of unrequested blocks as an anti-DoS
-    // measure, unless the blocks have more work than the active chain tip, and
-    // aren't too far ahead of it, so are likely to be attached soon.
-    bool fAlreadyHave = pindex->nStatus & BLOCK_HAVE_DATA;
-    bool fHasMoreOrSameWork = (ActiveTip() ? pindex->nChainWork >= ActiveTip()->nChainWork : true);
-    // Blocks that are too out-of-order needlessly limit the effectiveness of
-    // pruning, because pruning will not delete block files that contain any
-    // blocks which are too close in height to the tip.  Apply this test
-    // regardless of whether pruning is enabled; it should generally be safe to
-    // not process unrequested blocks.
-    bool fTooFarAhead{pindex->nHeight > ActiveHeight() + int(MIN_BLOCKS_TO_KEEP)};
+        // Check all requested blocks that we do not already have for validity and
+        // save them to disk. Skip processing of unrequested blocks as an anti-DoS
+        // measure, unless the blocks have more work than the active chain tip, and
+        // aren't too far ahead of it, so are likely to be attached soon.
+        bool fAlreadyHave = pindex->nStatus & BLOCK_HAVE_DATA;
+        bool fHasMoreOrSameWork = (ActiveTip() ? pindex->nChainWork >= ActiveTip()->nChainWork : true);
+        // Blocks that are too out-of-order needlessly limit the effectiveness of
+        // pruning, because pruning will not delete block files that contain any
+        // blocks which are too close in height to the tip.  Apply this test
+        // regardless of whether pruning is enabled; it should generally be safe to
+        // not process unrequested blocks.
+        bool fTooFarAhead{pindex->nHeight > ActiveHeight() + int(MIN_BLOCKS_TO_KEEP)};
 
-    // TODO: Decouple this function from the block download logic by removing fRequested
-    // This requires some new chain data structure to efficiently look up if a
-    // block is in a chain leading to a candidate for best tip, despite not
-    // being such a candidate itself.
-    // Note that this would break the getblockfrompeer RPC
+        // TODO: Decouple this function from the block download logic by removing fRequested
+        // This requires some new chain data structure to efficiently look up if a
+        // block is in a chain leading to a candidate for best tip, despite not
+        // being such a candidate itself.
+        // Note that this would break the getblockfrompeer RPC
 
-    // TODO: deal better with return value and error conditions for duplicate
-    // and unrequested blocks.
-    if (fAlreadyHave) return true;
-    if (!fRequested) {  // If we didn't ask for it:
-        if (pindex->nTx != 0) return true;    // This is a previously-processed block that was pruned
-        if (!fHasMoreOrSameWork) return true; // Don't process less-work chains
-        if (fTooFarAhead) return true;        // Block height is too high
+        // TODO: deal better with return value and error conditions for duplicate
+        // and unrequested blocks.
+        if (fAlreadyHave) return true;
+        if (!fRequested) {  // If we didn't ask for it:
+            if (pindex->nTx != 0) return true;    // This is a previously-processed block that was pruned
+            if (!fHasMoreOrSameWork) return true; // Don't process less-work chains
+            if (fTooFarAhead) return true;        // Block height is too high
 
-        // Protect against DoS attacks from low-work chains.
-        // If our tip is behind, a peer could try to send us
-        // low-work blocks on a fake chain that we would never
-        // request; don't process these.
-        if (pindex->nChainWork < MinimumChainWork()) return true;
-    }
-
-    const CChainParams& params{GetParams()};
-
-    if (!CheckBlock(block, state, params.GetConsensus()) ||
-        !ContextualCheckBlock(block, state, *this, pindex->pprev)) {
-        if (state.IsInvalid() && state.GetResult() != BlockValidationResult::BLOCK_MUTATED) {
-            pindex->nStatus |= BLOCK_FAILED_VALID;
-            m_blockman.m_dirty_blockindex.insert(pindex);
+            // Protect against DoS attacks from low-work chains.
+            // If our tip is behind, a peer could try to send us
+            // low-work blocks on a fake chain that we would never
+            // request; don't process these.
+            if (pindex->nChainWork < MinimumChainWork()) return true;
         }
-        LogError("%s: %s\n", __func__, state.ToString());
-        return false;
-    }
 
-    // Header is valid/has work, merkle tree and segwit merkle tree are good...RELAY NOW
-    // (but if it does not build on our best tip, let the SendMessages loop relay it)
-    if (!IsInitialBlockDownload() && ActiveTip() == pindex->pprev && m_options.signals) {
-        m_options.signals->NewPoWValidBlock(pindex, pblock);
-    }
+        const CChainParams& params{GetParams()};
+
+        if (!CheckBlock(block, state, params.GetConsensus()) ||
+            !ContextualCheckBlock(block, state, *this, pindex->pprev)) {
+            if (state.IsInvalid() && state.GetResult() != BlockValidationResult::BLOCK_MUTATED) {
+                pindex->nStatus |= BLOCK_FAILED_VALID;
+                m_blockman.m_dirty_blockindex.insert(pindex);
+            }
+            LogError("%s: %s\n", __func__, state.ToString());
+            return false;
+        }
+
+        // Header is valid/has work, merkle tree and segwit merkle tree are good...RELAY NOW
+        // (but if it does not build on our best tip, let the SendMessages loop relay it)
+        if (!IsInitialBlockDownload() && ActiveTip() == pindex->pprev && m_options.signals) {
+            m_options.signals->NewPoWValidBlock(pindex, pblock);
+        }
+
+    } // Unlock cs_main
 
     // Write block to history file
     if (fNewBlock) *fNewBlock = true;
@@ -4570,7 +4574,7 @@ bool ChainstateManager::AcceptBlock(const std::shared_ptr<const CBlock>& pblock,
                 return false;
             }
         }
-        ReceivedBlockTransactions(block, pindex, blockPos);
+        WITH_LOCK(cs_main, ReceivedBlockTransactions(block, pindex, blockPos));
     } catch (const std::runtime_error& e) {
         return FatalError(GetNotifications(), state, strprintf(_("System error while saving block to disk: %s"), e.what()));
     }
@@ -4582,7 +4586,7 @@ bool ChainstateManager::AcceptBlock(const std::shared_ptr<const CBlock>& pblock,
     // the block files may be pruned, so we can just call this on one
     // chainstate (particularly if we haven't implemented pruning with
     // background validation yet).
-    ActiveChainstate().FlushStateToDisk(state, FlushStateMode::NONE);
+    WITH_LOCK(cs_main, ActiveChainstate().FlushStateToDisk(state, FlushStateMode::NONE));
 
     CheckBlockIndex();
 
@@ -4600,7 +4604,7 @@ bool ChainstateManager::ProcessNewBlock(const std::shared_ptr<const CBlock>& blo
 
         // CheckBlock() does not support multi-threaded block validation because CBlock::fChecked can cause data race.
         // Therefore, the following critical section must include the CheckBlock() call as well.
-        LOCK(cs_main);
+        // LOCK(cs_main);
 
         // Skipping AcceptBlock() for CheckBlock() failures means that we will never mark a block as invalid if
         // CheckBlock() fails.  This is protective against consensus failure if there are any unknown forms of block

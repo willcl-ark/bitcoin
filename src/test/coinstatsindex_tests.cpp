@@ -89,16 +89,16 @@ BOOST_FIXTURE_TEST_CASE(coinstatsindex_unclean_shutdown, TestChain100Setup)
         IndexWaitSynced(index, *Assert(m_node.shutdown_signal));
         std::shared_ptr<const CBlock> new_block;
         CBlockIndex* new_block_index = nullptr;
+        const CScript script_pub_key{CScript() << ToByteVector(coinbaseKey.GetPubKey()) << OP_CHECKSIG};
+        const CBlock block = this->CreateBlock({}, script_pub_key, chainstate);
+
+        new_block = std::make_shared<CBlock>(block);
+
+        BlockValidationState state;
+        BOOST_CHECK(CheckBlock(block, state, params.GetConsensus()));
+        BOOST_CHECK(m_node.chainman->AcceptBlock(new_block, state, &new_block_index, true, nullptr, nullptr, true));
         {
-            const CScript script_pub_key{CScript() << ToByteVector(coinbaseKey.GetPubKey()) << OP_CHECKSIG};
-            const CBlock block = this->CreateBlock({}, script_pub_key, chainstate);
-
-            new_block = std::make_shared<CBlock>(block);
-
             LOCK(cs_main);
-            BlockValidationState state;
-            BOOST_CHECK(CheckBlock(block, state, params.GetConsensus()));
-            BOOST_CHECK(m_node.chainman->AcceptBlock(new_block, state, &new_block_index, true, nullptr, nullptr, true));
             CCoinsViewCache view(&chainstate.CoinsTip());
             BOOST_CHECK(chainstate.ConnectBlock(block, state, new_block_index, view));
         }
