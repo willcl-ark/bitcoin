@@ -4,6 +4,7 @@
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 export LC_ALL=C
 set -e -o pipefail
+set -x
 export TZ=UTC
 
 # Although Guix _does_ set umask when building its own packages (in our case,

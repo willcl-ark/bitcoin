@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 export LC_ALL=C
 set -e -o pipefail
+set -x
 
 # shellcheck source=contrib/shell/realpath.bash
 source contrib/shell/realpath.bash
