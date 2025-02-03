@@ -8,7 +8,15 @@ export LC_ALL=C.UTF-8
 
 set -ex
 
+if [[ $CI_IMAGE_NAME_TAG == *centos* ]]; then
+  bash -c "dnf -y install git"
+elif [ "$CI_OS_NAME" != "macos" ]; then
+  ${CI_RETRY_EXE} apt-get update
+  ${CI_RETRY_EXE} bash -c "apt-get install --no-install-recommends --no-upgrade -y git"
+fi
+
 CFG_DONE="ci.base-install-done"  # Use a global git setting to remember whether this script ran to avoid running it twice
+git init
 
 if [ "$(git config --global ${CFG_DONE})" == "true" ]; then
   echo "Skip base install"
