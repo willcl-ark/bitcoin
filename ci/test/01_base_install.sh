@@ -8,13 +8,6 @@ export LC_ALL=C.UTF-8
 
 set -ex
 
-CFG_DONE="ci.base-install-done"  # Use a global git setting to remember whether this script ran to avoid running it twice
-
-if [ "$(git config --global ${CFG_DONE})" == "true" ]; then
-  echo "Skip base install"
-  exit 0
-fi
-
 MAKEJOBS="-j$( nproc )"  # Use nproc, because MAKEJOBS is the default in docker image builds.
 
 if [ -n "$DPKG_ADD_ARCH" ]; then
@@ -104,4 +97,4 @@ if [ -n "$XCODE_VERSION" ] && [ ! -d "${DEPENDS_DIR}/SDKs/${OSX_SDK_BASENAME}" ]
   tar -C "${DEPENDS_DIR}/SDKs" -xf "$OSX_SDK_PATH"
 fi
 
-git config --global ${CFG_DONE} "true"
+git init
