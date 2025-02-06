@@ -16,6 +16,7 @@ mod include_guards;
 mod includes;
 mod lint_tests;
 mod locale_dependence;
+mod python_utf8;
 mod submodules;
 
 use check_doc::lint_doc;
@@ -24,6 +25,7 @@ use include_guards::check_include_guards;
 use includes::lint_includes;
 use lint_tests::check_test_names;
 use locale_dependence::lint_locale_dependence;
+use python_utf8::lint_python_utf8;
 use submodules::lint_submodules;
 
 /// A possible error returned by any of the linters.
@@ -145,6 +147,11 @@ fn get_linter_list() -> Vec<&'static Linter> {
             description: "Check dead code in python files",
             name: "python_dead_code",
             lint_fn: lint_python_dead_code
+        },
+        &Linter {
+            description: "Check utf8 in python files",
+            name: "python_utf8",
+            lint_fn: lint_python_utf8
         },
     ]
 }
