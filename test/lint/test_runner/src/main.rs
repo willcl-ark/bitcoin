@@ -8,8 +8,11 @@ use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::process::{Command, ExitCode, Stdio};
 
+mod check_doc;
 mod circular_dependencies;
 mod ignore_dirs;
+
+use check_doc::lint_doc;
 
 /// A possible error returned by any of the linters.
 ///
@@ -639,18 +642,6 @@ the header. Consider removing the unused include.
         .to_string());
     }
     Ok(())
-}
-
-fn lint_doc() -> LintResult {
-    if Command::new("test/lint/check-doc.py")
-        .status()
-        .expect("command error")
-        .success()
-    {
-        Ok(())
-    } else {
-        Err("".to_string())
-    }
 }
 
 fn lint_markdown() -> LintResult {
