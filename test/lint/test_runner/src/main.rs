@@ -14,12 +14,14 @@ mod ignore_dirs;
 mod include_guards;
 mod includes;
 mod lint_tests;
+mod locale_dependence;
 mod submodules;
 
 use check_doc::lint_doc;
 use include_guards::check_include_guards;
 use includes::lint_includes;
 use lint_tests::check_test_names;
+use locale_dependence::lint_locale_dependence;
 use submodules::lint_submodules;
 
 /// A possible error returned by any of the linters.
@@ -131,6 +133,11 @@ fn get_linter_list() -> Vec<&'static Linter> {
             description: "Check includes",
             name: "includes",
             lint_fn: lint_includes
+        },
+        &Linter {
+            description: "Check locale dependence",
+            name: "locale_dependence",
+            lint_fn: lint_locale_dependence
         },
     ]
 }
