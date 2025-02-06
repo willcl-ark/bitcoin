@@ -97,19 +97,20 @@ fi
 set $tree_actual
 tree_actual_type=$2
 tree_actual_tree=$3
-echo "$DIR in $COMMIT currently refers to $tree_actual_type $tree_actual_tree"
 if [ "d$tree_actual_type" != "dtree" ]; then
+    echo "$DIR in $COMMIT currently refers to $tree_actual_type $tree_actual_tree"
     echo "FAIL: subtree directory $DIR is not a tree in $COMMIT" >&2
     exit 1
 fi
 
 # get the tree at the time of the last subtree update
 tree_commit=$(git show -s --format="%T" "$old")
-echo "$DIR in $COMMIT was last updated in commit $old (tree $tree_commit)"
+last_update="$DIR in $COMMIT was last updated in commit $old (tree $tree_commit)"
 
 # ... and compare the actual tree with it
 if [ "$tree_actual_tree" != "$tree_commit" ]; then
     git diff "$tree_commit" "$tree_actual_tree" >&2
+    echo "$last_update"
     echo "FAIL: subtree directory was touched without subtree merge" >&2
     exit 1
 fi
@@ -129,5 +130,3 @@ if [ "$check_remote" != "0" ]; then
         exit 1
     fi
 fi
-
-echo "GOOD"
