@@ -7,6 +7,9 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::process::{Command, ExitCode, Stdio};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Instant;
 
 mod check_doc;
 mod circular_dependencies;
@@ -50,6 +53,30 @@ struct Linter {
     pub description: &'static str,
     pub name: &'static str,
     pub lint_fn: LintFn,
+}
+
+#[derive(Debug)]
+struct LintFailure {
+    name: String,
+    description: String,
+    error: String,
+}
+
+#[derive(Debug)]
+struct LintStatus {
+    running: Vec<String>,
+    completed: Vec<String>,
+    failures: Vec<LintFailure>,
+}
+
+impl LintStatus {
+    fn new() -> Self {
+        Self {
+            running: Vec::new(),
+            completed: Vec::new(),
+            failures: Vec::new(),
+        }
+    }
 }
 
 fn get_linter_list() -> Vec<&'static Linter> {
@@ -815,7 +842,6 @@ fn main() -> ExitCode {
         let args: Vec<String> = env::args().skip(1).collect();
         parse_lint_args(&args)
     } else {
-        // If no arguments are passed, run all linters.
         get_linter_list()
     };
 
@@ -825,21 +851,92 @@ fn main() -> ExitCode {
         .expect("check_output failed");
     println!("Checking commit range ({commit_range}):\n{commit_log}\n");
 
-    let mut test_failed = false;
-    for linter in linters_to_run {
-        // chdir to root before each lint test
-        env::set_current_dir(&git_root).unwrap();
-        if let Err(err) = (linter.lint_fn)() {
-            println!(
-                "^^^\n{err}\n^---- ⚠️ Failure generated from lint check '{}' ({})!\n\n",
-                linter.name, linter.description,
-            );
-            test_failed = true;
-        }
+    let status = Arc::new(Mutex::new(LintStatus::new()));
+    let git_root = Arc::new(git_root);
+    let total_linters = linters_to_run.len();
+
+    let start_time = Instant::now();
+    println!("Starting {} linters in parallel...\n", total_linters);
+
+    // Spawn threads for each linter
+    let handles: Vec<_> = linters_to_run
+        .iter()
+        .map(|linter| {
+            let git_root = Arc::clone(&git_root);
+            let status = Arc::clone(&status);
+            let name = linter.name.to_string();
+            let description = linter.description.to_string();
+            let lint_fn = linter.lint_fn;
+            let total = total_linters;
+
+            thread::spawn(move || {
+                // Mark linter as running
+                let linter_name = name.clone();
+                {
+                    let mut status = status.lock().unwrap();
+                    status.running.push(linter_name.clone());
+                    let running = status.running.len();
+                    let completed = status.completed.len();
+                    println!(
+                        "Starting: {} ({}/{} running, {} completed)",
+                        linter_name, running, total, completed
+                    );
+                }
+
+                env::set_current_dir(&*git_root).unwrap();
+                let result = (lint_fn)();
+
+                // Update status after completion
+                let mut status = status.lock().unwrap();
+                status.running.retain(|n| n != &linter_name);
+                status.completed.push(linter_name.clone());
+
+                if let Err(error) = result {
+                    status.failures.push(LintFailure {
+                        name,
+                        description,
+                        error,
+                    });
+                }
+
+                let running = status.running.len();
+                let completed = status.completed.len();
+                println!(
+                    "Completed: {} ({}/{} running, {} completed)",
+                    linter_name, running, total, completed
+                );
+            })
+        })
+        .collect();
+
+    // Wait for all threads to complete
+    for handle in handles {
+        handle.join().unwrap();
     }
-    if test_failed {
+
+    let elapsed = start_time.elapsed();
+    let status = status.lock().unwrap();
+
+    // Print all failures
+    if !status.failures.is_empty() {
+        println!("\nLint failures:");
+        for failure in &status.failures {
+            println!(
+                "^^^\n{}\n^---- ⚠️ Failure generated from lint check '{}' ({})!\n",
+                failure.error, failure.name, failure.description,
+            );
+        }
+        println!(
+            "\nCompleted in {:.2?} with {} failures",
+            elapsed,
+            status.failures.len()
+        );
         ExitCode::FAILURE
     } else {
+        println!(
+            "\nAll {} linters passed successfully in {:.2?}!",
+            total_linters, elapsed
+        );
         ExitCode::SUCCESS
     }
 }
