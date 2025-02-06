@@ -8,6 +8,7 @@ use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::process::{Command, ExitCode, Stdio};
 
+mod circular_dependencies;
 mod ignore_dirs;
 
 /// A possible error returned by any of the linters.
@@ -94,6 +95,11 @@ fn get_linter_list() -> Vec<&'static Linter> {
             description: "Run all linters of the form: test/lint/lint-*.py",
             name: "all_python_linters",
             lint_fn: run_all_python_linters
+        },
+        &Linter {
+            description: "Check for circular dependencies",
+            name: "circular_dependencies",
+            lint_fn: lint_circular_dependencies
         },
     ]
 }
@@ -688,6 +694,13 @@ Markdown link errors found:
             Ok(())
         }
         Err(e) => Err(format!("Error running mlc: {}", e)), // Misc errors
+    }
+}
+
+fn lint_circular_dependencies() -> LintResult {
+    match circular_dependencies::check_circular_dependencies() {
+        Ok(()) => Ok(()),
+        Err(e) => Err(e),
     }
 }
 
