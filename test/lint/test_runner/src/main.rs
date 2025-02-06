@@ -16,6 +16,7 @@ mod include_guards;
 mod includes;
 mod lint_tests;
 mod locale_dependence;
+mod python;
 mod python_utf8;
 mod submodules;
 
@@ -25,6 +26,7 @@ use include_guards::check_include_guards;
 use includes::lint_includes;
 use lint_tests::check_test_names;
 use locale_dependence::lint_locale_dependence;
+use python::lint_python;
 use python_utf8::lint_python_utf8;
 use submodules::lint_submodules;
 
@@ -152,6 +154,11 @@ fn get_linter_list() -> Vec<&'static Linter> {
             description: "Check utf8 in python files",
             name: "python_utf8",
             lint_fn: lint_python_utf8
+        },
+        &Linter {
+            description: "Check python files",
+            name: "python",
+            lint_fn: lint_python
         },
     ]
 }

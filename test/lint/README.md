@@ -45,9 +45,9 @@ or `--help`:
 
 | Lint test | Dependency |
 |-----------|:----------:|
-| [`lint-python.py`](/test/lint/lint-python.py) | [lief](https://github.com/lief-project/LIEF)
-| [`lint-python.py`](/test/lint/lint-python.py) | [mypy](https://github.com/python/mypy)
-| [`lint-python.py`](/test/lint/lint-python.py) | [pyzmq](https://github.com/zeromq/pyzmq)
+| [`python.rs`](/test/lint/test_runner/src/python.rs) | [lief](https://github.com/lief-project/LIEF)
+| [`python.rs`](/test/lint/test_runner/src/python.rs) | [mypy](https://github.com/python/mypy)
+| [`python.rs`](/test/lint/test_runner/src/python.rs) | [pyzmq](https://github.com/zeromq/pyzmq)
 | [`dead_code.rs`](/test/lint/test_runner/src/dead_code.rs) | [vulture](https://github.com/jendrikseipp/vulture)
 | [`lint-shell.py`](/test/lint/lint-shell.py) | [ShellCheck](https://github.com/koalaman/shellcheck)
 | [`lint-spelling.py`](/test/lint/lint-spelling.py) | [codespell](https://github.com/codespell-project/codespell)
