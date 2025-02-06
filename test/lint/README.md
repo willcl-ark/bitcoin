@@ -50,7 +50,7 @@ or `--help`:
 | [`python.rs`](/test/lint/test_runner/src/python.rs) | [pyzmq](https://github.com/zeromq/pyzmq)
 | [`dead_code.rs`](/test/lint/test_runner/src/dead_code.rs) | [vulture](https://github.com/jendrikseipp/vulture)
 | [`shell.rs`](/test/lint/test_runner/src/shell.rs) | [ShellCheck](https://github.com/koalaman/shellcheck)
-| [`lint-spelling.py`](/test/lint/lint-spelling.py) | [codespell](https://github.com/codespell-project/codespell)
+| [`spelling.rs`](/test/lint/test_runner/src/spelling.rs) | [codespell](https://github.com/codespell-project/codespell)
 | `py_lint` | [ruff](https://github.com/astral-sh/ruff)
 | markdown link check | [mlc](https://github.com/becheran/mlc)
 

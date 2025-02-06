@@ -20,6 +20,7 @@ mod python;
 mod python_utf8;
 mod qt_translation;
 mod shell;
+mod spelling;
 mod submodules;
 
 use check_doc::lint_doc;
@@ -33,6 +34,7 @@ use python_utf8::lint_python_utf8;
 use qt_translation::lint_qt_translation;
 use shell::lint_shell;
 use shell::lint_shell_locale;
+use spelling::lint_spelling;
 use submodules::lint_submodules;
 
 /// A possible error returned by any of the linters.
@@ -179,6 +181,11 @@ fn get_linter_list() -> Vec<&'static Linter> {
             description: "Check shell script with shellcheck",
             name: "shell",
             lint_fn: lint_shell
+        },
+        &Linter {
+            description: "Check source code spelling",
+            name: "spelling",
+            lint_fn: lint_spelling
         },
     ]
 }
