@@ -19,6 +19,7 @@ mod locale_dependence;
 mod python;
 mod python_utf8;
 mod qt_translation;
+mod shell;
 mod submodules;
 
 use check_doc::lint_doc;
@@ -30,6 +31,8 @@ use locale_dependence::lint_locale_dependence;
 use python::lint_python;
 use python_utf8::lint_python_utf8;
 use qt_translation::lint_qt_translation;
+use shell::lint_shell;
+use shell::lint_shell_locale;
 use submodules::lint_submodules;
 
 /// A possible error returned by any of the linters.
@@ -166,6 +169,16 @@ fn get_linter_list() -> Vec<&'static Linter> {
             description: "Check qt translations",
             name: "qt_translation",
             lint_fn: lint_qt_translation
+        },
+        &Linter {
+            description: "Check shell locale",
+            name: "shell_locale",
+            lint_fn: lint_shell_locale
+        },
+        &Linter {
+            description: "Check shell script with shellcheck",
+            name: "shell",
+            lint_fn: lint_shell
         },
     ]
 }

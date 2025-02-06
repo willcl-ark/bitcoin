@@ -49,7 +49,7 @@ or `--help`:
 | [`python.rs`](/test/lint/test_runner/src/python.rs) | [mypy](https://github.com/python/mypy)
 | [`python.rs`](/test/lint/test_runner/src/python.rs) | [pyzmq](https://github.com/zeromq/pyzmq)
 | [`dead_code.rs`](/test/lint/test_runner/src/dead_code.rs) | [vulture](https://github.com/jendrikseipp/vulture)
-| [`lint-shell.py`](/test/lint/lint-shell.py) | [ShellCheck](https://github.com/koalaman/shellcheck)
+| [`shell.rs`](/test/lint/test_runner/src/shell.rs) | [ShellCheck](https://github.com/koalaman/shellcheck)
 | [`lint-spelling.py`](/test/lint/lint-spelling.py) | [codespell](https://github.com/codespell-project/codespell)
 | `py_lint` | [ruff](https://github.com/astral-sh/ruff)
 | markdown link check | [mlc](https://github.com/becheran/mlc)
