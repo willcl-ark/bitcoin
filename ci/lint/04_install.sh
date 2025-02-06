@@ -47,7 +47,7 @@ if [ ! -d "${LINT_RUNNER_PATH}" ]; then
 fi
 
 ${CI_RETRY_EXE} pip3 install \
-  codespell==2.2.6 \
+  codespell==2.4.0 \
   lief==0.13.2 \
   mypy==1.4.1 \
   pyzmq==25.1.0 \
