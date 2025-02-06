@@ -10,6 +10,7 @@ use std::process::{Command, ExitCode, Stdio};
 
 mod check_doc;
 mod circular_dependencies;
+mod dead_code;
 mod ignore_dirs;
 mod include_guards;
 mod includes;
@@ -18,6 +19,7 @@ mod locale_dependence;
 mod submodules;
 
 use check_doc::lint_doc;
+use dead_code::lint_python_dead_code;
 use include_guards::check_include_guards;
 use includes::lint_includes;
 use lint_tests::check_test_names;
@@ -138,6 +140,11 @@ fn get_linter_list() -> Vec<&'static Linter> {
             description: "Check locale dependence",
             name: "locale_dependence",
             lint_fn: lint_locale_dependence
+        },
+        &Linter {
+            description: "Check dead code in python files",
+            name: "python_dead_code",
+            lint_fn: lint_python_dead_code
         },
     ]
 }
