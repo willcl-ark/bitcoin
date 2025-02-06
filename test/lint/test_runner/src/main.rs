@@ -3,7 +3,6 @@
 // file COPYING or https://opensource.org/license/mit/.
 
 use std::env;
-use std::fs;
 use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::process::{Command, ExitCode, Stdio};
@@ -145,11 +144,6 @@ fn get_linter_list() -> Vec<&'static Linter> {
             description: "Check for trailing whitespace",
             name: "trailing_whitespace",
             lint_fn: lint_trailing_whitespace
-        },
-        &Linter {
-            description: "Run all linters of the form: test/lint/lint-*.py",
-            name: "all_python_linters",
-            lint_fn: run_all_python_linters
         },
         &Linter {
             description: "Check for circular dependencies",
@@ -809,31 +803,6 @@ fn lint_circular_dependencies() -> LintResult {
     match circular_dependencies::check_circular_dependencies() {
         Ok(()) => Ok(()),
         Err(e) => Err(e),
-    }
-}
-
-fn run_all_python_linters() -> LintResult {
-    let mut good = true;
-    let lint_dir = get_git_root().join("test/lint");
-    for entry in fs::read_dir(lint_dir).unwrap() {
-        let entry = entry.unwrap();
-        let entry_fn = entry.file_name().into_string().unwrap();
-        if entry_fn.starts_with("lint-")
-            && entry_fn.ends_with(".py")
-            && !Command::new("python3")
-                .arg(entry.path())
-                .status()
-                .expect("command error")
-                .success()
-        {
-            good = false;
-            println!("^---- ⚠️ Failure generated from {}", entry_fn);
-        }
-    }
-    if good {
-        Ok(())
-    } else {
-        Err("".to_string())
     }
 }
 
