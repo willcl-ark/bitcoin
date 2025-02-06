@@ -268,7 +268,7 @@ BOOST_AUTO_TEST_CASE(natpmp_ipv4)
             2ms, TestOp::RECV,
             {
                 0x00, 0x80, 0x00, 0x00, // version, opcode (external IP), result code (success)
-                0x66, 0xfd, 0xa1, 0xee, // seconds sinds start of epoch
+                0x66, 0xfd, 0xa1, 0xee, // seconds since start of epoch
                 0x01, 0x02, 0x03, 0x04, // external IP address
             }, 0
         },
@@ -284,7 +284,7 @@ BOOST_AUTO_TEST_CASE(natpmp_ipv4)
             2ms, TestOp::RECV,
             {
                 0x00, 0x82, 0x00, 0x00, // version, opcode (mapped TCP)
-                0x66, 0xfd, 0xa1, 0xee, // seconds sinds start of epoch
+                0x66, 0xfd, 0xa1, 0xee, // seconds since start of epoch
                 0x04, 0xd2, 0x04, 0xd2, // internal port, mapped external port
                 0x00, 0x00, 0x01, 0xf4, // mapping lifetime in seconds
             }, 0
@@ -592,7 +592,7 @@ BOOST_AUTO_TEST_CASE(natpmp_protocol_error)
             2ms, TestOp::RECV,
             {
                 0x00, 0x80, 0x00, 0x42, // version, opcode (external IP), result code (*NOT* success)
-                0x66, 0xfd, 0xa1, 0xee, // seconds sinds start of epoch
+                0x66, 0xfd, 0xa1, 0xee, // seconds since start of epoch
                 0x01, 0x02, 0x03, 0x04, // external IP address
             }, 0
         },
@@ -620,7 +620,7 @@ BOOST_AUTO_TEST_CASE(natpmp_protocol_error)
             2ms, TestOp::RECV,
             {
                 0x00, 0x80, 0x00, 0x00, // version, opcode (external IP), result code (success)
-                0x66, 0xfd, 0xa1, 0xee, // seconds sinds start of epoch
+                0x66, 0xfd, 0xa1, 0xee, // seconds since start of epoch
                 0x01, 0x02, 0x03, 0x04, // external IP address
             }, 0
         },
@@ -636,7 +636,7 @@ BOOST_AUTO_TEST_CASE(natpmp_protocol_error)
             2ms, TestOp::RECV,
             {
                 0x00, 0x82, 0x00, 0x43, // version, opcode (mapped TCP)
-                0x66, 0xfd, 0xa1, 0xee, // seconds sinds start of epoch
+                0x66, 0xfd, 0xa1, 0xee, // seconds since start of epoch
                 0x04, 0xd2, 0x04, 0xd2, // internal port, mapped external port
                 0x00, 0x00, 0x01, 0xf4, // mapping lifetime in seconds
             }, 0

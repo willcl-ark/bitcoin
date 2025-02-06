@@ -1798,7 +1798,7 @@ inline NodeRef<Key> Parse(Span<const char> in, const Ctx& ctx)
     // script byte from all leaf nodes, counting it instead whenever a space for a recursive
     // expression is added (through andor, and_*, or_*, thresh). This guarantees that all fragments
     // increment the script_size by at least one, except for:
-    // - "0", "1": these leafs are only a single byte, so their subtracted-from increment is 0.
+    // - "0", "1": these leaves are only a single byte, so their subtracted-from increment is 0.
     //   This is not an issue however, as "space" for them has to be created by combinators,
     //   which do increment script_size.
     // - "v:": the v wrapper adds nothing as in some cases it results in no opcode being added

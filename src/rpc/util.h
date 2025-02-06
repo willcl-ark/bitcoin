@@ -190,7 +190,7 @@ struct RPCArg {
         OBJ_NAMED_PARAMS, //!< Special type that behaves almost exactly like
                           //!< OBJ, defining an options object with a list of
                           //!< pre-defined keys. The only difference between OBJ
-                          //!< and OBJ_NAMED_PARAMS is that OBJ_NAMED_PARMS
+                          //!< and OBJ_NAMED_PARAMS is that OBJ_NAMED_PARAMS
                           //!< also allows the keys to be passed as top-level
                           //!< named parameters, as a more convenient way to pass
                           //!< options to the RPC method without nesting them.

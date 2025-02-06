@@ -413,14 +413,14 @@ namespace util
 #else
     int fd = fileno(fp);
     int rbytes = 0;
-    int eintr_cnter = 0;
+    int eintr_counter = 0;
 
     while (1) {
       int read_bytes = read(fd, buf + rbytes, read_upto - rbytes);
       if (read_bytes == -1) {
         if (errno == EINTR) {
-          if (eintr_cnter >= 50) return -1;
-          eintr_cnter++;
+          if (eintr_counter >= 50) return -1;
+          eintr_counter++;
           continue;
         }
         return -1;

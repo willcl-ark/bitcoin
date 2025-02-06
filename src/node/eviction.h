@@ -62,7 +62,7 @@ struct NodeEvictionCandidate {
  *
  * This helps protect these privacy network peers, which tend to be otherwise
  * disadvantaged under our eviction criteria for their higher min ping times
- * relative to IPv4/IPv6 peers, and favorise the diversity of peer connections.
+ * relative to IPv4/IPv6 peers, and favour the diversity of peer connections.
  */
 void ProtectEvictionCandidatesByRatio(std::vector<NodeEvictionCandidate>& vEvictionCandidates);
 

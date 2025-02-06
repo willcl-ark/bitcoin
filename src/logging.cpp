@@ -19,7 +19,7 @@ using util::Join;
 using util::RemovePrefixView;
 
 const char * const DEFAULT_DEBUGLOGFILE = "debug.log";
-constexpr auto MAX_USER_SETABLE_SEVERITY_LEVEL{BCLog::Level::Info};
+constexpr auto MAX_USER_SETTABLE_SEVERITY_LEVEL{BCLog::Level::Info};
 
 BCLog::Logger& LogInstance()
 {
@@ -495,7 +495,7 @@ void BCLog::Logger::ShrinkDebugFile()
 bool BCLog::Logger::SetLogLevel(std::string_view level_str)
 {
     const auto level = GetLogLevel(level_str);
-    if (!level.has_value() || level.value() > MAX_USER_SETABLE_SEVERITY_LEVEL) return false;
+    if (!level.has_value() || level.value() > MAX_USER_SETTABLE_SEVERITY_LEVEL) return false;
     m_log_level = level.value();
     return true;
 }
@@ -506,7 +506,7 @@ bool BCLog::Logger::SetCategoryLogLevel(std::string_view category_str, std::stri
     if (!GetLogCategory(flag, category_str)) return false;
 
     const auto level = GetLogLevel(level_str);
-    if (!level.has_value() || level.value() > MAX_USER_SETABLE_SEVERITY_LEVEL) return false;
+    if (!level.has_value() || level.value() > MAX_USER_SETTABLE_SEVERITY_LEVEL) return false;
 
     StdLockGuard scoped_lock(m_cs);
     m_category_log_levels[flag] = level.value();

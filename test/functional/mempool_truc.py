@@ -440,13 +440,13 @@ class MempoolTRUC(BitcoinTestFramework):
         assert all([result["package-error"] == expected_error_2children for result in test_accept_2children])
 
         # Extra TRUC transaction does not get incorrectly marked as extra descendant
-        test_accept_1child_with_exra = node.testmempoolaccept([tx_v3_parent["hex"], tx_v3_child_1["hex"], tx_v3_independent["hex"]])
-        assert all([result["allowed"] for result in test_accept_1child_with_exra])
+        test_accept_1child_with_extra = node.testmempoolaccept([tx_v3_parent["hex"], tx_v3_child_1["hex"], tx_v3_independent["hex"]])
+        assert all([result["allowed"] for result in test_accept_1child_with_extra])
 
         # Extra TRUC transaction does not make us ignore the extra descendant
-        test_accept_2children_with_exra = node.testmempoolaccept([tx_v3_parent["hex"], tx_v3_child_1["hex"], tx_v3_child_2["hex"], tx_v3_independent["hex"]])
+        test_accept_2children_with_extra = node.testmempoolaccept([tx_v3_parent["hex"], tx_v3_child_1["hex"], tx_v3_child_2["hex"], tx_v3_independent["hex"]])
         expected_error_extra = f"TRUC-violation, tx {tx_v3_parent['txid']} (wtxid={tx_v3_parent['wtxid']}) would exceed descendant count limit"
-        assert all([result["package-error"] == expected_error_extra for result in test_accept_2children_with_exra])
+        assert all([result["package-error"] == expected_error_extra for result in test_accept_2children_with_extra])
         # Same result if the parent is already in mempool
         node.sendrawtransaction(tx_v3_parent["hex"])
         test_accept_2children_with_in_mempool_parent = node.testmempoolaccept([tx_v3_child_1["hex"], tx_v3_child_2["hex"]])

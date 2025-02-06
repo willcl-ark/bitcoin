@@ -106,7 +106,7 @@ void ProtectEvictionCandidatesByRatio(std::vector<NodeEvictionCandidate>& evicti
 {
     // Protect the half of the remaining nodes which have been connected the longest.
     // This replicates the non-eviction implicit behavior, and precludes attacks that start later.
-    // To favorise the diversity of our peer connections, reserve up to half of these protected
+    // To favour the diversity of our peer connections, reserve up to half of these protected
     // spots for Tor/onion, localhost, I2P, and CJDNS peers, even if they're not longest uptime
     // overall. This helps protect these higher-latency peers that tend to be otherwise
     // disadvantaged under our eviction criteria.

@@ -78,8 +78,8 @@ class NodeNetworkLimitedTest(BitcoinTestFramework):
 
         # Mine blocks and sync the pruned node. Surpass the NETWORK_NODE_LIMITED threshold.
         # Blocks deeper than the threshold are considered "historical blocks"
-        num_historial_blocks = 12
-        self.generate(miner, NODE_NETWORK_LIMITED_MIN_BLOCKS + num_historial_blocks, sync_fun=self.no_op)
+        num_historical_blocks = 12
+        self.generate(miner, NODE_NETWORK_LIMITED_MIN_BLOCKS + num_historical_blocks, sync_fun=self.no_op)
         self.sync_blocks([miner, pruned_node])
 
         # Connect full_node to prune_node and check peers don't disconnect right away.

@@ -193,12 +193,12 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
 
 void BlockAssembler::onlyUnconfirmed(CTxMemPool::setEntries& testSet)
 {
-    for (CTxMemPool::setEntries::iterator iit = testSet.begin(); iit != testSet.end(); ) {
+    for (CTxMemPool::setEntries::iterator it = testSet.begin(); it != testSet.end(); ) {
         // Only test txs not already in the block
-        if (inBlock.count((*iit)->GetSharedTx()->GetHash())) {
-            testSet.erase(iit++);
+        if (inBlock.count((*it)->GetSharedTx()->GetHash())) {
+            testSet.erase(it++);
         } else {
-            iit++;
+            it++;
         }
     }
 }

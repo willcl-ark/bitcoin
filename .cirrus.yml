@@ -35,7 +35,7 @@ env:  # Global defaults
 # ensures that previous containers and artifacts are cleared before each run.
 # This requires installing Podman instead of Docker.
 #
-# Futhermore:
+# Furthermore:
 # - podman-docker-4.1+ is required due to the bugfix in 4.1
 #   (https://github.com/bitcoin/bitcoin/pull/21652#issuecomment-1657098200)
 # - The ./ci/ dependencies (with cirrus-cli) should be installed. One-liner example

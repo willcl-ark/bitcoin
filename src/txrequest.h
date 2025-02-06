@@ -74,7 +74,7 @@
  *
  *     Rationale: random assignments are hard to influence for attackers.
  *
- * Together these rules strike a balance between being fast in non-adverserial conditions and minimizing
+ * Together these rules strike a balance between being fast in non-adversarial conditions and minimizing
  * susceptibility to censorship attacks. An attacker that races the network:
  * - Will be unsuccessful if all preferred connections are honest (and there is at least one preferred connection).
  * - If there are P preferred connections of which Ph>=1 are honest, the attacker can delay us from learning
