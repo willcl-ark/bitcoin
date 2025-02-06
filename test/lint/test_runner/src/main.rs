@@ -11,8 +11,10 @@ use std::process::{Command, ExitCode, Stdio};
 mod check_doc;
 mod circular_dependencies;
 mod ignore_dirs;
+mod submodules;
 
 use check_doc::lint_doc;
+use submodules::lint_submodules;
 
 /// A possible error returned by any of the linters.
 ///
@@ -103,6 +105,11 @@ fn get_linter_list() -> Vec<&'static Linter> {
             description: "Check for circular dependencies",
             name: "circular_dependencies",
             lint_fn: lint_circular_dependencies
+        },
+        &Linter {
+            description: "Check submodules",
+            name: "submodules",
+            lint_fn: lint_submodules
         },
     ]
 }
