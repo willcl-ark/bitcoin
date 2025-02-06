@@ -8,6 +8,8 @@ use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::process::{Command, ExitCode, Stdio};
 
+mod ignore_dirs;
+
 /// A possible error returned by any of the linters.
 ///
 /// The error string should explain the failure type and list all violations.
