@@ -12,11 +12,13 @@ mod check_doc;
 mod circular_dependencies;
 mod ignore_dirs;
 mod include_guards;
+mod includes;
 mod lint_tests;
 mod submodules;
 
 use check_doc::lint_doc;
 use include_guards::check_include_guards;
+use includes::lint_includes;
 use lint_tests::check_test_names;
 use submodules::lint_submodules;
 
@@ -124,6 +126,11 @@ fn get_linter_list() -> Vec<&'static Linter> {
             description: "Check include guards",
             name: "include_guards",
             lint_fn: check_include_guards
+        },
+        &Linter {
+            description: "Check includes",
+            name: "includes",
+            lint_fn: lint_includes
         },
     ]
 }
