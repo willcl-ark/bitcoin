@@ -25,6 +25,7 @@ mod markdown;
 mod python;
 mod python_utf8;
 mod qt_translation;
+mod scripted_diff;
 mod shell;
 mod spelling;
 mod submodules;
@@ -43,6 +44,7 @@ use markdown::lint_markdown;
 use python::lint_python;
 use python_utf8::lint_python_utf8;
 use qt_translation::lint_qt_translation;
+use scripted_diff::lint_scripted_diff;
 use shell::lint_shell;
 use shell::lint_shell_locale;
 use spelling::lint_spelling;
@@ -359,19 +361,6 @@ fn lint_subtree() -> LintResult {
             .success();
     }
     if good {
-        Ok(())
-    } else {
-        Err("".to_string())
-    }
-}
-
-fn lint_scripted_diff() -> LintResult {
-    if Command::new("test/lint/commit-script-check.sh")
-        .arg(commit_range())
-        .status()
-        .expect("command error")
-        .success()
-    {
         Ok(())
     } else {
         Err("".to_string())
