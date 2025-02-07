@@ -29,6 +29,7 @@ mod scripted_diff;
 mod shell;
 mod spelling;
 mod submodules;
+mod subtree;
 mod whitespace;
 
 use assert::{lint_boost_assert, lint_rpc_assert};
@@ -49,6 +50,7 @@ use shell::lint_shell;
 use shell::lint_shell_locale;
 use spelling::lint_spelling;
 use submodules::lint_submodules;
+use subtree::lint_subtree;
 use whitespace::{lint_tabs_whitespace, lint_trailing_whitespace};
 
 /// A possible error returned by any of the linters.
@@ -347,24 +349,6 @@ fn get_pathspecs_exclude_subtrees() -> Vec<String> {
         .iter()
         .map(|s| format!(":(exclude){}", s))
         .collect()
-}
-
-fn lint_subtree() -> LintResult {
-    // This only checks that the trees are pure subtrees, it is not doing a full
-    // check with -r to not have to fetch all the remotes.
-    let mut good = true;
-    for subtree in get_subtrees() {
-        good &= Command::new("test/lint/git-subtree-check.sh")
-            .arg(subtree)
-            .status()
-            .expect("command_error")
-            .success();
-    }
-    if good {
-        Ok(())
-    } else {
-        Err("".to_string())
-    }
 }
 
 fn lint_commit_msg() -> LintResult {
