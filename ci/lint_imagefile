@@ -4,22 +4,40 @@
 
 # See test/lint/README.md for usage.
 
-FROM docker.io/debian:bookworm
+FROM rust:slim-bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LC_ALL=C.UTF-8
+ENV LINT_RUNNER_PATH="/lint_test_runner"
+ENV MLC_BIN=mlc-x86_64-linux
+ENV MLC_VERSION=v0.19.0
 
-COPY ./ci/retry/retry /ci_retry
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+COPY --from=koalaman/shellcheck:v0.8.0 /bin/shellcheck /bin/
 COPY ./.python-version /.python-version
+COPY ./ci/requirements.txt /requirements.txt
 COPY ./ci/lint/container-entrypoint.sh /entrypoint.sh
-COPY ./ci/lint/04_install.sh /install.sh
 COPY ./test/lint/test_runner /test/lint/test_runner
 
-RUN /install.sh && \
-  echo 'alias lint="./ci/lint/06_script.sh"' >> ~/.bashrc && \
-  chmod 755 /entrypoint.sh && \
-  rm -rf /var/lib/apt/lists/*
+RUN apt-get update && \
+    apt-get install -y curl xz-utils git && \
+    rm -rf /var/lib/apt/lists/* &&\
+    # Install mlc
+    curl -sL "https://github.com/becheran/mlc/releases/download/${MLC_VERSION}/${MLC_BIN}" -o "/usr/bin/mlc" && \
+    chmod +x /usr/bin/mlc && \
+    # Setup Python
+    uv python install $(cat /.python-version) && \
+    uv venv --python $(cat /.python-version) && \
+    . /.venv/bin/activate && \
+    uv pip install -r /requirements.txt && \
+    export PATH="/.venv/bin:${PATH}" && \
+    # Build test runner
+    cd /test/lint/test_runner && \
+    cargo build && \
+    mkdir -p ${LINT_RUNNER_PATH} && \
+    mv target/debug/test_runner ${LINT_RUNNER_PATH}
 
-
+ENV PATH="/.venv/bin:${PATH}"
 WORKDIR /bitcoin
+RUN chmod 755 /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
