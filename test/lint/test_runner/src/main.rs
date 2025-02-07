@@ -42,6 +42,7 @@ use commit_message::lint_commit_msg;
 use dead_code::lint_python_dead_code;
 use files::lint_files;
 use filesystem::lint_std_filesystem;
+use ignore_dirs::get_subtrees;
 use include_guards::check_include_guards;
 use includes::lint_includes;
 use includes_build_config::lint_includes_build_config;
@@ -338,25 +339,6 @@ fn commit_range() -> String {
                 .expect("check_output failed")
         )
     })
-}
-
-/// Return all subtree paths
-fn get_subtrees() -> Vec<&'static str> {
-    vec![
-        "src/crc32c",
-        "src/crypto/ctaes",
-        "src/leveldb",
-        "src/minisketch",
-        "src/secp256k1",
-    ]
-}
-
-/// Return the pathspecs to exclude all subtrees
-fn get_pathspecs_exclude_subtrees() -> Vec<String> {
-    get_subtrees()
-        .iter()
-        .map(|s| format!(":(exclude){}", s))
-        .collect()
 }
 
 fn main() -> ExitCode {

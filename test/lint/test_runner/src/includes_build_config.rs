@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use crate::{check_output, get_pathspecs_exclude_subtrees, git, LintResult};
+use crate::{check_output, git, ignore_dirs::get_pathspecs_exclude_subtrees, LintResult};
 
 pub fn lint_includes_build_config() -> LintResult {
     let config_path = "./cmake/bitcoin-build-config.h.in";

@@ -1,18 +1,13 @@
+use crate::ignore_dirs::get_exclude_args;
 use std::process::Command;
 
 const DISABLED_WARNINGS: &[&str] = &["SC2162"]; // read without -r will mangle backslashes
-
-fn get_exclude_args() -> Vec<String> {
-    vec!["src/secp256k1/", "src/minisketch/"]
-        .into_iter()
-        .map(|dir| format!(":(exclude){}", dir))
-        .collect()
-}
+const SHELL_EXCLUDED_DIRS: &[&str] = &["src/secp256k1/", "src/minisketch/"];
 
 fn get_shell_files() -> Result<Vec<String>, String> {
     let output = Command::new("git")
         .args(["ls-files", "--", "*.sh"])
-        .args(get_exclude_args())
+        .args(get_exclude_args(SHELL_EXCLUDED_DIRS))
         .output()
         .map_err(|e| format!("Failed to execute git command: {}", e))?;
 
@@ -81,7 +76,7 @@ pub fn lint_shell() -> Result<(), String> {
     }
 }
 
-fn check_shell_locale_files() -> Result<(), String> {
+pub fn lint_shell_locale() -> Result<(), String> {
     let files = get_shell_files()?;
     let mut exit_code = 0;
 
@@ -113,8 +108,4 @@ fn check_shell_locale_files() -> Result<(), String> {
     } else {
         Ok(())
     }
-}
-
-pub fn lint_shell_locale() -> Result<(), String> {
-    check_shell_locale_files()
 }

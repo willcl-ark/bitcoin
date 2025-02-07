@@ -1,7 +1,6 @@
+use crate::ignore_dirs::get_exclude_args;
 use crate::LintResult;
 use std::process::Command;
-
-use crate::ignore_dirs::SHARED_EXCLUDED_SUBTREES;
 
 const EXCLUDED_DIRS: &[&str] = &[
     "contrib/seeds/*.txt",
@@ -22,21 +21,10 @@ fn check_codespell_install() -> Result<(), String> {
     }
 }
 
-fn get_excluded_paths() -> Vec<String> {
-    EXCLUDED_DIRS
-        .iter()
-        .chain(SHARED_EXCLUDED_SUBTREES.iter())
-        .map(|&s| s.to_string())
-        .collect()
-}
-
 fn get_files() -> Result<Vec<String>, String> {
     let mut cmd = Command::new("git");
     cmd.args(["ls-files"]);
-
-    for path in get_excluded_paths() {
-        cmd.arg(format!(":(exclude){}", path));
-    }
+    cmd.args(get_exclude_args(EXCLUDED_DIRS));
 
     let output = cmd
         .output()
