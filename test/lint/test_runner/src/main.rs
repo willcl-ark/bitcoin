@@ -459,11 +459,25 @@ fn lint_py_lint() -> LintResult {
     )?;
 
     let mut cmd = Command::new(bin_name);
-    cmd.args(["check", &checks]).args(files.lines());
+    cmd.args(["check", &checks])
+        .args(files.lines())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
 
-    match cmd.status() {
-        Ok(status) if status.success() => Ok(()),
-        Ok(_) => Err(format!("`{}` found errors!", bin_name)),
+    match cmd.output() {
+        Ok(output) if output.status.success() => Ok(()),
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let mut error_msg = format!("`{}` found errors!", bin_name);
+            if !stdout.is_empty() {
+                error_msg.push_str(&format!("\n{}", stdout));
+            }
+            if !stderr.is_empty() {
+                error_msg.push_str(&format!("\n{}", stderr));
+            }
+            Err(error_msg)
+        }
         Err(e) if e.kind() == ErrorKind::NotFound => {
             println!(
                 "`{}` was not found in $PATH, skipping those checks.",
