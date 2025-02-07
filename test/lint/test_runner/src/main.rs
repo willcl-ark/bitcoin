@@ -14,6 +14,7 @@ mod check_doc;
 mod circular_dependencies;
 mod dead_code;
 mod files;
+mod filesystem;
 mod ignore_dirs;
 mod include_guards;
 mod includes;
@@ -30,6 +31,7 @@ mod submodules;
 use check_doc::lint_doc;
 use dead_code::lint_python_dead_code;
 use files::lint_files;
+use filesystem::lint_std_filesystem;
 use include_guards::check_include_guards;
 use includes::lint_includes;
 use lint_tests::check_test_names;
@@ -488,31 +490,6 @@ fn lint_py_lint() -> LintResult {
             Ok(())
         }
         Err(e) => Err(format!("Error running `{}`: {}", bin_name, e)),
-    }
-}
-
-fn lint_std_filesystem() -> LintResult {
-    let found = git()
-        .args([
-            "grep",
-            "--line-number",
-            "std::filesystem",
-            "--",
-            "./src/",
-            ":(exclude)src/util/fs.h",
-        ])
-        .status()
-        .expect("command error")
-        .success();
-    if found {
-        Err(r#"
-Direct use of std::filesystem may be dangerous and buggy. Please include <util/fs.h> and use the
-fs:: namespace, which has unsafe filesystem functions marked as deleted.
-            "#
-        .trim()
-        .to_string())
-    } else {
-        Ok(())
     }
 }
 
