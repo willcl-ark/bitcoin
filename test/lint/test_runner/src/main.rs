@@ -37,6 +37,7 @@ mod whitespace;
 
 use assert::{lint_boost_assert, lint_rpc_assert};
 use check_doc::lint_doc;
+use circular_dependencies::lint_circular_dependencies;
 use commit_message::lint_commit_msg;
 use dead_code::lint_python_dead_code;
 use files::lint_files;
@@ -356,13 +357,6 @@ fn get_pathspecs_exclude_subtrees() -> Vec<String> {
         .iter()
         .map(|s| format!(":(exclude){}", s))
         .collect()
-}
-
-fn lint_circular_dependencies() -> LintResult {
-    match circular_dependencies::check_circular_dependencies() {
-        Ok(()) => Ok(()),
-        Err(e) => Err(e),
-    }
 }
 
 fn main() -> ExitCode {

@@ -13,7 +13,7 @@ const EXPECTED_CIRCULAR_DEPENDENCIES: &[&str] = &[
     "index/base -> node/context -> net_processing -> index/blockfilterindex -> index/base",
 ];
 
-pub fn check_circular_dependencies() -> Result<(), String> {
+pub fn lint_circular_dependencies() -> Result<(), String> {
     let git_root = crate::get_git_root();
     let script_path = git_root.join("contrib/devtools/circular-dependencies.py");
     let src_dir = git_root.join("src");
