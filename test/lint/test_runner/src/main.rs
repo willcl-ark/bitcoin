@@ -96,6 +96,11 @@ impl LintStatus {
 fn get_linter_list() -> Vec<&'static Linter> {
     vec![
         &Linter {
+            description: "Check locale dependence",
+            name: "locale_dependence",
+            lint_fn: lint_locale_dependence
+        },
+        &Linter {
             description: "Check that all command line arguments are documented.",
             name: "doc",
             lint_fn: lint_doc
@@ -184,11 +189,6 @@ fn get_linter_list() -> Vec<&'static Linter> {
             description: "Check includes",
             name: "includes",
             lint_fn: lint_includes
-        },
-        &Linter {
-            description: "Check locale dependence",
-            name: "locale_dependence",
-            lint_fn: lint_locale_dependence
         },
         &Linter {
             description: "Check dead code in python files",
