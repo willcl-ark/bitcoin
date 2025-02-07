@@ -26,6 +26,7 @@ mod py_lint;
 mod python;
 mod python_utf8;
 mod qt_translation;
+mod release_notes;
 mod scripted_diff;
 mod shell;
 mod spelling;
@@ -48,6 +49,7 @@ use py_lint::lint_py_lint;
 use python::lint_python;
 use python_utf8::lint_python_utf8;
 use qt_translation::lint_qt_translation;
+use release_notes::lint_doc_release_note_snippets;
 use scripted_diff::lint_scripted_diff;
 use shell::lint_shell;
 use shell::lint_shell_locale;
@@ -352,28 +354,6 @@ fn get_pathspecs_exclude_subtrees() -> Vec<String> {
         .iter()
         .map(|s| format!(":(exclude){}", s))
         .collect()
-}
-
-fn lint_doc_release_note_snippets() -> LintResult {
-    let non_release_notes = check_output(git().args([
-        "ls-files",
-        "--",
-        "doc/release-notes/",
-        ":(exclude)doc/release-notes/*.*.md", // Assume that at least one dot implies a proper release note
-    ]))?;
-    if non_release_notes.is_empty() {
-        Ok(())
-    } else {
-        println!("{non_release_notes}");
-        Err(r#"
-Release note snippets and other docs must be put into the doc/ folder directly.
-
-The doc/release-notes/ folder is for archived release notes of previous releases only. Snippets are
-expected to follow the naming "/doc/release-notes-<PR number>.md".
-            "#
-        .trim()
-        .to_string())
-    }
 }
 
 fn lint_includes_build_config() -> LintResult {
