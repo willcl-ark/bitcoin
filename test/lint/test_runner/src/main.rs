@@ -13,6 +13,7 @@ use std::time::Instant;
 mod assert;
 mod check_doc;
 mod circular_dependencies;
+mod commit_message;
 mod dead_code;
 mod files;
 mod filesystem;
@@ -34,6 +35,7 @@ mod whitespace;
 
 use assert::{lint_boost_assert, lint_rpc_assert};
 use check_doc::lint_doc;
+use commit_message::lint_commit_msg;
 use dead_code::lint_python_dead_code;
 use files::lint_files;
 use filesystem::lint_std_filesystem;
@@ -349,42 +351,6 @@ fn get_pathspecs_exclude_subtrees() -> Vec<String> {
         .iter()
         .map(|s| format!(":(exclude){}", s))
         .collect()
-}
-
-fn lint_commit_msg() -> LintResult {
-    let mut good = true;
-    let commit_hashes = check_output(git().args([
-        "-c",
-        "log.showSignature=false",
-        "log",
-        &commit_range(),
-        "--format=%H",
-    ]))?;
-    for hash in commit_hashes.lines() {
-        let commit_info = check_output(git().args([
-            "-c",
-            "log.showSignature=false",
-            "log",
-            "--format=%B",
-            "-n",
-            "1",
-            hash,
-        ]))?;
-        if let Some(line) = commit_info.lines().nth(1) {
-            if !line.is_empty() {
-                println!(
-                        "The subject line of commit hash {} is followed by a non-empty line. Subject lines should always be followed by a blank line.",
-                        hash
-                    );
-                good = false;
-            }
-        }
-    }
-    if good {
-        Ok(())
-    } else {
-        Err("".to_string())
-    }
 }
 
 fn lint_py_lint() -> LintResult {
