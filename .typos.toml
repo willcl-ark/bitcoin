@@ -1,0 +1,69 @@
+[files]
+extend-exclude = [
+    "contrib/guix/patches/*",
+    "contrib/seeds/*.txt",
+    "depends/*",
+    "doc/release-notes/*",
+    "src/crc32c/*",
+    "src/leveldb/*",
+    "src/minisketch/*",
+    "src/qt/*.qrc",
+    "src/qt/locale/",
+    "src/secp256k1/*",
+    "src/test/fuzz/locale.cpp",
+]
+
+[default]
+extend-ignore-re = [
+    "[a-zA-Z0-9]{12,33}" # ignores most bitcoin-style hashes
+]
+
+extend-ignore-identifiers-re = [
+    "RBF.*",
+    "OP_.*",
+]
+
+[default.extend-words]
+OIF = "OIF"
+WRONLY = "WRONLY"
+afile = "afile"
+amountIn = "amountIn"
+anc = "anc"
+asend = "asend"
+aso = "aso"
+ba = "ba"
+blockin = "blockin"
+bu = "bu"
+cachable = "cachable"
+clen = "clen"
+countr = "countr"
+crypted = "crypted"
+debbugs = "debbugs"
+deques = "deques"
+fo = "fo"
+fpr = "fpr"
+hashIn = "hashIn"
+hights = "hights"
+incomin = "incomin"
+invokable = "invokable"
+lief = "lief"
+mor = "mor"
+nd = "nd"
+nin = "nin"
+nversion = "nversion"
+outIn = "outIn"
+pn = "pn"
+ptd = "ptd"
+re-use = "re-use"
+rela = "rela"
+requestor = "requestor"
+ser = "ser"
+siz = "siz"
+snet = "snet"
+stap = "stap"
+thr = "thr"
+unparseable = "unparseable"
+unser = "unser"
+useable = "useable"
+viewIn = "viewIn"
+wit = "wit"
