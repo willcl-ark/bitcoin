@@ -17,7 +17,7 @@ if [[ "${INSTALL_BCC_TRACING_TOOLS}" == "true" ]]; then
     # Determine the appropriate headers package
     if [[ $KERNEL_RELEASE == *-azure ]]; then
         # For Azure kernels
-        HEADERS_PACKAGE="linux-headers-azure"
+        HEADERS_PACKAGE="linux-headers-generic"
     else
         # For standard kernels
         HEADERS_PACKAGE="linux-headers-$(uname -r)"
