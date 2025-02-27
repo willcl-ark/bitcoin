@@ -311,8 +311,6 @@ jobs:
     runs-on: ${{ github.repository == 'willcl-ark/bitcoin' && 'buildjet-4vcpu-ubuntu-2204' || 'ubuntu-24.04' }}
     if: ${{ vars.SKIP_BRANCH_PUSH != 'true' || github.event_name == 'pull_request' }}
     timeout-minutes: 60
-    container:
-      image: debian:bookworm
     steps:
       - name: Checkout
         uses: actions/checkout@v4
