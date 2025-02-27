@@ -316,11 +316,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
 
-      - name: Unshallow
-        run: git fetch --unshallow --no-tags
+      - name: Install git
+        run: |
+          apt-get update
+          apt-get install -y git
 
       - name: Setup test runner cache
         uses: buildjet/cache@v4
