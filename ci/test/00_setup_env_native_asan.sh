@@ -11,7 +11,20 @@ export CI_IMAGE_NAME_TAG="mirror.gcr.io/ubuntu:24.04"
 # Only install BCC tracing packages in CI. Container has to match the host for BCC to work.
 if [[ "${INSTALL_BCC_TRACING_TOOLS}" == "true" ]]; then
   # Required for USDT functional tests to run
-  BPFCC_PACKAGE="bpfcc-tools linux-headers-$(uname --kernel-release)"
+
+    # Needed for Azure VMs
+    KERNEL_RELEASE=$(uname -r)
+    # Determine the appropriate headers package
+    if [[ $KERNEL_RELEASE == *-azure ]]; then
+        # For Azure kernels
+        HEADERS_PACKAGE="linux-headers-azure"
+    else
+        # For standard kernels
+        HEADERS_PACKAGE="linux-headers-$(uname -r)"
+    fi
+
+    # Set the full package string
+    BPFCC_PACKAGE="bpfcc-tools $HEADERS_PACKAGE"
   export CI_CONTAINER_CAP="--privileged -v /sys/kernel:/sys/kernel:rw"
 else
   BPFCC_PACKAGE=""
