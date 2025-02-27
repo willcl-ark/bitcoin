@@ -305,3 +305,36 @@ jobs:
           path: ${{ env.CCACHE_DIR }}
           # https://github.com/actions/cache/blob/main/tips-and-workarounds.md#update-a-cache
           key: ${{ github.job }}-ccache-${{ github.run_id }}
+
+  lint:
+    name: 'lint'
+    runs-on: ${{ github.repository == 'willcl-ark/bitcoin' && 'buildjet-4vcpu-ubuntu-2204' || 'ubuntu-24.04' }}
+    if: ${{ vars.SKIP_BRANCH_PUSH != 'true' || github.event_name == 'pull_request' }}
+    timeout-minutes: 60
+    container:
+      image: debian:bookworm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Unshallow
+        run: git fetch --unshallow --no-tags
+
+      - name: Setup test runner cache
+        uses: buildjet/cache@v3
+        with:
+          path: /lint_test_runner
+          key: lint-test-runner-${{ hashFiles('test/lint/test_runner') }}
+          restore-keys: lint-test-runner-
+
+      - name: Setup Python cache
+        uses: buildjet/cache@v3
+        with:
+          path: /python_build
+          key: lint-python-${{ hashFiles('.python-version') }}-${{ hashFiles('/etc/os-release') }}
+          restore-keys: lint-python-
+
+      - name: Run lint checks
+        run: ./ci/lint_run_all.sh
