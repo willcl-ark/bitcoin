@@ -24,7 +24,7 @@ env:
 jobs:
   test-each-commit:
     name: 'test each commit'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'willcl-ark/bitcoin' && 'buildjet-4vcpu-ubuntu-2204' || 'ubuntu-24.04' }}
     if: github.event_name == 'pull_request' && github.event.pull_request.commits != 1
     timeout-minutes: 360  # Use maximum time, see https://docs.github.com/en/actions/writing-workflows/workflow-syntax-for-github-actions#jobsjob_idtimeout-minutes. Assuming a worst case time of 1 hour per commit, this leads to a --max-count=6 below.
     env:
@@ -265,7 +265,8 @@ jobs:
 
   asan-lsan-ubsan-integer-no-depends-usdt:
     name: 'ASan + LSan + UBSan + integer, no depends, USDT'
-    runs-on: ubuntu-24.04 # has to match container in ci/test/00_setup_env_native_asan.sh for tracing tools
+    # runs-on: ubuntu-24.04 # has to match container in ci/test/00_setup_env_native_asan.sh for tracing tools
+    runs-on: ${{ github.repository == 'willcl-ark/bitcoin' && 'buildjet-4vcpu-ubuntu-2204' || 'ubuntu-24.04' }}
     if: ${{ vars.SKIP_BRANCH_PUSH != 'true' || github.event_name == 'pull_request' }}
     timeout-minutes: 120
     env:
