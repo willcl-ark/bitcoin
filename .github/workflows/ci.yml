@@ -284,7 +284,7 @@ jobs:
 
       - name: Restore Ccache cache
         id: ccache-cache
-        uses: actions/cache/restore@v4
+        uses: buildjet/cache/restore@v4
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ${{ github.job }}-ccache-${{ github.run_id }}
@@ -299,7 +299,7 @@ jobs:
         run: ./ci/test_run_all.sh
 
       - name: Save Ccache cache
-        uses: actions/cache/save@v4
+        uses: buildjet/cache/save@v4
         if: github.event_name != 'pull_request' && steps.ccache-cache.outputs.cache-hit != 'true'
         with:
           path: ${{ env.CCACHE_DIR }}
@@ -323,14 +323,14 @@ jobs:
         run: git fetch --unshallow --no-tags
 
       - name: Setup test runner cache
-        uses: buildjet/cache@v3
+        uses: buildjet/cache@v4
         with:
           path: /lint_test_runner
           key: lint-test-runner-${{ hashFiles('test/lint/test_runner') }}
           restore-keys: lint-test-runner-
 
       - name: Setup Python cache
-        uses: buildjet/cache@v3
+        uses: buildjet/cache@v4
         with:
           path: /python_build
           key: lint-python-${{ hashFiles('.python-version') }}-${{ hashFiles('/etc/os-release') }}
