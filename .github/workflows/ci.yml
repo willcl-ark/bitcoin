@@ -310,7 +310,7 @@ jobs:
     name: 'lint'
     runs-on: ${{ github.repository == 'willcl-ark/bitcoin' && 'buildjet-4vcpu-ubuntu-2204' || 'ubuntu-24.04' }}
     if: ${{ vars.SKIP_BRANCH_PUSH != 'true' || github.event_name == 'pull_request' }}
-    timeout-minutes: 60
+    timeout-minutes: 61
     steps:
       - name: Checkout
         uses: actions/checkout@v4
