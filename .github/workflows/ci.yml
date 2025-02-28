@@ -272,6 +272,7 @@ jobs:
     env:
       FILE_ENV: "./ci/test/00_setup_env_native_asan.sh"
       DANGER_CI_ON_HOST_FOLDERS: 1
+      DANGER_DOCKER_BUILD_CACHE_HOST_DIR: /docker-cache # TODO: chacnge to use env var probably
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -290,6 +291,14 @@ jobs:
           key: ${{ github.job }}-ccache-${{ github.run_id }}
           restore-keys: ${{ github.job }}-ccache-
 
+      - name: Restore docker build cache
+        id: restore-docker-cache
+        uses: buildjet/cache/restore@v4
+        with:
+          path: ${{ env.DANGER_DOCKER_BUILD_CACHE_HOST_DIR }}
+          key: ${{ github.job }}-docker-${{ github.run_id }}
+          restore-keys: ${{ github.job }}-docker-
+
       - name: Enable bpfcc script
         # In the image build step, no external environment variables are available,
         # so any settings will need to be written to the settings env file:
@@ -305,6 +314,14 @@ jobs:
           path: ${{ env.CCACHE_DIR }}
           # https://github.com/actions/cache/blob/main/tips-and-workarounds.md#update-a-cache
           key: ${{ github.job }}-ccache-${{ github.run_id }}
+
+      - name: Save docker build cache
+        id: save-docker-cache
+        # TODO: gat of "if : merge to master"
+        uses: buildjet/cache/save@v4
+        with:
+          path: ${{ env.DANGER_DOCKER_BUILD_CACHE_HOST_DIR }}
+          key: ${{ github.job }}-docker-${{ github.run_id }}
 
   lint:
     name: 'lint'
