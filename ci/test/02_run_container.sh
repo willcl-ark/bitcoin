@@ -57,6 +57,7 @@ if [ -z "$DANGER_RUN_CI_ON_HOST" ]; then
       --build-arg "CI_IMAGE_NAME_TAG=${CI_IMAGE_NAME_TAG}" \
       --build-arg "FILE_ENV=${FILE_ENV}" \
       $MAYBE_CPUSET \
+      --progress=plain \
       --platform="${CI_IMAGE_PLATFORM}" \
       --label="${CI_IMAGE_LABEL}" \
       --tag="${CONTAINER_NAME}" \
