@@ -46,12 +46,18 @@ if [ -z "$DANGER_RUN_CI_ON_HOST" ]; then
     DOCKER_BUILD_CACHE_ARG="--cache-from type=local,src=${DOCKER_BUILD_CACHE_OLD_DIR} --cache-to type=local,dest=${DOCKER_BUILD_CACHE_NEW_DIR},mode=max"
   fi
 
+  # Create a new builder instance if it doesn't exist
+  docker buildx inspect bitcoin-builder >/dev/null 2>&1 || \
+    docker buildx create --name bitcoin-builder --driver docker-container --use
+
+  # Use the bitcoin-builder for the build
   # shellcheck disable=SC2086
-  DOCKER_BUILDKIT=1 docker build \
+  docker buildx build --builder bitcoin-builder \
       --file "${BASE_READ_ONLY_DIR}/ci/test_imagefile" \
       --build-arg "CI_IMAGE_NAME_TAG=${CI_IMAGE_NAME_TAG}" \
       --build-arg "FILE_ENV=${FILE_ENV}" \
       $MAYBE_CPUSET \
+      --progress=plain \
       --platform="${CI_IMAGE_PLATFORM}" \
       --label="${CI_IMAGE_LABEL}" \
       --tag="${CONTAINER_NAME}" \
