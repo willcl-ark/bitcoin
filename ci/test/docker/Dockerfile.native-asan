@@ -1,0 +1,42 @@
+FROM bitcoin-ci:base
+
+ARG APT_LLVM_V
+ARG BITCOIN_CONFIG
+ARG GOAL
+ARG INSTALL_BCC_TRACING_TOOLS
+ARG NO_DEPENDS
+ARG PACKAGES
+
+# Install LLVM repository
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates gnupg && \
+    curl "https://apt.llvm.org/llvm-snapshot.gpg.key" | tee "/etc/apt/trusted.gpg.d/apt.llvm.org.asc" && \
+    . /etc/os-release && \
+    echo "deb http://apt.llvm.org/${VERSION_CODENAME}/ llvm-toolchain-${VERSION_CODENAME}-${APT_LLVM_V} main" > "/etc/apt/sources.list.d/llvm-toolchain-${VERSION_CODENAME}-${APT_LLVM_V}.list"
+
+# Install BCC tracing packages if needed
+RUN if [ "$INSTALL_BCC_TRACING_TOOLS" = "true" ]; then \
+        apt-get update && \
+        apt-get install -y --no-install-recommends bpfcc-tools linux-headers-$(uname --kernel-release); \
+    fi
+
+# Install job-specific packages
+RUN apt-get update && apt-get install -y --no-install-recommends ${PACKAGES} && \
+    rm -rf /var/lib/apt/lists/*
+
+# Set environment variables
+ENV NO_DEPENDS=1
+ENV GOAL="install"
+ENV BITCOIN_CONFIG=${BITCOIN_CONFIG}
+ENV ASAN_OPTIONS="detect_leaks=1:detect_stack_use_after_return=1:check_initialization_order=1:strict_init_order=1"
+ENV LSAN_OPTIONS="suppressions=/bitcoin/test/sanitizer_suppressions/lsan"
+ENV TSAN_OPTIONS="suppressions=/bitcoin/test/sanitizer_suppressions/tsan:halt_on_error=1:second_deadlock_stack=1"
+ENV UBSAN_OPTIONS="suppressions=/bitcoin/test/sanitizer_suppressions/ubsan:print_stacktrace=1:halt_on_error=1:report_error_type=1"
+
+# Set working directory to where source will be mounted
+WORKDIR /bitcoin
+
+# Define the container capabilities based on BCC tracing tools
+ENV CI_CONTAINER_CAP=${INSTALL_BCC_TRACING_TOOLS:+"--privileged -v /sys/kernel:/sys/kernel:rw":+"--cap-add SYS_PTRACE"}
+
+# Entry point to keep container running when started
+CMD ["bash"]

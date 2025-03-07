@@ -1,0 +1,41 @@
+FROM ubuntu:24.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG MAKEJOBS=-j4
+
+# Install common dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    pkgconf \
+    curl \
+    ca-certificates \
+    ccache \
+    python3 \
+    rsync \
+    git \
+    procps \
+    bison \
+    e2fsprogs \
+    cmake \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create directory structure
+RUN mkdir -p /ci_container_base/depends \
+    /ci_container_base/ci/scratch/ccache \
+    /ci_container_base/ci/scratch/out \
+    /ci_container_base/prev_releases
+
+# Set environment variables
+ENV BASE_ROOT_DIR=/ci_container_base
+ENV DEPENDS_DIR=/ci_container_base/depends
+ENV BASE_SCRATCH_DIR=/ci_container_base/ci/scratch
+ENV BINS_SCRATCH_DIR=/ci_container_base/ci/scratch/bins
+ENV CCACHE_DIR=/ci_container_base/ci/scratch/ccache
+ENV BASE_OUTDIR=/ci_container_base/ci/scratch/out
+ENV PREVIOUS_RELEASES_DIR=/ci_container_base/prev_releases
+
+# Copy retry script
+COPY retry/retry /usr/bin/retry
+RUN chmod +x /usr/bin/retry
+
+WORKDIR /ci_container_base
