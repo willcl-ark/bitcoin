@@ -8,7 +8,7 @@ default:
 
 # Show available jobs
 jobs:
-    @find ./test/config -name "*.env" -type f | sort | sed 's|config/||g' | sed 's|\.env||g'
+    @find ./ci/test/config -name "*.env" -type f | sort | sed 's|config/||g' | sed 's|\.env||g'
 
 # Build all Docker images
 build-all:
@@ -16,15 +16,15 @@ build-all:
 
 # Build a specific Docker image
 build JOB:
-    docker buildx bake --file docker-bake.hcl --file ./test/config/{{JOB}}.env {{JOB}}
+    docker buildx bake --file ./ci/docker-bake.hcl --file ./ci/test/config/{{JOB}}.env {{JOB}}
 
 # Run a job in Docker
 run JOB *ARGS:
-    ./test/scripts/runner.sh --job {{JOB}} -- {{ARGS}}
+    ./ci/test/scripts/runner.sh --job {{JOB}} -- {{ARGS}}
 
 # Run a job on the host system
 run-host JOB *ARGS:
-    ./test/scripts/runner.sh --job {{JOB}} --host -- {{ARGS}}
+    ./ci/test/scripts/runner.sh --job {{JOB}} --host -- {{ARGS}}
 
 # Clean up Docker volumes for a specific job
 clean JOB:
@@ -48,4 +48,4 @@ list-volumes:
 
 # Print the Docker Bake configuration for a job
 print-config JOB:
-    docker buildx bake --file docker-bake.hcl --file ./test/config/{{JOB}}.env --print {{JOB}}
+    docker buildx bake --file ./ci/docker-bake.hcl --file ./ci/test/config/{{JOB}}.env --print {{JOB}}

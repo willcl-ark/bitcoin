@@ -13,10 +13,10 @@ group "default" {
 
 # Base image for Ubuntu 24.04
 target "ubuntu2404-base" {
-  context = "test"
+  context = "ci/test"
   dockerfile = "docker/Dockerfile.ubuntu2404-base"
   output = [{ type = "docker" }]
-  tags = ["bitcoin-ci:base"]
+  tags = ["bitcoin-ci:ubuntu2404-base"]
   args = {
     DEBIAN_FRONTEND = "noninteractive"
     MAKEJOBS = "${MAKEJOBS}"

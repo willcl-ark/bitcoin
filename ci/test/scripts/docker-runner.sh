@@ -39,7 +39,6 @@ if [[ ! -f "${CONFIG_FILE}" ]]; then
 fi
 
 # Source the job configuration to get the variables for this script
-# We don't export them as they'll be passed to Docker via the .env file
 # shellcheck disable=SC1090
 source "${CONFIG_FILE}"
 
@@ -79,13 +78,22 @@ fi
 # Create volumes if they don't exist
 log_info "Creating Docker volumes..."
 docker volume create "bitcoin-ci-${JOB_NAME}-ccache" &>/dev/null || true
-docker volume create "bitcoin-ci-${JOB_NAME}-depends" &>/dev/null || true
+docker volume create "bitcoin-ci-${JOB_NAME}-depends-built" &>/dev/null || true
 docker volume create "bitcoin-ci-${JOB_NAME}-depends-sources" &>/dev/null || true
 docker volume create "bitcoin-ci-${JOB_NAME}-previous-releases" &>/dev/null || true
 
-# Get source directory (current directory)
+# Get source directory (current directory or specified by argument)
 SRC_DIR="$(pwd)"
 log_info "Source directory: ${SRC_DIR}"
+
+# Set MAKEJOBS to nproc-1 if not already set
+# TODO: handle macos & windows...
+# Maybe just set to 4 or something?
+if [[ -z "${MAKEJOBS}" ]]; then
+    MAKEJOBS="-j$(($(nproc) - 1))"
+    export MAKEJOBS
+    log_info "Setting MAKEJOBS to ${MAKEJOBS}"
+fi
 
 # Run the container
 log_info "Running container..."
@@ -93,11 +101,12 @@ docker run --rm -it \
     --platform="${CI_IMAGE_PLATFORM:-linux/amd64}" \
     -v "${SRC_DIR}:/bitcoin:ro" \
     -v "bitcoin-ci-${JOB_NAME}-ccache:/ci_container_base/ci/scratch/ccache" \
-    -v "bitcoin-ci-${JOB_NAME}-depends:/ci_container_base/depends/built" \
+    -v "bitcoin-ci-${JOB_NAME}-depends-built:/ci_container_base/depends/built" \
     -v "bitcoin-ci-${JOB_NAME}-depends-sources:/ci_container_base/depends/sources" \
     -v "bitcoin-ci-${JOB_NAME}-previous-releases:/ci_container_base/prev_releases" \
+    -e MAKEJOBS \
     --name "${CONTAINER_NAME:-bitcoin-ci-${JOB_NAME}}" \
     "bitcoin-ci:${JOB_NAME}" \
-    bash -c "cd /bitcoin && ./ci/test/03_test_script.sh ${EXTRA_ARGS}"
+    bash -c "/bitcoin/ci/test/scripts/copy-source.sh && cd /ci_container_base && ./ci/test/scripts/test.sh ${EXTRA_ARGS}"
 
 log_info "Job ${JOB_NAME} completed successfully"

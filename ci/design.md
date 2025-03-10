@@ -247,13 +247,15 @@ SRC_DIR="$(pwd)"
 
 # Run the container
 docker run --rm -it \
+    --platform="${CI_IMAGE_PLATFORM:-linux/amd64}" \
     -v "${SRC_DIR}:/bitcoin:ro" \
     -v "bitcoin-ci-${JOB_NAME}-ccache:/ci_container_base/ci/scratch/ccache" \
-    -v "bitcoin-ci-${JOB_NAME}-depends:/ci_container_base/depends/built" \
+    -v "bitcoin-ci-${JOB_NAME}-depends-built:/ci_container_base/depends/built" \
+    -v "bitcoin-ci-${JOB_NAME}-depends-sources:/ci_container_base/depends/sources" \
     -v "bitcoin-ci-${JOB_NAME}-previous-releases:/ci_container_base/prev_releases" \
-    --name "bitcoin-ci-${JOB_NAME}" \
+    --name "${CONTAINER_NAME:-bitcoin-ci-${JOB_NAME}}" \
     "bitcoin-ci:${JOB_NAME}" \
-    bash -c "cd /bitcoin && ./ci/test/03_test_script.sh ${EXTRA_ARGS}"
+    bash -c "/bitcoin/ci/test/scripts/copy-source.sh && cd /ci_container_base && ./ci/test/scripts/test.sh ${EXTRA_ARGS}"
 ```
 
 ### 6. Host Runner Script (host-runner.sh)

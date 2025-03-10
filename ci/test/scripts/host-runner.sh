@@ -93,6 +93,6 @@ CI_EXEC() {
 export -f CI_EXEC
 
 log_info "Running test script..."
-"${BASE_ROOT_DIR}/ci/test/03_test_script.sh" ${EXTRA_ARGS}
+"${BASE_ROOT_DIR}/ci/test/scripts/test.sh" ${EXTRA_ARGS}
 
 log_info "Job ${JOB_NAME} completed successfully"

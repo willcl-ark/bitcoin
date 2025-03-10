@@ -1,4 +1,4 @@
-FROM bitcoin-ci:base
+FROM bitcoin-ci:ubuntu2404-base
 
 ARG APT_LLVM_V
 ARG BITCOIN_CONFIG
@@ -23,7 +23,7 @@ RUN if [ "$INSTALL_BCC_TRACING_TOOLS" = "true" ]; then \
 RUN apt-get update && apt-get install -y --no-install-recommends ${PACKAGES} && \
     rm -rf /var/lib/apt/lists/*
 
-# Set environment variables
+# Environment variables
 ENV NO_DEPENDS=1
 ENV GOAL="install"
 ENV BITCOIN_CONFIG=${BITCOIN_CONFIG}
@@ -38,5 +38,4 @@ WORKDIR /bitcoin
 # Define the container capabilities based on BCC tracing tools
 ENV CI_CONTAINER_CAP=${INSTALL_BCC_TRACING_TOOLS:+"--privileged -v /sys/kernel:/sys/kernel:rw":+"--cap-add SYS_PTRACE"}
 
-# Entry point to keep container running when started
 CMD ["bash"]
