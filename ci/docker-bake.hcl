@@ -35,8 +35,10 @@ target "native-asan" {
   }
 }
 
+################################################################################
 # Dummy global variables
-# These are evaluated for all targets so we add them here to avoid haveing to
+################################################################################
+# These are evaluated for all targets so we add them here to avoid having to
 # add them to all *.env files
 variable "MAKEJOBS" {
   default = "-j4"

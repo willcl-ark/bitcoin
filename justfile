@@ -19,12 +19,12 @@ build JOB:
     docker buildx bake --file ./ci/docker-bake.hcl --file ./ci/test/config/{{JOB}}.env {{JOB}}
 
 # Run a job in Docker
-run JOB *ARGS:
-    ./ci/test/scripts/runner.sh --job {{JOB}} -- {{ARGS}}
+run JOB *ARGS: (build JOB)
+    MAKEJOBS=-j{{ num_cpus()}} ./ci/test/scripts/runner.sh --job {{JOB}} -- {{ARGS}}
 
 # Run a job on the host system
 run-host JOB *ARGS:
-    ./ci/test/scripts/runner.sh --job {{JOB}} --host -- {{ARGS}}
+    MAKEJOBS=-j{{ num_cpus()}} ./ci/test/scripts/runner.sh --job {{JOB}} --host -- {{ARGS}}
 
 # Clean up Docker volumes for a specific job
 clean JOB:

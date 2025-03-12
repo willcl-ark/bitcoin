@@ -86,11 +86,9 @@ docker volume create "bitcoin-ci-${JOB_NAME}-previous-releases" &>/dev/null || t
 SRC_DIR="$(pwd)"
 log_info "Source directory: ${SRC_DIR}"
 
-# Set MAKEJOBS to nproc-1 if not already set
-# TODO: handle macos & windows...
-# Maybe just set to 4 or something?
+# Set MAKEJOBS to something not-terrible if not already set
 if [[ -z "${MAKEJOBS}" ]]; then
-    MAKEJOBS="-j$(($(nproc) - 1))"
+    MAKEJOBS="-j4)"
     export MAKEJOBS
     log_info "Setting MAKEJOBS to ${MAKEJOBS}"
 fi
@@ -105,6 +103,7 @@ docker run --rm -it \
     -v "bitcoin-ci-${JOB_NAME}-depends-sources:/ci_container_base/depends/sources" \
     -v "bitcoin-ci-${JOB_NAME}-previous-releases:/ci_container_base/prev_releases" \
     -e MAKEJOBS \
+    --env-file "./ci/test/config/${JOB_NAME}.env" \
     --name "${CONTAINER_NAME:-bitcoin-ci-${JOB_NAME}}" \
     "bitcoin-ci:${JOB_NAME}" \
     bash -c "/bitcoin/ci/test/scripts/copy-source.sh && cd /ci_container_base && ./ci/test/scripts/test.sh ${EXTRA_ARGS}"
