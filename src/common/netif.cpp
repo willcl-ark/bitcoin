@@ -59,15 +59,34 @@ std::optional<CNetAddr> QueryDefaultGatewayImpl(sa_family_t family)
     request.hdr.nlmsg_type = RTM_GETROUTE;
     request.hdr.nlmsg_flags = NLM_F_REQUEST;
 #ifdef __linux__
-    // Linux IPv4 / IPv6 - this must be present, otherwise no gateway is found
-    // FreeBSD IPv4 - does not matter, the gateway is found with or without this
-    // FreeBSD IPv6 - this must be absent, otherwise no gateway is found
-    request.hdr.nlmsg_flags |= NLM_F_DUMP;
+    // Use a specific destination instead of NLM_F_DUMP to handle systems (e.g.
+    // Tailscale) that setup custom routing tables better.
+    // This is like how `ip route show` works.
+    if (family == AF_INET) {
+        // RFC 5737 TEST-NET-1 documentation address (192.0.2.0/24).
+        static const unsigned char ipv4_dst[4] = {192, 0, 2, 1}; // 192.0.2.1
+        std::memcpy(request.dst_data, ipv4_dst, sizeof(ipv4_dst));
+        request.data.rtm_dst_len = 32; // Full-sized IPv4 address.
+    } else if (family == AF_INET6) {
+        // RFC 3849 documentation prefix 2001:DB8::/32.
+        static const unsigned char ipv6_dst[16] = {
+            0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01
+        };
+        std::memcpy(request.dst_data, ipv6_dst, sizeof(ipv6_dst));
+        request.data.rtm_dst_len = 128; // Full-sized IPv6 address.
+    }
+#else
+    // FreeBSD IPv4 - The gateway is found with or without NLM_F_DUMP.
+    // FreeBSD IPv6 - NLM_F_DUMP must be absent, otherwise no gateway is found.
+    if (family != AF_INET6) {
+        request.hdr.nlmsg_flags |= NLM_F_DUMP;
+    }
+    request.data.rtm_dst_len = 0; // Prefix length.
 #endif
     request.hdr.nlmsg_len = NLMSG_LENGTH(sizeof(rtmsg) + sizeof(nlattr) + dst_data_len);
     request.hdr.nlmsg_seq = 0; // Sequence number, used to match which reply is to which request. Irrelevant for us because we send just one request.
     request.data.rtm_family = family;
-    request.data.rtm_dst_len = 0; // Prefix length.
 #ifdef __FreeBSD__
     // Linux IPv4 / IPv6 this must be absent, otherwise no gateway is found
     // FreeBSD IPv4 - does not matter, the gateway is found with or without this
