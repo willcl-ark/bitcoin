@@ -1373,6 +1373,12 @@ void PeerManagerImpl::FindNextBlocksToDownload(const Peer& peer, unsigned int co
         state->pindexLastCommonBlock = m_chainman.ActiveChain()[std::min(state->pindexBestKnownBlock->nHeight, m_chainman.ActiveChain().Height())];
     }
 
+    // If our tip has advanced beyond pindexLastCommonBlock, move it ahead to the tip. We don't need to download any blocks in between, and skipping ahead here
+    // allows us to determine nWindowEnd better.
+    if (m_chainman.ActiveHeight() > state->pindexLastCommonBlock->nHeight && state->pindexBestKnownBlock->GetAncestor(m_chainman.ActiveHeight()) == m_chainman.ActiveTip()) {
+        state->pindexLastCommonBlock = m_chainman.ActiveTip();
+    }
+
     // If the peer reorganized, our previous pindexLastCommonBlock may not be an ancestor
     // of its current tip anymore. Go back enough to fix that.
     state->pindexLastCommonBlock = LastCommonAncestor(state->pindexLastCommonBlock, state->pindexBestKnownBlock);
