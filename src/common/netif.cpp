@@ -11,9 +11,11 @@
 #include <util/check.h>
 #include <util/sock.h>
 #include <util/syserror.h>
+#include <util/time.h>
 
 #if defined(__linux__)
 #include <linux/rtnetlink.h>
+#include <thread>
 #elif defined(__FreeBSD__)
 #include <osreldate.h>
 #if __FreeBSD_version >= 1400000
@@ -38,6 +40,8 @@ namespace {
 
 // Good for responses containing ~ 10,000-15,000 routes.
 static constexpr ssize_t NETLINK_MAX_RESPONSE_SIZE{1'048'576};
+static constexpr int NETLINK_MAX_RETRIES{10};
+static constexpr auto NETLINK_REQUEST_TIMEOUT{std::chrono::seconds(10)};
 
 std::optional<CNetAddr> QueryDefaultGatewayImpl(sa_family_t family)
 {
@@ -90,13 +94,29 @@ std::optional<CNetAddr> QueryDefaultGatewayImpl(sa_family_t family)
     ssize_t total_bytes_read{0};
     bool done{false};
     bool multi_part{false};
+    auto start{std::chrono::steady_clock::now()};
     while (!done) {
-        ssize_t recv_result;
-        do {
+        if (std::chrono::steady_clock::now() - start > NETLINK_REQUEST_TIMEOUT) {
+            LogPrintLevel(BCLog::NET, BCLog::Level::Warning, "Netlink query timed out after %zu bytes received\n", total_bytes_read);
+            return std::nullopt;
+        }
+
+        ssize_t recv_result{-1};
+        for (int retries = 0; retries < NETLINK_MAX_RETRIES; retries++) {
             recv_result = sock->Recv(response, sizeof(response), 0);
-        } while (recv_result < 0 && (errno == EINTR || errno == EAGAIN));
+
+            if (recv_result >= 0 || (errno != EINTR && errno != EAGAIN)) {
+                break; // Success or non-retryable error
+            }
+
+            if (errno == EAGAIN) {
+                // Avoid tight loops
+                std::this_thread::sleep_for(std::chrono::milliseconds(std::min(10 << retries, 50)));
+            }
+        }
+
         if (recv_result < 0) {
-            LogPrintLevel(BCLog::NET, BCLog::Level::Error, "recv() from netlink socket: %s\n", NetworkErrorString(errno));
+            LogPrintLevel(BCLog::NET, BCLog::Level::Error, "recv() from netlink socket failed after %d retries: %s\n", NETLINK_MAX_RETRIES, NetworkErrorString(errno));
             return std::nullopt;
         }
 
