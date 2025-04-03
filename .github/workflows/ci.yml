@@ -38,52 +38,14 @@ jobs:
     steps:
       - name: Determine fetch depth
         run: echo "FETCH_DEPTH=$((${{ github.event.pull_request.commits }} + 2))" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: ${{ env.FETCH_DEPTH }}
+          ref: master
 
-      - name: Get list of commits to test
-        id: commit-list
+      - name: Test each commit
         run: |
-          git config user.email "ci@example.com"
-          git config user.name "CI"
-          git switch -c pr
-          git fetch origin master
-          git checkout master
-          git merge --no-commit  pr
-          MERGE_BASE=$(git merge-base ${{ github.event.pull_request.base.sha }} HEAD^1)
-          # Drop the top commit (last in the list) because it would be wasteful to rerun tests on the PR head commit that are already run by other jobs.
-          COMMITS=$(git rev-list --max-count=${{ env.MAX_COUNT }} --reverse ${MERGE_BASE}..${{ github.event.pull_request.head.sha }} | head -n -1)
-
-          if [ -z "$COMMITS" ]; then
-            echo "All commits filterd out. This probably indicates an error in the merge base or commit list calculations";
-            exit 1
-          fi
-
-          echo "commits=$(echo "$COMMITS")" >> "$GITHUB_OUTPUT"
-          echo "Commits to be tested(s):"
-          echo "$COMMITS"
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang ccache build-essential cmake ninja-build pkgconf python3-zmq libevent-dev libboost-dev libsqlite3-dev libdb++-dev systemtap-sdt-dev libzmq3-dev qt6-base-dev qt6-tools-dev qt6-l10n-tools libqrencode-dev
-
-      - name: Build and test commit(s)
-        run: |
-          COMMITS="${{ steps.commit-list.outputs.commits }}"
-          echo "$COMMITS" | while read -r COMMIT; do
-            echo "Testing commit $COMMIT"
-            git checkout "$COMMIT" || { echo "Failed to checkout $COMMIT"; exit 1; }
-            # Use clang++, because it is a bit faster and uses less memory than g++
-            CC=clang CXX=clang++ cmake -B build -DWERROR=ON -DWITH_ZMQ=ON -DBUILD_GUI=ON -DBUILD_BENCH=ON -DBUILD_FUZZ_BINARY=ON -DWITH_BDB=ON -DWITH_USDT=ON -DCMAKE_CXX_FLAGS='-Wno-error=unused-member-function' || exit 1
-            cmake --build build -j $(nproc) || exit 1
-            ctest --output-on-failure --stop-on-failure --test-dir build -j $(nproc) || exit 1
-            ./build/test/functional/test_runner.py -j $(( $(nproc) * 2 )) --combinedlogslen=99999999 || exit 1
-            echo "Tests passed for commit $COMMIT"
-            rm -Rf build
-          done
+          ./.github/ci-test-each-commit.sh ${{ github.event.pull_request.base.sha }} ${{ github.event.pull_request.head.sha }} ${{ env.MAX_COUNT }}
         shell: bash
 
   # macos-native-arm64:
