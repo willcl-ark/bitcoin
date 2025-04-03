@@ -40,15 +40,19 @@ jobs:
         run: echo "FETCH_DEPTH=$((${{ github.event.pull_request.commits }} + 2))" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: ${{ env.FETCH_DEPTH }}
 
       - name: Get list of commits to test
         id: commit-list
         run: |
-          git fetch origin ${{ github.event.pull_request.base.ref }} --depth=1
-          # The default actions/checkout@v4 uses PR merge branch refs/pull/PULL_REQUEST_NUMBER/merge, a synthetic merge commit created by github to simulate merging PR branch into master.
-          # Therefore use `HEAD^2` in the merge-base calculation
-          MERGE_BASE=$(git merge-base ${{ github.event.pull_request.base.sha }} HEAD^2)
+          git config user.email "ci@example.com"
+          git config user.name "CI"
+          git switch -c pr
+          git fetch origin master
+          git checkout master
+          git merge --no-commit  pr
+          MERGE_BASE=$(git merge-base ${{ github.event.pull_request.base.sha }} HEAD^1)
           # Drop the top commit (last in the list) because it would be wasteful to rerun tests on the PR head commit that are already run by other jobs.
           COMMITS=$(git rev-list --max-count=${{ env.MAX_COUNT }} --reverse ${MERGE_BASE}..${{ github.event.pull_request.head.sha }} | head -n -1)
 
