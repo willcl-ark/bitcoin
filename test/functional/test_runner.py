@@ -378,6 +378,7 @@ BASE_SCRIPTS = [
     'mempool_datacarrier.py',
     'feature_blocktree_migration.py',
     'feature_blocktree_corruption.py',
+    'feature_blocktree_lock.py',
     'feature_coinstatsindex.py',
     'feature_coinstatsindex_compatibility.py',
     'wallet_orphanedreward.py',

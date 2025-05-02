@@ -207,6 +207,18 @@ typedef struct btck_Context btck_Context;
 typedef struct btck_BlockTreeEntry btck_BlockTreeEntry;
 
 /**
+ * Opaque data structure for read-only access to the block tree store and block
+ * files.
+ *
+ * This object loads a snapshot of the block index without opening the
+ * chainstate database. It can be used while another process is writing to the
+ * block tree store. The entries returned by this object are valid for the
+ * reader's lifetime and represent the block index loaded when the reader was
+ * created. No active-chain view is exposed by this object.
+ */
+typedef struct btck_BlockTreeReader btck_BlockTreeReader;
+
+/**
  * Opaque data structure for holding options for creating a new chainstate
  * manager.
  *
@@ -1195,6 +1207,97 @@ BITCOINKERNEL_API const btck_BlockTreeEntry* btck_block_tree_entry_get_ancestor(
 
 ///@}
 
+/** @name BlockTreeReader
+ * Functions for read-only block tree and block file access.
+ */
+///@{
+
+/**
+ * @brief Create a read-only block tree reader.
+ *
+ * Opens the block tree store and block files without opening the chainstate
+ * database or acquiring the block tree writer lock. The block index entries
+ * visible through this reader are fixed at creation time. Block and undo data
+ * reads use the positions in those entries and may fail if the entry is
+ * header-only or the referenced files are missing or pruned.
+ *
+ * @param[in] context          Non-null, supplies chain parameters and logging context.
+ * @param[in] data_directory   Path string of the chain data directory containing blocks/index.
+ * @param[in] blocks_directory Path string of the directory containing the block data.
+ * @return                     The allocated block tree reader, or null on error.
+ */
+BITCOINKERNEL_API btck_BlockTreeReader* BITCOINKERNEL_WARN_UNUSED_RESULT btck_block_tree_reader_create(
+    const btck_Context* context,
+    const char* data_directory,
+    size_t data_directory_len,
+    const char* blocks_directory,
+    size_t blocks_directory_len) BITCOINKERNEL_ARG_NONNULL(1);
+
+/**
+ * @brief Count the block index entries loaded by the reader.
+ *
+ * @param[in] block_tree_reader Non-null.
+ * @return                      The number of loaded entries.
+ */
+BITCOINKERNEL_API size_t btck_block_tree_reader_count_entries(
+    const btck_BlockTreeReader* block_tree_reader) BITCOINKERNEL_ARG_NONNULL(1);
+
+/**
+ * @brief Return a block tree entry by enumeration index.
+ *
+ * Entries are ordered by height, then by block hash for entries at the same
+ * height. The returned entry is valid for the lifetime of the reader.
+ *
+ * @param[in] block_tree_reader Non-null.
+ * @param[in] entry_index       Index of the requested entry.
+ * @return                      The block tree entry, or null if entry_index is out of range.
+ */
+BITCOINKERNEL_API const btck_BlockTreeEntry* btck_block_tree_reader_get_entry_at(
+    const btck_BlockTreeReader* block_tree_reader,
+    size_t entry_index) BITCOINKERNEL_ARG_NONNULL(1);
+
+/**
+ * @brief Retrieve a block tree entry by its block hash.
+ *
+ * @param[in] block_tree_reader Non-null.
+ * @param[in] block_hash        Non-null.
+ * @return                      The block tree entry of the block with the passed in hash, or null if
+ *                              the block hash is not found.
+ */
+BITCOINKERNEL_API const btck_BlockTreeEntry* btck_block_tree_reader_get_block_tree_entry_by_hash(
+    const btck_BlockTreeReader* block_tree_reader,
+    const btck_BlockHash* block_hash) BITCOINKERNEL_ARG_NONNULL(1, 2);
+
+/**
+ * @brief Reads the block the passed in block tree entry points to from disk and
+ * returns it.
+ *
+ * @param[in] block_tree_reader Non-null.
+ * @param[in] block_tree_entry  Non-null.
+ * @return                      The read out block, or null on error.
+ */
+BITCOINKERNEL_API btck_Block* BITCOINKERNEL_WARN_UNUSED_RESULT btck_block_tree_reader_read_block(
+    const btck_BlockTreeReader* block_tree_reader,
+    const btck_BlockTreeEntry* block_tree_entry) BITCOINKERNEL_ARG_NONNULL(1, 2);
+
+/**
+ * @brief Reads spent outputs data for the passed in block tree entry from disk.
+ *
+ * @param[in] block_tree_reader Non-null.
+ * @param[in] block_tree_entry  Non-null.
+ * @return                      The spent outputs data, or null on error.
+ */
+BITCOINKERNEL_API btck_BlockSpentOutputs* BITCOINKERNEL_WARN_UNUSED_RESULT btck_block_tree_reader_read_block_spent_outputs(
+    const btck_BlockTreeReader* block_tree_reader,
+    const btck_BlockTreeEntry* block_tree_entry) BITCOINKERNEL_ARG_NONNULL(1, 2);
+
+/**
+ * Destroy the block tree reader.
+ */
+BITCOINKERNEL_API void btck_block_tree_reader_destroy(btck_BlockTreeReader* block_tree_reader);
+
+///@}
+
 /** @name ChainstateManagerOptions
  * Functions for working with chainstate manager options.
  */
@@ -1262,16 +1365,6 @@ BITCOINKERNEL_API int BITCOINKERNEL_WARN_UNUSED_RESULT btck_chainstate_manager_o
     btck_ChainstateManagerOptions* chainstate_manager_options,
     int wipe_block_tree_db,
     int wipe_chainstate_db) BITCOINKERNEL_ARG_NONNULL(1);
-
-/**
- * @brief Sets block tree db in memory in the options.
- *
- * @param[in] chainstate_manager_options   Non-null, created by @ref btck_chainstate_manager_options_create.
- * @param[in] block_tree_db_in_memory      Set block tree db in memory.
- */
-BITCOINKERNEL_API void btck_chainstate_manager_options_update_block_tree_db_in_memory(
-    btck_ChainstateManagerOptions* chainstate_manager_options,
-    int block_tree_db_in_memory) BITCOINKERNEL_ARG_NONNULL(1);
 
 /**
  * @brief Sets chainstate db in memory in the options.

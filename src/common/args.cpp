@@ -845,6 +845,7 @@ std::string HelpMessageOpt(std::string_view option, std::string_view help_param,
 const std::vector<std::string> TEST_OPTIONS_DOC{
     "addrman (use deterministic addrman)",
     "reindex_after_failure_noninteractive_yes (When asked for a reindex after failure interactively, simulate as-if answered with 'yes')",
+    "blocktree_migration_interrupt_after_cutover (simulate an interrupt after the block tree migration cutover)",
     "bip94 (enforce BIP94 consensus rules)",
 };
 

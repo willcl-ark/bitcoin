@@ -13,6 +13,7 @@ def main():
     base_out = Path(os.environ["BASE_OUTDIR"])
     suppressions_file = base_root / "test" / "sanitizer_suppressions" / "valgrind.supp"
     target_names = {b.name for b in (base_out / "bin").iterdir()}
+    target_names.add("test_block_tree_reader")
 
     for exe in base_root.rglob("*"):
         if exe.name in target_names and exe.is_file() and os.access(exe, os.X_OK):

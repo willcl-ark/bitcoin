@@ -20,6 +20,7 @@
 #include <cuckoocache.h>
 #include <flatfile.h>
 #include <hash.h>
+#include <kernel/blocktreestorage.h>
 #include <kernel/chainparams.h>
 #include <kernel/coinstats.h>
 #include <kernel/disconnected_transactions.h>
@@ -2839,6 +2840,12 @@ bool Chainstate::FlushStateToDisk(
             }
         }
     }
+    } catch (const kernel::BlockTreeStoreInterrupted& e) {
+        if (!m_chainman.m_interrupt) {
+            return FatalError(m_chainman.GetNotifications(), state, strprintf(_("System error while flushing: %s"), e.what()));
+        }
+        // No store access was acquired. Leave dirty metadata for the next flush.
+        return state.Error(e.what());
     } catch (const std::runtime_error& e) {
         return FatalError(m_chainman.GetNotifications(), state, strprintf(_("System error while flushing: %s"), e.what()));
     }

@@ -26,7 +26,6 @@
 #include <compare>
 #include <cstddef>
 #include <cstdio>
-#include <exception>
 #include <ios>
 #include <limits>
 #include <optional>

@@ -15,6 +15,7 @@ from test_framework.wallet import MiniWallet
 class TxIndexTest(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 2
+        self.setup_clean_chain = True
         self.extra_args = [["-txindex"],["-txindex"]]
 
     def skip_test_if_missing_module(self):
@@ -38,6 +39,7 @@ class TxIndexTest(BitcoinTestFramework):
         node = self.nodes[0]
         legacy_node = self.nodes[1]
         self.wallet = MiniWallet(self.nodes[0])
+        self.generate(self.wallet, 101)
         tx1 = self.wallet.send_self_transfer(from_node=self.nodes[0])
         self.generate(self.nodes[0], 1)
         txId1 = tx1['txid']

@@ -261,6 +261,8 @@ private:
 
     std::unique_ptr<kernel::BlockTreeStore> CreateAndMigrateBlockTree();
 
+    void CheckWriteAccess() const;
+
     const kernel::BlockManagerOpts m_opts;
 
     const FlatFileSeq m_block_file_seq;

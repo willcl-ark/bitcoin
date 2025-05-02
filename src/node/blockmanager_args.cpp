@@ -35,8 +35,7 @@ util::Result<void> ApplyArgsManOptions(const ArgsManager& args, BlockManager::Op
     opts.prune_target = nPruneTarget;
 
     if (auto value{args.GetBoolArg("-fastprune")}) opts.fast_prune = *value;
-
-    ReadDatabaseArgs(args, opts.block_tree_db_params.options);
+    opts.test_block_tree_migration_interrupt_after_cutover = HasTestOption(args, "blocktree_migration_interrupt_after_cutover");
 
     return {};
 }

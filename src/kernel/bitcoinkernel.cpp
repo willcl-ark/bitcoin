@@ -10,7 +10,6 @@
 #include <coins.h>
 #include <consensus/tx_check.h>
 #include <consensus/validation.h>
-#include <dbwrapper.h>
 #include <kernel/caches.h>
 #include <kernel/chainparams.h>
 #include <kernel/checks.h>
@@ -40,6 +39,8 @@
 #include <validation.h>
 #include <validationinterface.h>
 
+#include <algorithm>
+#include <compare>
 #include <cstddef>
 #include <cstring>
 #include <exception>
@@ -468,12 +469,11 @@ struct ChainstateManagerOptions {
           m_blockman_options{node::BlockManager::Options{
               .chainparams = *context->m_chainparams,
               .blocks_dir = blocks_dir,
+              .block_tree_dir = data_dir / "blocks" / "index",
               .notifications = *context->m_notifications,
-              .block_tree_db_params = DBParams{
-                  .path = data_dir / "blocks" / "index",
-                  .cache_bytes = kernel::CacheSizes{DEFAULT_KERNEL_CACHE}.block_tree_db,
-              }}},
-          m_context{context}, m_chainstate_load_options{node::ChainstateLoadOptions{}}
+          }},
+          m_context{context},
+          m_chainstate_load_options{node::ChainstateLoadOptions{}}
     {
     }
 };
@@ -484,6 +484,44 @@ struct ChainMan {
 
     ChainMan(std::unique_ptr<ChainstateManager> chainman, std::shared_ptr<const Context> context)
         : m_chainman(std::move(chainman)), m_context(std::move(context)) {}
+};
+
+struct BlockTreeReader {
+    std::shared_ptr<const Context> m_context;
+    node::BlockManager m_blockman;
+    std::vector<CBlockIndex*> m_entries;
+
+    BlockTreeReader(std::shared_ptr<const Context> context, const fs::path& data_dir, const fs::path& blocks_dir)
+        : m_context{std::move(context)},
+          m_blockman{*m_context->m_interrupt, node::BlockManager::Options{
+              .chainparams = *m_context->m_chainparams,
+              .blocks_dir = blocks_dir,
+              .block_tree_dir = data_dir / "blocks" / "index",
+              .block_tree_read_only = true,
+              .notifications = *m_context->m_notifications,
+          }}
+    {
+        LOCK(::cs_main);
+        if (!m_blockman.LoadBlockIndexDB(std::nullopt)) {
+            throw std::runtime_error("Failed to load block index");
+        }
+        m_entries = m_blockman.GetAllBlockIndices();
+        for (const CBlockIndex* entry : m_entries) {
+            if (entry->nStatus == 0) {
+                throw std::runtime_error("Block index contains an incomplete entry");
+            }
+            if ((entry->nHeight == 0) != (entry->pprev == nullptr)) {
+                throw std::runtime_error("Block index contains an entry with an inconsistent parent");
+            }
+            if (entry->pprev && entry->pprev->nHeight + 1 != entry->nHeight) {
+                throw std::runtime_error("Block index contains a non-contiguous entry");
+            }
+        }
+        std::sort(m_entries.begin(), m_entries.end(), [](const CBlockIndex* a, const CBlockIndex* b) {
+            if (a->nHeight != b->nHeight) return a->nHeight < b->nHeight;
+            return a->GetBlockHash() < b->GetBlockHash();
+        });
+    }
 };
 
 } // namespace
@@ -497,6 +535,7 @@ struct btck_Context : Handle<btck_Context, std::shared_ptr<const Context>> {};
 struct btck_ChainParameters : Handle<btck_ChainParameters, CChainParams> {};
 struct btck_ChainstateManagerOptions : Handle<btck_ChainstateManagerOptions, ChainstateManagerOptions> {};
 struct btck_ChainstateManager : Handle<btck_ChainstateManager, ChainMan> {};
+struct btck_BlockTreeReader : Handle<btck_BlockTreeReader, BlockTreeReader> {};
 struct btck_Chain : Handle<btck_Chain, CChain> {};
 struct btck_BlockSpentOutputs : Handle<btck_BlockSpentOutputs, std::shared_ptr<CBlockUndo>> {};
 struct btck_TransactionSpentOutputs : Handle<btck_TransactionSpentOutputs, CTxUndo> {};
@@ -995,6 +1034,81 @@ const btck_BlockTreeEntry* btck_block_tree_entry_get_ancestor(const btck_BlockTr
     return btck_BlockTreeEntry::ref(ancestor);
 }
 
+btck_BlockTreeReader* btck_block_tree_reader_create(
+    const btck_Context* context,
+    const char* data_dir,
+    size_t data_dir_len,
+    const char* blocks_dir,
+    size_t blocks_dir_len)
+{
+    assert(data_dir != nullptr || data_dir_len == 0);
+    assert(blocks_dir != nullptr || blocks_dir_len == 0);
+    if (data_dir_len == 0 || blocks_dir_len == 0) {
+        LogError("Failed to create block tree reader: dir must be non-null and non-empty");
+        return nullptr;
+    }
+    try {
+        fs::path abs_data_dir{fs::absolute(fs::PathFromString({data_dir, data_dir_len}))};
+        fs::path abs_blocks_dir{fs::absolute(fs::PathFromString({blocks_dir, blocks_dir_len}))};
+        return btck_BlockTreeReader::create(btck_Context::get(context), abs_data_dir, abs_blocks_dir);
+    } catch (const std::exception& e) {
+        LogError("Failed to create block tree reader: %s", e.what());
+        return nullptr;
+    }
+}
+
+size_t btck_block_tree_reader_count_entries(const btck_BlockTreeReader* block_tree_reader)
+{
+    return btck_BlockTreeReader::get(block_tree_reader).m_entries.size();
+}
+
+const btck_BlockTreeEntry* btck_block_tree_reader_get_entry_at(const btck_BlockTreeReader* block_tree_reader, size_t entry_index)
+{
+    const auto& entries{btck_BlockTreeReader::get(block_tree_reader).m_entries};
+    if (entry_index >= entries.size()) return nullptr;
+    return btck_BlockTreeEntry::ref(entries[entry_index]);
+}
+
+const btck_BlockTreeEntry* btck_block_tree_reader_get_block_tree_entry_by_hash(const btck_BlockTreeReader* block_tree_reader, const btck_BlockHash* block_hash)
+{
+    auto& reader{btck_BlockTreeReader::get(block_tree_reader)};
+    const CBlockIndex* block_index{WITH_LOCK(::cs_main, return reader.m_blockman.LookupBlockIndex(btck_BlockHash::get(block_hash)))};
+    if (!block_index) {
+        LogDebug(BCLog::KERNEL, "A block with the given hash is not indexed.");
+        return nullptr;
+    }
+    return btck_BlockTreeEntry::ref(block_index);
+}
+
+btck_Block* btck_block_tree_reader_read_block(const btck_BlockTreeReader* block_tree_reader, const btck_BlockTreeEntry* entry)
+{
+    auto block{std::make_shared<CBlock>()};
+    if (!btck_BlockTreeReader::get(block_tree_reader).m_blockman.ReadBlock(*block, btck_BlockTreeEntry::get(entry))) {
+        LogError("Failed to read block.");
+        return nullptr;
+    }
+    return btck_Block::create(block);
+}
+
+btck_BlockSpentOutputs* btck_block_tree_reader_read_block_spent_outputs(const btck_BlockTreeReader* block_tree_reader, const btck_BlockTreeEntry* entry)
+{
+    auto block_undo{std::make_shared<CBlockUndo>()};
+    if (btck_BlockTreeEntry::get(entry).nHeight < 1) {
+        LogDebug(BCLog::KERNEL, "The genesis block does not have any spent outputs.");
+        return btck_BlockSpentOutputs::create(block_undo);
+    }
+    if (!btck_BlockTreeReader::get(block_tree_reader).m_blockman.ReadBlockUndo(*block_undo, btck_BlockTreeEntry::get(entry))) {
+        LogError("Failed to read block spent outputs data.");
+        return nullptr;
+    }
+    return btck_BlockSpentOutputs::create(block_undo);
+}
+
+void btck_block_tree_reader_destroy(btck_BlockTreeReader* block_tree_reader)
+{
+    delete block_tree_reader;
+}
+
 btck_BlockValidationState* btck_block_validation_state_create()
 {
     return btck_BlockValidationState::create();
@@ -1080,7 +1194,6 @@ int btck_chainstate_manager_options_set_database_cache_bytes(btck_ChainstateMana
     auto& opts{btck_ChainstateManagerOptions::get(chainman_opts)};
     LOCK(opts.m_mutex);
     opts.m_db_cache_bytes = database_cache_bytes;
-    opts.m_blockman_options.block_tree_db_params.cache_bytes = kernel::CacheSizes{database_cache_bytes}.block_tree_db;
     return 0;
 }
 
@@ -1097,18 +1210,9 @@ int btck_chainstate_manager_options_set_wipe_dbs(btck_ChainstateManagerOptions* 
     }
     auto& opts{btck_ChainstateManagerOptions::get(chainman_opts)};
     LOCK(opts.m_mutex);
-    opts.m_blockman_options.block_tree_db_params.wipe_data = wipe_block_tree_db == 1;
+    opts.m_blockman_options.wipe_block_tree_data = wipe_block_tree_db == 1;
     opts.m_chainstate_load_options.wipe_chainstate_db = wipe_chainstate_db == 1;
     return 0;
-}
-
-void btck_chainstate_manager_options_update_block_tree_db_in_memory(
-    btck_ChainstateManagerOptions* chainman_opts,
-    int block_tree_db_in_memory)
-{
-    auto& opts{btck_ChainstateManagerOptions::get(chainman_opts)};
-    LOCK(opts.m_mutex);
-    opts.m_blockman_options.block_tree_db_params.memory_only = block_tree_db_in_memory == 1;
 }
 
 void btck_chainstate_manager_options_update_chainstate_db_in_memory(

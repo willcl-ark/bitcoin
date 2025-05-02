@@ -429,6 +429,9 @@ if(BUILD_KERNEL_LIB)
         bitcoinkernel
     )
     install_binary_component(bitcoin-chainstate INTERNAL)
+    add_executable(test_block_tree_reader test/kernel/block_tree_reader.cpp)
+    add_windows_application_manifest(test_block_tree_reader)
+    target_link_libraries(test_block_tree_reader PRIVATE core_interface bitcoinkernel)
   endif()
 endif()
 

@@ -1276,11 +1276,6 @@ public:
         return btck_chainstate_manager_options_set_wipe_dbs(get(), wipe_block_tree, wipe_chainstate) == 0;
     }
 
-    void UpdateBlockTreeDbInMemory(bool block_tree_db_in_memory)
-    {
-        btck_chainstate_manager_options_update_block_tree_db_in_memory(get(), block_tree_db_in_memory);
-    }
-
     void UpdateChainstateDbInMemory(bool chainstate_db_in_memory)
     {
         btck_chainstate_manager_options_update_chainstate_db_in_memory(get(), chainstate_db_in_memory);
@@ -1488,6 +1483,49 @@ inline void set_mock_time(std::chrono::seconds timestamp)
         throw std::runtime_error("timestamp out of range");
     }
 }
+
+class BlockTreeReader : public UniqueHandle<btck_BlockTreeReader, btck_block_tree_reader_destroy>
+{
+public:
+    BlockTreeReader(const Context& context, std::string_view data_dir, std::string_view blocks_dir)
+        : UniqueHandle{btck_block_tree_reader_create(
+              context.get(), data_dir.data(), data_dir.length(), blocks_dir.data(), blocks_dir.length())}
+    {
+    }
+
+    size_t CountEntries() const
+    {
+        return btck_block_tree_reader_count_entries(get());
+    }
+
+    BlockTreeEntry GetEntry(size_t index) const
+    {
+        auto entry{btck_block_tree_reader_get_entry_at(get(), index)};
+        if (!entry) throw std::out_of_range("No entry at the provided index");
+        return entry;
+    }
+
+    std::optional<BlockTreeEntry> GetBlockTreeEntry(const BlockHash& block_hash) const
+    {
+        auto entry{btck_block_tree_reader_get_block_tree_entry_by_hash(get(), block_hash.get())};
+        if (!entry) return std::nullopt;
+        return entry;
+    }
+
+    std::optional<Block> ReadBlock(const BlockTreeEntry& entry) const
+    {
+        auto block{btck_block_tree_reader_read_block(get(), entry.get())};
+        if (!block) return std::nullopt;
+        return block;
+    }
+
+    BlockSpentOutputs ReadBlockSpentOutputs(const BlockTreeEntry& entry) const
+    {
+        return btck_block_tree_reader_read_block_spent_outputs(get(), entry.get());
+    }
+
+    MAKE_RANGE_METHOD(Entries, BlockTreeReader, &BlockTreeReader::CountEntries, &BlockTreeReader::GetEntry, *this)
+};
 
 } // namespace btck
 

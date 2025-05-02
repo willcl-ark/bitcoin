@@ -34,11 +34,8 @@ BOOST_AUTO_TEST_CASE(blockmanager_find_block_pos)
     const BlockManager::Options blockman_opts{
         .chainparams = *params,
         .blocks_dir = m_args.GetBlocksDirPath(),
+        .block_tree_dir = m_args.GetDataDirNet() / "blocks" / "index",
         .notifications = notifications,
-        .block_tree_db_params = DBParams{
-            .path = m_args.GetDataDirNet() / "blocks" / "index",
-            .cache_bytes = 0,
-        },
     };
     BlockManager blockman{*Assert(m_node.shutdown_signal), blockman_opts};
     // simulate adding a genesis block normally
@@ -238,11 +235,8 @@ BOOST_AUTO_TEST_CASE(blockmanager_flush_block_file)
     node::BlockManager::Options blockman_opts{
         .chainparams = Params(),
         .blocks_dir = m_args.GetBlocksDirPath(),
+        .block_tree_dir = m_args.GetDataDirNet() / "blocks" / "index",
         .notifications = notifications,
-        .block_tree_db_params = DBParams{
-            .path = m_args.GetDataDirNet() / "blocks" / "index",
-            .cache_bytes = 0,
-        },
     };
     BlockManager blockman{*Assert(m_node.shutdown_signal), blockman_opts};
 
@@ -300,6 +294,34 @@ BOOST_AUTO_TEST_CASE(blockmanager_flush_block_file)
     // Block 2 was not overwritten:
     BOOST_CHECK(!blockman.ReadBlock(read_block, pos2, {}));
     BOOST_CHECK_EQUAL(read_block.nVersion, 2);
+}
+
+BOOST_AUTO_TEST_CASE(blockmanager_read_only_disables_writes)
+{
+    KernelNotifications notifications{Assert(m_node.shutdown_request), m_node.exit_status, *Assert(m_node.warnings)};
+    const fs::path block_tree_dir{m_args.GetDataDirNet() / "blocks" / "index"};
+    BlockManager::Options write_opts{
+        .chainparams = Params(),
+        .blocks_dir = m_args.GetBlocksDirPath(),
+        .block_tree_dir = block_tree_dir,
+        .notifications = notifications,
+    };
+    {
+        BlockManager blockman{*Assert(m_node.shutdown_signal), write_opts};
+    }
+
+    BlockManager::Options read_opts{
+        .chainparams = Params(),
+        .blocks_dir = m_args.GetBlocksDirPath(),
+        .block_tree_dir = block_tree_dir,
+        .block_tree_read_only = true,
+        .notifications = notifications,
+    };
+    BlockManager blockman{*Assert(m_node.shutdown_signal), read_opts};
+
+    LOCK(::cs_main);
+    BOOST_CHECK_THROW(blockman.WriteBlock(Params().GenesisBlock(), 0), std::logic_error);
+    BOOST_CHECK_THROW(blockman.WriteBlockIndexDB(), std::logic_error);
 }
 
 BOOST_FIXTURE_TEST_CASE(prune_lock_update_and_delete, TestingSetup)

@@ -52,7 +52,22 @@ class BlockTreeMigrationTest(BitcoinTestFramework):
         assert_equal(block_tree_store_node.getblockchaininfo()["blocks"], nblocks)
         self.stop_node(0)
 
-        self.log.info("Re-starting the node to exercise non-migration path")
+        self.log.info("Interrupt migration cleanup after the durable cutover")
+        self.cleanup_folder(block_tree_store_node.chain_path)
+        shutil.copytree(legacy_node.chain_path, block_tree_store_node.chain_path)
+        with block_tree_store_node.assert_debug_log(expected_msgs=["Test interruption after block tree migration cutover"]):
+            block_tree_store_node.assert_start_raises_init_error(extra_args=["-test=blocktree_migration_interrupt_after_cutover"])
+        index_dir = block_tree_store_node.chain_path / "blocks" / "index"
+        assert (index_dir / "headers.dat").exists()
+        assert not (index_dir / "CURRENT").exists()
+        with block_tree_store_node.assert_debug_log(expected_msgs=[], unexpected_msgs=[migrate_log]):
+            self.start_node(0)
+        assert_equal(block_tree_store_node.getblockchaininfo()["blocks"], nblocks)
+        self.stop_node(0)
+
+        self.log.info("Re-starting the node with leftover legacy files but no CURRENT marker")
+        (index_dir / "MANIFEST-000001").write_text("left over from legacy cleanup", encoding="utf8")
+        (index_dir / "000003.ldb").write_bytes(b"left over from legacy cleanup")
         with block_tree_store_node.assert_debug_log(expected_msgs=[], unexpected_msgs=[migrate_log]):
             self.start_node(0)
         assert_equal(block_tree_store_node.getblockchaininfo()["blocks"], nblocks)

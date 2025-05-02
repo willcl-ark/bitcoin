@@ -11,12 +11,14 @@ Test that bitcoin-chainstate can load a datadir initialized with an assumeutxo
 snapshot and extend the snapshot chain with new blocks.
 """
 
+from concurrent.futures import ThreadPoolExecutor
 import subprocess
+import tempfile
+from pathlib import Path
 
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import assert_equal
 from test_framework.wallet import MiniWallet
-from pathlib import Path
 
 START_HEIGHT = 199
 # Hardcoded in regtest chainparams
@@ -60,6 +62,49 @@ class BitcoinChainstateTest(BitcoinTestFramework):
         proc = run_chainstate(other_datadir)
         assert proc.returncode == 0
         assert expected_message not in proc.stdout
+
+    def readonly_kernel_reader_test(self):
+        self.restart_node(0)
+        node = self.nodes[0]
+        assert node.is_node_stopped() is False
+        target_height = 1
+        for height in range(1, node.getblockcount() + 1):
+            block = node.getblock(node.getblockhash(height), 2)
+            if len(block["tx"]) > 1:
+                target_height = height
+                break
+        target_hash = node.getblockhash(target_height)
+        target_block = node.getblock(target_hash, 2)
+
+        self.log.info("Test read-only kernel block tree reader while bitcoind owns the writer lock")
+        helper = Path(self.config["environment"]["BUILDDIR"]) / "bin" / ("test_block_tree_reader" + self.config["environment"]["EXEEXT"])
+        args = self.get_binaries().valgrind_cmd + [str(helper), str(node.chain_path),
+                target_hash, str(target_height), str(len(target_block["tx"])), node.getblockhash(0), str(node.getblockcount())]
+        with tempfile.TemporaryFile(mode="w+") as errors, ThreadPoolExecutor(max_workers=1) as executor:
+            proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                    stderr=errors, text=True)
+            try:
+                ready = executor.submit(proc.stdout.readline).result(timeout=30 * self.options.timeout_factor).strip()
+                if ready != "ready":
+                    proc.wait(timeout=5 * self.options.timeout_factor)
+                    errors.seek(0)
+                    raise AssertionError(f"Kernel reader failed: {errors.read()}")
+
+                self.log.info("Test read-only kernel block tree reader snapshots do not refresh in place")
+                new_header_height = node.getblockcount() + 1
+                new_header = self.generateblock(node, output="raw(55)", transactions=[], submit=False, sync_fun=self.no_op)
+                node.submitheader(new_header["hex"])
+                self.restart_node(0)
+                assert_equal(self.nodes[0].getblockcount(), START_HEIGHT)
+                stdout, _ = proc.communicate(input=f"{new_header['hash']} {new_header_height}\n",
+                                             timeout=30 * self.options.timeout_factor)
+                errors.seek(0)
+                assert proc.returncode == 0, errors.read()
+                assert_equal(stdout.strip(), "ok")
+            finally:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.communicate()
 
     def generate_snapshot_chain(self):
         self.log.info(f"Generate deterministic chain up to block {SNAPSHOT_BASE_BLOCK_HEIGHT} for node0 while node1 disconnected")
@@ -123,6 +168,7 @@ class BitcoinChainstateTest(BitcoinTestFramework):
 
     def run_test(self):
         self.writer_lock_test()
+        self.readonly_kernel_reader_test()
         dump_output = self.generate_snapshot_chain()
         self.basic_test()
         self.assumeutxo_test(dump_output['path'])
