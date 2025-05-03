@@ -376,6 +376,8 @@ BASE_SCRIPTS = [
     'interface_gui.py',
     'feature_anchors.py',
     'mempool_datacarrier.py',
+    'feature_blocktree_migration.py',
+    'feature_blocktree_corruption.py',
     'feature_coinstatsindex.py',
     'feature_coinstatsindex_compatibility.py',
     'wallet_orphanedreward.py',
