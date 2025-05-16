@@ -7,6 +7,7 @@
 #
 # Centos Stream 9, https://www.centos.org/cl-vs-cs/#end-of-life, EOL in May 2027:
 #  - CMake 3.26.5, https://mirror.stream.centos.org/9-stream/AppStream/x86_64/os/Packages/
+# TODO: bump this? Make it optional?
 cmake_minimum_required(VERSION 3.22)
 
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
@@ -49,6 +50,21 @@ set(CMAKE_TRY_COMPILE_PLATFORM_VARIABLES
   CMAKE_OBJCXX_COMPILE_OBJECT
   CMAKE_CXX_LINK_EXECUTABLE
 )
+
+# Check for dependency provider setup from toolchain file
+# Setup must happen before `project()` command.
+if(DEFINED CMAKE_TOOLCHAIN_FILE AND EXISTS "${CMAKE_TOOLCHAIN_FILE}")
+  get_filename_component(TOOLCHAIN_DIR "${CMAKE_TOOLCHAIN_FILE}" DIRECTORY)
+  set(PROVIDER_PATH "${CMAKE_SOURCE_DIR}/depends/dependency_provider.cmake")
+  if(EXISTS "${PROVIDER_PATH}")
+    list(APPEND CMAKE_PROJECT_TOP_LEVEL_INCLUDES "${PROVIDER_PATH}")
+    set(BITCOIN_DEPENDENCY_PROVIDER_ACTIVE ON CACHE INTERNAL "Dependency provider active")
+    message(STATUS "Dependency provider included from: ${PROVIDER_PATH}")
+  else()
+    message(WARNING "Dependency provider file not found at: ${PROVIDER_PATH}")
+  endif()
+endif()
+
 
 project(BitcoinCore
   VERSION ${CLIENT_VERSION_MAJOR}.${CLIENT_VERSION_MINOR}.${CLIENT_VERSION_BUILD}
@@ -685,6 +701,17 @@ message("  test_bitcoin ........................ ${BUILD_TESTS}")
 message("  test_bitcoin-qt ..................... ${BUILD_GUI_TESTS}")
 message("  bench_bitcoin ....................... ${BUILD_BENCH}")
 message("  fuzz binary ......................... ${BUILD_FUZZ_BINARY}")
+set(TOOLCHAIN_MESSAGE "${CMAKE_TOOLCHAIN_FILE}")
+if(NOT DEFINED CMAKE_TOOLCHAIN_FILE OR NOT EXISTS "${CMAKE_TOOLCHAIN_FILE}")
+  set(TOOLCHAIN_MESSAGE "NONE")
+endif()
+set(DEP_PROVIDER_MESSAGE "${CMAKE_SOURCE_DIR}/depends/dependency_provider.cmake")
+if(NOT BITCOIN_DEPENDENCY_PROVIDER_ACTIVE)
+  set(DEP_PROVIDER_MESSAGE "INACTIVE")
+endif()
+message("Depends:")
+message("  Toolchain file ...................... ${TOOLCHAIN_MESSAGE}")
+message("  Dependency provider ................. ${DEP_PROVIDER_MESSAGE}")
 message("")
 if(CMAKE_CROSSCOMPILING)
   set(cross_status "TRUE, for ${CMAKE_SYSTEM_NAME}, ${CMAKE_SYSTEM_PROCESSOR}")
