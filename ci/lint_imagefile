@@ -11,6 +11,7 @@ ENV LC_ALL=C.UTF-8
 
 COPY ./ci/retry/retry /ci_retry
 COPY ./.python-version /.python-version
+COPY ./requirements.txt /requirements.txt
 COPY ./ci/lint/container-entrypoint.sh /entrypoint.sh
 COPY ./ci/lint/04_install.sh /install.sh
 
