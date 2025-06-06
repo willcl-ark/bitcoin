@@ -61,9 +61,12 @@ class MultiWalletTest(BitcoinTestFramework):
     def run_test(self):
         node = self.nodes[0]
 
-        data_dir = lambda *p: os.path.join(node.chain_path, *p)
-        wallet_dir = lambda *p: data_dir('wallets', *p)
-        wallet = lambda name: node.get_wallet_rpc(name)
+        def data_dir(*p):
+            return os.path.join(node.chain_path, *p)
+        def wallet_dir(*p):
+            return data_dir('wallets', *p)
+        def wallet(name):
+            return node.get_wallet_rpc(name)
 
         def wallet_file(name):
             if name == self.default_wallet_name:

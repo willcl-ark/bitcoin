@@ -35,7 +35,8 @@ class P2PIgnoreInv(P2PInterface):
     def on_addr(self, message):
         self.firstAddrnServices = message.addrs[0].nServices
     def wait_for_addr(self, timeout=5):
-        test_function = lambda: self.last_message.get("addr")
+        def test_function():
+            return self.last_message.get("addr")
         self.wait_until(test_function, timeout=timeout)
     def send_getdata_for_block(self, blockhash):
         getdata_request = msg_getdata()
