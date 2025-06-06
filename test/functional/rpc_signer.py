@@ -7,6 +7,7 @@
 Verify that a bitcoind node can use an external signer command.
 See also wallet_signer.py for tests that require wallet context.
 """
+
 import os
 import platform
 import sys
@@ -20,7 +21,7 @@ from test_framework.util import (
 
 class RPCSignerTest(BitcoinTestFramework):
     def mock_signer_path(self):
-        path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'mocks', 'signer.py')
+        path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "mocks", "signer.py")
         return sys.executable + " " + path
 
     def set_test_params(self):
@@ -28,8 +29,8 @@ class RPCSignerTest(BitcoinTestFramework):
 
         self.extra_args = [
             [],
-            [f"-signer={self.mock_signer_path()}", '-keypool=10'],
-            [f"-signer={self.mock_signer_path()}", '-keypool=10'],
+            [f"-signer={self.mock_signer_path()}", "-keypool=10"],
+            [f"-signer={self.mock_signer_path()}", "-keypool=10"],
             ["-signer=fake.py"],
         ]
 
@@ -46,9 +47,7 @@ class RPCSignerTest(BitcoinTestFramework):
     def run_test(self):
         self.log.debug(f"-signer={self.mock_signer_path()}")
 
-        assert_raises_rpc_error(-1, 'Error: restart bitcoind with -signer=<cmd>',
-            self.nodes[0].enumeratesigners
-        )
+        assert_raises_rpc_error(-1, "Error: restart bitcoind with -signer=<cmd>", self.nodes[0].enumeratesigners)
 
         # Handle script missing:
         assert_raises_rpc_error(
@@ -61,18 +60,19 @@ class RPCSignerTest(BitcoinTestFramework):
 
         # Handle error thrown by script
         self.set_mock_result(self.nodes[1], "2")
-        assert_raises_rpc_error(-1, 'RunCommandParseJSON error',
-            self.nodes[1].enumeratesigners
-        )
+        assert_raises_rpc_error(-1, "RunCommandParseJSON error", self.nodes[1].enumeratesigners)
         self.clear_mock_result(self.nodes[1])
 
-        self.set_mock_result(self.nodes[1], '0 [{"type": "trezor", "model": "trezor_t", "error": "fingerprint not found"}]')
-        assert_raises_rpc_error(-1, 'fingerprint not found',
-            self.nodes[1].enumeratesigners
+        self.set_mock_result(
+            self.nodes[1], '0 [{"type": "trezor", "model": "trezor_t", "error": "fingerprint not found"}]'
         )
+        assert_raises_rpc_error(-1, "fingerprint not found", self.nodes[1].enumeratesigners)
         self.clear_mock_result(self.nodes[1])
 
-        assert_equal({'fingerprint': '00000001', 'name': 'trezor_t'} in self.nodes[1].enumeratesigners()['signers'], True)
+        assert_equal(
+            {"fingerprint": "00000001", "name": "trezor_t"} in self.nodes[1].enumeratesigners()["signers"], True
+        )
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     RPCSignerTest(__file__).main()

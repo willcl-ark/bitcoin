@@ -3,8 +3,8 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test descendant package tracking carve-out allowing one final transaction in
-   an otherwise-full package as long as it has only one parent and is <= 10k in
-   size.
+an otherwise-full package as long as it has only one parent and is <= 10k in
+size.
 """
 
 from test_framework.messages import (
@@ -24,9 +24,8 @@ class MempoolPackagesTest(BitcoinTestFramework):
 
     def chain_tx(self, utxos_to_spend, *, num_outputs=1):
         return self.wallet.send_self_transfer_multi(
-            from_node=self.nodes[0],
-            utxos_to_spend=utxos_to_spend,
-            num_outputs=num_outputs)['new_utxos']
+            from_node=self.nodes[0], utxos_to_spend=utxos_to_spend, num_outputs=num_outputs
+        )["new_utxos"]
 
     def run_test(self):
         self.wallet = MiniWallet(self.nodes[0])
@@ -38,25 +37,34 @@ class MempoolPackagesTest(BitcoinTestFramework):
             utxo, utxo2 = self.chain_tx([utxo], num_outputs=2)
             chain.append(utxo2)
         for _ in range(DEFAULT_ANCESTOR_LIMIT - 4):
-            utxo, = self.chain_tx([utxo])
+            (utxo,) = self.chain_tx([utxo])
             chain.append(utxo)
-        second_chain, = self.chain_tx([self.wallet.get_utxo(confirmed_only=True)])
+        (second_chain,) = self.chain_tx([self.wallet.get_utxo(confirmed_only=True)])
 
         # Check mempool has DEFAULT_ANCESTOR_LIMIT + 1 transactions in it
         assert_equal(len(self.nodes[0].getrawmempool()), DEFAULT_ANCESTOR_LIMIT + 1)
 
         # Adding one more transaction on to the chain should fail.
-        assert_raises_rpc_error(-26, "too-long-mempool-chain, too many unconfirmed ancestors [limit: 25]", self.chain_tx, [utxo])
+        assert_raises_rpc_error(
+            -26, "too-long-mempool-chain, too many unconfirmed ancestors [limit: 25]", self.chain_tx, [utxo]
+        )
         # ... or if it chains on from some point in the middle of the chain.
         assert_raises_rpc_error(-26, "too-long-mempool-chain, too many descendants", self.chain_tx, [chain[2]])
         assert_raises_rpc_error(-26, "too-long-mempool-chain, too many descendants", self.chain_tx, [chain[1]])
         # ...even if it chains on to two parent transactions with one in the chain.
-        assert_raises_rpc_error(-26, "too-long-mempool-chain, too many descendants", self.chain_tx, [chain[0], second_chain])
+        assert_raises_rpc_error(
+            -26, "too-long-mempool-chain, too many descendants", self.chain_tx, [chain[0], second_chain]
+        )
         # ...especially if its > 40k weight
-        assert_raises_rpc_error(-26, "too-long-mempool-chain, too many descendants", self.chain_tx, [chain[0]], num_outputs=350)
+        assert_raises_rpc_error(
+            -26, "too-long-mempool-chain, too many descendants", self.chain_tx, [chain[0]], num_outputs=350
+        )
         # ...even if it's submitted with other transactions
         replaceable_tx = self.wallet.create_self_transfer_multi(utxos_to_spend=[chain[0]])
-        txns = [replaceable_tx["tx"], self.wallet.create_self_transfer_multi(utxos_to_spend=replaceable_tx["new_utxos"])["tx"]]
+        txns = [
+            replaceable_tx["tx"],
+            self.wallet.create_self_transfer_multi(utxos_to_spend=replaceable_tx["new_utxos"])["tx"],
+        ]
         txns_hex = [tx.serialize().hex() for tx in txns]
         assert_equal(self.nodes[0].testmempoolaccept(txns_hex)[0]["reject-reason"], "too-long-mempool-chain")
         pkg_result = self.nodes[0].submitpackage(txns_hex)
@@ -76,5 +84,5 @@ class MempoolPackagesTest(BitcoinTestFramework):
         assert_equal(len(self.nodes[0].getrawmempool()), DEFAULT_ANCESTOR_LIMIT + 3)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     MempoolPackagesTest(__file__).main()

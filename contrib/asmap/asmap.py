@@ -15,25 +15,27 @@ from enum import Enum
 from functools import total_ordering
 from typing import Optional, Union, overload
 
-def net_to_prefix(net: Union[ipaddress.IPv4Network,ipaddress.IPv6Network]) -> list[bool]:
+
+def net_to_prefix(net: Union[ipaddress.IPv4Network, ipaddress.IPv6Network]) -> list[bool]:
     """
     Convert an IPv4 or IPv6 network to a prefix represented as a list of bits.
 
     IPv4 ranges are remapped to their IPv4-mapped IPv6 range (::ffff:0:0/96).
     """
     num_bits = net.prefixlen
-    netrange = int.from_bytes(net.network_address.packed, 'big')
+    netrange = int.from_bytes(net.network_address.packed, "big")
 
     # Map an IPv4 prefix into IPv6 space.
     if isinstance(net, ipaddress.IPv4Network):
         num_bits += 96
-        netrange += 0xffff00000000
+        netrange += 0xFFFF00000000
 
     # Strip unused bottom bits.
     assert (netrange & ((1 << (128 - num_bits)) - 1)) == 0
     return [((netrange >> (127 - i)) & 1) != 0 for i in range(num_bits)]
 
-def prefix_to_net(prefix: list[bool]) -> Union[ipaddress.IPv4Network,ipaddress.IPv6Network]:
+
+def prefix_to_net(prefix: list[bool]) -> Union[ipaddress.IPv4Network, ipaddress.IPv6Network]:
     """The reverse operation of net_to_prefix."""
     # Convert to number
     netrange = sum(b << (127 - i) for i, b in enumerate(prefix))
@@ -41,17 +43,19 @@ def prefix_to_net(prefix: list[bool]) -> Union[ipaddress.IPv4Network,ipaddress.I
     assert num_bits <= 128
 
     # Return IPv4 range if in ::ffff:0:0/96
-    if num_bits >= 96 and (netrange >> 32) == 0xffff:
-        return ipaddress.IPv4Network((netrange & 0xffffffff, num_bits - 96), True)
+    if num_bits >= 96 and (netrange >> 32) == 0xFFFF:
+        return ipaddress.IPv4Network((netrange & 0xFFFFFFFF, num_bits - 96), True)
 
     # Return IPv6 range otherwise.
     return ipaddress.IPv6Network((netrange, num_bits), True)
+
 
 # Shortcut for (prefix, ASN) entries.
 ASNEntry = tuple[list[bool], int]
 
 # Shortcut for (prefix, old ASN, new ASN) entries.
 ASNDiff = tuple[list[bool], int, int]
+
 
 class _VarLenCoder:
     """
@@ -121,7 +125,7 @@ class _VarLenCoder:
                 break
         return ret + bits
 
-    def decode(self, stream, bitpos) -> tuple[int,int]:
+    def decode(self, stream, bitpos) -> tuple[int, int]:
         """Decode a number starting at bitpos in stream, returning value and new bitpos."""
         val = self._minval
         bits = 0
@@ -139,14 +143,17 @@ class _VarLenCoder:
             val += bit << (bits - 1 - i)
         return val, bitpos
 
+
 # Variable-length encoders used in the binary asmap format.
 _CODER_INS = _VarLenCoder(0, [0, 0, 1])
 _CODER_ASN = _VarLenCoder(1, list(range(15, 25)))
 _CODER_MATCH = _VarLenCoder(2, list(range(1, 9)))
 _CODER_JUMP = _VarLenCoder(17, list(range(5, 31)))
 
+
 class _Instruction(Enum):
     """One instruction in the binary asmap format."""
+
     # A return instruction, encoded as [0], returns a constant ASN. It is followed by
     # an integer using the ASN encoding.
     RETURN = 0
@@ -172,6 +179,7 @@ class _Instruction(Enum):
     # a successful return. In this usage, they're always converted to an actual MATCH or RETURN
     # before the top level is reached (see make_default below).
     END = 4
+
 
 class _BinNode:
     """A class representing a (node of) the parsed binary asmap format."""
@@ -204,8 +212,7 @@ class _BinNode:
         elif ins == _Instruction.JUMP:
             assert isinstance(arg1, _BinNode)
             assert isinstance(arg2, _BinNode)
-            self.size = (_CODER_INS.encode_size(ins.value) + _CODER_JUMP.encode_size(arg1.size) +
-                         arg1.size + arg2.size)
+            self.size = _CODER_INS.encode_size(ins.value) + _CODER_JUMP.encode_size(arg1.size) + arg1.size + arg2.size
         elif ins == _Instruction.DEFAULT:
             assert isinstance(arg1, int)
             assert isinstance(arg2, _BinNode)
@@ -213,8 +220,7 @@ class _BinNode:
         elif ins == _Instruction.MATCH:
             assert isinstance(arg1, int)
             assert isinstance(arg2, _BinNode)
-            self.size = (_CODER_INS.encode_size(ins.value) + _CODER_MATCH.encode_size(arg1)
-                         + arg2.size)
+            self.size = _CODER_INS.encode_size(ins.value) + _CODER_MATCH.encode_size(arg1) + arg2.size
         elif ins == _Instruction.END:
             assert arg1 is None
             assert arg2 is None
@@ -248,8 +254,7 @@ class _BinNode:
             return _BinNode(_Instruction.MATCH, 3, node1)
         if node1.ins == _Instruction.END:
             if node0.ins == _Instruction.MATCH and node0.arg1 <= 0xFF:
-                return _BinNode(node0.ins, node0.arg1 + (1 << (node0.arg1.bit_length() - 1)),
-                                node0.arg2)
+                return _BinNode(node0.ins, node0.arg1 + (1 << (node0.arg1.bit_length() - 1)), node0.arg2)
             return _BinNode(_Instruction.MATCH, 2, node0)
         return _BinNode(_Instruction.JUMP, node0, node1)
 
@@ -265,6 +270,7 @@ class _BinNode:
         if sub.ins in (_Instruction.RETURN, _Instruction.DEFAULT):
             return sub
         return _BinNode(_Instruction.DEFAULT, val, sub)
+
 
 @total_ordering
 class ASMap:
@@ -305,6 +311,7 @@ class ASMap:
                 oldasn = node[0][0]
                 node.clear()
                 node.append(oldasn)
+
         recurse(self._trie, 0)
 
     def update_multi(self, entries: list[tuple[list[bool], int]]) -> None:
@@ -315,6 +322,7 @@ class ASMap:
 
     def _set_trie(self, trie) -> None:
         """Set trie directly. Internal use only."""
+
         def recurse(node: list) -> None:
             if len(node) < 2:
                 return
@@ -329,6 +337,7 @@ class ASMap:
                     asn = node[0][0]
                     node.clear()
                     node.append(asn)
+
         recurse(trie)
         self._trie = trie
 
@@ -336,10 +345,12 @@ class ASMap:
         """Construct an ASMap object from an optional list of entries."""
         self._trie = [0]
         if entries is not None:
+
             def entry_key(entry):
                 """Sort function that places shorter prefixes first."""
                 prefix, asn = entry
                 return len(prefix), prefix, asn
+
             for prefix, asn in sorted(entries, key=entry_key):
                 self.update(prefix, asn)
 
@@ -356,7 +367,7 @@ class ASMap:
 
     def _to_entries_flat(self, fill: bool = False) -> list[ASNEntry]:
         """Convert an ASMap object to a list of non-overlapping (prefix, asn) objects."""
-        prefix : list[bool] = []
+        prefix: list[bool] = []
 
         def recurse(node: list) -> list[ASNEntry]:
             ret = []
@@ -374,13 +385,14 @@ class ASMap:
                     if len(asns) == 1:
                         ret = [(list(prefix), list(asns)[0])]
             return ret
+
         return recurse(self._trie)
 
     def _to_entries_minimal(self, fill: bool = False) -> list[ASNEntry]:
         """Convert a trie to a minimal list of ASNEntry objects, exploiting overlap."""
-        prefix : list[bool] = []
+        prefix: list[bool] = []
 
-        def recurse(node: list) -> (tuple[dict[Optional[int], list[ASNEntry]], bool]):
+        def recurse(node: list) -> tuple[dict[Optional[int], list[ASNEntry]], bool]:
             if len(node) == 1 and node[0] == 0:
                 return {None if fill else 0: []}, True
             if len(node) == 1:
@@ -392,11 +404,12 @@ class ASMap:
             right, rhole = recurse(node[1])
             prefix.pop()
             hole = not fill and (lhole or rhole)
-            def candidate(ctx: Optional[int], res0: Optional[list[ASNEntry]],
-                    res1: Optional[list[ASNEntry]]):
+
+            def candidate(ctx: Optional[int], res0: Optional[list[ASNEntry]], res1: Optional[list[ASNEntry]]):
                 if res0 is not None and res1 is not None:
                     if ctx not in ret or len(res0) + len(res1) < len(ret[ctx]):
                         ret[ctx] = res0 + res1
+
             for ctx in set(left) | set(right):
                 candidate(ctx, left.get(ctx), right.get(ctx))
                 candidate(ctx, left.get(None), right.get(ctx))
@@ -406,11 +419,11 @@ class ASMap:
                     if ctx is not None:
                         candidate(None, [(list(prefix), ctx)], ret[ctx])
             if None in ret:
-                ret = {ctx:entries for ctx, entries in ret.items()
-                       if ctx is None or len(entries) < len(ret[None])}
+                ret = {ctx: entries for ctx, entries in ret.items() if ctx is None or len(entries) < len(ret[None])}
             if hole:
-                ret = {ctx:entries for ctx, entries in ret.items() if ctx is None or ctx == 0}
+                ret = {ctx: entries for ctx, entries in ret.items() if ctx is None or ctx == 0}
             return ret, hole
+
         res, _ = recurse(self._trie)
         return res[0] if 0 in res else res[None]
 
@@ -434,8 +447,7 @@ class ASMap:
         return self._to_entries_flat(fill)
 
     @staticmethod
-    def from_random(num_leaves: int = 10, max_asn: int = 6,
-                    unassigned_prob: float = 0.5) -> "ASMap":
+    def from_random(num_leaves: int = 10, max_asn: int = 6, unassigned_prob: float = 0.5) -> "ASMap":
         """
         Construct a random ASMap object, with specified:
          - Number of leaves in its trie (at least 1)
@@ -467,12 +479,13 @@ class ASMap:
                 leaf.append(random.randrange(1, max_asn + 1))
             else:
                 leaf.append(0)
-        #pylint: disable=protected-access
+        # pylint: disable=protected-access
         ret._set_trie(trie)
         return ret
 
     def _to_binnode(self, fill: bool = False) -> _BinNode:
         """Convert a trie to a _BinNode object."""
+
         def recurse(node: list) -> tuple[dict[Optional[int], _BinNode], bool]:
             if len(node) == 1 and node[0] == 0:
                 return {(None if fill else 0): _BinNode.make_end()}, True
@@ -499,17 +512,18 @@ class ASMap:
                 for ctx in sorted(set(ret) - set([None])):
                     candidate(None, ctx, ret[ctx], _BinNode.make_default)
             if None in ret:
-                ret = {ctx:enc for ctx, enc in ret.items()
-                       if ctx is None or enc.size < ret[None].size}
+                ret = {ctx: enc for ctx, enc in ret.items() if ctx is None or enc.size < ret[None].size}
             if hole:
-                ret = {ctx:enc for ctx, enc in ret.items() if ctx is None or ctx == 0}
+                ret = {ctx: enc for ctx, enc in ret.items() if ctx is None or ctx == 0}
             return ret, hole
+
         res, _ = recurse(self._trie)
         return res[0] if 0 in res else res[None]
 
     @staticmethod
     def _from_binnode(binnode: _BinNode) -> "ASMap":
         """Construct an ASMap object from a _BinNode. Internal use only."""
+
         def recurse(node: _BinNode, default: int) -> list:
             if node.ins == _Instruction.RETURN:
                 return [node.arg1]
@@ -528,9 +542,10 @@ class ASMap:
                 return sub
             assert node.ins == _Instruction.DEFAULT
             return recurse(node.arg2, node.arg1)
+
         ret = ASMap()
         if binnode.ins != _Instruction.END:
-            #pylint: disable=protected-access
+            # pylint: disable=protected-access
             ret._set_trie(recurse(binnode, 0))
         return ret
 
@@ -571,7 +586,7 @@ class ASMap:
         nbits = 0
         ret = []
         for bit in bits:
-            val += (bit << nbits)
+            val += bit << nbits
             nbits += 1
             if nbits == 8:
                 ret.append(val)
@@ -635,6 +650,7 @@ class ASMap:
 
     def extends(self, req: "ASMap") -> bool:
         """Determine whether this matches req for all subranges where req is assigned."""
+
         def recurse(actual: list, require: list) -> bool:
             if len(require) == 1 and require[0] == 0:
                 return True
@@ -645,8 +661,9 @@ class ASMap:
             if len(actual) == 2:
                 return recurse(actual[0], require[0]) and recurse(actual[1], require[1])
             return recurse(actual, require[0]) and recurse(actual, require[1])
+
         assert isinstance(req, ASMap)
-        #pylint: disable=protected-access
+        # pylint: disable=protected-access
         return recurse(self._trie, req._trie)
 
     def diff(self, other: "ASMap") -> list[ASNDiff]:
@@ -668,15 +685,16 @@ class ASMap:
                 prefix[-1] = True
                 recurse(old_right, new_right)
                 prefix.pop()
+
         assert isinstance(other, ASMap)
-        #pylint: disable=protected-access
+        # pylint: disable=protected-access
         recurse(self._trie, other._trie)
         return ret
 
     def __copy__(self) -> "ASMap":
         """Construct a copy of this ASMap object. Its state will not be shared."""
         ret = ASMap()
-        #pylint: disable=protected-access
+        # pylint: disable=protected-access
         ret._set_trie(copy.deepcopy(self._trie))
         return ret
 
@@ -694,7 +712,7 @@ class TestASMap(unittest.TestCase):
             net_bits = random.getrandbits(128)
             for prefix_len in range(0, 129):
                 masked_bits = (net_bits >> (128 - prefix_len)) << (128 - prefix_len)
-                net = ipaddress.IPv6Network((masked_bits.to_bytes(16, 'big'), prefix_len))
+                net = ipaddress.IPv6Network((masked_bits.to_bytes(16, "big"), prefix_len))
                 prefix = net_to_prefix(net)
                 self.assertTrue(len(prefix) <= 128)
                 net2 = prefix_to_net(prefix)
@@ -706,7 +724,7 @@ class TestASMap(unittest.TestCase):
             net_bits = random.getrandbits(32)
             for prefix_len in range(0, 33):
                 masked_bits = (net_bits >> (32 - prefix_len)) << (32 - prefix_len)
-                net = ipaddress.IPv4Network((masked_bits.to_bytes(4, 'big'), prefix_len))
+                net = ipaddress.IPv4Network((masked_bits.to_bytes(4, "big"), prefix_len))
                 prefix = net_to_prefix(net)
                 self.assertTrue(32 <= len(prefix) <= 128)
                 net2 = prefix_to_net(prefix)
@@ -721,8 +739,7 @@ class TestASMap(unittest.TestCase):
                 # Iterate over the probability that leaves are unassigned.
                 for pct in range(101):
                     # Construct a random ASMap object according to the above parameters.
-                    asmap = ASMap.from_random(num_leaves=leaves, max_asn=1 + (1 << asnbits),
-                                              unassigned_prob=0.01 * pct)
+                    asmap = ASMap.from_random(num_leaves=leaves, max_asn=1 + (1 << asnbits), unassigned_prob=0.01 * pct)
                     # Run tests for to_entries and construction from those entries, both
                     # for overlapping and non-overlapping ones.
                     for overlapping in [False, True]:
@@ -749,7 +766,7 @@ class TestASMap(unittest.TestCase):
 
     def test_patching(self) -> None:
         """Test behavior of update, lookup, extends, and diff."""
-        #pylint: disable=too-many-locals,too-many-nested-blocks
+        # pylint: disable=too-many-locals,too-many-nested-blocks
         # Iterate over the number of leaves the random test ASMap objects have.
         for leaves in range(1, 20):
             # Iterate over the number of bits in the AS numbers used.
@@ -757,8 +774,7 @@ class TestASMap(unittest.TestCase):
                 # Iterate over the probability that leaves are unassigned.
                 for pct in range(0, 101):
                     # Construct a random ASMap object according to the above parameters.
-                    asmap = ASMap.from_random(num_leaves=leaves, max_asn=1 + (1 << asnbits),
-                                              unassigned_prob=0.01 * pct)
+                    asmap = ASMap.from_random(num_leaves=leaves, max_asn=1 + (1 << asnbits), unassigned_prob=0.01 * pct)
                     # Make a copy of that asmap object to which patches will be applied.
                     # It starts off being equal to asmap.
                     patched = copy.copy(asmap)
@@ -805,7 +821,7 @@ class TestASMap(unittest.TestCase):
                                 # order, so the first match should work).
                                 found = False
                                 for patch_path, patch_asn in patches:
-                                    if spec_path[:len(patch_path)] == patch_path:
+                                    if spec_path[: len(patch_path)] == patch_path:
                                         # When found, it must match whatever the result was patched
                                         # to.
                                         self.assertEqual(new_asn, patch_asn)
@@ -814,5 +830,6 @@ class TestASMap(unittest.TestCase):
                                 # And such a patch must exist.
                                 self.assertTrue(found)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main()

@@ -28,18 +28,31 @@ TMPDIR_PREFIX = "bitcoin_func_test_"
 # Matches on the date format at the start of the log event
 TIMESTAMP_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{6})?Z")
 
-LogEvent = namedtuple('LogEvent', ['timestamp', 'source', 'event'])
+LogEvent = namedtuple("LogEvent", ["timestamp", "source", "event"])
+
 
 def main():
     """Main function. Parses args, reads the log files and renders them as text or html."""
-    parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument(
-        'testdir', nargs='?', default='',
-        help=('temporary test directory to combine logs from. '
-              'Defaults to the most recent'))
-    parser.add_argument('-c', '--color', dest='color', action='store_true', help='outputs the combined log with events colored by source (requires posix terminal colors. Use less -r for viewing)')
-    parser.add_argument('--html', dest='html', action='store_true', help='outputs the combined log as html. Requires jinja2. pip install jinja2')
+        "testdir",
+        nargs="?",
+        default="",
+        help=("temporary test directory to combine logs from. Defaults to the most recent"),
+    )
+    parser.add_argument(
+        "-c",
+        "--color",
+        dest="color",
+        action="store_true",
+        help="outputs the combined log with events colored by source (requires posix terminal colors. Use less -r for viewing)",
+    )
+    parser.add_argument(
+        "--html",
+        dest="html",
+        action="store_true",
+        help="outputs the combined log as html. Requires jinja2. pip install jinja2",
+    )
     args = parser.parse_args()
 
     if args.html and args.color:
@@ -55,7 +68,7 @@ def main():
     if not args.testdir:
         print("Opening latest test directory: {}".format(testdir), file=sys.stderr)
 
-    colors = defaultdict(lambda: '')
+    colors = defaultdict(lambda: "")
     if args.color:
         colors["test"] = "\033[0;36m"  # CYAN
         colors["node0"] = "\033[0;34m"  # BLUE
@@ -80,15 +93,14 @@ def read_logs(tmp_dir):
     for each of the input log files."""
 
     # Find out what the folder is called that holds node 0's debug.log file
-    debug_logs = list(pathlib.Path(tmp_dir).glob('node0/**/debug.log'))
+    debug_logs = list(pathlib.Path(tmp_dir).glob("node0/**/debug.log"))
     match len(debug_logs):
         case 0:
-            chain = 'regtest'  # fallback to regtest
+            chain = "regtest"  # fallback to regtest
         case 1:
-            chain = re.search(r'node0/(.+?)/debug\.log$', debug_logs[0].as_posix()).group(1)
+            chain = re.search(r"node0/(.+?)/debug\.log$", debug_logs[0].as_posix()).group(1)
         case _:
-            raise RuntimeError('Max one debug.log is supported, found several:\n\t' +
-                               '\n\t'.join(map(str, debug_logs)))
+            raise RuntimeError("Max one debug.log is supported, found several:\n\t" + "\n\t".join(map(str, debug_logs)))
 
     files = [("test", "%s/test_framework.log" % tmp_dir)]
     for i in itertools.count():
@@ -104,14 +116,14 @@ def print_node_warnings(tmp_dir, colors):
     """Print nodes' errors and warnings"""
 
     warnings = []
-    for stream in ['stdout', 'stderr']:
+    for stream in ["stdout", "stderr"]:
         for i in itertools.count():
             folder = "{}/node{}/{}".format(tmp_dir, i, stream)
             if not os.path.isdir(folder):
                 break
-            for (_, _, fns) in os.walk(folder):
+            for _, _, fns in os.walk(folder):
                 for fn in fns:
-                    warning = pathlib.Path('{}/{}'.format(folder, fn)).read_text().strip()
+                    warning = pathlib.Path("{}/{}".format(folder, fn)).read_text().strip()
                     if warning:
                         warnings.append(("node{} {}".format(i, stream), warning))
 
@@ -129,15 +141,9 @@ def find_latest_test_dir():
 
     def is_valid_test_tmpdir(basename):
         fullpath = join_tmp(basename)
-        return (
-            os.path.isdir(fullpath)
-            and basename.startswith(TMPDIR_PREFIX)
-            and os.access(fullpath, os.R_OK)
-        )
+        return os.path.isdir(fullpath) and basename.startswith(TMPDIR_PREFIX) and os.access(fullpath, os.R_OK)
 
-    testdir_paths = [
-        join_tmp(name) for name in os.listdir(tmpdir) if is_valid_test_tmpdir(name)
-    ]
+    testdir_paths = [join_tmp(name) for name in os.listdir(tmpdir) if is_valid_test_tmpdir(name)]
 
     return max(testdir_paths, key=os.path.getmtime) if testdir_paths else None
 
@@ -148,12 +154,12 @@ def get_log_events(source, logfile):
     Log events may be split over multiple lines. We use the timestamp
     regex match as the marker for a new log event."""
     try:
-        with open(logfile, 'r', encoding='utf-8') as infile:
-            event = ''
-            timestamp = ''
+        with open(logfile, "r", encoding="utf-8") as infile:
+            event = ""
+            timestamp = ""
             for line in infile:
                 # skip blank lines
-                if line == '\n':
+                if line == "\n":
                     continue
                 # if this line has a timestamp, it's the start of a new log event.
                 time_match = TIMESTAMP_PATTERN.match(line)
@@ -190,14 +196,16 @@ def print_logs_plain(log_events, colors):
 def print_logs_html(log_events):
     """Renders the iterator of log events into html."""
     try:
-        import jinja2 #type:ignore
+        import jinja2  # type:ignore
     except ImportError:
         print("jinja2 not found. Try `pip install jinja2`")
         sys.exit(1)
-    print(jinja2.Environment(loader=jinja2.FileSystemLoader('./'))
-                    .get_template('combined_log_template.html')
-                    .render(title="Combined Logs from testcase", log_events=[event._asdict() for event in log_events]))
+    print(
+        jinja2.Environment(loader=jinja2.FileSystemLoader("./"))
+        .get_template("combined_log_template.html")
+        .render(title="Combined Logs from testcase", log_events=[event._asdict() for event in log_events])
+    )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

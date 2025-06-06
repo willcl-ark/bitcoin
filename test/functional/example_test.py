@@ -9,6 +9,7 @@ what the test is doing. It's the first thing people see when they open
 the file and should give the reader information about *what* the test
 is testing and *how* it's being tested
 """
+
 # Imports should be in PEP8 ordering (std library first, then third party
 # libraries then local imports).
 from collections import defaultdict
@@ -33,6 +34,7 @@ from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
     assert_equal,
 )
+
 
 # P2PInterface is a class containing callbacks to be executed when a P2P
 # message is received from the node-under-test. Subclass P2PInterface and
@@ -63,6 +65,7 @@ class BaseNode(P2PInterface):
     def on_inv(self, message):
         """Override the standard on_inv callback"""
         pass
+
 
 def custom_function():
     """Do some custom behaviour
@@ -169,7 +172,7 @@ class ExampleTest(BitcoinTestFramework):
 
         self.log.info("Create some blocks")
         self.tip = int(self.nodes[0].getbestblockhash(), 16)
-        self.block_time = self.nodes[0].getblock(self.nodes[0].getbestblockhash())['time'] + 1
+        self.block_time = self.nodes[0].getblock(self.nodes[0].getbestblockhash())["time"] + 1
 
         height = self.nodes[0].getblockcount()
 
@@ -177,7 +180,7 @@ class ExampleTest(BitcoinTestFramework):
             # Use the blocktools functionality to manually build a block.
             # Calling the generate() rpc is easier, but this allows us to exactly
             # control the blocks and transactions.
-            block = create_block(self.tip, create_coinbase(height+1), self.block_time)
+            block = create_block(self.tip, create_coinbase(height + 1), self.block_time)
             block.solve()
             block_message = msg_block(block)
             # Send message is used to send a P2P message to the node over our P2PInterface
@@ -210,7 +213,9 @@ class ExampleTest(BitcoinTestFramework):
 
         # wait_until() will loop until a predicate condition is met. Use it to test properties of the
         # P2PInterface objects.
-        peer_receiving.wait_until(lambda: sorted(blocks) == sorted(list(peer_receiving.block_receive_map.keys())), timeout=5)
+        peer_receiving.wait_until(
+            lambda: sorted(blocks) == sorted(list(peer_receiving.block_receive_map.keys())), timeout=5
+        )
 
         self.log.info("Check that each block was received only once")
         # The network thread uses a global lock on data access to the P2PConnection objects when sending and receiving
@@ -221,5 +226,5 @@ class ExampleTest(BitcoinTestFramework):
                 assert_equal(block, 1)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     ExampleTest(__file__).main()

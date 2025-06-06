@@ -28,9 +28,7 @@ def grep_boost_fixture_test_suite():
 
 def check_matching_test_names(test_suite_list):
     not_matching = [
-        x
-        for x in test_suite_list
-        if re.search(r"/(.*?)\.cpp:BOOST_FIXTURE_TEST_SUITE\(\1, .*\)", x) is None
+        x for x in test_suite_list if re.search(r"/(.*?)\.cpp:BOOST_FIXTURE_TEST_SUITE\(\1, .*\)", x) is None
     ]
     if len(not_matching) > 0:
         not_matching = "\n".join(not_matching)

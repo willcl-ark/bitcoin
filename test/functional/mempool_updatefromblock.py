@@ -7,6 +7,7 @@
 Test mempool update of transaction descendants/ancestors information (count, size)
 when transactions have been re-added from a disconnected block to the mempool.
 """
+
 from decimal import Decimal
 from math import ceil
 import time
@@ -24,20 +25,29 @@ MAX_DISCONNECTED_TX_POOL_BYTES = 20_000_000
 CUSTOM_ANCESTOR_COUNT = 100
 CUSTOM_DESCENDANT_COUNT = CUSTOM_ANCESTOR_COUNT
 
+
 class MempoolUpdateFromBlockTest(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 1
         # Ancestor and descendant limits depend on transaction_graph_test requirements
-        self.extra_args = [['-limitdescendantsize=1000', '-limitancestorsize=1000', f'-limitancestorcount={CUSTOM_ANCESTOR_COUNT}', f'-limitdescendantcount={CUSTOM_DESCENDANT_COUNT}', '-datacarriersize=100000']]
+        self.extra_args = [
+            [
+                "-limitdescendantsize=1000",
+                "-limitancestorsize=1000",
+                f"-limitancestorcount={CUSTOM_ANCESTOR_COUNT}",
+                f"-limitdescendantcount={CUSTOM_DESCENDANT_COUNT}",
+                "-datacarriersize=100000",
+            ]
+        ]
 
     def create_empty_fork(self, fork_length):
-        '''
-            Creates a fork using first node's chaintip as the starting point.
-            Returns a list of blocks to submit in order.
-        '''
+        """
+        Creates a fork using first node's chaintip as the starting point.
+        Returns a list of blocks to submit in order.
+        """
         tip = int(self.nodes[0].getbestblockhash(), 16)
         height = self.nodes[0].getblockcount()
-        block_time = self.nodes[0].getblock(self.nodes[0].getbestblockhash())['time'] + 1
+        block_time = self.nodes[0].getblock(self.nodes[0].getbestblockhash())["time"] + 1
 
         blocks = []
         for _ in range(fork_length):
@@ -73,9 +83,9 @@ class MempoolUpdateFromBlockTest(BitcoinTestFramework):
 
         tx_id = []
         tx_size = []
-        self.log.info('Creating {} transactions...'.format(size))
+        self.log.info("Creating {} transactions...".format(size))
         for i in range(0, size):
-            self.log.debug('Preparing transaction #{}...'.format(i))
+            self.log.debug("Preparing transaction #{}...".format(i))
             # Prepare inputs.
             if i == 0:
                 inputs = [wallet.get_utxo()]  # let MiniWallet provide a start UTXO
@@ -99,44 +109,56 @@ class MempoolUpdateFromBlockTest(BitcoinTestFramework):
                 from_node=self.nodes[0],
                 utxos_to_spend=inputs,
                 num_outputs=n_outputs,
-                fee_per_output=ceil(fee / n_outputs)
+                fee_per_output=ceil(fee / n_outputs),
             )
-            tx_id.append(new_tx['txid'])
-            tx_size.append(new_tx['tx'].get_vsize())
+            tx_id.append(new_tx["txid"])
+            tx_size.append(new_tx["tx"].get_vsize())
 
             if tx_count in n_tx_to_mine:
                 # The created transactions are mined into blocks by batches.
-                self.log.info('The batch of {} transactions has been accepted into the mempool.'.format(len(self.nodes[0].getrawmempool())))
+                self.log.info(
+                    "The batch of {} transactions has been accepted into the mempool.".format(
+                        len(self.nodes[0].getrawmempool())
+                    )
+                )
                 self.generate(self.nodes[0], 1)[0]
                 assert_equal(len(self.nodes[0].getrawmempool()), 0)
-                self.log.info('All of the transactions from the current batch have been mined into a block.')
+                self.log.info("All of the transactions from the current batch have been mined into a block.")
             elif tx_count == size:
                 # At the end the old fork is submitted to cause reorg, and all of the created
                 # transactions should be re-added from disconnected blocks to the mempool.
-                self.log.info('The last batch of {} transactions has been accepted into the mempool.'.format(len(self.nodes[0].getrawmempool())))
+                self.log.info(
+                    "The last batch of {} transactions has been accepted into the mempool.".format(
+                        len(self.nodes[0].getrawmempool())
+                    )
+                )
                 start = time.time()
                 # Trigger reorg
                 for block in fork_blocks:
                     self.nodes[0].submitblock(block.serialize().hex())
                 end = time.time()
                 assert_equal(len(self.nodes[0].getrawmempool()), size)
-                self.log.info('All of the recently mined transactions have been re-added into the mempool in {} seconds.'.format(end - start))
+                self.log.info(
+                    "All of the recently mined transactions have been re-added into the mempool in {} seconds.".format(
+                        end - start
+                    )
+                )
 
-        self.log.info('Checking descendants/ancestors properties of all of the in-mempool transactions...')
+        self.log.info("Checking descendants/ancestors properties of all of the in-mempool transactions...")
         for k, tx in enumerate(tx_id):
-            self.log.debug('Check transaction #{}.'.format(k))
+            self.log.debug("Check transaction #{}.".format(k))
             entry = self.nodes[0].getmempoolentry(tx)
-            assert_equal(entry['descendantcount'], size - k)
-            assert_equal(entry['descendantsize'], sum(tx_size[k:size]))
-            assert_equal(entry['ancestorcount'], k + 1)
-            assert_equal(entry['ancestorsize'], sum(tx_size[0:(k + 1)]))
+            assert_equal(entry["descendantcount"], size - k)
+            assert_equal(entry["descendantsize"], sum(tx_size[k:size]))
+            assert_equal(entry["ancestorcount"], k + 1)
+            assert_equal(entry["ancestorsize"], sum(tx_size[0 : (k + 1)]))
 
         self.generate(self.nodes[0], 1)
         assert_equal(self.nodes[0].getrawmempool(), [])
         wallet.rescan_utxos()
 
     def test_max_disconnect_pool_bytes(self):
-        self.log.info('Creating independent transactions to test MAX_DISCONNECTED_TX_POOL_BYTES limit during reorg')
+        self.log.info("Creating independent transactions to test MAX_DISCONNECTED_TX_POOL_BYTES limit during reorg")
 
         # Generate coins for the hundreds of transactions we will make
         parent_target_vsize = 100_000
@@ -154,8 +176,13 @@ class MempoolUpdateFromBlockTest(BitcoinTestFramework):
         aggregate_serialized_size = 0
         while aggregate_serialized_size < MAX_DISCONNECTED_TX_POOL_BYTES:
             # Mine parents in FIFO order via fee ordering
-            large_std_txs.append(wallet.create_self_transfer(target_vsize=parent_target_vsize, fee=Decimal("0.00400000") - (Decimal("0.00001000") * len(large_std_txs))))
-            small_child_txs.append(wallet.create_self_transfer(utxo_to_spend=large_std_txs[-1]['new_utxo']))
+            large_std_txs.append(
+                wallet.create_self_transfer(
+                    target_vsize=parent_target_vsize,
+                    fee=Decimal("0.00400000") - (Decimal("0.00001000") * len(large_std_txs)),
+                )
+            )
+            small_child_txs.append(wallet.create_self_transfer(utxo_to_spend=large_std_txs[-1]["new_utxo"]))
             # Slight underestimate of dynamic cost, so we'll be over during reorg
             aggregate_serialized_size += len(large_std_txs[-1]["tx"].serialize())
 
@@ -187,7 +214,7 @@ class MempoolUpdateFromBlockTest(BitcoinTestFramework):
         assert_equal([tx["txid"] in mempool for tx in large_std_txs], [True] * expected_parent_count + [False] * 2)
 
     def test_chainlimits_exceeded(self):
-        self.log.info('Check that too long chains on reorg are handled')
+        self.log.info("Check that too long chains on reorg are handled")
 
         wallet = MiniWallet(self.nodes[0])
         self.generate(wallet, 101)
@@ -202,7 +229,12 @@ class MempoolUpdateFromBlockTest(BitcoinTestFramework):
         for tx in chain[:-2]:
             self.nodes[0].sendrawtransaction(tx["hex"])
 
-        assert_raises_rpc_error(-26, "too-long-mempool-chain, too many unconfirmed ancestors [limit: 100]", self.nodes[0].sendrawtransaction, chain[-2]["hex"])
+        assert_raises_rpc_error(
+            -26,
+            "too-long-mempool-chain, too many unconfirmed ancestors [limit: 100]",
+            self.nodes[0].sendrawtransaction,
+            chain[-2]["hex"],
+        )
 
         # Mine a block with all but last transaction, non-standardly long chain
         self.generateblock(self.nodes[0], output="raw(42)", transactions=[tx["hex"] for tx in chain[:-1]])
@@ -226,5 +258,6 @@ class MempoolUpdateFromBlockTest(BitcoinTestFramework):
 
         self.test_chainlimits_exceeded()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     MempoolUpdateFromBlockTest(__file__).main()

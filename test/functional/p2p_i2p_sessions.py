@@ -32,5 +32,5 @@ class I2PSessions(BitcoinTestFramework):
             node1.addnode(node=addr, command="onetry")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     I2PSessions(__file__).main()

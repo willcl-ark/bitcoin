@@ -46,7 +46,7 @@ KNOWN_VIOLATIONS = [
     "src/span.h:.*printf",
     "src/test/fuzz/locale.cpp:.*setlocale",
     "src/test/util_tests.cpp:.*strtoll",
-    "src/util/syserror.cpp:.*strerror",      # Outside this function use `SysErrorString`
+    "src/util/syserror.cpp:.*strerror",  # Outside this function use `SysErrorString`
 ]
 
 REGEXP_EXTERNAL_DEPENDENCIES_EXCLUSIONS = [
@@ -59,71 +59,71 @@ REGEXP_EXTERNAL_DEPENDENCIES_EXCLUSIONS = [
 ]
 
 LOCALE_DEPENDENT_FUNCTIONS = [
-    "alphasort",    # LC_COLLATE (via strcoll)
-    "asctime",      # LC_TIME (directly)
-    "asprintf",     # (via vasprintf)
-    "atof",         # LC_NUMERIC (via strtod)
-    "atoi",         # LC_NUMERIC (via strtol)
-    "atol",         # LC_NUMERIC (via strtol)
-    "atoll",        # (via strtoll)
+    "alphasort",  # LC_COLLATE (via strcoll)
+    "asctime",  # LC_TIME (directly)
+    "asprintf",  # (via vasprintf)
+    "atof",  # LC_NUMERIC (via strtod)
+    "atoi",  # LC_NUMERIC (via strtol)
+    "atol",  # LC_NUMERIC (via strtol)
+    "atoll",  # (via strtoll)
     "atoq",
-    "btowc",        # LC_CTYPE (directly)
-    "ctime",        # (via asctime or localtime)
-    "dprintf",      # (via vdprintf)
+    "btowc",  # LC_CTYPE (directly)
+    "ctime",  # (via asctime or localtime)
+    "dprintf",  # (via vdprintf)
     "fgetwc",
     "fgetws",
-    "fold_case",    # boost::locale::fold_case
-    "fprintf",      # (via vfprintf)
+    "fold_case",  # boost::locale::fold_case
+    "fprintf",  # (via vfprintf)
     "fputwc",
     "fputws",
-    "fscanf",       # (via __vfscanf)
-    "fwprintf",     # (via __vfwprintf)
-    "getdate",      # via __getdate_r => isspace // __localtime_r
+    "fscanf",  # (via __vfscanf)
+    "fwprintf",  # (via __vfwprintf)
+    "getdate",  # via __getdate_r => isspace // __localtime_r
     "getwc",
     "getwchar",
-    "is_digit",     # boost::algorithm::is_digit
-    "is_space",     # boost::algorithm::is_space
-    "isalnum",      # LC_CTYPE
-    "isalpha",      # LC_CTYPE
-    "isblank",      # LC_CTYPE
-    "iscntrl",      # LC_CTYPE
-    "isctype",      # LC_CTYPE
-    "isdigit",      # LC_CTYPE
-    "isgraph",      # LC_CTYPE
-    "islower",      # LC_CTYPE
-    "isprint",      # LC_CTYPE
-    "ispunct",      # LC_CTYPE
-    "isspace",      # LC_CTYPE
-    "isupper",      # LC_CTYPE
-    "iswalnum",     # LC_CTYPE
-    "iswalpha",     # LC_CTYPE
-    "iswblank",     # LC_CTYPE
-    "iswcntrl",     # LC_CTYPE
-    "iswctype",     # LC_CTYPE
-    "iswdigit",     # LC_CTYPE
-    "iswgraph",     # LC_CTYPE
-    "iswlower",     # LC_CTYPE
-    "iswprint",     # LC_CTYPE
-    "iswpunct",     # LC_CTYPE
-    "iswspace",     # LC_CTYPE
-    "iswupper",     # LC_CTYPE
-    "iswxdigit",    # LC_CTYPE
-    "isxdigit",     # LC_CTYPE
-    "localeconv",   # LC_NUMERIC + LC_MONETARY
-    "mblen",        # LC_CTYPE
+    "is_digit",  # boost::algorithm::is_digit
+    "is_space",  # boost::algorithm::is_space
+    "isalnum",  # LC_CTYPE
+    "isalpha",  # LC_CTYPE
+    "isblank",  # LC_CTYPE
+    "iscntrl",  # LC_CTYPE
+    "isctype",  # LC_CTYPE
+    "isdigit",  # LC_CTYPE
+    "isgraph",  # LC_CTYPE
+    "islower",  # LC_CTYPE
+    "isprint",  # LC_CTYPE
+    "ispunct",  # LC_CTYPE
+    "isspace",  # LC_CTYPE
+    "isupper",  # LC_CTYPE
+    "iswalnum",  # LC_CTYPE
+    "iswalpha",  # LC_CTYPE
+    "iswblank",  # LC_CTYPE
+    "iswcntrl",  # LC_CTYPE
+    "iswctype",  # LC_CTYPE
+    "iswdigit",  # LC_CTYPE
+    "iswgraph",  # LC_CTYPE
+    "iswlower",  # LC_CTYPE
+    "iswprint",  # LC_CTYPE
+    "iswpunct",  # LC_CTYPE
+    "iswspace",  # LC_CTYPE
+    "iswupper",  # LC_CTYPE
+    "iswxdigit",  # LC_CTYPE
+    "isxdigit",  # LC_CTYPE
+    "localeconv",  # LC_NUMERIC + LC_MONETARY
+    "mblen",  # LC_CTYPE
     "mbrlen",
     "mbrtowc",
     "mbsinit",
     "mbsnrtowcs",
     "mbsrtowcs",
-    "mbstowcs",     # LC_CTYPE
-    "mbtowc",       # LC_CTYPE
+    "mbstowcs",  # LC_CTYPE
+    "mbtowc",  # LC_CTYPE
     "mktime",
-    "normalize",    # boost::locale::normalize
-    "printf",       # LC_NUMERIC
+    "normalize",  # boost::locale::normalize
+    "printf",  # LC_NUMERIC
     "putwc",
     "putwchar",
-    "scanf",        # LC_NUMERIC
+    "scanf",  # LC_NUMERIC
     "setlocale",
     "snprintf",
     "sprintf",
@@ -140,36 +140,36 @@ LOCALE_DEPENDENT_FUNCTIONS = [
     "stoull",
     "strcasecmp",
     "strcasestr",
-    "strcoll",      # LC_COLLATE
+    "strcoll",  # LC_COLLATE
     "strerror",
     "strfmon",
-    "strftime",     # LC_TIME
+    "strftime",  # LC_TIME
     "strncasecmp",
     "strptime",
-    "strtod",       # LC_NUMERIC
+    "strtod",  # LC_NUMERIC
     "strtof",
     "strtoimax",
-    "strtol",       # LC_NUMERIC
+    "strtol",  # LC_NUMERIC
     "strtold",
     "strtoll",
     "strtoq",
-    "strtoul",      # LC_NUMERIC
+    "strtoul",  # LC_NUMERIC
     "strtoull",
     "strtoumax",
     "strtouq",
-    "strxfrm",      # LC_COLLATE
+    "strxfrm",  # LC_COLLATE
     "swprintf",
-    "to_lower",     # boost::locale::to_lower
-    "to_title",     # boost::locale::to_title
-    "to_upper",     # boost::locale::to_upper
-    "tolower",      # LC_CTYPE
-    "toupper",      # LC_CTYPE
+    "to_lower",  # boost::locale::to_lower
+    "to_title",  # boost::locale::to_title
+    "to_upper",  # boost::locale::to_upper
+    "tolower",  # LC_CTYPE
+    "toupper",  # LC_CTYPE
     "towctrans",
-    "towlower",     # LC_CTYPE
-    "towupper",     # LC_CTYPE
-    "trim",         # boost::algorithm::trim
-    "trim_left",    # boost::algorithm::trim_left
-    "trim_right",   # boost::algorithm::trim_right
+    "towlower",  # LC_CTYPE
+    "towupper",  # LC_CTYPE
+    "trim",  # boost::algorithm::trim
+    "trim_left",  # boost::algorithm::trim_left
+    "trim_right",  # boost::algorithm::trim_right
     "ungetwc",
     "vasprintf",
     "vdprintf",
@@ -186,36 +186,44 @@ LOCALE_DEPENDENT_FUNCTIONS = [
     "vwprintf",
     "wcrtomb",
     "wcscasecmp",
-    "wcscoll",      # LC_COLLATE
-    "wcsftime",     # LC_TIME
+    "wcscoll",  # LC_COLLATE
+    "wcsftime",  # LC_TIME
     "wcsncasecmp",
     "wcsnrtombs",
     "wcsrtombs",
-    "wcstod",       # LC_NUMERIC
+    "wcstod",  # LC_NUMERIC
     "wcstof",
     "wcstoimax",
-    "wcstol",       # LC_NUMERIC
+    "wcstol",  # LC_NUMERIC
     "wcstold",
     "wcstoll",
-    "wcstombs",     # LC_CTYPE
-    "wcstoul",      # LC_NUMERIC
+    "wcstombs",  # LC_CTYPE
+    "wcstoul",  # LC_NUMERIC
     "wcstoull",
     "wcstoumax",
     "wcswidth",
-    "wcsxfrm",      # LC_COLLATE
+    "wcsxfrm",  # LC_COLLATE
     "wctob",
-    "wctomb",       # LC_CTYPE
+    "wctomb",  # LC_CTYPE
     "wctrans",
     "wctype",
     "wcwidth",
-    "wprintf"
+    "wprintf",
 ]
 
 
 def find_locale_dependent_function_uses():
     regexp_locale_dependent_functions = "|".join(LOCALE_DEPENDENT_FUNCTIONS)
     exclude_args = [":(exclude)" + excl for excl in REGEXP_EXTERNAL_DEPENDENCIES_EXCLUSIONS]
-    git_grep_command = ["git", "grep", "--extended-regexp", "[^a-zA-Z0-9_\\`'\"<>](" +  regexp_locale_dependent_functions + ")(_r|_s)?\\(", "--", "*.cpp", "*.h"] + exclude_args
+    git_grep_command = [
+        "git",
+        "grep",
+        "--extended-regexp",
+        "[^a-zA-Z0-9_\\`'\"<>](" + regexp_locale_dependent_functions + ")(_r|_s)?\\(",
+        "--",
+        "*.cpp",
+        "*.h",
+    ] + exclude_args
     git_grep_output = list()
 
     try:
@@ -234,10 +242,13 @@ def main():
     git_grep_output = find_locale_dependent_function_uses()
 
     for locale_dependent_function in LOCALE_DEPENDENT_FUNCTIONS:
-        matches =  [line for line in git_grep_output
-                    if re.search("[^a-zA-Z0-9_\\`'\"<>]" + locale_dependent_function + "(_r|_s)?\\(", line)
-                    and not re.search("\\.(c|cpp|h):\\s*//.*" + locale_dependent_function, line)
-                    and not re.search(regexp_ignore_known_violations, line)]
+        matches = [
+            line
+            for line in git_grep_output
+            if re.search("[^a-zA-Z0-9_\\`'\"<>]" + locale_dependent_function + "(_r|_s)?\\(", line)
+            and not re.search("\\.(c|cpp|h):\\s*//.*" + locale_dependent_function, line)
+            and not re.search(regexp_ignore_known_violations, line)
+        ]
         if matches:
             print(f"The locale dependent function {locale_dependent_function}(...) appears to be used:")
             for match in matches:
@@ -246,8 +257,12 @@ def main():
             exit_code = 1
 
     if exit_code == 1:
-        print("Unnecessary locale dependence can cause bugs that are very tricky to isolate and fix. Please avoid using locale-dependent functions if possible.\n")
-        print(f"Advice not applicable in this specific case? Add an exception by updating the ignore list in {sys.argv[0]}")
+        print(
+            "Unnecessary locale dependence can cause bugs that are very tricky to isolate and fix. Please avoid using locale-dependent functions if possible.\n"
+        )
+        print(
+            f"Advice not applicable in this specific case? Add an exception by updating the ignore list in {sys.argv[0]}"
+        )
 
     sys.exit(exit_code)
 

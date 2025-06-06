@@ -7,16 +7,15 @@ import sys
 import re
 
 MAPPING = {
-    'core_read.cpp': 'core_io.cpp',
-    'core_write.cpp': 'core_io.cpp',
+    "core_read.cpp": "core_io.cpp",
+    "core_write.cpp": "core_io.cpp",
 }
 
 # Directories with header-based modules, where the assumption that .cpp files
 # define functions and variables declared in corresponding .h files is
 # incorrect.
-HEADER_MODULE_PATHS = [
-    'interfaces/'
-]
+HEADER_MODULE_PATHS = ["interfaces/"]
+
 
 def module_name(path):
     if path in MAPPING:
@@ -30,6 +29,7 @@ def module_name(path):
     if path.endswith(".cpp"):
         return path[:-4]
     return None
+
 
 files = dict()
 deps: dict[str, set[str]] = dict()
@@ -49,7 +49,7 @@ for arg in sys.argv[1:]:
 # TODO: implement support for multiple include directories
 for arg in sorted(files.keys()):
     module = files[arg]
-    with open(arg, 'r', encoding="utf8") as f:
+    with open(arg, "r", encoding="utf8") as f:
         for line in f:
             match = RE.match(line)
             if match:

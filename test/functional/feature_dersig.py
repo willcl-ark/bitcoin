@@ -34,8 +34,8 @@ def unDERify(tx):
     scriptSig = CScript(tx.vin[0].scriptSig)
     newscript = []
     for i in scriptSig:
-        if (len(newscript) == 0):
-            newscript.append(i[0:-1] + b'\0' + i[-1:])
+        if len(newscript) == 0:
+            newscript.append(i[0:-1] + b"\0" + i[-1:])
         else:
             newscript.append(i)
     tx.vin[0].scriptSig = CScript(newscript)
@@ -49,18 +49,21 @@ class BIP66Test(BitcoinTestFramework):
         self.num_nodes = 1
         # whitelist peers to speed up tx relay / mempool sync
         self.noban_tx_relay = True
-        self.extra_args = [[
-            f'-testactivationheight=dersig@{DERSIG_HEIGHT}',
-        ]]
+        self.extra_args = [
+            [
+                f"-testactivationheight=dersig@{DERSIG_HEIGHT}",
+            ]
+        ]
         self.setup_clean_chain = True
         self.rpc_timeout = 240
 
     def create_tx(self, input_txid):
         utxo_to_spend = self.miniwallet.get_utxo(txid=input_txid, mark_as_spent=False)
-        return self.miniwallet.create_self_transfer(utxo_to_spend=utxo_to_spend)['tx']
+        return self.miniwallet.create_self_transfer(utxo_to_spend=utxo_to_spend)["tx"]
 
     def test_dersig_info(self, *, is_active):
-        assert_equal(self.nodes[0].getdeploymentinfo()['deployments']['bip66'],
+        assert_equal(
+            self.nodes[0].getdeploymentinfo()["deployments"]["bip66"],
             {
                 "active": is_active,
                 "height": DERSIG_HEIGHT,
@@ -75,7 +78,9 @@ class BIP66Test(BitcoinTestFramework):
         self.test_dersig_info(is_active=False)
 
         self.log.info("Mining %d blocks", DERSIG_HEIGHT - 2)
-        self.coinbase_txids = [self.nodes[0].getblock(b)['tx'][0] for b in self.generate(self.miniwallet, DERSIG_HEIGHT - 2)]
+        self.coinbase_txids = [
+            self.nodes[0].getblock(b)["tx"][0] for b in self.generate(self.miniwallet, DERSIG_HEIGHT - 2)
+        ]
 
         self.log.info("Test that a transaction with non-DER signature can still appear in a block")
 
@@ -84,12 +89,14 @@ class BIP66Test(BitcoinTestFramework):
         spendtx.rehash()
 
         tip = self.nodes[0].getbestblockhash()
-        block_time = self.nodes[0].getblockheader(tip)['mediantime'] + 1
+        block_time = self.nodes[0].getblockheader(tip)["mediantime"] + 1
         block = create_block(int(tip, 16), create_coinbase(DERSIG_HEIGHT - 1), block_time, txlist=[spendtx])
         block.solve()
 
         assert_equal(self.nodes[0].getblockcount(), DERSIG_HEIGHT - 2)
-        self.test_dersig_info(is_active=False)  # Not active as of current tip and next block does not need to obey rules
+        self.test_dersig_info(
+            is_active=False
+        )  # Not active as of current tip and next block does not need to obey rules
         peer.send_and_ping(msg_block(block))
         assert_equal(self.nodes[0].getblockcount(), DERSIG_HEIGHT - 1)
         self.test_dersig_info(is_active=True)  # Not active as of current tip, but next block must obey rules
@@ -101,7 +108,7 @@ class BIP66Test(BitcoinTestFramework):
         block = create_block(tip, create_coinbase(DERSIG_HEIGHT), block_time, version=2)
         block.solve()
 
-        with self.nodes[0].assert_debug_log(expected_msgs=[f'{block.hash}, bad-version(0x00000002)']):
+        with self.nodes[0].assert_debug_log(expected_msgs=[f"{block.hash}, bad-version(0x00000002)"]):
             peer.send_and_ping(msg_block(block))
             assert_equal(int(self.nodes[0].getbestblockhash(), 16), tip)
             peer.sync_with_ping()
@@ -119,14 +126,16 @@ class BIP66Test(BitcoinTestFramework):
         spendtx_txid = spendtx.hash
         spendtx_wtxid = spendtx.getwtxid()
         assert_equal(
-            [{
-                'txid': spendtx_txid,
-                'wtxid': spendtx_wtxid,
-                'allowed': False,
-                'reject-reason': 'mandatory-script-verify-flag-failed (Non-canonical DER signature)',
-                'reject-details': 'mandatory-script-verify-flag-failed (Non-canonical DER signature), ' +
-                                  f"input 0 of {spendtx_txid} (wtxid {spendtx_wtxid}), spending {coin_txid}:0"
-            }],
+            [
+                {
+                    "txid": spendtx_txid,
+                    "wtxid": spendtx_wtxid,
+                    "allowed": False,
+                    "reject-reason": "mandatory-script-verify-flag-failed (Non-canonical DER signature)",
+                    "reject-details": "mandatory-script-verify-flag-failed (Non-canonical DER signature), "
+                    + f"input 0 of {spendtx_txid} (wtxid {spendtx_wtxid}), spending {coin_txid}:0",
+                }
+            ],
             self.nodes[0].testmempoolaccept(rawtxs=[spendtx.serialize().hex()], maxfeerate=0),
         )
 
@@ -135,7 +144,9 @@ class BIP66Test(BitcoinTestFramework):
         block.hashMerkleRoot = block.calc_merkle_root()
         block.solve()
 
-        with self.nodes[0].assert_debug_log(expected_msgs=['Block validation error: mandatory-script-verify-flag-failed (Non-canonical DER signature)']):
+        with self.nodes[0].assert_debug_log(
+            expected_msgs=["Block validation error: mandatory-script-verify-flag-failed (Non-canonical DER signature)"]
+        ):
             peer.send_and_ping(msg_block(block))
             assert_equal(int(self.nodes[0].getbestblockhash(), 16), tip)
             peer.sync_with_ping()
@@ -151,5 +162,5 @@ class BIP66Test(BitcoinTestFramework):
         assert_equal(int(self.nodes[0].getbestblockhash(), 16), block.sha256)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     BIP66Test(__file__).main()

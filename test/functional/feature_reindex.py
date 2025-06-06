@@ -44,14 +44,14 @@ class ReindexTest(BitcoinTestFramework):
         blk0 = self.nodes[0].blocks_path / "blk00000.dat"
         xor_dat = self.nodes[0].read_xor_key()
 
-        with open(blk0, 'r+b') as bf:
+        with open(blk0, "r+b") as bf:
             # Read at least the first few blocks (including genesis)
             b = util_xor(bf.read(2000), xor_dat, offset=0)
 
             # Find the offsets of blocks 2, 3, and 4 (the first 3 blocks beyond genesis)
             # by searching for the regtest marker bytes (see pchMessageStart).
             def find_block(b, start):
-                return b.find(MAGIC_BYTES["regtest"], start)+4
+                return b.find(MAGIC_BYTES["regtest"], start) + 4
 
             genesis_start = find_block(b, 0)
             assert_equal(genesis_start, 4)
@@ -68,10 +68,12 @@ class ReindexTest(BitcoinTestFramework):
             bf.write(util_xor(b[b2_start:b3_start], xor_dat, offset=b3_start))
 
         # The reindexing code should detect and accommodate out of order blocks.
-        with self.nodes[0].assert_debug_log([
-            'LoadExternalBlockFile: Out of order block',
-            'LoadExternalBlockFile: Processing out of order child',
-        ]):
+        with self.nodes[0].assert_debug_log(
+            [
+                "LoadExternalBlockFile: Out of order block",
+                "LoadExternalBlockFile: Processing out of order child",
+            ]
+        ):
             extra_args = [["-reindex"]]
             self.start_nodes(extra_args)
 
@@ -85,15 +87,17 @@ class ReindexTest(BitcoinTestFramework):
         # Restart node with reindex and stop reindex as soon as it starts reindexing
         self.log.info("Restarting node while reindexing..")
         node.stop_node()
-        with node.busy_wait_for_debug_log([b'initload thread start']):
-            node.start(['-blockfilterindex', '-reindex'])
+        with node.busy_wait_for_debug_log([b"initload thread start"]):
+            node.start(["-blockfilterindex", "-reindex"])
             node.wait_for_rpc_connection(wait_for_import=False)
         node.stop_node()
 
         # Start node without the reindex flag and verify it does not wipe the indexes data again
-        db_path = node.chain_path / 'indexes' / 'blockfilter' / 'basic' / 'db'
-        with node.assert_debug_log(expected_msgs=[f'Opening LevelDB in {db_path}'], unexpected_msgs=[f'Wiping LevelDB in {db_path}']):
-            node.start(['-blockfilterindex'])
+        db_path = node.chain_path / "indexes" / "blockfilter" / "basic" / "db"
+        with node.assert_debug_log(
+            expected_msgs=[f"Opening LevelDB in {db_path}"], unexpected_msgs=[f"Wiping LevelDB in {db_path}"]
+        ):
+            node.start(["-blockfilterindex"])
             node.wait_for_rpc_connection(wait_for_import=False)
         node.stop_node()
 
@@ -107,5 +111,5 @@ class ReindexTest(BitcoinTestFramework):
         self.continue_reindex_after_shutdown()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     ReindexTest(__file__).main()

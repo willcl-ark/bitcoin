@@ -25,13 +25,14 @@ from test_framework.util import (
 )
 import random
 
+
 class HeadersSyncTest(BitcoinTestFramework):
     def set_test_params(self):
         self.setup_clean_chain = True
         self.num_nodes = 1
 
     def announce_random_block(self, peers):
-        new_block_announcement = msg_inv(inv=[CInv(MSG_BLOCK, random.randrange(1<<256))])
+        new_block_announcement = msg_inv(inv=[CInv(MSG_BLOCK, random.randrange(1 << 256))])
         for p in peers:
             p.send_and_ping(new_block_announcement)
 
@@ -66,7 +67,7 @@ class HeadersSyncTest(BitcoinTestFramework):
 
         self.log.info("Check that peer1 receives a getheaders in response")
         peer1.wait_for_getheaders(block_hash=best_block_hash)
-        peer1.send_without_ping(msg_headers()) # Send empty response, see above
+        peer1.send_without_ping(msg_headers())  # Send empty response, see above
 
         self.log.info("Check that exactly 1 of {peer2, peer3} received a getheaders in response")
         count = 0
@@ -76,7 +77,7 @@ class HeadersSyncTest(BitcoinTestFramework):
                 if "getheaders" in p.last_message:
                     count += 1
                     peer_receiving_getheaders = p
-                    p.send_without_ping(msg_headers()) # Send empty response, see above
+                    p.send_without_ping(msg_headers())  # Send empty response, see above
 
         assert_equal(count, 1)
 
@@ -95,6 +96,6 @@ class HeadersSyncTest(BitcoinTestFramework):
 
         self.log.info("Success!")
 
-if __name__ == '__main__':
-    HeadersSyncTest(__file__).main()
 
+if __name__ == "__main__":
+    HeadersSyncTest(__file__).main()

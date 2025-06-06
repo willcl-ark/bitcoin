@@ -36,13 +36,16 @@ class BlockstoreReindexTest(BitcoinTestFramework):
 
         def undo_immutable():
             return None
+
         # Linux
         try:
-            subprocess.run(['chattr'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["chattr"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             try:
-                subprocess.run(['chattr', '+i', filename], capture_output=True, check=True)
+                subprocess.run(["chattr", "+i", filename], capture_output=True, check=True)
+
                 def undo_immutable():
-                    return subprocess.check_call(['chattr', '-i', filename])
+                    return subprocess.check_call(["chattr", "-i", filename])
+
                 self.log.info("Made file immutable with chattr")
             except subprocess.CalledProcessError as e:
                 self.log.warning(str(e))
@@ -58,11 +61,13 @@ class BlockstoreReindexTest(BitcoinTestFramework):
         except Exception:
             # macOS, and *BSD
             try:
-                subprocess.run(['chflags'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(["chflags"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 try:
-                    subprocess.run(['chflags', 'uchg', filename], capture_output=True, check=True)
+                    subprocess.run(["chflags", "uchg", filename], capture_output=True, check=True)
+
                     def undo_immutable():
-                        return subprocess.check_call(['chflags', 'nouchg', filename])
+                        return subprocess.check_call(["chflags", "nouchg", filename])
+
                     self.log.info("Made file immutable with chflags")
                 except subprocess.CalledProcessError as e:
                     self.log.warning(str(e))
@@ -79,7 +84,7 @@ class BlockstoreReindexTest(BitcoinTestFramework):
         if undo_immutable:
             self.log.debug("Attempt to restart and reindex the node with the unwritable block file")
             with self.nodes[0].assert_debug_log(["Reindexing finished"], timeout=60):
-                self.start_node(0, extra_args=['-reindex', '-fastprune'])
+                self.start_node(0, extra_args=["-reindex", "-fastprune"])
             assert block_count == self.nodes[0].getblockcount()
             undo_immutable()
 
@@ -89,5 +94,5 @@ class BlockstoreReindexTest(BitcoinTestFramework):
         self.reindex_readonly()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     BlockstoreReindexTest(__file__).main()

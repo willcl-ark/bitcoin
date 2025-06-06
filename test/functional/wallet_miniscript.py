@@ -239,15 +239,11 @@ class WalletMiniscriptTest(BitcoinTestFramework):
         self.log.info("Testing we detect funds sent to one of them")
         addr = self.ms_wo_wallet.getnewaddress()
         txid = self.funder.sendtoaddress(addr, 0.01)
-        self.wait_until(
-            lambda: len(self.ms_wo_wallet.listunspent(minconf=0, addresses=[addr])) == 1
-        )
+        self.wait_until(lambda: len(self.ms_wo_wallet.listunspent(minconf=0, addresses=[addr])) == 1)
         utxo = self.ms_wo_wallet.listunspent(minconf=0, addresses=[addr])[0]
         assert utxo["txid"] == txid and utxo["solvable"]
 
-    def signing_test(
-        self, desc, sequence, locktime, sigs_count, stack_size, sha256_preimages
-    ):
+    def signing_test(self, desc, sequence, locktime, sigs_count, stack_size, sha256_preimages):
         self.log.info(f"Importing private Miniscript descriptor '{desc}'")
         is_taproot = desc.startswith("tr(")
         desc = descsum_create(desc)
@@ -292,7 +288,7 @@ class WalletMiniscriptTest(BitcoinTestFramework):
         self.log.info("Signing it and checking the satisfaction.")
         if sha256_preimages is not None:
             psbt = PSBT.from_base64(psbt)
-            for (h, preimage) in sha256_preimages.items():
+            for h, preimage in sha256_preimages.items():
                 k = PSBT_IN_SHA256.to_bytes(1, "big") + bytes.fromhex(h)
                 psbt.i[0].map[k] = bytes.fromhex(preimage)
             psbt = psbt.to_base64()
@@ -313,17 +309,13 @@ class WalletMiniscriptTest(BitcoinTestFramework):
             # If necessary, satisfy an absolute timelock
             height = self.funder.getblockcount()
             if locktime is not None and height < locktime:
-                self.funder.generatetoaddress(
-                    locktime - height, self.funder.getnewaddress()
-                )
+                self.funder.generatetoaddress(locktime - height, self.funder.getnewaddress())
             self.ms_sig_wallet.sendrawtransaction(res["hex"])
 
     def run_test(self):
         self.log.info("Making a descriptor wallet")
         self.funder = self.nodes[0].get_wallet_rpc(self.default_wallet_name)
-        self.nodes[0].createwallet(
-            wallet_name="ms_wo", disable_private_keys=True
-        )
+        self.nodes[0].createwallet(wallet_name="ms_wo", disable_private_keys=True)
         self.ms_wo_wallet = self.nodes[0].get_wallet_rpc("ms_wo")
         self.nodes[0].createwallet(wallet_name="ms_sig")
         self.ms_sig_wallet = self.nodes[0].get_wallet_rpc("ms_sig")
@@ -332,9 +324,7 @@ class WalletMiniscriptTest(BitcoinTestFramework):
         res = self.ms_wo_wallet.importdescriptors(
             [
                 {
-                    "desc": descsum_create(
-                        "wsh(and_b(ripemd160(1fd9b55a054a2b3f658d97e6b84cf3ee00be429a),a:1))"
-                    ),
+                    "desc": descsum_create("wsh(and_b(ripemd160(1fd9b55a054a2b3f658d97e6b84cf3ee00be429a),a:1))"),
                     "active": False,
                     "timestamp": "now",
                 }

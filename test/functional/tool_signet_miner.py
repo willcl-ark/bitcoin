@@ -22,19 +22,22 @@ from test_framework.util import (
 from test_framework.wallet_util import bytes_to_wif
 
 
-CHALLENGE_PRIVATE_KEY = (42).to_bytes(32, 'big')
+CHALLENGE_PRIVATE_KEY = (42).to_bytes(32, "big")
+
 
 def get_segwit_commitment(node):
-    coinbase = node.getblock(node.getbestblockhash(), 2)['tx'][0]
-    commitment = coinbase['vout'][1]['scriptPubKey']['hex']
-    assert_equal(commitment[0:12], '6a24aa21a9ed')
+    coinbase = node.getblock(node.getbestblockhash(), 2)["tx"][0]
+    commitment = coinbase["vout"][1]["scriptPubKey"]["hex"]
+    assert_equal(commitment[0:12], "6a24aa21a9ed")
     return commitment
+
 
 def get_signet_commitment(segwit_commitment):
     for el in CScript.fromhex(segwit_commitment):
         if isinstance(el, bytes) and el[0:4] == SIGNET_HEADER:
             return el[4:].hex()
     return None
+
 
 class SignetMinerTest(BitcoinTestFramework):
     def set_test_params(self):
@@ -49,10 +52,10 @@ class SignetMinerTest(BitcoinTestFramework):
         challenge = key_to_p2wpkh_script(pubkey)
 
         self.extra_args = [
-            [f'-signetchallenge={challenge.hex()}'],
-            ["-signetchallenge=51"], # OP_TRUE
-            ["-signetchallenge=60"], # OP_16
-            ["-signetchallenge=202cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"], # sha256("hello")
+            [f"-signetchallenge={challenge.hex()}"],
+            ["-signetchallenge=51"],  # OP_TRUE
+            ["-signetchallenge=60"],  # OP_16
+            ["-signetchallenge=202cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"],  # sha256("hello")
         ]
 
     def skip_test_if_missing_module(self):
@@ -71,17 +74,21 @@ class SignetMinerTest(BitcoinTestFramework):
         signet_miner_path = os.path.join(base_dir, "contrib", "signet", "miner")
         rpc_argv = node.binaries.rpc_argv() + [f"-datadir={node.cli.datadir}"]
         util_argv = node.binaries.util_argv() + ["grind"]
-        subprocess.run([
+        subprocess.run(
+            [
                 sys.executable,
                 signet_miner_path,
-                f'--cli={shlex.join(rpc_argv)}',
-                'generate',
-                f'--address={node.getnewaddress()}',
-                f'--grind-cmd={shlex.join(util_argv)}',
-                f'--nbits={DIFF_1_N_BITS:08x}',
-                f'--set-block-time={int(time.time())}',
-                '--poolnum=99',
-            ], check=True, stderr=subprocess.STDOUT)
+                f"--cli={shlex.join(rpc_argv)}",
+                "generate",
+                f"--address={node.getnewaddress()}",
+                f"--grind-cmd={shlex.join(util_argv)}",
+                f"--nbits={DIFF_1_N_BITS:08x}",
+                f"--set-block-time={int(time.time())}",
+                "--poolnum=99",
+            ],
+            check=True,
+            stderr=subprocess.STDOUT,
+        )
         assert_equal(node.getblockcount(), n_blocks + 1)
 
     # generate block using the signet miner tool genpsbt and solvepsbt commands
@@ -94,26 +101,38 @@ class SignetMinerTest(BitcoinTestFramework):
         base_cmd = [
             sys.executable,
             signet_miner_path,
-            f'--cli={shlex.join(rpc_argv)}',
+            f"--cli={shlex.join(rpc_argv)}",
         ]
 
-        template = node.getblocktemplate(dict(rules=["signet","segwit"]))
-        genpsbt = subprocess.run(base_cmd + [
-                'genpsbt',
-                f'--address={node.getnewaddress()}',
-                '--poolnum=98',
-            ], check=True, input=json.dumps(template).encode('utf8'), capture_output=True)
-        psbt = genpsbt.stdout.decode('utf8').strip()
+        template = node.getblocktemplate(dict(rules=["signet", "segwit"]))
+        genpsbt = subprocess.run(
+            base_cmd
+            + [
+                "genpsbt",
+                f"--address={node.getnewaddress()}",
+                "--poolnum=98",
+            ],
+            check=True,
+            input=json.dumps(template).encode("utf8"),
+            capture_output=True,
+        )
+        psbt = genpsbt.stdout.decode("utf8").strip()
         if sign:
             self.log.debug("Sign the PSBT")
-            res = node.walletprocesspsbt(psbt=psbt, sign=True, sighashtype='ALL')
-            assert res['complete']
-            psbt = res['psbt']
-        solvepsbt = subprocess.run(base_cmd + [
-                'solvepsbt',
-                f'--grind-cmd={shlex.join(util_argv)}',
-            ], check=True, input=psbt.encode('utf8'), capture_output=True)
-        node.submitblock(solvepsbt.stdout.decode('utf8').strip())
+            res = node.walletprocesspsbt(psbt=psbt, sign=True, sighashtype="ALL")
+            assert res["complete"]
+            psbt = res["psbt"]
+        solvepsbt = subprocess.run(
+            base_cmd
+            + [
+                "solvepsbt",
+                f"--grind-cmd={shlex.join(util_argv)}",
+            ],
+            check=True,
+            input=psbt.encode("utf8"),
+            capture_output=True,
+        )
+        node.submitblock(solvepsbt.stdout.decode("utf8").strip())
         assert_equal(node.getblockcount(), n_blocks + 1)
 
     def run_test(self):

@@ -8,6 +8,7 @@ import sys
 import argparse
 import json
 
+
 def perform_pre_checks():
     mock_result_path = os.path.join(os.getcwd(), "mock_result")
     if os.path.isfile(mock_result_path):
@@ -17,27 +18,32 @@ def perform_pre_checks():
             sys.stdout.write(mock_result[2:])
             sys.exit(int(mock_result[0]))
 
+
 def enumerate(args):
     sys.stdout.write(json.dumps([{"fingerprint": "00000001", "type": "trezor", "model": "trezor_t"}]))
+
 
 def getdescriptors(args):
     xpub = "tpubD6NzVbkrYhZ4WaWSyoBvQwbpLkojyoTZPRsgXELWz3Popb3qkjcJyJUGLnL4qHHoQvao8ESaAstxYSnhyswJ76uZPStJRJCTKvosUCJZL5B"
 
-    sys.stdout.write(json.dumps({
-        "receive": [
-            "pkh([00000001/44h/1h/" + args.account + "']" + xpub + "/0/*)#aqllu46s",
-            "sh(wpkh([00000001/49h/1h/" + args.account + "']" + xpub + "/0/*))#5dh56mgg",
-            "wpkh([00000001/84h/1h/" + args.account + "']" + xpub + "/0/*)#h62dxaej",
-            "tr([00000001/86h/1h/" + args.account + "']" + xpub + "/0/*)#pcd5w87f"
-        ],
-        "internal": [
-            "pkh([00000001/44h/1h/" + args.account + "']" + xpub + "/1/*)#v567pq2g",
-            "sh(wpkh([00000001/49h/1h/" + args.account + "']" + xpub + "/1/*))#pvezzyah",
-            "wpkh([00000001/84h/1h/" + args.account + "']" + xpub + "/1/*)#xw0vmgf2",
-            "tr([00000001/86h/1h/" + args.account + "']" + xpub + "/1/*)#svg4njw3"
-
-        ]
-    }))
+    sys.stdout.write(
+        json.dumps(
+            {
+                "receive": [
+                    "pkh([00000001/44h/1h/" + args.account + "']" + xpub + "/0/*)#aqllu46s",
+                    "sh(wpkh([00000001/49h/1h/" + args.account + "']" + xpub + "/0/*))#5dh56mgg",
+                    "wpkh([00000001/84h/1h/" + args.account + "']" + xpub + "/0/*)#h62dxaej",
+                    "tr([00000001/86h/1h/" + args.account + "']" + xpub + "/0/*)#pcd5w87f",
+                ],
+                "internal": [
+                    "pkh([00000001/44h/1h/" + args.account + "']" + xpub + "/1/*)#v567pq2g",
+                    "sh(wpkh([00000001/49h/1h/" + args.account + "']" + xpub + "/1/*))#pvezzyah",
+                    "wpkh([00000001/84h/1h/" + args.account + "']" + xpub + "/1/*)#xw0vmgf2",
+                    "tr([00000001/86h/1h/" + args.account + "']" + xpub + "/1/*)#svg4njw3",
+                ],
+            }
+        )
+    )
 
 
 def displayaddress(args):
@@ -56,6 +62,7 @@ def displayaddress(args):
 
     return sys.stdout.write(json.dumps({"address": expected_desc[args.desc]}))
 
+
 def signtx(args):
     if args.fingerprint != "00000001":
         return sys.stdout.write(json.dumps({"error": "Unexpected fingerprint", "fingerprint": args.fingerprint}))
@@ -63,35 +70,33 @@ def signtx(args):
     with open(os.path.join(os.getcwd(), "mock_psbt"), "r", encoding="utf8") as f:
         mock_psbt = f.read()
 
-    if args.fingerprint == "00000001" :
-        sys.stdout.write(json.dumps({
-            "psbt": mock_psbt,
-            "complete": True
-        }))
+    if args.fingerprint == "00000001":
+        sys.stdout.write(json.dumps({"psbt": mock_psbt, "complete": True}))
     else:
         sys.stdout.write(json.dumps({"psbt": args.psbt}))
 
-parser = argparse.ArgumentParser(prog='./signer.py', description='External signer mock')
-parser.add_argument('--fingerprint')
-parser.add_argument('--chain', default='main')
-parser.add_argument('--stdin', action='store_true')
 
-subparsers = parser.add_subparsers(description='Commands', dest='command')
+parser = argparse.ArgumentParser(prog="./signer.py", description="External signer mock")
+parser.add_argument("--fingerprint")
+parser.add_argument("--chain", default="main")
+parser.add_argument("--stdin", action="store_true")
+
+subparsers = parser.add_subparsers(description="Commands", dest="command")
 subparsers.required = True
 
-parser_enumerate = subparsers.add_parser('enumerate', help='list available signers')
+parser_enumerate = subparsers.add_parser("enumerate", help="list available signers")
 parser_enumerate.set_defaults(func=enumerate)
 
-parser_getdescriptors = subparsers.add_parser('getdescriptors')
+parser_getdescriptors = subparsers.add_parser("getdescriptors")
 parser_getdescriptors.set_defaults(func=getdescriptors)
-parser_getdescriptors.add_argument('--account', metavar='account')
+parser_getdescriptors.add_argument("--account", metavar="account")
 
-parser_displayaddress = subparsers.add_parser('displayaddress', help='display address on signer')
-parser_displayaddress.add_argument('--desc', metavar='desc')
+parser_displayaddress = subparsers.add_parser("displayaddress", help="display address on signer")
+parser_displayaddress.add_argument("--desc", metavar="desc")
 parser_displayaddress.set_defaults(func=displayaddress)
 
-parser_signtx = subparsers.add_parser('signtx')
-parser_signtx.add_argument('psbt', metavar='psbt')
+parser_signtx = subparsers.add_parser("signtx")
+parser_signtx.add_argument("psbt", metavar="psbt")
 
 parser_signtx.set_defaults(func=signtx)
 

@@ -33,7 +33,7 @@ class FeatureRemovePrunedFilesOnStartupTest(BitcoinTestFramework):
         self.nodes[0].pruneblockchain(600)
 
         # Windows systems will not remove files with an open fd
-        if platform.system() != 'Windows':
+        if platform.system() != "Windows":
             assert not blk0.exists()
             assert not rev0.exists()
             assert not blk1.exists()
@@ -68,5 +68,5 @@ class FeatureRemovePrunedFilesOnStartupTest(BitcoinTestFramework):
         assert_equal(ls_files(), ["blk00000.dat", "rev00000.dat"])
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     FeatureRemovePrunedFilesOnStartupTest(__file__).main()

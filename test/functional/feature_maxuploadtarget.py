@@ -11,6 +11,7 @@ if uploadtarget has been reached.
 * Verify that mempool requests lead to a disconnect if uploadtarget has been reached.
 * Verify that the upload counters are reset after 24 hours.
 """
+
 from collections import defaultdict
 import time
 
@@ -44,15 +45,17 @@ class TestP2PConn(P2PInterface):
         message.block.calc_sha256()
         self.block_receive_map[message.block.sha256] += 1
 
-class MaxUploadTest(BitcoinTestFramework):
 
+class MaxUploadTest(BitcoinTestFramework):
     def set_test_params(self):
         self.setup_clean_chain = True
         self.num_nodes = 1
-        self.extra_args = [[
-            f"-maxuploadtarget={UPLOAD_TARGET_MB}M",
-            "-datacarriersize=100000",
-        ]]
+        self.extra_args = [
+            [
+                f"-maxuploadtarget={UPLOAD_TARGET_MB}M",
+                "-datacarriersize=100000",
+            ]
+        ]
         self.supports_cli = False
 
     def assert_uploadtarget_state(self, *, target_reached, serve_historical_blocks):
@@ -68,7 +71,7 @@ class MaxUploadTest(BitcoinTestFramework):
         # Before we connect anything, we first set the time on the node
         # to be in the past, otherwise things break because the CNode
         # time counters can't be reset backward after initialization
-        old_time = int(time.time() - 2*60*60*24*7)
+        old_time = int(time.time() - 2 * 60 * 60 * 24 * 7)
         self.nodes[0].setmocktime(old_time)
 
         # Generate some old blocks
@@ -89,11 +92,11 @@ class MaxUploadTest(BitcoinTestFramework):
 
         # Store the hash; we'll request this later
         big_old_block = self.nodes[0].getbestblockhash()
-        old_block_size = self.nodes[0].getblock(big_old_block, True)['size']
+        old_block_size = self.nodes[0].getblock(big_old_block, True)["size"]
         big_old_block = int(big_old_block, 16)
 
         # Advance to two days ago
-        self.nodes[0].setmocktime(int(time.time()) - 2*60*60*24)
+        self.nodes[0].setmocktime(int(time.time()) - 2 * 60 * 60 * 24)
 
         # Mine one more block, so that the prior block looks old
         mine_large_block(self, self.wallet, self.nodes[0])
@@ -108,7 +111,7 @@ class MaxUploadTest(BitcoinTestFramework):
         getdata_request = msg_getdata()
         getdata_request.inv.append(CInv(MSG_BLOCK, big_old_block))
 
-        max_bytes_per_day = UPLOAD_TARGET_MB * 1024 *1024
+        max_bytes_per_day = UPLOAD_TARGET_MB * 1024 * 1024
         daily_buffer = 144 * 4000000
         max_bytes_available = max_bytes_per_day - daily_buffer
         success_count = max_bytes_available // old_block_size
@@ -117,12 +120,14 @@ class MaxUploadTest(BitcoinTestFramework):
         # succeed for ~235 tries.
         for i in range(success_count):
             p2p_conns[0].send_and_ping(getdata_request)
-            assert_equal(p2p_conns[0].block_receive_map[big_old_block], i+1)
+            assert_equal(p2p_conns[0].block_receive_map[big_old_block], i + 1)
 
         assert_equal(len(self.nodes[0].getpeerinfo()), 3)
         # At most a couple more tries should succeed (depending on how long
         # the test has been running so far).
-        with self.nodes[0].assert_debug_log(expected_msgs=["historical block serving limit reached, disconnecting peer=0"]):
+        with self.nodes[0].assert_debug_log(
+            expected_msgs=["historical block serving limit reached, disconnecting peer=0"]
+        ):
             for _ in range(3):
                 p2p_conns[0].send_without_ping(getdata_request)
             p2p_conns[0].wait_for_disconnect()
@@ -138,7 +143,7 @@ class MaxUploadTest(BitcoinTestFramework):
         getdata_request.inv = [CInv(MSG_BLOCK, big_new_block)]
         for i in range(800):
             p2p_conns[1].send_and_ping(getdata_request)
-            assert_equal(p2p_conns[1].block_receive_map[big_new_block], i+1)
+            assert_equal(p2p_conns[1].block_receive_map[big_new_block], i + 1)
 
         # Both historical blocks serving limit and total limit are reached
         self.assert_uploadtarget_state(target_reached=True, serve_historical_blocks=False)
@@ -147,7 +152,9 @@ class MaxUploadTest(BitcoinTestFramework):
 
         # But if p2p_conns[1] tries for an old block, it gets disconnected too.
         getdata_request.inv = [CInv(MSG_BLOCK, big_old_block)]
-        with self.nodes[0].assert_debug_log(expected_msgs=["historical block serving limit reached, disconnecting peer=1"]):
+        with self.nodes[0].assert_debug_log(
+            expected_msgs=["historical block serving limit reached, disconnecting peer=1"]
+        ):
             p2p_conns[1].send_without_ping(getdata_request)
             p2p_conns[1].wait_for_disconnect()
         assert_equal(len(self.nodes[0].getpeerinfo()), 1)
@@ -179,11 +186,11 @@ class MaxUploadTest(BitcoinTestFramework):
         # Sending mempool message shouldn't disconnect peer, as total limit isn't reached yet
         peer.send_and_ping(msg_mempool())
 
-        #retrieve 20 blocks which should be enough to break the 1MB limit
+        # retrieve 20 blocks which should be enough to break the 1MB limit
         getdata_request.inv = [CInv(MSG_BLOCK, big_new_block)]
         for i in range(20):
             peer.send_and_ping(getdata_request)
-            assert_equal(peer.block_receive_map[big_new_block], i+1)
+            assert_equal(peer.block_receive_map[big_new_block], i + 1)
 
         # Total limit is exceeded
         self.assert_uploadtarget_state(target_reached=True, serve_historical_blocks=False)
@@ -194,16 +201,21 @@ class MaxUploadTest(BitcoinTestFramework):
         self.log.info("Peer still connected after trying to download old block (download permission)")
         peer_info = self.nodes[0].getpeerinfo()
         assert_equal(len(peer_info), 1)  # node is still connected
-        assert_equal(peer_info[0]['permissions'], ['download'])
+        assert_equal(peer_info[0]["permissions"], ["download"])
 
         self.log.info("Peer gets disconnected for a mempool request after limit is reached")
-        with self.nodes[0].assert_debug_log(expected_msgs=["mempool request with bandwidth limit reached, disconnecting peer=0"]):
+        with self.nodes[0].assert_debug_log(
+            expected_msgs=["mempool request with bandwidth limit reached, disconnecting peer=0"]
+        ):
             peer.send_without_ping(msg_mempool())
             peer.wait_for_disconnect()
 
         self.log.info("Test passing an unparsable value to -maxuploadtarget throws an error")
         self.stop_node(0)
-        self.nodes[0].assert_start_raises_init_error(extra_args=["-maxuploadtarget=abc"], expected_msg="Error: Unable to parse -maxuploadtarget: 'abc'")
+        self.nodes[0].assert_start_raises_init_error(
+            extra_args=["-maxuploadtarget=abc"], expected_msg="Error: Unable to parse -maxuploadtarget: 'abc'"
+        )
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     MaxUploadTest(__file__).main()

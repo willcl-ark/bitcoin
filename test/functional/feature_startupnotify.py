@@ -3,6 +3,7 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test -startupnotify."""
+
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
     assert_equal,
@@ -38,5 +39,5 @@ class StartupNotifyTest(BitcoinTestFramework):
         assert_equal(self.nodes[0].getblockcount(), 200)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     StartupNotifyTest(__file__).main()

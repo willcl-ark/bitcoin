@@ -35,24 +35,28 @@ class P2PPermissionsTests(BitcoinTestFramework):
             # default permissions (no specific permissions)
             ["-whitelist=127.0.0.1"],
             # Make sure the default values in the command line documentation match the ones here
-            ["relay", "noban", "mempool", "download"])
+            ["relay", "noban", "mempool", "download"],
+        )
 
         self.checkpermission(
             # no permission (even with forcerelay)
             ["-whitelist=@127.0.0.1", "-whitelistforcerelay=1"],
-            [])
+            [],
+        )
 
         self.checkpermission(
             # relay permission removed (no specific permissions)
             ["-whitelist=127.0.0.1", "-whitelistrelay=0"],
-            ["noban", "mempool", "download"])
+            ["noban", "mempool", "download"],
+        )
 
         self.checkpermission(
             # forcerelay and relay permission added
             # Legacy parameter interaction which set whitelistrelay to true
             # if whitelistforcerelay is true
             ["-whitelist=127.0.0.1", "-whitelistforcerelay"],
-            ["forcerelay", "relay", "noban", "mempool", "download"])
+            ["forcerelay", "relay", "noban", "mempool", "download"],
+        )
 
         # Let's make sure permissions are merged correctly
         # For this, we need to use whitebind instead of bind
@@ -64,42 +68,62 @@ class P2PPermissionsTests(BitcoinTestFramework):
         self.checkpermission(
             ["-whitelist=noban@127.0.0.1"],
             # Check parameter interaction forcerelay should activate relay
-            ["noban", "bloomfilter", "forcerelay", "relay", "download"])
+            ["noban", "bloomfilter", "forcerelay", "relay", "download"],
+        )
         self.nodes[1].replace_in_config([("whitebind=bloomfilter,forcerelay@" + ip_port, "bind=127.0.0.1")])
         self.nodes[1].replace_in_config([(f"bind=127.0.0.1:{tor_port(self.nodes[1].index)}=onion", "")])
 
         self.checkpermission(
             # legacy whitelistrelay should be ignored
             ["-whitelist=noban,mempool@127.0.0.1", "-whitelistrelay"],
-            ["noban", "mempool", "download"])
+            ["noban", "mempool", "download"],
+        )
 
         self.checkpermission(
             # legacy whitelistforcerelay should be ignored
             ["-whitelist=noban,mempool@127.0.0.1", "-whitelistforcerelay"],
-            ["noban", "mempool", "download"])
+            ["noban", "mempool", "download"],
+        )
 
         self.checkpermission(
             # missing mempool permission to be considered legacy whitelisted
             ["-whitelist=noban@127.0.0.1"],
-            ["noban", "download"])
+            ["noban", "download"],
+        )
 
         self.checkpermission(
             # all permission added
             ["-whitelist=all@127.0.0.1"],
-            ["forcerelay", "noban", "mempool", "bloomfilter", "relay", "download", "addr"])
+            ["forcerelay", "noban", "mempool", "bloomfilter", "relay", "download", "addr"],
+        )
 
-        for flag, permissions in [(["-whitelist=noban,out@127.0.0.1"], ["noban", "download"]), (["-whitelist=noban@127.0.0.1"], [])]:
+        for flag, permissions in [
+            (["-whitelist=noban,out@127.0.0.1"], ["noban", "download"]),
+            (["-whitelist=noban@127.0.0.1"], []),
+        ]:
             self.restart_node(0, flag)
             self.connect_nodes(0, 1)
             peerinfo = self.nodes[0].getpeerinfo()[0]
-            assert_equal(peerinfo['permissions'], permissions)
+            assert_equal(peerinfo["permissions"], permissions)
 
         self.stop_node(1)
-        self.nodes[1].assert_start_raises_init_error(["-whitelist=in,out@127.0.0.1"], "Only direction was set, no permissions", match=ErrorMatch.PARTIAL_REGEX)
-        self.nodes[1].assert_start_raises_init_error(["-whitelist=oopsie@127.0.0.1"], "Invalid P2P permission", match=ErrorMatch.PARTIAL_REGEX)
-        self.nodes[1].assert_start_raises_init_error(["-whitelist=noban@127.0.0.1:230"], "Invalid netmask specified in", match=ErrorMatch.PARTIAL_REGEX)
-        self.nodes[1].assert_start_raises_init_error(["-whitebind=noban@127.0.0.1/10"], "Cannot resolve -whitebind address", match=ErrorMatch.PARTIAL_REGEX)
-        self.nodes[1].assert_start_raises_init_error(["-whitebind=noban@127.0.0.1", "-bind=127.0.0.1", "-listen=0"], "Cannot set -bind or -whitebind together with -listen=0", match=ErrorMatch.PARTIAL_REGEX)
+        self.nodes[1].assert_start_raises_init_error(
+            ["-whitelist=in,out@127.0.0.1"], "Only direction was set, no permissions", match=ErrorMatch.PARTIAL_REGEX
+        )
+        self.nodes[1].assert_start_raises_init_error(
+            ["-whitelist=oopsie@127.0.0.1"], "Invalid P2P permission", match=ErrorMatch.PARTIAL_REGEX
+        )
+        self.nodes[1].assert_start_raises_init_error(
+            ["-whitelist=noban@127.0.0.1:230"], "Invalid netmask specified in", match=ErrorMatch.PARTIAL_REGEX
+        )
+        self.nodes[1].assert_start_raises_init_error(
+            ["-whitebind=noban@127.0.0.1/10"], "Cannot resolve -whitebind address", match=ErrorMatch.PARTIAL_REGEX
+        )
+        self.nodes[1].assert_start_raises_init_error(
+            ["-whitebind=noban@127.0.0.1", "-bind=127.0.0.1", "-listen=0"],
+            "Cannot set -bind or -whitebind together with -listen=0",
+            match=ErrorMatch.PARTIAL_REGEX,
+        )
 
     def check_tx_relay(self):
         self.log.debug("Create a connection from a forcerelay peer that rebroadcasts raw txs")
@@ -110,7 +134,7 @@ class P2PPermissionsTests(BitcoinTestFramework):
         p2p_rebroadcast_wallet = self.nodes[1].add_p2p_connection(P2PDataStore())
 
         self.log.debug("Send a tx from the wallet initially")
-        tx = self.wallet.create_self_transfer(sequence=SEQUENCE_FINAL)['tx']
+        tx = self.wallet.create_self_transfer(sequence=SEQUENCE_FINAL)["tx"]
         txid = tx.rehash()
 
         self.log.debug("Wait until tx is in node[1]'s mempool")
@@ -118,7 +142,9 @@ class P2PPermissionsTests(BitcoinTestFramework):
 
         self.log.debug("Check that node[1] will send the tx to node[0] even though it is already in the mempool")
         self.connect_nodes(1, 0)
-        with self.nodes[1].assert_debug_log(["Force relaying tx {} (wtxid={}) from peer=0".format(txid, tx.getwtxid())]):
+        with self.nodes[1].assert_debug_log(
+            ["Force relaying tx {} (wtxid={}) from peer=0".format(txid, tx.getwtxid())]
+        ):
             p2p_rebroadcast_wallet.send_txs_and_test([tx], self.nodes[1])
             self.wait_until(lambda: txid in self.nodes[0].getrawmempool())
 
@@ -134,25 +160,27 @@ class P2PPermissionsTests(BitcoinTestFramework):
             [tx],
             self.nodes[1],
             success=False,
-            reject_reason='{} (wtxid={}) from peer=0 was not accepted: dust'.format(txid, tx.getwtxid())
+            reject_reason="{} (wtxid={}) from peer=0 was not accepted: dust".format(txid, tx.getwtxid()),
         )
 
         p2p_rebroadcast_wallet.send_txs_and_test(
             [tx],
             self.nodes[1],
             success=False,
-            reject_reason='Not relaying non-mempool transaction {} (wtxid={}) from forcerelay peer=0'.format(txid, tx.getwtxid())
+            reject_reason="Not relaying non-mempool transaction {} (wtxid={}) from forcerelay peer=0".format(
+                txid, tx.getwtxid()
+            ),
         )
 
     def checkpermission(self, args, expectedPermissions):
         self.restart_node(1, args)
         self.connect_nodes(0, 1)
         peerinfo = self.nodes[1].getpeerinfo()[0]
-        assert_equal(len(expectedPermissions), len(peerinfo['permissions']))
+        assert_equal(len(expectedPermissions), len(peerinfo["permissions"]))
         for p in expectedPermissions:
-            if p not in peerinfo['permissions']:
+            if p not in peerinfo["permissions"]:
                 raise AssertionError("Expected permissions %r is not granted." % p)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     P2PPermissionsTests(__file__).main()

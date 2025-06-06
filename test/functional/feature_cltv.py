@@ -87,15 +87,19 @@ class BIP65Test(BitcoinTestFramework):
         self.num_nodes = 1
         # whitelist peers to speed up tx relay / mempool sync
         self.noban_tx_relay = True
-        self.extra_args = [[
-            f'-testactivationheight=cltv@{CLTV_HEIGHT}',
-            '-acceptnonstdtxn=1',  # cltv_invalidate is nonstandard
-        ]]
+        self.extra_args = [
+            [
+                f"-testactivationheight=cltv@{CLTV_HEIGHT}",
+                "-acceptnonstdtxn=1",  # cltv_invalidate is nonstandard
+            ]
+        ]
         self.setup_clean_chain = True
         self.rpc_timeout = 480
 
     def test_cltv_info(self, *, is_active):
-        assert_equal(self.nodes[0].getdeploymentinfo()['deployments']['bip65'], {
+        assert_equal(
+            self.nodes[0].getdeploymentinfo()["deployments"]["bip65"],
+            {
                 "active": is_active,
                 "height": CLTV_HEIGHT,
                 "type": "buried",
@@ -118,13 +122,15 @@ class BIP65Test(BitcoinTestFramework):
         # create one invalid tx per CLTV failure reason (5 in total) and collect them
         invalid_cltv_txs = []
         for i in range(5):
-            spendtx = wallet.create_self_transfer()['tx']
+            spendtx = wallet.create_self_transfer()["tx"]
             cltv_invalidate(spendtx, i)
             invalid_cltv_txs.append(spendtx)
 
         tip = self.nodes[0].getbestblockhash()
-        block_time = self.nodes[0].getblockheader(tip)['mediantime'] + 1
-        block = create_block(int(tip, 16), create_coinbase(CLTV_HEIGHT - 1), block_time, version=3, txlist=invalid_cltv_txs)
+        block_time = self.nodes[0].getblockheader(tip)["mediantime"] + 1
+        block = create_block(
+            int(tip, 16), create_coinbase(CLTV_HEIGHT - 1), block_time, version=3, txlist=invalid_cltv_txs
+        )
         block.solve()
 
         self.test_cltv_info(is_active=False)  # Not active as of current tip and next block does not need to obey rules
@@ -138,21 +144,21 @@ class BIP65Test(BitcoinTestFramework):
         block = create_block(tip, create_coinbase(CLTV_HEIGHT), block_time, version=3)
         block.solve()
 
-        with self.nodes[0].assert_debug_log(expected_msgs=[f'{block.hash}, bad-version(0x00000003)']):
+        with self.nodes[0].assert_debug_log(expected_msgs=[f"{block.hash}, bad-version(0x00000003)"]):
             peer.send_and_ping(msg_block(block))
             assert_equal(int(self.nodes[0].getbestblockhash(), 16), tip)
             peer.sync_with_ping()
 
         self.log.info("Test that invalid-according-to-CLTV transactions cannot appear in a block")
         block.nVersion = 4
-        block.vtx.append(CTransaction()) # dummy tx after coinbase that will be replaced later
+        block.vtx.append(CTransaction())  # dummy tx after coinbase that will be replaced later
 
         # create and test one invalid tx per CLTV failure reason (5 in total)
         for i in range(5):
-            spendtx = wallet.create_self_transfer()['tx']
+            spendtx = wallet.create_self_transfer()["tx"]
             assert_equal(len(spendtx.vin), 1)
             coin = spendtx.vin[0]
-            coin_txid = format(coin.prevout.hash, '064x')
+            coin_txid = format(coin.prevout.hash, "064x")
             coin_vout = coin.prevout.n
             cltv_invalidate(spendtx, i)
 
@@ -168,13 +174,16 @@ class BIP65Test(BitcoinTestFramework):
             spendtx_txid = spendtx.hash
             spendtx_wtxid = spendtx.getwtxid()
             assert_equal(
-                [{
-                    'txid': spendtx_txid,
-                    'wtxid': spendtx_wtxid,
-                    'allowed': False,
-                    'reject-reason': expected_cltv_reject_reason,
-                    'reject-details': expected_cltv_reject_reason + f", input 0 of {spendtx_txid} (wtxid {spendtx_wtxid}), spending {coin_txid}:{coin_vout}"
-                }],
+                [
+                    {
+                        "txid": spendtx_txid,
+                        "wtxid": spendtx_wtxid,
+                        "allowed": False,
+                        "reject-reason": expected_cltv_reject_reason,
+                        "reject-details": expected_cltv_reject_reason
+                        + f", input 0 of {spendtx_txid} (wtxid {spendtx_wtxid}), spending {coin_txid}:{coin_vout}",
+                    }
+                ],
                 self.nodes[0].testmempoolaccept(rawtxs=[spendtx.serialize().hex()], maxfeerate=0),
             )
 
@@ -183,7 +192,9 @@ class BIP65Test(BitcoinTestFramework):
             block.hashMerkleRoot = block.calc_merkle_root()
             block.solve()
 
-            with self.nodes[0].assert_debug_log(expected_msgs=[f'Block validation error: {expected_cltv_reject_reason}']):
+            with self.nodes[0].assert_debug_log(
+                expected_msgs=[f"Block validation error: {expected_cltv_reject_reason}"]
+            ):
                 peer.send_and_ping(msg_block(block))
                 assert_equal(int(self.nodes[0].getbestblockhash(), 16), tip)
                 peer.sync_with_ping()
@@ -202,5 +213,5 @@ class BIP65Test(BitcoinTestFramework):
         assert_equal(int(self.nodes[0].getbestblockhash(), 16), block.sha256)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     BIP65Test(__file__).main()

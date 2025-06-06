@@ -64,7 +64,9 @@ class P2PDNSSeeds(BitcoinTestFramework):
         self.restart_node(0)
         with self.nodes[0].assert_debug_log(expected_msgs=["P2P peers available. Skipped DNS seeding."], timeout=12):
             for i in range(2):
-                self.nodes[0].add_outbound_p2p_connection(P2PInterface(), p2p_idx=i, connection_type="outbound-full-relay")
+                self.nodes[0].add_outbound_p2p_connection(
+                    P2PInterface(), p2p_idx=i, connection_type="outbound-full-relay"
+                )
 
     def existing_block_relay_connections_test(self):
         # Make sure addrman is populated to enter the conditional where we
@@ -113,7 +115,7 @@ class P2PDNSSeeds(BitcoinTestFramework):
             third_octet = i % 100
             a = f"{first_octet}.{second_octet}.{third_octet}.1"
             self.nodes[0].addpeeraddress(a, 8333)
-            if (i > 1000 and i % 100 == 0):
+            if i > 1000 and i % 100 == 0:
                 # The addrman size is non-deterministic because new addresses
                 # are sorted into buckets, potentially displacing existing
                 # addresses. Periodically check if we have met the desired
@@ -126,5 +128,5 @@ class P2PDNSSeeds(BitcoinTestFramework):
             self.restart_node(0)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     P2PDNSSeeds(__file__).main()

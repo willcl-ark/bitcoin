@@ -43,7 +43,7 @@ class InvalidateTest(BitcoinTestFramework):
         # Add a header to the tip of node 0 without submitting the block. This shouldn't
         # affect results since this chain will be invalidated next.
         tip = self.nodes[0].getbestblockhash()
-        block_time = self.nodes[0].getblock(self.nodes[0].getbestblockhash())['time'] + 1
+        block_time = self.nodes[0].getblock(self.nodes[0].getbestblockhash())["time"] + 1
         block = create_block(int(tip, 16), create_coinbase(self.nodes[0].getblockcount()), block_time, version=4)
         block.solve()
         self.nodes[0].submitheader(block.serialize().hex())
@@ -116,5 +116,5 @@ class InvalidateTest(BitcoinTestFramework):
         assert_equal(self.nodes[1].getbestblockhash(), blocks[-1])
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     InvalidateTest(__file__).main()

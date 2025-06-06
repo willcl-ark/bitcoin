@@ -8,9 +8,8 @@ Tests listtransactions, listsinceblock, and gettransaction.
 """
 
 from test_framework.test_framework import BitcoinTestFramework
-from test_framework.util import (
-    assert_array_result
-)
+from test_framework.util import assert_array_result
+
 
 class CoinbaseCategoryTest(BitcoinTestFramework):
     def set_test_params(self):
@@ -21,15 +20,11 @@ class CoinbaseCategoryTest(BitcoinTestFramework):
         self.skip_if_no_wallet()
 
     def assert_category(self, category, address, txid, skip):
-        assert_array_result(self.nodes[0].listtransactions(skip=skip),
-                            {"address": address},
-                            {"category": category})
-        assert_array_result(self.nodes[0].listsinceblock()["transactions"],
-                            {"address": address},
-                            {"category": category})
-        assert_array_result(self.nodes[0].gettransaction(txid)["details"],
-                            {"address": address},
-                            {"category": category})
+        assert_array_result(self.nodes[0].listtransactions(skip=skip), {"address": address}, {"category": category})
+        assert_array_result(
+            self.nodes[0].listsinceblock()["transactions"], {"address": address}, {"category": category}
+        )
+        assert_array_result(self.nodes[0].gettransaction(txid)["details"], {"address": address}, {"category": category})
 
     def run_test(self):
         # Generate one block to an address
@@ -56,5 +51,6 @@ class CoinbaseCategoryTest(BitcoinTestFramework):
         # Coinbase transaction is now orphaned
         self.assert_category("orphan", address, txid, 100)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     CoinbaseCategoryTest(__file__).main()

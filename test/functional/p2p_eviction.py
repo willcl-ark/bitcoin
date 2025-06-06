@@ -3,7 +3,7 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-""" Test node eviction logic
+"""Test node eviction logic
 
 When the number of peers has reached the limit of maximum connections,
 the next connecting inbound peer will trigger the eviction mechanism.
@@ -12,6 +12,7 @@ address/netgroup since in the current framework, all peers are connecting from
 the same local address. See Issue #14210 for more info.
 Therefore, this test is limited to the remaining protection criteria.
 """
+
 import time
 
 from test_framework.blocktools import (
@@ -49,7 +50,7 @@ class P2PEvict(BitcoinTestFramework):
         # The choice of maxconnections=32 results in a maximum of 21 inbound connections
         # (32 - 10 outbound - 1 feeler). 20 inbound peers are protected from eviction:
         # 4 by netgroup, 4 that sent us blocks, 4 that sent us transactions and 8 via lowest ping time
-        self.extra_args = [['-maxconnections=32']]
+        self.extra_args = [["-maxconnections=32"]]
 
     def run_test(self):
         protected_peers = set()  # peers that we expect to be protected from eviction
@@ -64,7 +65,7 @@ class P2PEvict(BitcoinTestFramework):
             block_peer.sync_with_ping()
             best_block = node.getbestblockhash()
             tip = int(best_block, 16)
-            best_block_time = node.getblock(best_block)['time']
+            best_block_time = node.getblock(best_block)["time"]
             block = create_block(tip, create_coinbase(node.getblockcount() + 1), best_block_time + 1)
             block.solve()
             block_peer.send_blocks_and_test([block], node, success=True)
@@ -81,7 +82,7 @@ class P2PEvict(BitcoinTestFramework):
             current_peer += 1
             txpeer.sync_with_ping()
 
-            tx = self.wallet.create_self_transfer()['tx']
+            tx = self.wallet.create_self_transfer()["tx"]
             txpeer.send_without_ping(msg_tx(tx))
             protected_peers.add(current_peer)
 
@@ -95,7 +96,7 @@ class P2PEvict(BitcoinTestFramework):
         peerinfo = node.getpeerinfo()
         pings = {}
         for i in range(len(peerinfo)):
-            pings[i] = peerinfo[i]['minping'] if 'minping' in peerinfo[i] else 1000000
+            pings[i] = peerinfo[i]["minping"] if "minping" in peerinfo[i] else 1000000
         sorted_pings = sorted(pings.items(), key=lambda x: x[1])
 
         # Usually the 8 fast peers are protected. In rare case of unreliable pings,
@@ -123,5 +124,5 @@ class P2PEvict(BitcoinTestFramework):
         assert evicted_peers[0] not in protected_peers
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     P2PEvict(__file__).main()

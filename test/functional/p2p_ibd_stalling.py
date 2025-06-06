@@ -8,23 +8,20 @@ Test stalling logic during IBD
 
 import time
 
-from test_framework.blocktools import (
-        create_block,
-        create_coinbase
-)
+from test_framework.blocktools import create_block, create_coinbase
 from test_framework.messages import (
-        MSG_BLOCK,
-        MSG_TYPE_MASK,
+    MSG_BLOCK,
+    MSG_TYPE_MASK,
 )
 from test_framework.p2p import (
-        CBlockHeader,
-        msg_block,
-        msg_headers,
-        P2PDataStore,
+    CBlockHeader,
+    msg_block,
+    msg_headers,
+    P2PDataStore,
 )
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
-        assert_equal,
+    assert_equal,
 )
 
 
@@ -37,7 +34,7 @@ class P2PStaller(P2PDataStore):
         for inv in message.inv:
             self.getdata_requests.append(inv.hash)
             if (inv.type & MSG_TYPE_MASK) == MSG_BLOCK:
-                if (inv.hash != self.stall_block):
+                if inv.hash != self.stall_block:
                     self.send_without_ping(msg_block(self.block_store[inv.hash]))
 
     def on_getheaders(self, message):
@@ -56,7 +53,7 @@ class P2PIBDStallingTest(BitcoinTestFramework):
         tip = int(node.getbestblockhash(), 16)
         blocks = []
         height = 1
-        block_time = node.getblock(node.getbestblockhash())['time'] + 1
+        block_time = node.getblock(node.getbestblockhash())["time"] + 1
         self.log.info("Prepare blocks without sending them to the node")
         block_dict = {}
         for _ in range(NUM_BLOCKS):
@@ -69,14 +66,18 @@ class P2PIBDStallingTest(BitcoinTestFramework):
         stall_block = blocks[0].sha256
 
         headers_message = msg_headers()
-        headers_message.headers = [CBlockHeader(b) for b in blocks[:NUM_BLOCKS-1]]
+        headers_message.headers = [CBlockHeader(b) for b in blocks[: NUM_BLOCKS - 1]]
         peers = []
 
         self.log.info("Check that a staller does not get disconnected if the 1024 block lookahead buffer is filled")
         self.mocktime = int(time.time()) + 1
         node.setmocktime(self.mocktime)
         for id in range(NUM_PEERS):
-            peers.append(node.add_outbound_p2p_connection(P2PStaller(stall_block), p2p_idx=id, connection_type="outbound-full-relay"))
+            peers.append(
+                node.add_outbound_p2p_connection(
+                    P2PStaller(stall_block), p2p_idx=id, connection_type="outbound-full-relay"
+                )
+            )
             peers[-1].block_store = block_dict
             peers[-1].send_and_ping(headers_message)
 
@@ -94,7 +95,7 @@ class P2PIBDStallingTest(BitcoinTestFramework):
 
         self.log.info("Check that increasing the window beyond 1024 blocks triggers stalling logic")
         headers_message.headers = [CBlockHeader(b) for b in blocks]
-        with node.assert_debug_log(expected_msgs=['Stall started']):
+        with node.assert_debug_log(expected_msgs=["Stall started"]):
             for p in peers:
                 p.send_without_ping(headers_message)
             self.all_sync_send_with_ping(peers)
@@ -136,7 +137,7 @@ class P2PIBDStallingTest(BitcoinTestFramework):
         self.all_sync_send_with_ping(peers)
 
         self.log.info("Provide the withheld block and check that stalling timeout gets reduced back to 2 seconds")
-        with node.assert_debug_log(expected_msgs=['Decreased stalling timeout to 2 seconds']):
+        with node.assert_debug_log(expected_msgs=["Decreased stalling timeout to 2 seconds"]):
             for p in peers:
                 if p.is_connected and (stall_block in p.getdata_requests):
                     p.send_without_ping(msg_block(block_dict[stall_block]))
@@ -147,7 +148,7 @@ class P2PIBDStallingTest(BitcoinTestFramework):
     def total_bytes_recv_for_blocks(self):
         total = 0
         for info in self.nodes[0].getpeerinfo():
-            if ("block" in info["bytesrecv_per_msg"].keys()):
+            if "block" in info["bytesrecv_per_msg"].keys():
                 total += info["bytesrecv_per_msg"]["block"]
         return total
 
@@ -163,5 +164,5 @@ class P2PIBDStallingTest(BitcoinTestFramework):
         return False
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     P2PIBDStallingTest(__file__).main()

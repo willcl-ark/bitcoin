@@ -3,7 +3,9 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test utxo-to-sqlite conversion tool"""
+
 import os.path
+
 try:
     import sqlite3
 except ImportError:
@@ -42,10 +44,10 @@ def calculate_muhash_from_sqlite_utxos(filename):
     muhash = MuHash3072()
     con = sqlite3.connect(filename)
     cur = con.cursor()
-    for (txid_hex, vout, value, coinbase, height, spk_hex) in cur.execute("SELECT * FROM utxos"):
+    for txid_hex, vout, value, coinbase, height, spk_hex in cur.execute("SELECT * FROM utxos"):
         # serialize UTXO for MuHash (see function `TxOutSer` in the  coinstats module)
         utxo_ser = COutPoint(int(txid_hex, 16), vout).serialize()
-        utxo_ser += (height * 2 + coinbase).to_bytes(4, 'little')
+        utxo_ser += (height * 2 + coinbase).to_bytes(4, "little")
         utxo_ser += CTxOut(value, bytes.fromhex(spk_hex)).serialize()
         muhash.insert(utxo_ser)
     con.close()
@@ -56,7 +58,7 @@ class UtxoToSqliteTest(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 1
         # we want to create some UTXOs with non-standard output scripts
-        self.extra_args = [['-acceptnonstdtxn=1']]
+        self.extra_args = [["-acceptnonstdtxn=1"]]
 
     def skip_test_if_missing_module(self):
         self.skip_if_no_py_sqlite3()
@@ -66,8 +68,8 @@ class UtxoToSqliteTest(BitcoinTestFramework):
         wallet = MiniWallet(node)
         key = ECKey()
 
-        self.log.info('Create UTXOs with various output script types')
-        for i in range(1, 10+1):
+        self.log.info("Create UTXOs with various output script types")
+        for i in range(1, 10 + 1):
             key.generate(compressed=False)
             uncompressed_pubkey = key.get_pubkey().get_bytes()
             key.generate(compressed=True)
@@ -81,14 +83,13 @@ class UtxoToSqliteTest(BitcoinTestFramework):
                 script_to_p2sh_script(key_to_p2pkh_script(pubkey)),
                 key_to_p2pk_script(pubkey),
                 key_to_p2pk_script(uncompressed_pubkey),
-
-                keys_to_multisig_script([pubkey]*i),
-                keys_to_multisig_script([uncompressed_pubkey]*i),
+                keys_to_multisig_script([pubkey] * i),
+                keys_to_multisig_script([uncompressed_pubkey] * i),
                 key_to_p2wpkh_script(pubkey),
                 script_to_p2wsh_script(key_to_p2pkh_script(pubkey)),
                 output_key_to_p2tr_script(pubkey[1:]),
                 PAY_TO_ANCHOR,
-                CScript([CScriptOp.encode_op_n(i)]*(1000*i)),  # large script (up to 10000 bytes)
+                CScript([CScriptOp.encode_op_n(i)] * (1000 * i)),  # large script (up to 10000 bytes)
             )
 
             # create outputs and mine them in a block
@@ -96,20 +97,21 @@ class UtxoToSqliteTest(BitcoinTestFramework):
                 wallet.send_to(from_node=node, scriptPubKey=output_script, amount=i, fee=20000)
             self.generate(wallet, 1)
 
-        self.log.info('Dump UTXO set via `dumptxoutset` RPC')
+        self.log.info("Dump UTXO set via `dumptxoutset` RPC")
         input_filename = os.path.join(self.options.tmpdir, "utxos.dat")
         node.dumptxoutset(input_filename, "latest")
 
-        self.log.info('Convert UTXO set from compact-serialized format to sqlite format')
+        self.log.info("Convert UTXO set from compact-serialized format to sqlite format")
         output_filename = os.path.join(self.options.tmpdir, "utxos.sqlite")
         base_dir = self.config["environment"]["SRCDIR"]
         utxo_to_sqlite_path = os.path.join(base_dir, "contrib", "utxo-tools", "utxo_to_sqlite.py")
-        subprocess.run([sys.executable, utxo_to_sqlite_path, input_filename, output_filename],
-                       check=True, stderr=subprocess.STDOUT)
+        subprocess.run(
+            [sys.executable, utxo_to_sqlite_path, input_filename, output_filename], check=True, stderr=subprocess.STDOUT
+        )
 
-        self.log.info('Verify that both UTXO sets match by comparing their MuHash')
+        self.log.info("Verify that both UTXO sets match by comparing their MuHash")
         muhash_sqlite = calculate_muhash_from_sqlite_utxos(output_filename)
-        muhash_compact_serialized = node.gettxoutsetinfo('muhash')['muhash']
+        muhash_compact_serialized = node.gettxoutsetinfo("muhash")["muhash"]
         assert_equal(muhash_sqlite, muhash_compact_serialized)
 
 

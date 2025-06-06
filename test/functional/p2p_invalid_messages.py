@@ -37,7 +37,7 @@ VALID_DATA_LIMIT = MAX_PROTOCOL_MESSAGE_LENGTH - 5  # Account for the 5-byte len
 class msg_unrecognized:
     """Nonsensical message. Modeled after similar types in test_framework.messages."""
 
-    msgtype = b'badmsg\x01'
+    msgtype = b"badmsg\x01"
 
     def __init__(self, *, str_data):
         self.str_data = str_data.encode() if not isinstance(str_data, bytes) else str_data
@@ -51,7 +51,7 @@ class msg_unrecognized:
 
 class SenderOfAddrV2(P2PInterface):
     def wait_for_sendaddrv2(self):
-        self.wait_until(lambda: 'sendaddrv2' in self.last_message)
+        self.wait_until(lambda: "sendaddrv2" in self.last_message)
 
 
 class InvalidMessagesTest(BitcoinTestFramework):
@@ -90,11 +90,11 @@ class InvalidMessagesTest(BitcoinTestFramework):
         msg = conn.build_message(msg_ping(nonce=12345))
         cut_pos = 12  # Chosen at an arbitrary position within the header
         # Send message in two pieces
-        before = self.nodes[0].getnettotals()['totalbytesrecv']
+        before = self.nodes[0].getnettotals()["totalbytesrecv"]
         conn.send_raw_message(msg[:cut_pos])
         # Wait until node has processed the first half of the message
-        self.wait_until(lambda: self.nodes[0].getnettotals()['totalbytesrecv'] != before)
-        middle = self.nodes[0].getnettotals()['totalbytesrecv']
+        self.wait_until(lambda: self.nodes[0].getnettotals()["totalbytesrecv"] != before)
+        middle = self.nodes[0].getnettotals()["totalbytesrecv"]
         assert_equal(middle, before + cut_pos)
         conn.send_raw_message(msg[cut_pos:])
         conn.sync_with_ping(timeout=1)
@@ -103,7 +103,7 @@ class InvalidMessagesTest(BitcoinTestFramework):
     def test_duplicate_version_msg(self):
         self.log.info("Test duplicate version message is ignored")
         conn = self.nodes[0].add_p2p_connection(P2PDataStore())
-        with self.nodes[0].assert_debug_log(['redundant version message from peer']):
+        with self.nodes[0].assert_debug_log(["redundant version message from peer"]):
             conn.send_and_ping(msg_version())
         self.nodes[0].disconnect_p2ps()
 
@@ -113,10 +113,10 @@ class InvalidMessagesTest(BitcoinTestFramework):
             return
         self.log.info("Test message with invalid magic bytes disconnects peer")
         conn = self.nodes[0].add_p2p_connection(P2PDataStore())
-        with self.nodes[0].assert_debug_log(['Header error: Wrong MessageStart ffffffff received']):
+        with self.nodes[0].assert_debug_log(["Header error: Wrong MessageStart ffffffff received"]):
             msg = conn.build_message(msg_unrecognized(str_data="d"))
             # modify magic bytes
-            msg = b'\xff' * 4 + msg[4:]
+            msg = b"\xff" * 4 + msg[4:]
             conn.send_raw_message(msg)
             conn.wait_for_disconnect(timeout=1)
         self.nodes[0].disconnect_p2ps()
@@ -127,24 +127,27 @@ class InvalidMessagesTest(BitcoinTestFramework):
             return
         self.log.info("Test message with invalid checksum logs an error")
         conn = self.nodes[0].add_p2p_connection(P2PDataStore())
-        with self.nodes[0].assert_debug_log(['Header error: Wrong checksum (badmsg, 2 bytes), expected 78df0a04 was ffffffff']):
+        with self.nodes[0].assert_debug_log(
+            ["Header error: Wrong checksum (badmsg, 2 bytes), expected 78df0a04 was ffffffff"]
+        ):
             msg = conn.build_message(msg_unrecognized(str_data="d"))
             # Checksum is after start bytes (4B), message type (12B), len (4B)
             cut_len = 4 + 12 + 4
             # modify checksum
-            msg = msg[:cut_len] + b'\xff' * 4 + msg[cut_len + 4:]
+            msg = msg[:cut_len] + b"\xff" * 4 + msg[cut_len + 4 :]
             conn.send_raw_message(msg)
             conn.sync_with_ping(timeout=1)
         # Check that traffic is accounted for (24 bytes header + 2 bytes payload)
-        assert_equal(self.nodes[0].getpeerinfo()[0]['bytesrecv_per_msg']['*other*'], 26)
+        assert_equal(self.nodes[0].getpeerinfo()[0]["bytesrecv_per_msg"]["*other*"], 26)
         self.nodes[0].disconnect_p2ps()
 
     def test_size(self):
         self.log.info("Test message with oversized payload disconnects peer")
         conn = self.nodes[0].add_p2p_connection(P2PDataStore())
         error_msg = (
-            ['V2 transport error: packet too large (4000014 bytes)'] if self.options.v2transport
-            else ['Header error: Size too large (badmsg, 4000001 bytes)']
+            ["V2 transport error: packet too large (4000014 bytes)"]
+            if self.options.v2transport
+            else ["Header error: Size too large (badmsg, 4000001 bytes)"]
         )
         with self.nodes[0].assert_debug_log(error_msg):
             msg = msg_unrecognized(str_data="d" * (VALID_DATA_LIMIT + 1))
@@ -157,25 +160,25 @@ class InvalidMessagesTest(BitcoinTestFramework):
         self.log.info("Test message with invalid message type logs an error")
         conn = self.nodes[0].add_p2p_connection(P2PDataStore())
         if self.options.v2transport:
-            msgtype = 99 # not defined
+            msgtype = 99  # not defined
             msg = msg_unrecognized(str_data="d")
-            contents = msgtype.to_bytes(1, 'big') + msg.serialize()
+            contents = msgtype.to_bytes(1, "big") + msg.serialize()
             tmsg = conn.v2_state.v2_enc_packet(contents, ignore=False)
-            with self.nodes[0].assert_debug_log(['V2 transport error: invalid message type']):
+            with self.nodes[0].assert_debug_log(["V2 transport error: invalid message type"]):
                 conn.send_raw_message(tmsg)
                 conn.sync_with_ping(timeout=1)
             # Check that traffic is accounted for (20 bytes plus 3 bytes contents)
-            assert_equal(self.nodes[0].getpeerinfo()[0]['bytesrecv_per_msg']['*other*'], 23)
+            assert_equal(self.nodes[0].getpeerinfo()[0]["bytesrecv_per_msg"]["*other*"], 23)
         else:
-            with self.nodes[0].assert_debug_log(['Header error: Invalid message type']):
+            with self.nodes[0].assert_debug_log(["Header error: Invalid message type"]):
                 msg = msg_unrecognized(str_data="d")
                 msg = conn.build_message(msg)
                 # Modify msgtype
-                msg = msg[:7] + b'\x00' + msg[7 + 1:]
+                msg = msg[:7] + b"\x00" + msg[7 + 1 :]
                 conn.send_raw_message(msg)
                 conn.sync_with_ping(timeout=1)
                 # Check that traffic is accounted for (24 bytes header + 2 bytes payload)
-                assert_equal(self.nodes[0].getpeerinfo()[0]['bytesrecv_per_msg']['*other*'], 26)
+                assert_equal(self.nodes[0].getpeerinfo()[0]["bytesrecv_per_msg"]["*other*"], 26)
         self.nodes[0].disconnect_p2ps()
 
     def test_addrv2(self, label, required_log_messages, raw_addrv2):
@@ -187,10 +190,10 @@ class InvalidMessagesTest(BitcoinTestFramework):
         # will produce unexpected results.
         conn.wait_for_sendaddrv2()
 
-        self.log.info('Test addrv2: ' + label)
+        self.log.info("Test addrv2: " + label)
 
-        msg = msg_unrecognized(str_data=b'')
-        msg.msgtype = b'addrv2'
+        msg = msg_unrecognized(str_data=b"")
+        msg.msgtype = b"addrv2"
         with node.assert_debug_log(required_log_messages):
             # override serialize() which would include the length of the data
             msg.serialize = lambda: raw_addrv2
@@ -200,74 +203,82 @@ class InvalidMessagesTest(BitcoinTestFramework):
         node.disconnect_p2ps()
 
     def test_addrv2_empty(self):
-        self.test_addrv2('empty',
+        self.test_addrv2(
+            "empty",
             [
-                'received: addrv2 (0 bytes)',
-                'ProcessMessages(addrv2, 0 bytes): Exception',
-                'end of data',
+                "received: addrv2 (0 bytes)",
+                "ProcessMessages(addrv2, 0 bytes): Exception",
+                "end of data",
             ],
-            b'')
+            b"",
+        )
 
     def test_addrv2_no_addresses(self):
-        self.test_addrv2('no addresses',
+        self.test_addrv2(
+            "no addresses",
             [
-                'received: addrv2 (1 bytes)',
+                "received: addrv2 (1 bytes)",
             ],
-            bytes.fromhex('00'))
+            bytes.fromhex("00"),
+        )
 
     def test_addrv2_too_long_address(self):
-        self.test_addrv2('too long address',
+        self.test_addrv2(
+            "too long address",
             [
-                'received: addrv2 (525 bytes)',
-                'ProcessMessages(addrv2, 525 bytes): Exception',
-                'Address too long: 513 > 512',
+                "received: addrv2 (525 bytes)",
+                "ProcessMessages(addrv2, 525 bytes): Exception",
+                "Address too long: 513 > 512",
             ],
             # fmt: off
             bytes.fromhex(
-                "01" +       # number of entries
-                "61bc6649" + # time, Fri Jan  9 02:54:25 UTC 2009
-                "00" +       # service flags, COMPACTSIZE(NODE_NONE)
-                "01" +       # network type (IPv4)
-                "fd0102" +   # address length (COMPACTSIZE(513))
-                "ab" * 513 + # address
-                "208d"       # port
+                "01"  # number of entries
+                + "61bc6649"  # time, Fri Jan  9 02:54:25 UTC 2009
+                + "00"  # service flags, COMPACTSIZE(NODE_NONE)
+                + "01"  # network type (IPv4)
+                + "fd0102"  # address length (COMPACTSIZE(513))
+                + "ab" * 513  # address
+                + "208d"  # port
             ),
             # fmt: on
         )
 
     def test_addrv2_unrecognized_network(self):
         now_hex = int(time.time()).to_bytes(4, "little").hex()
-        self.test_addrv2('unrecognized network',
+        self.test_addrv2(
+            "unrecognized network",
             [
-                'received: addrv2 (25 bytes)',
-                '9.9.9.9:8333',
-                'Added 1 addresses',
+                "received: addrv2 (25 bytes)",
+                "9.9.9.9:8333",
+                "Added 1 addresses",
             ],
             # fmt: off
             bytes.fromhex(
-                "02" +     # number of entries
+                "02"  # number of entries
+                +
                 # this should be ignored without impeding acceptance of subsequent ones
-                now_hex +  # time
-                "01" +     # service flags, COMPACTSIZE(NODE_NETWORK)
-                "99" +     # network type (unrecognized)
-                "02" +     # address length (COMPACTSIZE(2))
-                "ab" * 2 + # address
-                "208d" +   # port
+                now_hex  # time
+                + "01"  # service flags, COMPACTSIZE(NODE_NETWORK)
+                + "99"  # network type (unrecognized)
+                + "02"  # address length (COMPACTSIZE(2))
+                + "ab" * 2  # address
+                + "208d"  # port
+                +
                 # this should be added:
-                now_hex +  # time
-                "01" +     # service flags, COMPACTSIZE(NODE_NETWORK)
-                "01" +     # network type (IPv4)
-                "04" +     # address length (COMPACTSIZE(4))
-                "09" * 4 + # address
-                "208d"     # port
+                now_hex  # time
+                + "01"  # service flags, COMPACTSIZE(NODE_NETWORK)
+                + "01"  # network type (IPv4)
+                + "04"  # address length (COMPACTSIZE(4))
+                + "09" * 4  # address
+                + "208d"  # port
             ),
             # fmt: on
         )
 
     def test_oversized_msg(self, msg, size):
-        msg_type = msg.msgtype.decode('ascii')
+        msg_type = msg.msgtype.decode("ascii")
         self.log.info("Test {} message of size {} is logged as misbehaving".format(msg_type, size))
-        with self.nodes[0].assert_debug_log(['Misbehaving', '{} message size = {}'.format(msg_type, size)]):
+        with self.nodes[0].assert_debug_log(["Misbehaving", "{} message size = {}".format(msg_type, size)]):
             conn = self.nodes[0].add_p2p_connection(P2PInterface())
             conn.send_without_ping(msg)
             conn.wait_for_disconnect()
@@ -291,27 +302,27 @@ class InvalidMessagesTest(BitcoinTestFramework):
         blockheader_tip = from_hex(CBlockHeader(), self.nodes[0].getblockheader(blockheader_tip_hash, False))
 
         # send valid headers message first
-        assert_equal(self.nodes[0].getblockchaininfo()['headers'], 0)
+        assert_equal(self.nodes[0].getblockchaininfo()["headers"], 0)
         blockheader = CBlockHeader()
         blockheader.hashPrevBlock = int(blockheader_tip_hash, 16)
         blockheader.nTime = int(time.time())
         blockheader.nBits = blockheader_tip.nBits
         blockheader.rehash()
-        while not blockheader.hash.startswith('0'):
+        while not blockheader.hash.startswith("0"):
             blockheader.nNonce += 1
             blockheader.rehash()
         peer = self.nodes[0].add_p2p_connection(P2PInterface())
         peer.send_and_ping(msg_headers([blockheader]))
-        assert_equal(self.nodes[0].getblockchaininfo()['headers'], 1)
+        assert_equal(self.nodes[0].getblockchaininfo()["headers"], 1)
         chaintips = self.nodes[0].getchaintips()
-        assert_equal(chaintips[0]['status'], 'headers-only')
-        assert_equal(chaintips[0]['hash'], blockheader.hash)
+        assert_equal(chaintips[0]["status"], "headers-only")
+        assert_equal(chaintips[0]["hash"], blockheader.hash)
 
         # invalidate PoW
-        while not blockheader.hash.startswith('f'):
+        while not blockheader.hash.startswith("f"):
             blockheader.nNonce += 1
             blockheader.rehash()
-        with self.nodes[0].assert_debug_log(['Misbehaving', 'header with invalid proof of work']):
+        with self.nodes[0].assert_debug_log(["Misbehaving", "header with invalid proof of work"]):
             peer.send_without_ping(msg_headers([blockheader]))
             peer.wait_for_disconnect()
 
@@ -323,13 +334,13 @@ class InvalidMessagesTest(BitcoinTestFramework):
             block_headers.append(from_hex(CBlockHeader(), self.nodes[0].getblockheader(block_hash, False)))
 
         # continuous headers sequence should be fine
-        MISBEHAVING_NONCONTINUOUS_HEADERS_MSGS = ['Misbehaving', 'non-continuous headers sequence']
+        MISBEHAVING_NONCONTINUOUS_HEADERS_MSGS = ["Misbehaving", "non-continuous headers sequence"]
         peer = self.nodes[0].add_p2p_connection(P2PInterface())
         with self.nodes[0].assert_debug_log([], unexpected_msgs=MISBEHAVING_NONCONTINUOUS_HEADERS_MSGS):
             peer.send_and_ping(msg_headers(block_headers))
 
         # delete arbitrary block header somewhere in the middle to break link
-        del block_headers[random.randrange(1, len(block_headers)-1)]
+        del block_headers[random.randrange(1, len(block_headers) - 1)]
         with self.nodes[0].assert_debug_log(expected_msgs=MISBEHAVING_NONCONTINUOUS_HEADERS_MSGS):
             peer.send_without_ping(msg_headers(block_headers))
             peer.wait_for_disconnect()
@@ -363,5 +374,5 @@ class InvalidMessagesTest(BitcoinTestFramework):
         self.nodes[0].disconnect_p2ps()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     InvalidMessagesTest(__file__).main()

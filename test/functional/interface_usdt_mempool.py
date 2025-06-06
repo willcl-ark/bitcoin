@@ -3,8 +3,8 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-"""  Tests the mempool:* tracepoint API interface.
-     See https://github.com/bitcoin/bitcoin/blob/master/doc/tracing.md#context-mempool
+"""Tests the mempool:* tracepoint API interface.
+See https://github.com/bitcoin/bitcoin/blob/master/doc/tracing.md#context-mempool
 """
 
 import ctypes
@@ -264,16 +264,12 @@ class MempoolTracepointTest(BitcoinTestFramework):
         self.log.info("Sending RBF transaction...")
         utxo = self.wallet.get_utxo(mark_as_spent=True)
         original_fee = Decimal(40000)
-        original_tx = self.wallet.send_self_transfer(
-            from_node=node, utxo_to_spend=utxo, fee=original_fee / COIN
-        )
+        original_tx = self.wallet.send_self_transfer(from_node=node, utxo_to_spend=utxo, fee=original_fee / COIN)
         entry_time = node.getmempoolentry(original_tx["txid"])["time"]
 
         self.log.info("Sending replacement transaction...")
         replacement_fee = Decimal(45000)
-        replacement_tx = self.wallet.send_self_transfer(
-            from_node=node, utxo_to_spend=utxo, fee=replacement_fee / COIN
-        )
+        replacement_tx = self.wallet.send_self_transfer(from_node=node, utxo_to_spend=utxo, fee=replacement_fee / COIN)
 
         self.log.info("Polling buffer...")
         bpf.perf_buffer_poll(timeout=200)

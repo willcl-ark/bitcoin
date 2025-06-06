@@ -7,6 +7,7 @@ import subprocess
 
 from test_framework.test_framework import BitcoinTestFramework
 
+
 class BitcoinChainstateTest(BitcoinTestFramework):
     def skip_test_if_missing_module(self):
         self.skip_if_no_bitcoin_chainstate()
@@ -24,7 +25,7 @@ class BitcoinChainstateTest(BitcoinTestFramework):
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True
+            text=True,
         )
         stdout, stderr = proc.communicate(input=input + "\n", timeout=5)
         self.log.debug("STDOUT: {0}".format(stdout.strip("\n")))
@@ -44,6 +45,7 @@ class BitcoinChainstateTest(BitcoinTestFramework):
         self.add_block(datadir, block_one, "duplicate")
         self.add_block(datadir, "00", "Block decode failed")
         self.add_block(datadir, "", "Empty line found")
+
 
 if __name__ == "__main__":
     BitcoinChainstateTest(__file__).main()

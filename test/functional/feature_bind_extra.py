@@ -44,10 +44,7 @@ class BindExtraTest(BitcoinTestFramework):
 
         # Node0, no normal -bind=... with -bind=...=onion, thus only the tor target.
         self.expected.append(
-            [
-                [f"-bind=127.0.0.1:{port}=onion"],
-                [(loopback_ipv4, port)]
-            ],
+            [[f"-bind=127.0.0.1:{port}=onion"], [(loopback_ipv4, port)]],
         )
         port += 1
 
@@ -55,17 +52,14 @@ class BindExtraTest(BitcoinTestFramework):
         self.expected.append(
             [
                 [f"-bind=127.0.0.1:{port}", f"-bind=127.0.0.1:{port + 1}=onion"],
-                [(loopback_ipv4, port), (loopback_ipv4, port + 1)]
+                [(loopback_ipv4, port), (loopback_ipv4, port + 1)],
             ],
         )
         port += 2
 
         # Node2, no -bind=...=onion, thus no extra port for Tor target.
         self.expected.append(
-            [
-                [f"-bind=127.0.0.1:{port}"],
-                [(loopback_ipv4, port)]
-            ],
+            [[f"-bind=127.0.0.1:{port}"], [(loopback_ipv4, port)]],
         )
         port += 1
 
@@ -87,5 +81,6 @@ class BindExtraTest(BitcoinTestFramework):
             binds = set(filter(lambda e: e[1] != rpc_port(i), binds))
             assert_equal(binds, set(expected_services))
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     BindExtraTest(__file__).main()

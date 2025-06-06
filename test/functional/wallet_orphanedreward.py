@@ -7,6 +7,7 @@
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import assert_equal
 
+
 class OrphanedBlockRewardTest(BitcoinTestFramework):
     def set_test_params(self):
         self.setup_clean_chain = True
@@ -42,11 +43,14 @@ class OrphanedBlockRewardTest(BitcoinTestFramework):
         blocks = self.generate(self.nodes[0], 152)
         conflict_block = blocks[0]
         # We expect the descendants of orphaned rewards to no longer be considered
-        assert_equal(self.nodes[1].getbalances()["mine"], {
-          "trusted": 10,
-          "untrusted_pending": 0,
-          "immature": 0,
-        })
+        assert_equal(
+            self.nodes[1].getbalances()["mine"],
+            {
+                "trusted": 10,
+                "untrusted_pending": 0,
+                "immature": 0,
+            },
+        )
         # And the unconfirmed tx to be abandoned
         assert_equal(self.nodes[1].gettransaction(txid)["details"][0]["abandoned"], True)
 
@@ -69,5 +73,5 @@ class OrphanedBlockRewardTest(BitcoinTestFramework):
         assert_equal(self.nodes[1].gettransaction(txid)["details"][0]["abandoned"], True)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     OrphanedBlockRewardTest(__file__).main()

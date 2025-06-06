@@ -38,11 +38,11 @@ class P2PNoBloomFilterMessages(BitcoinTestFramework):
         self.test_message_causes_disconnect(msg_filterload())
 
         self.log.info("Test that peer is disconnected if it sends filteradd message")
-        self.test_message_causes_disconnect(msg_filteradd(data=b'\xcc'))
+        self.test_message_causes_disconnect(msg_filteradd(data=b"\xcc"))
 
         self.log.info("Test that peer is disconnected if it sends a filterclear message")
         self.test_message_causes_disconnect(msg_filterclear())
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     P2PNoBloomFilterMessages(__file__).main()

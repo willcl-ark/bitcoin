@@ -12,6 +12,7 @@ from collections import defaultdict
 
 import asmap
 
+
 def load_file(input_file):
     try:
         contents = input_file.read()
@@ -31,19 +32,19 @@ def load_file(input_file):
     if txt_contents is not None:
         entries = []
         for line in txt_contents.split("\n"):
-            idx = line.find('#')
+            idx = line.find("#")
             if idx >= 0:
                 line = line[:idx]
-            line = line.lstrip(' ').rstrip(' \t\r\n')
+            line = line.lstrip(" ").rstrip(" \t\r\n")
             if len(line) == 0:
                 continue
-            fields = line.split(' ')
+            fields = line.split(" ")
             if len(fields) != 2:
                 txt_error = f"unparseable line '{line}'"
                 entries = None
                 break
             prefix, asn = fields
-            if len(asn) <= 2 or asn[:2] != "AS" or any(c < '0' or c > '9' for c in asn[2:]):
+            if len(asn) <= 2 or asn[:2] != "AS" or any(c < "0" or c > "9" for c in asn[2:]):
                 txt_error = f"invalid ASN '{asn}'"
                 entries = None
                 break
@@ -73,6 +74,7 @@ def save_binary(output_file, state, fill):
     except OSError as err:
         sys.exit(f"Output file '{output_file.name}' cannot be written to: {err.strerror}.")
 
+
 def save_text(output_file, state, fill, overlapping):
     for prefix, asn in state.to_entries(fill=fill, overlapping=overlapping):
         net = asmap.prefix_to_net(prefix)
@@ -85,48 +87,105 @@ def save_text(output_file, state, fill, overlapping):
     except OSError as err:
         sys.exit(f"Output file '{output_file.name}' cannot be written to: {err.strerror}.")
 
+
 def main():
-    parser = argparse.ArgumentParser(description="Tool for performing various operations on textual and binary asmap files.")
+    parser = argparse.ArgumentParser(
+        description="Tool for performing various operations on textual and binary asmap files."
+    )
     subparsers = parser.add_subparsers(title="valid subcommands", dest="subcommand")
 
     parser_encode = subparsers.add_parser("encode", help="convert asmap data to binary format")
-    parser_encode.add_argument('-f', '--fill', dest="fill", default=False, action="store_true",
-                               help="permit reassigning undefined network ranges arbitrarily to reduce size")
-    parser_encode.add_argument('infile', nargs='?', type=argparse.FileType('rb'), default=sys.stdin.buffer,
-                               help="input asmap file (text or binary); default is stdin")
-    parser_encode.add_argument('outfile', nargs='?', type=argparse.FileType('wb'), default=sys.stdout.buffer,
-                               help="output binary asmap file; default is stdout")
+    parser_encode.add_argument(
+        "-f",
+        "--fill",
+        dest="fill",
+        default=False,
+        action="store_true",
+        help="permit reassigning undefined network ranges arbitrarily to reduce size",
+    )
+    parser_encode.add_argument(
+        "infile",
+        nargs="?",
+        type=argparse.FileType("rb"),
+        default=sys.stdin.buffer,
+        help="input asmap file (text or binary); default is stdin",
+    )
+    parser_encode.add_argument(
+        "outfile",
+        nargs="?",
+        type=argparse.FileType("wb"),
+        default=sys.stdout.buffer,
+        help="output binary asmap file; default is stdout",
+    )
 
     parser_decode = subparsers.add_parser("decode", help="convert asmap data to text format")
-    parser_decode.add_argument('-f', '--fill', dest="fill", default=False, action="store_true",
-                               help="permit reassigning undefined network ranges arbitrarily to reduce length")
-    parser_decode.add_argument('-n', '--nonoverlapping', dest="overlapping", default=True, action="store_false",
-                               help="output strictly non-overall ping network ranges (increases output size)")
-    parser_decode.add_argument('infile', nargs='?', type=argparse.FileType('rb'), default=sys.stdin.buffer,
-                               help="input asmap file (text or binary); default is stdin")
-    parser_decode.add_argument('outfile', nargs='?', type=argparse.FileType('w'), default=sys.stdout,
-                               help="output text file; default is stdout")
+    parser_decode.add_argument(
+        "-f",
+        "--fill",
+        dest="fill",
+        default=False,
+        action="store_true",
+        help="permit reassigning undefined network ranges arbitrarily to reduce length",
+    )
+    parser_decode.add_argument(
+        "-n",
+        "--nonoverlapping",
+        dest="overlapping",
+        default=True,
+        action="store_false",
+        help="output strictly non-overall ping network ranges (increases output size)",
+    )
+    parser_decode.add_argument(
+        "infile",
+        nargs="?",
+        type=argparse.FileType("rb"),
+        default=sys.stdin.buffer,
+        help="input asmap file (text or binary); default is stdin",
+    )
+    parser_decode.add_argument(
+        "outfile",
+        nargs="?",
+        type=argparse.FileType("w"),
+        default=sys.stdout,
+        help="output text file; default is stdout",
+    )
 
     parser_diff = subparsers.add_parser("diff", help="compute the difference between two asmap files")
-    parser_diff.add_argument('-i', '--ignore-unassigned', dest="ignore_unassigned", default=False, action="store_true",
-                             help="ignore unassigned ranges in the first input (useful when second input is filled)")
-    parser_diff.add_argument('infile1', type=argparse.FileType('rb'),
-                             help="first file to compare (text or binary)")
-    parser_diff.add_argument('infile2', type=argparse.FileType('rb'),
-                             help="second file to compare (text or binary)")
+    parser_diff.add_argument(
+        "-i",
+        "--ignore-unassigned",
+        dest="ignore_unassigned",
+        default=False,
+        action="store_true",
+        help="ignore unassigned ranges in the first input (useful when second input is filled)",
+    )
+    parser_diff.add_argument("infile1", type=argparse.FileType("rb"), help="first file to compare (text or binary)")
+    parser_diff.add_argument("infile2", type=argparse.FileType("rb"), help="second file to compare (text or binary)")
 
-    parser_diff_addrs = subparsers.add_parser("diff_addrs",
-                                              help="compute difference between two asmap files for a set of addresses")
-    parser_diff_addrs.add_argument('-s', '--show-addresses', dest="show_addresses", default=False, action="store_true",
-                                   help="include reassigned addresses in the output")
-    parser_diff_addrs.add_argument("infile1", type=argparse.FileType("rb"),
-                                   help="first file to compare (text or binary)")
-    parser_diff_addrs.add_argument("infile2", type=argparse.FileType("rb"),
-                                   help="second file to compare (text or binary)")
-    parser_diff_addrs.add_argument("addrs_file", type=argparse.FileType("r"),
-                                   help="address file containing getnodeaddresses output to use in the comparison "
-                                   "(make sure to set the count parameter to zero to get all node addresses, "
-                                   "e.g. 'bitcoin-cli getnodeaddresses 0 > addrs.json')")
+    parser_diff_addrs = subparsers.add_parser(
+        "diff_addrs", help="compute difference between two asmap files for a set of addresses"
+    )
+    parser_diff_addrs.add_argument(
+        "-s",
+        "--show-addresses",
+        dest="show_addresses",
+        default=False,
+        action="store_true",
+        help="include reassigned addresses in the output",
+    )
+    parser_diff_addrs.add_argument(
+        "infile1", type=argparse.FileType("rb"), help="first file to compare (text or binary)"
+    )
+    parser_diff_addrs.add_argument(
+        "infile2", type=argparse.FileType("rb"), help="second file to compare (text or binary)"
+    )
+    parser_diff_addrs.add_argument(
+        "addrs_file",
+        type=argparse.FileType("r"),
+        help="address file containing getnodeaddresses output to use in the comparison "
+        "(make sure to set the count parameter to zero to get all node addresses, "
+        "e.g. 'bitcoin-cli getnodeaddresses 0 > addrs.json')",
+    )
     args = parser.parse_args()
     if args.subcommand is None:
         parser.print_help()
@@ -186,12 +245,15 @@ def main():
             print(f"{num_reassigned} address(es) reassigned from {old_asn_str} to {new_asn_str}{opt}")
         num_reassignments = sum(len(addrs) for _, addrs in reassignments)
         share = num_reassignments / len(addrs) if len(addrs) > 0 else 0
-        print(f"Summary: {num_reassignments:,} ({share:.2%}) of {len(addrs):,} addresses were reassigned "
-              f"(migrations={num_reassignment_type[True, True]}, assignments={num_reassignment_type[False, True]}, "
-              f"unassignments={num_reassignment_type[True, False]})")
+        print(
+            f"Summary: {num_reassignments:,} ({share:.2%}) of {len(addrs):,} addresses were reassigned "
+            f"(migrations={num_reassignment_type[True, True]}, assignments={num_reassignment_type[False, True]}, "
+            f"unassignments={num_reassignment_type[True, False]})"
+        )
     else:
         parser.print_help()
         sys.exit("No command provided.")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

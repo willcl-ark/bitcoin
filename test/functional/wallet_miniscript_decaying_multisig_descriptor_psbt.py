@@ -30,7 +30,12 @@ class WalletMiniscriptDecayingMultisigDescriptorPSBTTest(BitcoinTestFramework):
     @staticmethod
     def _get_xpub(wallet, internal):
         """Extract the wallet's xpubs using `listdescriptors` and pick the one from the `pkh` descriptor since it's least likely to be accidentally reused (legacy addresses)."""
-        pkh_descriptor = next(filter(lambda d: d["desc"].startswith("pkh(") and d["internal"] == internal, wallet.listdescriptors()["descriptors"]))
+        pkh_descriptor = next(
+            filter(
+                lambda d: d["desc"].startswith("pkh(") and d["internal"] == internal,
+                wallet.listdescriptors()["descriptors"],
+            )
+        )
         # keep all key origin information (master key fingerprint and all derivation steps) for proper support of hardware devices
         # see section 'Key origin identification' in 'doc/descriptors.md' for more details...
         return pkh_descriptor["desc"].split("pkh(")[1].split(")")[0]
@@ -41,22 +46,28 @@ class WalletMiniscriptDecayingMultisigDescriptorPSBTTest(BitcoinTestFramework):
         multisig = self.node.get_wallet_rpc(f"{self.name}")
         # spending policy: `thresh(4,pk(key_1),pk(key_2),pk(key_3),pk(key_4),after(t1),after(t2),after(t3))`
         # IMPORTANT: when backing up your descriptor, the order of key_1...key_4 must be correct!
-        external = multisig.getdescriptorinfo(f"wsh(thresh({self.N},pk({'),s:pk('.join(external_xpubs)}),sln:after({'),sln:after('.join(map(str, self.locktimes))})))")
-        internal = multisig.getdescriptorinfo(f"wsh(thresh({self.N},pk({'),s:pk('.join(internal_xpubs)}),sln:after({'),sln:after('.join(map(str, self.locktimes))})))")
-        result = multisig.importdescriptors([
-            {  # receiving addresses (internal: False)
-                "desc": external["descriptor"],
-                "active": True,
-                "internal": False,
-                "timestamp": "now",
-            },
-            {  # change addresses (internal: True)
-                "desc": internal["descriptor"],
-                "active": True,
-                "internal": True,
-                "timestamp": "now",
-            },
-        ])
+        external = multisig.getdescriptorinfo(
+            f"wsh(thresh({self.N},pk({'),s:pk('.join(external_xpubs)}),sln:after({'),sln:after('.join(map(str, self.locktimes))})))"
+        )
+        internal = multisig.getdescriptorinfo(
+            f"wsh(thresh({self.N},pk({'),s:pk('.join(internal_xpubs)}),sln:after({'),sln:after('.join(map(str, self.locktimes))})))"
+        )
+        result = multisig.importdescriptors(
+            [
+                {  # receiving addresses (internal: False)
+                    "desc": external["descriptor"],
+                    "active": True,
+                    "internal": False,
+                    "timestamp": "now",
+                },
+                {  # change addresses (internal: True)
+                    "desc": internal["descriptor"],
+                    "active": True,
+                    "internal": True,
+                    "timestamp": "now",
+                },
+            ]
+        )
         assert all(r["success"] for r in result)
         return multisig
 
@@ -69,11 +80,17 @@ class WalletMiniscriptDecayingMultisigDescriptorPSBTTest(BitcoinTestFramework):
         assert_equal(len(self.locktimes), self.N - 1)
 
         self.name = f"{self.M}_of_{self.N}_decaying_multisig"
-        self.log.info(f"Testing a miniscript multisig which starts as 4-of-4 and 'decays' to 3-of-4 at block height {self.locktimes[0]}, 2-of-4 at {self.locktimes[1]}, and finally 1-of-4 at {self.locktimes[2]}...")
+        self.log.info(
+            f"Testing a miniscript multisig which starts as 4-of-4 and 'decays' to 3-of-4 at block height {self.locktimes[0]}, 2-of-4 at {self.locktimes[1]}, and finally 1-of-4 at {self.locktimes[2]}..."
+        )
 
         self.log.info("Create the signer wallets and get their xpubs...")
-        signers = [self.node.get_wallet_rpc(self.node.createwallet(wallet_name=f"signer_{i}")["name"]) for i in range(self.N)]
-        external_xpubs, internal_xpubs = [[self._get_xpub(signer, internal) for signer in signers] for internal in [False, True]]
+        signers = [
+            self.node.get_wallet_rpc(self.node.createwallet(wallet_name=f"signer_{i}")["name"]) for i in range(self.N)
+        ]
+        external_xpubs, internal_xpubs = [
+            [self._get_xpub(signer, internal) for signer in signers] for internal in [False, True]
+        ]
 
         self.log.info("Create the watch-only decaying multisig using signers' xpubs...")
         multisig = self.create_multisig(external_xpubs, internal_xpubs)
@@ -94,12 +111,14 @@ class WalletMiniscriptDecayingMultisigDescriptorPSBTTest(BitcoinTestFramework):
         sent = 0
         for locktime in [0] + self.locktimes:
             self.log.info(f"At block height >= {locktime} this multisig is {self.M}-of-{self.N}")
-            current_height = self.node.getblock(self.node.getbestblockhash())['height']
+            current_height = self.node.getblock(self.node.getbestblockhash())["height"]
 
             # in this test each signer signs the same psbt "in series" one after the other.
             # Another option is for each signer to sign the original psbt, and then combine
             # and finalize these. In some cases this may be more optimal for coordination.
-            psbt = multisig.walletcreatefundedpsbt(inputs=[], outputs={receiver.getnewaddress(): amount}, feeRate=0.00010, locktime=locktime)
+            psbt = multisig.walletcreatefundedpsbt(
+                inputs=[], outputs={receiver.getnewaddress(): amount}, feeRate=0.00010, locktime=locktime
+            )
             # the random sample asserts that any of the signing keys can sign for the 3-of-4,
             # 2-of-4, and 1-of-4. While this is basic behavior of the miniscript thresh primitive,
             # it is a critical property of this wallet.
@@ -108,11 +127,15 @@ class WalletMiniscriptDecayingMultisigDescriptorPSBTTest(BitcoinTestFramework):
                 assert_equal(psbt["complete"], i == self.M - 1)
 
             if self.M < self.N:
-                self.log.info(f"Check that the time-locked transaction is too immature to spend with {self.M}-of-{self.N} at block height {current_height}...")
+                self.log.info(
+                    f"Check that the time-locked transaction is too immature to spend with {self.M}-of-{self.N} at block height {current_height}..."
+                )
                 assert_equal(current_height >= locktime, False)
                 assert_raises_rpc_error(-26, "non-final", multisig.sendrawtransaction, psbt["hex"])
 
-                self.log.info(f"Generate blocks to reach the time-lock block height {locktime} and broadcast the transaction...")
+                self.log.info(
+                    f"Generate blocks to reach the time-lock block height {locktime} and broadcast the transaction..."
+                )
                 self.generate(self.node, locktime - current_height)
             else:
                 self.log.info("All the signers are required to spend before the first locktime")

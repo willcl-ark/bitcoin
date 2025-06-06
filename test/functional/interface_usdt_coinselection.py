@@ -3,13 +3,13 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-"""  Tests the coin_selection:* tracepoint API interface.
-     See https://github.com/bitcoin/bitcoin/blob/master/doc/tracing.md#context-coin_selection
+"""Tests the coin_selection:* tracepoint API interface.
+See https://github.com/bitcoin/bitcoin/blob/master/doc/tracing.md#context-coin_selection
 """
 
 # Test will be skipped if we don't have bcc installed
 try:
-    from bcc import BPF, USDT # type: ignore[import]
+    from bcc import BPF, USDT  # type: ignore[import]
 except ImportError:
     pass
 from test_framework.test_framework import BitcoinTestFramework
@@ -135,7 +135,6 @@ class CoinSelectionTracepointTest(BitcoinTestFramework):
             assert_equal(len(events), len(expected_types))
             return events
 
-
     def determine_selection_from_usdt(self, events):
         success = None
         use_aps = None
@@ -219,7 +218,9 @@ class CoinSelectionTracepointTest(BitcoinTestFramework):
         # 3. attempting_aps_create_tx (type 3)
         # 4. selected_coins (type 1)
         # 5. aps_create_tx_internal (type 4)
-        wallet.sendtoaddress(address=wallet.getnewaddress(), amount=wallet.getbalance(), subtractfeefromamount=True, avoid_reuse=False)
+        wallet.sendtoaddress(
+            address=wallet.getnewaddress(), amount=wallet.getbalance(), subtractfeefromamount=True, avoid_reuse=False
+        )
         events = self.get_tracepoints([1, 2, 3, 1, 4])
         success, use_aps, _algo, _waste, change_pos = self.determine_selection_from_usdt(events)
         assert_equal(success, True)
@@ -238,5 +239,5 @@ class CoinSelectionTracepointTest(BitcoinTestFramework):
         self.bpf.cleanup()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     CoinSelectionTracepointTest(__file__).main()

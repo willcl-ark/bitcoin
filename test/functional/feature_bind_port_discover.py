@@ -22,10 +22,11 @@ from test_framework.util import (
 # FreeBSD:
 # ifconfig em0 1.1.1.1/32 alias && ifconfig wlan0 2.2.2.2/32 alias  # to set up
 # ifconfig em0 1.1.1.1 -alias && ifconfig wlan0 2.2.2.2 -alias  # to remove it, after the test
-ADDR1 = '1.1.1.1'
-ADDR2 = '2.2.2.2'
+ADDR1 = "1.1.1.1"
+ADDR2 = "2.2.2.2"
 
 BIND_PORT = 31001
+
 
 class BindPortDiscoverTest(BitcoinTestFramework):
     def set_test_params(self):
@@ -33,49 +34,50 @@ class BindPortDiscoverTest(BitcoinTestFramework):
         self.setup_clean_chain = True
         self.bind_to_localhost_only = False
         self.extra_args = [
-            ['-discover', f'-port={BIND_PORT}'], # bind on any
-            ['-discover', f'-bind={ADDR1}:{BIND_PORT}'],
+            ["-discover", f"-port={BIND_PORT}"],  # bind on any
+            ["-discover", f"-bind={ADDR1}:{BIND_PORT}"],
         ]
         self.num_nodes = len(self.extra_args)
 
     def add_options(self, parser):
         parser.add_argument(
-            "--ihave1111and2222", action='store_true', dest="ihave1111and2222",
+            "--ihave1111and2222",
+            action="store_true",
+            dest="ihave1111and2222",
             help=f"Run the test, assuming {ADDR1} and {ADDR2} are configured on the machine",
-            default=False)
+            default=False,
+        )
 
     def skip_test_if_missing_module(self):
         if not self.options.ihave1111and2222:
             raise SkipTest(
                 f"To run this test make sure that {ADDR1} and {ADDR2} (routable addresses) are "
-                "assigned to the interfaces on this machine and rerun with --ihave1111and2222")
+                "assigned to the interfaces on this machine and rerun with --ihave1111and2222"
+            )
 
     def run_test(self):
-        self.log.info(
-                "Test that if -bind= is not passed then all addresses are "
-                "added to localaddresses")
+        self.log.info("Test that if -bind= is not passed then all addresses are added to localaddresses")
         found_addr1 = False
         found_addr2 = False
-        for local in self.nodes[0].getnetworkinfo()['localaddresses']:
-            if local['address'] == ADDR1:
+        for local in self.nodes[0].getnetworkinfo()["localaddresses"]:
+            if local["address"] == ADDR1:
                 found_addr1 = True
-                assert_equal(local['port'], BIND_PORT)
-            if local['address'] == ADDR2:
+                assert_equal(local["port"], BIND_PORT)
+            if local["address"] == ADDR2:
                 found_addr2 = True
-                assert_equal(local['port'], BIND_PORT)
+                assert_equal(local["port"], BIND_PORT)
         assert found_addr1
         assert found_addr2
 
-        self.log.info(
-                "Test that if -bind= is passed then only that address is "
-                "added to localaddresses")
+        self.log.info("Test that if -bind= is passed then only that address is added to localaddresses")
         found_addr1 = False
-        for local in self.nodes[1].getnetworkinfo()['localaddresses']:
-            if local['address'] == ADDR1:
+        for local in self.nodes[1].getnetworkinfo()["localaddresses"]:
+            if local["address"] == ADDR1:
                 found_addr1 = True
-                assert_equal(local['port'], BIND_PORT)
-            assert_not_equal(local['address'], ADDR2)
+                assert_equal(local["port"], BIND_PORT)
+            assert_not_equal(local["address"], ADDR2)
         assert found_addr1
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     BindPortDiscoverTest(__file__).main()

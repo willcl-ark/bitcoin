@@ -25,11 +25,7 @@ from test_framework.util import (
 class GetBlockFromPeerTest(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 3
-        self.extra_args = [
-            [],
-            [],
-            ["-fastprune", "-prune=1"]
-        ]
+        self.extra_args = [[], [], ["-fastprune", "-prune=1"]]
 
     def setup_network(self):
         self.setup_nodes()
@@ -56,8 +52,8 @@ class GetBlockFromPeerTest(BitcoinTestFramework):
         self.sync_blocks(self.nodes[0:2])
 
         self.log.info("Node 0 should only have the header for node 1's block 3")
-        x = next(filter(lambda x: x['hash'] == short_tip, self.nodes[0].getchaintips()))
-        assert_equal(x['status'], "headers-only")
+        x = next(filter(lambda x: x["hash"] == short_tip, self.nodes[0].getchaintips()))
+        assert_equal(x["status"], "headers-only")
         assert_raises_rpc_error(-1, "Block not available (not fully downloaded)", self.nodes[0].getblock, short_tip)
 
         self.log.info("Fetch block from node 1")
@@ -66,9 +62,27 @@ class GetBlockFromPeerTest(BitcoinTestFramework):
         peer_0_peer_1_id = peers[0]["id"]
 
         self.log.info("Arguments must be valid")
-        assert_raises_rpc_error(-8, "hash must be of length 64 (not 4, for '1234')", self.nodes[0].getblockfrompeer, "1234", peer_0_peer_1_id)
-        assert_raises_rpc_error(-3, "JSON value of type number is not of expected type string", self.nodes[0].getblockfrompeer, 1234, peer_0_peer_1_id)
-        assert_raises_rpc_error(-3, "JSON value of type string is not of expected type number", self.nodes[0].getblockfrompeer, short_tip, "0")
+        assert_raises_rpc_error(
+            -8,
+            "hash must be of length 64 (not 4, for '1234')",
+            self.nodes[0].getblockfrompeer,
+            "1234",
+            peer_0_peer_1_id,
+        )
+        assert_raises_rpc_error(
+            -3,
+            "JSON value of type number is not of expected type string",
+            self.nodes[0].getblockfrompeer,
+            1234,
+            peer_0_peer_1_id,
+        )
+        assert_raises_rpc_error(
+            -3,
+            "JSON value of type string is not of expected type number",
+            self.nodes[0].getblockfrompeer,
+            short_tip,
+            "0",
+        )
 
         self.log.info("We must already have the header")
         assert_raises_rpc_error(-1, "Block header missing", self.nodes[0].getblockfrompeer, "00" * 32, 0)
@@ -90,7 +104,9 @@ class GetBlockFromPeerTest(BitcoinTestFramework):
         assert_equal(result, {})
 
         self.log.info("Don't fetch blocks we already have")
-        assert_raises_rpc_error(-1, "Block already downloaded", self.nodes[0].getblockfrompeer, short_tip, peer_0_peer_1_id)
+        assert_raises_rpc_error(
+            -1, "Block already downloaded", self.nodes[0].getblockfrompeer, short_tip, peer_0_peer_1_id
+        )
 
         self.log.info("Don't fetch blocks while the node has not synced past it yet")
         # For this test we need node 1 in prune mode and as a side effect this also disconnects
@@ -143,9 +159,14 @@ class GetBlockFromPeerTest(BitcoinTestFramework):
         self.sync_blocks([self.nodes[0], pruned_node])
         pruneheight += 251
         assert_equal(pruned_node.pruneblockchain(700), pruneheight)
-        assert_equal(pruned_node.getblock(pruned_block)["hash"], "196ee3a1a6db2353965081c48ef8e6b031cb2115d084bec6fec937e91a2c6277")
+        assert_equal(
+            pruned_node.getblock(pruned_block)["hash"],
+            "196ee3a1a6db2353965081c48ef8e6b031cb2115d084bec6fec937e91a2c6277",
+        )
 
-        self.log.info("Fetched block can be pruned again when prune height exceeds the height of the tip at the time when the block was fetched")
+        self.log.info(
+            "Fetched block can be pruned again when prune height exceeds the height of the tip at the time when the block was fetched"
+        )
         self.generate(self.nodes[0], 250, sync_fun=self.no_op)
         self.sync_blocks([self.nodes[0], pruned_node])
         pruneheight += 250
@@ -153,5 +174,5 @@ class GetBlockFromPeerTest(BitcoinTestFramework):
         assert_raises_rpc_error(-1, "Block not available (pruned data)", pruned_node.getblock, pruned_block)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     GetBlockFromPeerTest(__file__).main()

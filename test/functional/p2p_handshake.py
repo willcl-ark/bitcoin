@@ -5,6 +5,7 @@
 """
 Test P2P behaviour during the handshake phase (VERSION, VERACK messages).
 """
+
 import itertools
 import time
 
@@ -35,9 +36,14 @@ class P2PHandshakeTest(BitcoinTestFramework):
 
     def add_outbound_connection(self, node, connection_type, services, wait_for_disconnect):
         peer = node.add_outbound_p2p_connection(
-            P2PInterface(), p2p_idx=0, wait_for_disconnect=wait_for_disconnect,
-            connection_type=connection_type, services=services,
-            supports_v2_p2p=self.options.v2transport, advertise_v2_p2p=self.options.v2transport)
+            P2PInterface(),
+            p2p_idx=0,
+            wait_for_disconnect=wait_for_disconnect,
+            connection_type=connection_type,
+            services=services,
+            supports_v2_p2p=self.options.v2transport,
+            advertise_v2_p2p=self.options.v2transport,
+        )
         if not wait_for_disconnect:
             # check that connection is alive past the version handshake and disconnect manually
             peer.sync_with_ping()
@@ -47,8 +53,8 @@ class P2PHandshakeTest(BitcoinTestFramework):
 
     def test_desirable_service_flags(self, node, service_flag_tests, desirable_service_flags, expect_disconnect):
         """Check that connecting to a peer either fails or succeeds depending on its offered
-           service flags in the VERSION message. The test is exercised for all relevant
-           outbound connection types where the desirable service flags check is done."""
+        service flags in the VERSION message. The test is exercised for all relevant
+        outbound connection types where the desirable service flags check is done."""
         CONNECTION_TYPES = ["outbound-full-relay", "block-relay-only", "addr-fetch"]
         for conn_type, services in itertools.product(CONNECTION_TYPES, service_flag_tests):
             if self.options.v2transport:
@@ -57,8 +63,10 @@ class P2PHandshakeTest(BitcoinTestFramework):
             self.log.info(f'    - services 0x{services:08x}, type "{conn_type}" [{expected_result}]')
             if expect_disconnect:
                 assert_not_equal((services & desirable_service_flags), desirable_service_flags)
-                expected_debug_log = f'does not offer the expected services ' \
-                        f'({services:08x} offered, {desirable_service_flags:08x} expected)'
+                expected_debug_log = (
+                    f"does not offer the expected services "
+                    f"({services:08x} offered, {desirable_service_flags:08x} expected)"
+                )
                 with node.assert_debug_log([expected_debug_log]):
                     self.add_outbound_connection(node, conn_type, services, wait_for_disconnect=True)
             else:
@@ -73,18 +81,22 @@ class P2PHandshakeTest(BitcoinTestFramework):
     def run_test(self):
         node = self.nodes[0]
         self.log.info("Check that lacking desired service flags leads to disconnect (non-pruned peers)")
-        self.test_desirable_service_flags(node, [NODE_NONE, NODE_NETWORK, NODE_WITNESS],
-                                          DESIRABLE_SERVICE_FLAGS_FULL, expect_disconnect=True)
-        self.test_desirable_service_flags(node, [NODE_NETWORK | NODE_WITNESS],
-                                          DESIRABLE_SERVICE_FLAGS_FULL, expect_disconnect=False)
+        self.test_desirable_service_flags(
+            node, [NODE_NONE, NODE_NETWORK, NODE_WITNESS], DESIRABLE_SERVICE_FLAGS_FULL, expect_disconnect=True
+        )
+        self.test_desirable_service_flags(
+            node, [NODE_NETWORK | NODE_WITNESS], DESIRABLE_SERVICE_FLAGS_FULL, expect_disconnect=False
+        )
 
         self.log.info("Check that limited peers are only desired if the local chain is close to the tip (<24h)")
         self.generate_at_mocktime(int(time.time()) - 25 * 3600)  # tip outside the 24h window, should fail
-        self.test_desirable_service_flags(node, [NODE_NETWORK_LIMITED | NODE_WITNESS],
-                                          DESIRABLE_SERVICE_FLAGS_FULL, expect_disconnect=True)
+        self.test_desirable_service_flags(
+            node, [NODE_NETWORK_LIMITED | NODE_WITNESS], DESIRABLE_SERVICE_FLAGS_FULL, expect_disconnect=True
+        )
         self.generate_at_mocktime(int(time.time()) - 23 * 3600)  # tip inside the 24h window, should succeed
-        self.test_desirable_service_flags(node, [NODE_NETWORK_LIMITED | NODE_WITNESS],
-                                          DESIRABLE_SERVICE_FLAGS_PRUNED, expect_disconnect=False)
+        self.test_desirable_service_flags(
+            node, [NODE_NETWORK_LIMITED | NODE_WITNESS], DESIRABLE_SERVICE_FLAGS_PRUNED, expect_disconnect=False
+        )
 
         self.log.info("Check that feeler connections get disconnected immediately")
         with node.assert_debug_log(["feeler connection completed"]):
@@ -97,5 +109,5 @@ class P2PHandshakeTest(BitcoinTestFramework):
             self.wait_until(lambda: len(node.getpeerinfo()) == 0)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     P2PHandshakeTest(__file__).main()

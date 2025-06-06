@@ -3,8 +3,8 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-""" Tests the validation:* tracepoint API interface.
-    See https://github.com/bitcoin/bitcoin/blob/master/doc/tracing.md#context-validation
+"""Tests the validation:* tracepoint API interface.
+See https://github.com/bitcoin/bitcoin/blob/master/doc/tracing.md#context-validation
 """
 
 import ctypes
@@ -12,7 +12,7 @@ import time
 
 # Test will be skipped if we don't have bcc installed
 try:
-    from bcc import BPF, USDT # type: ignore[import]
+    from bcc import BPF, USDT  # type: ignore[import]
 except ImportError:
     pass
 
@@ -89,7 +89,8 @@ class ValidationTracepointTest(BitcoinTestFramework):
                     self.transactions,
                     self.inputs,
                     self.sigops,
-                    self.duration)
+                    self.duration,
+                )
 
         BLOCKS_EXPECTED = 2
         expected_blocks = dict()
@@ -97,18 +98,15 @@ class ValidationTracepointTest(BitcoinTestFramework):
 
         self.log.info("hook into the validation:block_connected tracepoint")
         ctx = USDT(pid=self.nodes[0].process.pid)
-        ctx.enable_probe(probe="validation:block_connected",
-                         fn_name="trace_block_connected")
-        bpf = BPF(text=validation_blockconnected_program,
-                  usdt_contexts=[ctx], debug=0, cflags=bpf_cflags())
+        ctx.enable_probe(probe="validation:block_connected", fn_name="trace_block_connected")
+        bpf = BPF(text=validation_blockconnected_program, usdt_contexts=[ctx], debug=0, cflags=bpf_cflags())
 
         def handle_blockconnected(_, data, __):
             event = ctypes.cast(data, ctypes.POINTER(Block)).contents
             self.log.info(f"handle_blockconnected(): {event}")
             events.append(event)
 
-        bpf["block_connected"].open_perf_buffer(
-            handle_blockconnected)
+        bpf["block_connected"].open_perf_buffer(handle_blockconnected)
 
         self.log.info(f"mine {BLOCKS_EXPECTED} blocks")
         generatetoaddress_duration = dict()
@@ -142,5 +140,5 @@ class ValidationTracepointTest(BitcoinTestFramework):
         bpf.cleanup()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     ValidationTracepointTest(__file__).main()

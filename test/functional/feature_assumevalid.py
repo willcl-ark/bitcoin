@@ -88,7 +88,7 @@ class AssumeValidTest(BitcoinTestFramework):
     def run_test(self):
         # Build the blockchain
         self.tip = int(self.nodes[0].getbestblockhash(), 16)
-        self.block_time = self.nodes[0].getblock(self.nodes[0].getbestblockhash())['time'] + 1
+        self.block_time = self.nodes[0].getblock(self.nodes[0].getbestblockhash())["time"] + 1
 
         self.blocks = []
 
@@ -160,7 +160,7 @@ class AssumeValidTest(BitcoinTestFramework):
             p2p1.send_without_ping(msg_block(self.blocks[i]))
         # Syncing 2200 blocks can take a while on slow systems. Give it plenty of time to sync.
         p2p1.sync_with_ping(timeout=960)
-        assert_equal(self.nodes[1].getblock(self.nodes[1].getbestblockhash())['height'], 2202)
+        assert_equal(self.nodes[1].getblock(self.nodes[1].getbestblockhash())["height"], 2202)
 
         p2p2 = self.nodes[2].add_p2p_connection(BaseNode())
         p2p2.send_header_for_blocks(self.blocks[0:200])
@@ -171,5 +171,5 @@ class AssumeValidTest(BitcoinTestFramework):
         assert_equal(self.nodes[2].getblockcount(), COINBASE_MATURITY + 1)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     AssumeValidTest(__file__).main()

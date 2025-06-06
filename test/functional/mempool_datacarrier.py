@@ -3,6 +3,7 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test datacarrier functionality"""
+
 from test_framework.messages import (
     CTxOut,
     MAX_OP_RETURN_RELAY,
@@ -39,7 +40,7 @@ class DataCarrierTest(BitcoinTestFramework):
 
         if success:
             self.wallet.sendrawtransaction(from_node=node, tx_hex=tx_hex)
-            assert tx.rehash() in node.getrawmempool(True), f'{tx_hex} not in mempool'
+            assert tx.rehash() in node.getrawmempool(True), f"{tx_hex} not in mempool"
         else:
             assert_raises_rpc_error(-26, "scriptpubkey", self.wallet.sendrawtransaction, from_node=node, tx_hex=tx_hex)
 
@@ -87,5 +88,5 @@ class DataCarrierTest(BitcoinTestFramework):
         self.test_null_data_transaction(node=self.nodes[3], data=one_byte, success=False)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     DataCarrierTest(__file__).main()

@@ -65,6 +65,7 @@ from test_framework.util import (
     assert_raises_rpc_error,
 )
 
+
 class AddressTypeTest(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 6
@@ -92,65 +93,65 @@ class AddressTypeTest(BitcoinTestFramework):
                 self.connect_nodes(i, j)
         self.sync_all()
 
-    def get_balances(self, key='trusted'):
+    def get_balances(self, key="trusted"):
         """Return a list of balances."""
-        return [self.nodes[i].getbalances()['mine'][key] for i in range(4)]
+        return [self.nodes[i].getbalances()["mine"][key] for i in range(4)]
 
     def test_address(self, node, address, multisig, typ):
         """Run sanity checks on an address."""
         info = self.nodes[node].getaddressinfo(address)
-        assert self.nodes[node].validateaddress(address)['isvalid']
-        assert_equal(info.get('solvable'), True)
+        assert self.nodes[node].validateaddress(address)["isvalid"]
+        assert_equal(info.get("solvable"), True)
 
-        if not multisig and typ == 'legacy':
+        if not multisig and typ == "legacy":
             # P2PKH
-            assert not info['isscript']
-            assert not info['iswitness']
-            assert 'pubkey' in info
-        elif not multisig and typ == 'p2sh-segwit':
+            assert not info["isscript"]
+            assert not info["iswitness"]
+            assert "pubkey" in info
+        elif not multisig and typ == "p2sh-segwit":
             # P2SH-P2WPKH
-            assert info['isscript']
-            assert not info['iswitness']
-            assert_equal(info['script'], 'witness_v0_keyhash')
-            assert 'pubkey' in info
-        elif not multisig and typ == 'bech32':
+            assert info["isscript"]
+            assert not info["iswitness"]
+            assert_equal(info["script"], "witness_v0_keyhash")
+            assert "pubkey" in info
+        elif not multisig and typ == "bech32":
             # P2WPKH
-            assert not info['isscript']
-            assert info['iswitness']
-            assert_equal(info['witness_version'], 0)
-            assert_equal(len(info['witness_program']), 40)
-            assert 'pubkey' in info
+            assert not info["isscript"]
+            assert info["iswitness"]
+            assert_equal(info["witness_version"], 0)
+            assert_equal(len(info["witness_program"]), 40)
+            assert "pubkey" in info
         elif not multisig and typ == "bech32m":
             # P2TR single sig
             assert info["isscript"]
             assert info["iswitness"]
             assert_equal(info["witness_version"], 1)
             assert_equal(len(info["witness_program"]), 64)
-        elif typ == 'legacy':
+        elif typ == "legacy":
             # P2SH-multisig
-            assert info['isscript']
-            assert_equal(info['script'], 'multisig')
-            assert not info['iswitness']
-            assert 'pubkeys' in info
-        elif typ == 'p2sh-segwit':
+            assert info["isscript"]
+            assert_equal(info["script"], "multisig")
+            assert not info["iswitness"]
+            assert "pubkeys" in info
+        elif typ == "p2sh-segwit":
             # P2SH-P2WSH-multisig
-            assert info['isscript']
-            assert_equal(info['script'], 'witness_v0_scripthash')
-            assert not info['iswitness']
-            assert info['embedded']['isscript']
-            assert_equal(info['embedded']['script'], 'multisig')
-            assert info['embedded']['iswitness']
-            assert_equal(info['embedded']['witness_version'], 0)
-            assert_equal(len(info['embedded']['witness_program']), 64)
-            assert 'pubkeys' in info['embedded']
-        elif typ == 'bech32':
+            assert info["isscript"]
+            assert_equal(info["script"], "witness_v0_scripthash")
+            assert not info["iswitness"]
+            assert info["embedded"]["isscript"]
+            assert_equal(info["embedded"]["script"], "multisig")
+            assert info["embedded"]["iswitness"]
+            assert_equal(info["embedded"]["witness_version"], 0)
+            assert_equal(len(info["embedded"]["witness_program"]), 64)
+            assert "pubkeys" in info["embedded"]
+        elif typ == "bech32":
             # P2WSH-multisig
-            assert info['isscript']
-            assert_equal(info['script'], 'multisig')
-            assert info['iswitness']
-            assert_equal(info['witness_version'], 0)
-            assert_equal(len(info['witness_program']), 64)
-            assert 'pubkeys' in info
+            assert info["isscript"]
+            assert_equal(info["script"], "multisig")
+            assert info["iswitness"]
+            assert_equal(info["witness_version"], 0)
+            assert_equal(len(info["witness_program"]), 64)
+            assert "pubkeys" in info
         else:
             # Unknown type
             assert False
@@ -158,64 +159,78 @@ class AddressTypeTest(BitcoinTestFramework):
     def test_desc(self, node, address, multisig, typ, utxo):
         """Run sanity checks on a descriptor reported by getaddressinfo."""
         info = self.nodes[node].getaddressinfo(address)
-        assert 'desc' in info
-        assert_equal(info['desc'], utxo['desc'])
-        assert self.nodes[node].validateaddress(address)['isvalid']
+        assert "desc" in info
+        assert_equal(info["desc"], utxo["desc"])
+        assert self.nodes[node].validateaddress(address)["isvalid"]
 
         # Use a ridiculously roundabout way to find the key origin info through
         # the PSBT logic. However, this does test consistency between the PSBT reported
         # fingerprints/paths and the descriptor logic.
-        psbt = self.nodes[node].createpsbt([{'txid':utxo['txid'], 'vout':utxo['vout']}],[{address:0.00010000}])
+        psbt = self.nodes[node].createpsbt([{"txid": utxo["txid"], "vout": utxo["vout"]}], [{address: 0.00010000}])
         psbt = self.nodes[node].walletprocesspsbt(psbt, False, "ALL", True)
-        decode = self.nodes[node].decodepsbt(psbt['psbt'])
+        decode = self.nodes[node].decodepsbt(psbt["psbt"])
         key_descs = {}
-        for deriv in decode['inputs'][0]['bip32_derivs']:
-            assert_equal(len(deriv['master_fingerprint']), 8)
-            assert_equal(deriv['path'][0], 'm')
-            key_descs[deriv['pubkey']] = '[' + deriv['master_fingerprint'] + deriv['path'][1:].replace("'","h") + ']' + deriv['pubkey']
+        for deriv in decode["inputs"][0]["bip32_derivs"]:
+            assert_equal(len(deriv["master_fingerprint"]), 8)
+            assert_equal(deriv["path"][0], "m")
+            key_descs[deriv["pubkey"]] = (
+                "[" + deriv["master_fingerprint"] + deriv["path"][1:].replace("'", "h") + "]" + deriv["pubkey"]
+            )
 
         # Verify the descriptor checksum against the Python implementation
-        assert descsum_check(info['desc'])
+        assert descsum_check(info["desc"])
         # Verify that stripping the checksum and recreating it using Python roundtrips
-        assert info['desc'] == descsum_create(info['desc'][:-9])
+        assert info["desc"] == descsum_create(info["desc"][:-9])
         # Verify that stripping the checksum and feeding it to getdescriptorinfo roundtrips
-        assert info['desc'] == self.nodes[0].getdescriptorinfo(info['desc'][:-9])['descriptor']
-        assert_equal(info['desc'][-8:], self.nodes[0].getdescriptorinfo(info['desc'][:-9])['checksum'])
+        assert info["desc"] == self.nodes[0].getdescriptorinfo(info["desc"][:-9])["descriptor"]
+        assert_equal(info["desc"][-8:], self.nodes[0].getdescriptorinfo(info["desc"][:-9])["checksum"])
         # Verify that keeping the checksum and feeding it to getdescriptorinfo roundtrips
-        assert info['desc'] == self.nodes[0].getdescriptorinfo(info['desc'])['descriptor']
-        assert_equal(info['desc'][-8:], self.nodes[0].getdescriptorinfo(info['desc'])['checksum'])
+        assert info["desc"] == self.nodes[0].getdescriptorinfo(info["desc"])["descriptor"]
+        assert_equal(info["desc"][-8:], self.nodes[0].getdescriptorinfo(info["desc"])["checksum"])
 
-        if not multisig and typ == 'legacy':
+        if not multisig and typ == "legacy":
             # P2PKH
-            assert_equal(info['desc'], descsum_create("pkh(%s)" % key_descs[info['pubkey']]))
-        elif not multisig and typ == 'p2sh-segwit':
+            assert_equal(info["desc"], descsum_create("pkh(%s)" % key_descs[info["pubkey"]]))
+        elif not multisig and typ == "p2sh-segwit":
             # P2SH-P2WPKH
-            assert_equal(info['desc'], descsum_create("sh(wpkh(%s))" % key_descs[info['pubkey']]))
-        elif not multisig and typ == 'bech32':
+            assert_equal(info["desc"], descsum_create("sh(wpkh(%s))" % key_descs[info["pubkey"]]))
+        elif not multisig and typ == "bech32":
             # P2WPKH
-            assert_equal(info['desc'], descsum_create("wpkh(%s)" % key_descs[info['pubkey']]))
-        elif typ == 'legacy':
+            assert_equal(info["desc"], descsum_create("wpkh(%s)" % key_descs[info["pubkey"]]))
+        elif typ == "legacy":
             # P2SH-multisig
-            assert_equal(info['desc'], descsum_create("sh(multi(2,%s,%s))" % (key_descs[info['pubkeys'][0]], key_descs[info['pubkeys'][1]])))
-        elif typ == 'p2sh-segwit':
+            assert_equal(
+                info["desc"],
+                descsum_create("sh(multi(2,%s,%s))" % (key_descs[info["pubkeys"][0]], key_descs[info["pubkeys"][1]])),
+            )
+        elif typ == "p2sh-segwit":
             # P2SH-P2WSH-multisig
-            assert_equal(info['desc'], descsum_create("sh(wsh(multi(2,%s,%s)))" % (key_descs[info['embedded']['pubkeys'][0]], key_descs[info['embedded']['pubkeys'][1]])))
-        elif typ == 'bech32':
+            assert_equal(
+                info["desc"],
+                descsum_create(
+                    "sh(wsh(multi(2,%s,%s)))"
+                    % (key_descs[info["embedded"]["pubkeys"][0]], key_descs[info["embedded"]["pubkeys"][1]])
+                ),
+            )
+        elif typ == "bech32":
             # P2WSH-multisig
-            assert_equal(info['desc'], descsum_create("wsh(multi(2,%s,%s))" % (key_descs[info['pubkeys'][0]], key_descs[info['pubkeys'][1]])))
+            assert_equal(
+                info["desc"],
+                descsum_create("wsh(multi(2,%s,%s))" % (key_descs[info["pubkeys"][0]], key_descs[info["pubkeys"][1]])),
+            )
         else:
             # Unknown type
             assert False
 
     def test_change_output_type(self, node_sender, destinations, expected_type):
         txid = self.nodes[node_sender].sendmany(dummy="", amounts=dict.fromkeys(destinations, 0.001))
-        tx = self.nodes[node_sender].gettransaction(txid=txid, verbose=True)['decoded']
+        tx = self.nodes[node_sender].gettransaction(txid=txid, verbose=True)["decoded"]
 
         # Make sure the transaction has change:
         assert_equal(len(tx["vout"]), len(destinations) + 1)
 
         # Make sure the destinations are included, and remove them:
-        output_addresses = [vout['scriptPubKey']['address'] for vout in tx["vout"]]
+        output_addresses = [vout["scriptPubKey"]["address"] for vout in tx["vout"]]
         change_addresses = [d for d in output_addresses if d not in destinations]
         assert_equal(len(change_addresses), 1)
 
@@ -236,12 +251,19 @@ class AddressTypeTest(BitcoinTestFramework):
             address_type = None
             if explicit_type and not multisig:
                 if from_node == 1:
-                    address_type = 'bech32'
+                    address_type = "bech32"
                 elif from_node == 0 or from_node == 3:
-                    address_type = 'p2sh-segwit'
+                    address_type = "p2sh-segwit"
                 else:
-                    address_type = 'legacy'
-            self.log.info("Sending from node {} ({}) with{} multisig using {}".format(from_node, self.extra_args[from_node], "" if multisig else "out", "default" if address_type is None else address_type))
+                    address_type = "legacy"
+            self.log.info(
+                "Sending from node {} ({}) with{} multisig using {}".format(
+                    from_node,
+                    self.extra_args[from_node],
+                    "" if multisig else "out",
+                    "default" if address_type is None else address_type,
+                )
+            )
             old_balances = self.get_balances()
             self.log.debug("Old balances are {}".format(old_balances))
             to_send = (old_balances[from_node] / (COINBASE_MATURITY + 1)).quantize(Decimal("0.00000001"))
@@ -270,11 +292,11 @@ class AddressTypeTest(BitcoinTestFramework):
                 if address_type is not None:
                     typ = address_type
                 elif to_node == 0:
-                    typ = 'legacy'
+                    typ = "legacy"
                 elif to_node == 1 or (to_node == 2 and not change):
-                    typ = 'p2sh-segwit'
+                    typ = "p2sh-segwit"
                 else:
-                    typ = 'bech32'
+                    typ = "bech32"
                 self.test_address(to_node, address, multisig, typ)
 
                 # Output entry
@@ -285,7 +307,7 @@ class AddressTypeTest(BitcoinTestFramework):
             self.nodes[from_node].sendmany("", sends)
             self.sync_mempools()
 
-            unconf_balances = self.get_balances('untrusted_pending')
+            unconf_balances = self.get_balances("untrusted_pending")
             self.log.debug("Check unconfirmed balances: {}".format(unconf_balances))
             assert_equal(unconf_balances[from_node], 0)
             for n, to_node in enumerate(range(from_node + 1, from_node + 4)):
@@ -300,7 +322,7 @@ class AddressTypeTest(BitcoinTestFramework):
                 to_node %= 4
                 found = False
                 for utxo in self.nodes[to_node].listunspent():
-                    if utxo['address'] == addresses[to_node][0]:
+                    if utxo["address"] == addresses[to_node][0]:
                         found = True
                         self.test_desc(to_node, addresses[to_node][0], multisig, addresses[to_node][1], utxo)
                         break
@@ -325,43 +347,53 @@ class AddressTypeTest(BitcoinTestFramework):
         self.generate(self.nodes[5], 1)
         assert_equal(self.nodes[4].getbalance(), 1)
 
-        self.log.info("Nodes with addresstype=legacy never use a P2WPKH change output (unless changetype is set otherwise):")
-        self.test_change_output_type(0, [to_address_bech32_1], 'legacy')
+        self.log.info(
+            "Nodes with addresstype=legacy never use a P2WPKH change output (unless changetype is set otherwise):"
+        )
+        self.test_change_output_type(0, [to_address_bech32_1], "legacy")
 
         self.log.info("Nodes with addresstype=p2sh-segwit match the change output")
-        self.test_change_output_type(1, [to_address_p2sh], 'p2sh-segwit')
-        self.test_change_output_type(1, [to_address_bech32_1], 'bech32')
-        self.test_change_output_type(1, [to_address_p2sh, to_address_bech32_1], 'bech32')
-        self.test_change_output_type(1, [to_address_bech32_1, to_address_bech32_2], 'bech32')
+        self.test_change_output_type(1, [to_address_p2sh], "p2sh-segwit")
+        self.test_change_output_type(1, [to_address_bech32_1], "bech32")
+        self.test_change_output_type(1, [to_address_p2sh, to_address_bech32_1], "bech32")
+        self.test_change_output_type(1, [to_address_bech32_1, to_address_bech32_2], "bech32")
 
         self.log.info("Nodes with change_type=bech32 always use a P2WPKH change output:")
-        self.test_change_output_type(2, [to_address_bech32_1], 'bech32')
-        self.test_change_output_type(2, [to_address_p2sh], 'bech32')
+        self.test_change_output_type(2, [to_address_bech32_1], "bech32")
+        self.test_change_output_type(2, [to_address_p2sh], "bech32")
 
         self.log.info("Nodes with addresstype=bech32 match the change output (unless changetype is set otherwise):")
-        self.test_change_output_type(3, [to_address_bech32_1], 'bech32')
-        self.test_change_output_type(3, [to_address_p2sh], 'p2sh-segwit')
+        self.test_change_output_type(3, [to_address_bech32_1], "bech32")
+        self.test_change_output_type(3, [to_address_p2sh], "p2sh-segwit")
 
-        self.log.info('getrawchangeaddress defaults to addresstype if -changetype is not set and argument is absent')
-        self.test_address(3, self.nodes[3].getrawchangeaddress(), multisig=False, typ='bech32')
+        self.log.info("getrawchangeaddress defaults to addresstype if -changetype is not set and argument is absent")
+        self.test_address(3, self.nodes[3].getrawchangeaddress(), multisig=False, typ="bech32")
 
-        self.log.info('test invalid address type arguments')
-        assert_raises_rpc_error(-5, "Unknown address type ''", self.nodes[3].createmultisig, 2, [compressed_1, compressed_2], address_type="")
-        assert_raises_rpc_error(-5, "Unknown address type ''", self.nodes[3].getnewaddress, None, '')
-        assert_raises_rpc_error(-5, "Unknown address type ''", self.nodes[3].getrawchangeaddress, '')
-        assert_raises_rpc_error(-5, "Unknown address type 'bech23'", self.nodes[3].getrawchangeaddress, 'bech23')
+        self.log.info("test invalid address type arguments")
+        assert_raises_rpc_error(
+            -5,
+            "Unknown address type ''",
+            self.nodes[3].createmultisig,
+            2,
+            [compressed_1, compressed_2],
+            address_type="",
+        )
+        assert_raises_rpc_error(-5, "Unknown address type ''", self.nodes[3].getnewaddress, None, "")
+        assert_raises_rpc_error(-5, "Unknown address type ''", self.nodes[3].getrawchangeaddress, "")
+        assert_raises_rpc_error(-5, "Unknown address type 'bech23'", self.nodes[3].getrawchangeaddress, "bech23")
         assert_raises_rpc_error(-5, "Unknown address type 'bech23'", self.nodes[3].createwalletdescriptor, "bech23")
 
         self.log.info("Nodes with changetype=p2sh-segwit never use a P2WPKH change output")
-        self.test_change_output_type(4, [to_address_bech32_1], 'p2sh-segwit')
-        self.test_address(4, self.nodes[4].getrawchangeaddress(), multisig=False, typ='p2sh-segwit')
+        self.test_change_output_type(4, [to_address_bech32_1], "p2sh-segwit")
+        self.test_address(4, self.nodes[4].getrawchangeaddress(), multisig=False, typ="p2sh-segwit")
         self.log.info("Except for getrawchangeaddress if specified:")
-        self.test_address(4, self.nodes[4].getrawchangeaddress(), multisig=False, typ='p2sh-segwit')
-        self.test_address(4, self.nodes[4].getrawchangeaddress('bech32'), multisig=False, typ='bech32')
+        self.test_address(4, self.nodes[4].getrawchangeaddress(), multisig=False, typ="p2sh-segwit")
+        self.test_address(4, self.nodes[4].getrawchangeaddress("bech32"), multisig=False, typ="bech32")
 
         self.log.info("Descriptor wallets have bech32m addresses")
         self.test_address(4, self.nodes[4].getnewaddress("", "bech32m"), multisig=False, typ="bech32m")
         self.test_address(4, self.nodes[4].getrawchangeaddress("bech32m"), multisig=False, typ="bech32m")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     AddressTypeTest(__file__).main()

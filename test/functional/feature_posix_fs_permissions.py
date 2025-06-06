@@ -2,8 +2,7 @@
 # Copyright (c) 2022 The Bitcoin Core developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
-"""Test file system permissions for POSIX platforms.
-"""
+"""Test file system permissions for POSIX platforms."""
 
 import os
 import stat
@@ -39,5 +38,5 @@ class PosixFsPermissionsTest(BitcoinTestFramework):
         self.check_file_permissions(debuglog)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     PosixFsPermissionsTest(__file__).main()

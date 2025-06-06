@@ -195,9 +195,9 @@ class ValidateAddressMainTest(BitcoinTestFramework):
         assert_equal(res["error_locations"], error_locations)
 
     def test_validateaddress(self):
-        for (addr, error, locs) in INVALID_DATA:
+        for addr, error, locs in INVALID_DATA:
             self.check_invalid(addr, error, locs)
-        for (addr, spk) in VALID_DATA:
+        for addr, spk in VALID_DATA:
             self.check_valid(addr, spk)
 
     def run_test(self):

@@ -6,6 +6,7 @@
 """
 Test seednode interaction with the AddrMan
 """
+
 import random
 import time
 
@@ -24,14 +25,23 @@ class P2PSeedNodes(BitcoinTestFramework):
 
     def test_no_seednode(self):
         self.log.info("Check that if no seednode is provided, the node proceeds as usual (without waiting)")
-        with self.nodes[0].assert_debug_log(expected_msgs=[], unexpected_msgs=["Empty addrman, adding seednode", f"Couldn't connect to peers from addrman after {ADD_NEXT_SEEDNODE} seconds. Adding seednode"], timeout=ADD_NEXT_SEEDNODE):
+        with self.nodes[0].assert_debug_log(
+            expected_msgs=[],
+            unexpected_msgs=[
+                "Empty addrman, adding seednode",
+                f"Couldn't connect to peers from addrman after {ADD_NEXT_SEEDNODE} seconds. Adding seednode",
+            ],
+            timeout=ADD_NEXT_SEEDNODE,
+        ):
             self.restart_node(0, extra_args=self.nodes[0].extra_args)
 
     def test_seednode_empty_addrman(self):
         seed_node = "25.0.0.1"
         self.log.info("Check that the seednode is immediately added on bootstrap on an empty addrman")
-        with self.nodes[0].assert_debug_log(expected_msgs=[f"Empty addrman, adding seednode ({seed_node}) to addrfetch"], timeout=ADD_NEXT_SEEDNODE):
-            self.restart_node(0, extra_args=self.nodes[0].extra_args + [f'-seednode={seed_node}'])
+        with self.nodes[0].assert_debug_log(
+            expected_msgs=[f"Empty addrman, adding seednode ({seed_node}) to addrfetch"], timeout=ADD_NEXT_SEEDNODE
+        ):
+            self.restart_node(0, extra_args=self.nodes[0].extra_args + [f"-seednode={seed_node}"])
 
     def test_seednode_non_empty_addrman(self):
         self.log.info("Check that if addrman is non-empty, seednodes are queried with a delay")
@@ -39,15 +49,21 @@ class P2PSeedNodes(BitcoinTestFramework):
         node = self.nodes[0]
         # Fill the addrman with unreachable nodes
         for i in range(10):
-            ip = f"{random.randrange(128,169)}.{random.randrange(1,255)}.{random.randrange(1,255)}.{random.randrange(1,255)}"
+            ip = f"{random.randrange(128, 169)}.{random.randrange(1, 255)}.{random.randrange(1, 255)}.{random.randrange(1, 255)}"
             port = 8333 + i
             node.addpeeraddress(ip, port)
 
         # Restart the node so seednode is processed again.
         with node.assert_debug_log(expected_msgs=["trying v1 connection"], timeout=ADD_NEXT_SEEDNODE):
-            self.restart_node(0, extra_args=self.nodes[0].extra_args + [f'-seednode={seed_node}'])
+            self.restart_node(0, extra_args=self.nodes[0].extra_args + [f"-seednode={seed_node}"])
 
-        with node.assert_debug_log(expected_msgs=[f"Couldn't connect to peers from addrman after {ADD_NEXT_SEEDNODE} seconds. Adding seednode ({seed_node}) to addrfetch"], unexpected_msgs=["Empty addrman, adding seednode"], timeout=ADD_NEXT_SEEDNODE * 1.5):
+        with node.assert_debug_log(
+            expected_msgs=[
+                f"Couldn't connect to peers from addrman after {ADD_NEXT_SEEDNODE} seconds. Adding seednode ({seed_node}) to addrfetch"
+            ],
+            unexpected_msgs=["Empty addrman, adding seednode"],
+            timeout=ADD_NEXT_SEEDNODE * 1.5,
+        ):
             node.setmocktime(int(time.time()) + ADD_NEXT_SEEDNODE + 1)
 
     def run_test(self):
@@ -56,5 +72,5 @@ class P2PSeedNodes(BitcoinTestFramework):
         self.test_seednode_non_empty_addrman()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     P2PSeedNodes(__file__).main()

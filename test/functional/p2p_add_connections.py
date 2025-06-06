@@ -27,6 +27,7 @@ class P2PFeelerReceiver(P2PInterface):
         # closed.
         self.send_version()
 
+
 class P2PAddConnections(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 2
@@ -104,7 +105,9 @@ class P2PAddConnections(BitcoinTestFramework):
         check_node_connections(node=self.nodes[1], num_in=5, num_out=10)
 
         self.log.info("Add 1 feeler connection to node 0")
-        feeler_conn = self.nodes[0].add_outbound_p2p_connection(P2PFeelerReceiver(), p2p_idx=6, connection_type="feeler")
+        feeler_conn = self.nodes[0].add_outbound_p2p_connection(
+            P2PFeelerReceiver(), p2p_idx=6, connection_type="feeler"
+        )
 
         # Feeler connection is closed
         assert not feeler_conn.is_connected
@@ -124,9 +127,15 @@ class P2PAddConnections(BitcoinTestFramework):
         # the remote version (and replying with a verack). Otherwise it would
         # be violating its own rules, such as "non-version message before
         # version handshake".
-        ver_conn = self.nodes[0].add_outbound_p2p_connection(VersionSender(), p2p_idx=6, connection_type="outbound-full-relay", supports_v2_p2p=False, advertise_v2_p2p=False)
+        ver_conn = self.nodes[0].add_outbound_p2p_connection(
+            VersionSender(),
+            p2p_idx=6,
+            connection_type="outbound-full-relay",
+            supports_v2_p2p=False,
+            advertise_v2_p2p=False,
+        )
         ver_conn.sync_with_ping()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     P2PAddConnections(__file__).main()

@@ -35,62 +35,84 @@ class ListTransactionsTest(BitcoinTestFramework):
         self.log.info("Test simple send from node0 to node1")
         txid = self.nodes[0].sendtoaddress(self.nodes[1].getnewaddress(), 0.1)
         self.sync_all()
-        assert_array_result(self.nodes[0].listtransactions(),
-                            {"txid": txid},
-                            {"category": "send", "amount": Decimal("-0.1"), "confirmations": 0, "trusted": True})
-        assert_array_result(self.nodes[1].listtransactions(),
-                            {"txid": txid},
-                            {"category": "receive", "amount": Decimal("0.1"), "confirmations": 0, "trusted": False})
+        assert_array_result(
+            self.nodes[0].listtransactions(),
+            {"txid": txid},
+            {"category": "send", "amount": Decimal("-0.1"), "confirmations": 0, "trusted": True},
+        )
+        assert_array_result(
+            self.nodes[1].listtransactions(),
+            {"txid": txid},
+            {"category": "receive", "amount": Decimal("0.1"), "confirmations": 0, "trusted": False},
+        )
         self.log.info("Test confirmations change after mining a block")
         blockhash = self.generate(self.nodes[0], 1)[0]
-        blockheight = self.nodes[0].getblockheader(blockhash)['height']
-        assert_array_result(self.nodes[0].listtransactions(),
-                            {"txid": txid},
-                            {"category": "send", "amount": Decimal("-0.1"), "confirmations": 1, "blockhash": blockhash, "blockheight": blockheight})
-        assert_array_result(self.nodes[1].listtransactions(),
-                            {"txid": txid},
-                            {"category": "receive", "amount": Decimal("0.1"), "confirmations": 1, "blockhash": blockhash, "blockheight": blockheight})
+        blockheight = self.nodes[0].getblockheader(blockhash)["height"]
+        assert_array_result(
+            self.nodes[0].listtransactions(),
+            {"txid": txid},
+            {
+                "category": "send",
+                "amount": Decimal("-0.1"),
+                "confirmations": 1,
+                "blockhash": blockhash,
+                "blockheight": blockheight,
+            },
+        )
+        assert_array_result(
+            self.nodes[1].listtransactions(),
+            {"txid": txid},
+            {
+                "category": "receive",
+                "amount": Decimal("0.1"),
+                "confirmations": 1,
+                "blockhash": blockhash,
+                "blockheight": blockheight,
+            },
+        )
 
         self.log.info("Test send-to-self on node0")
         txid = self.nodes[0].sendtoaddress(self.nodes[0].getnewaddress(), 0.2)
-        assert_array_result(self.nodes[0].listtransactions(),
-                            {"txid": txid, "category": "send"},
-                            {"amount": Decimal("-0.2")})
-        assert_array_result(self.nodes[0].listtransactions(),
-                            {"txid": txid, "category": "receive"},
-                            {"amount": Decimal("0.2")})
+        assert_array_result(
+            self.nodes[0].listtransactions(), {"txid": txid, "category": "send"}, {"amount": Decimal("-0.2")}
+        )
+        assert_array_result(
+            self.nodes[0].listtransactions(), {"txid": txid, "category": "receive"}, {"amount": Decimal("0.2")}
+        )
 
         self.log.info("Test sendmany from node1: twice to self, twice to node0")
-        send_to = {self.nodes[0].getnewaddress(): 0.11,
-                   self.nodes[1].getnewaddress(): 0.22,
-                   self.nodes[0].getnewaddress(): 0.33,
-                   self.nodes[1].getnewaddress(): 0.44}
+        send_to = {
+            self.nodes[0].getnewaddress(): 0.11,
+            self.nodes[1].getnewaddress(): 0.22,
+            self.nodes[0].getnewaddress(): 0.33,
+            self.nodes[1].getnewaddress(): 0.44,
+        }
         txid = self.nodes[1].sendmany("", send_to)
         self.sync_all()
-        assert_array_result(self.nodes[1].listtransactions(),
-                            {"category": "send", "amount": Decimal("-0.11")},
-                            {"txid": txid})
-        assert_array_result(self.nodes[0].listtransactions(),
-                            {"category": "receive", "amount": Decimal("0.11")},
-                            {"txid": txid})
-        assert_array_result(self.nodes[1].listtransactions(),
-                            {"category": "send", "amount": Decimal("-0.22")},
-                            {"txid": txid})
-        assert_array_result(self.nodes[1].listtransactions(),
-                            {"category": "receive", "amount": Decimal("0.22")},
-                            {"txid": txid})
-        assert_array_result(self.nodes[1].listtransactions(),
-                            {"category": "send", "amount": Decimal("-0.33")},
-                            {"txid": txid})
-        assert_array_result(self.nodes[0].listtransactions(),
-                            {"category": "receive", "amount": Decimal("0.33")},
-                            {"txid": txid})
-        assert_array_result(self.nodes[1].listtransactions(),
-                            {"category": "send", "amount": Decimal("-0.44")},
-                            {"txid": txid})
-        assert_array_result(self.nodes[1].listtransactions(),
-                            {"category": "receive", "amount": Decimal("0.44")},
-                            {"txid": txid})
+        assert_array_result(
+            self.nodes[1].listtransactions(), {"category": "send", "amount": Decimal("-0.11")}, {"txid": txid}
+        )
+        assert_array_result(
+            self.nodes[0].listtransactions(), {"category": "receive", "amount": Decimal("0.11")}, {"txid": txid}
+        )
+        assert_array_result(
+            self.nodes[1].listtransactions(), {"category": "send", "amount": Decimal("-0.22")}, {"txid": txid}
+        )
+        assert_array_result(
+            self.nodes[1].listtransactions(), {"category": "receive", "amount": Decimal("0.22")}, {"txid": txid}
+        )
+        assert_array_result(
+            self.nodes[1].listtransactions(), {"category": "send", "amount": Decimal("-0.33")}, {"txid": txid}
+        )
+        assert_array_result(
+            self.nodes[0].listtransactions(), {"category": "receive", "amount": Decimal("0.33")}, {"txid": txid}
+        )
+        assert_array_result(
+            self.nodes[1].listtransactions(), {"category": "send", "amount": Decimal("-0.44")}, {"txid": txid}
+        )
+        assert_array_result(
+            self.nodes[1].listtransactions(), {"category": "receive", "amount": Decimal("0.44")}, {"txid": txid}
+        )
 
         self.run_rbf_opt_in_test()
         self.run_externally_generated_address_test()
@@ -105,7 +127,7 @@ class ListTransactionsTest(BitcoinTestFramework):
             """Check whether a transaction signals opt-in RBF itself."""
             rawtx = node.getrawtransaction(txid, 1)
             for x in rawtx["vin"]:
-                if x["sequence"] < 0xfffffffe:
+                if x["sequence"] < 0xFFFFFFFE:
                     return True
             return False
 
@@ -153,7 +175,7 @@ class ListTransactionsTest(BitcoinTestFramework):
         tx3_modified = tx_from_hex(tx3)
         tx3_modified.vin[0].nSequence = 0
         tx3 = tx3_modified.serialize().hex()
-        tx3_signed = self.nodes[0].signrawtransactionwithwallet(tx3)['hex']
+        tx3_signed = self.nodes[0].signrawtransactionwithwallet(tx3)["hex"]
         txid_3 = self.nodes[0].sendrawtransaction(tx3_signed)
 
         assert is_opt_in(self.nodes[0], txid_3)
@@ -180,7 +202,7 @@ class ListTransactionsTest(BitcoinTestFramework):
         tx3_b = tx3_modified
         tx3_b.vout[0].nValue -= int(Decimal("0.004") * COIN)  # bump the fee
         tx3_b = tx3_b.serialize().hex()
-        tx3_b_signed = self.nodes[0].signrawtransactionwithwallet(tx3_b)['hex']
+        tx3_b_signed = self.nodes[0].signrawtransactionwithwallet(tx3_b)["hex"]
         txid_3b = self.nodes[0].sendrawtransaction(tx3_b_signed, 0)
         assert is_opt_in(self.nodes[0], txid_3b)
 
@@ -198,7 +220,7 @@ class ListTransactionsTest(BitcoinTestFramework):
 
         self.log.info("Test bip125-replaceable status with listsinceblock")
         for n in self.nodes[0:2]:
-            txs = {tx['txid']: tx['bip125-replaceable'] for tx in n.listsinceblock()['transactions']}
+            txs = {tx["txid"]: tx["bip125-replaceable"] for tx in n.listsinceblock()["transactions"]}
             assert_equal(txs[txid_1], "no")
             assert_equal(txs[txid_2], "no")
             assert_equal(txs[txid_3], "yes")
@@ -227,9 +249,9 @@ class ListTransactionsTest(BitcoinTestFramework):
         self.connect_nodes(1, 2)
         self.connect_nodes(2, 0)
 
-        addr1 = self.nodes[0].getnewaddress("pizza1", 'legacy')
-        addr2 = self.nodes[0].getnewaddress("pizza2", 'p2sh-segwit')
-        addr3 = self.nodes[0].getnewaddress("pizza3", 'bech32')
+        addr1 = self.nodes[0].getnewaddress("pizza1", "legacy")
+        addr2 = self.nodes[0].getnewaddress("pizza2", "p2sh-segwit")
+        addr3 = self.nodes[0].getnewaddress("pizza3", "bech32")
 
         self.log.info("Send to externally generated addresses")
         # send to an address beyond the next to be generated to test the keypool gap
@@ -251,19 +273,19 @@ class ListTransactionsTest(BitcoinTestFramework):
         # normalize results: remove fields that normally could differ and sort
         def normalize_list(txs):
             for tx in txs:
-                tx.pop('label', None)
-                tx.pop('time', None)
-                tx.pop('timereceived', None)
-            txs.sort(key=lambda x: x['txid'])
+                tx.pop("label", None)
+                tx.pop("time", None)
+                tx.pop("timereceived", None)
+            txs.sort(key=lambda x: x["txid"])
 
         normalize_list(transactions0)
         normalize_list(transactions2)
         assert_equal(transactions0, transactions2)
 
         self.log.info("Verify labels are persistent on the node that generated the addresses")
-        assert_equal(['pizza1'], self.nodes[0].getaddressinfo(addr1)['labels'])
-        assert_equal(['pizza2'], self.nodes[0].getaddressinfo(addr2)['labels'])
-        assert_equal(['pizza3'], self.nodes[0].getaddressinfo(addr3)['labels'])
+        assert_equal(["pizza1"], self.nodes[0].getaddressinfo(addr1)["labels"])
+        assert_equal(["pizza2"], self.nodes[0].getaddressinfo(addr2)["labels"])
+        assert_equal(["pizza3"], self.nodes[0].getaddressinfo(addr3)["labels"])
 
     def run_coinjoin_test(self):
         self.log.info('Check "coin-join" transaction')
@@ -295,22 +317,24 @@ class ListTransactionsTest(BitcoinTestFramework):
 
     def run_invalid_parameters_test(self):
         self.log.info("Test listtransactions RPC parameter validity")
-        assert_raises_rpc_error(-8, 'Label argument must be a valid label name or "*".', self.nodes[0].listtransactions, label="")
+        assert_raises_rpc_error(
+            -8, 'Label argument must be a valid label name or "*".', self.nodes[0].listtransactions, label=""
+        )
         self.nodes[0].listtransactions(label="*")
         assert_raises_rpc_error(-8, "Negative count", self.nodes[0].listtransactions, count=-1)
         assert_raises_rpc_error(-8, "Negative from", self.nodes[0].listtransactions, skip=-1)
 
     def test_op_return(self):
         """Test if OP_RETURN outputs will be displayed correctly."""
-        raw_tx = self.nodes[0].createrawtransaction([], [{'data': 'aa'}])
+        raw_tx = self.nodes[0].createrawtransaction([], [{"data": "aa"}])
         funded_tx = self.nodes[0].fundrawtransaction(raw_tx)
-        signed_tx = self.nodes[0].signrawtransactionwithwallet(funded_tx['hex'])
-        tx_id = self.nodes[0].sendrawtransaction(signed_tx['hex'])
+        signed_tx = self.nodes[0].signrawtransactionwithwallet(funded_tx["hex"])
+        tx_id = self.nodes[0].sendrawtransaction(signed_tx["hex"])
 
-        op_ret_tx = [tx for tx in self.nodes[0].listtransactions() if tx['txid'] == tx_id][0]
+        op_ret_tx = [tx for tx in self.nodes[0].listtransactions() if tx["txid"] == tx_id][0]
 
-        assert 'address' not in op_ret_tx
+        assert "address" not in op_ret_tx
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     ListTransactionsTest(__file__).main()

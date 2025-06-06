@@ -37,7 +37,9 @@ class LoggingTest(BitcoinTestFramework):
         invalidname = os.path.join("foo", "foo.log")
         self.stop_node(0)
         exp_stderr = r"Error: Could not open debug log file \S+$"
-        self.nodes[0].assert_start_raises_init_error([f"-debuglogfile={invalidname}"], exp_stderr, match=ErrorMatch.FULL_REGEX)
+        self.nodes[0].assert_start_raises_init_error(
+            [f"-debuglogfile={invalidname}"], exp_stderr, match=ErrorMatch.FULL_REGEX
+        )
         assert not os.path.isfile(os.path.join(invdir, "foo.log"))
 
         # check that invalid log (relative) works after path exists
@@ -50,7 +52,9 @@ class LoggingTest(BitcoinTestFramework):
         self.stop_node(0)
         invdir = os.path.join(self.options.tmpdir, "foo")
         invalidname = os.path.join(invdir, "foo.log")
-        self.nodes[0].assert_start_raises_init_error([f"-debuglogfile={invalidname}"], exp_stderr, match=ErrorMatch.FULL_REGEX)
+        self.nodes[0].assert_start_raises_init_error(
+            [f"-debuglogfile={invalidname}"], exp_stderr, match=ErrorMatch.FULL_REGEX
+        )
         assert not os.path.isfile(os.path.join(invdir, "foo.log"))
 
         # check that invalid log (absolute) works after path exists
@@ -100,20 +104,17 @@ class LoggingTest(BitcoinTestFramework):
         )
 
         self.log.info("Test that -nodebug,-debug=0,-debug=none clear previously specified debug options")
-        disable_debug_options = [
-            '-debug=0',
-            '-debug=none',
-            '-nodebug'
-        ]
+        disable_debug_options = ["-debug=0", "-debug=none", "-nodebug"]
 
         for disable_debug_opt in disable_debug_options:
             # Every category before disable_debug_opt will be ignored, including the invalid 'abc'
-            self.restart_node(0, ['-debug=http', '-debug=abc', disable_debug_opt, '-debug=rpc', '-debug=net'])
+            self.restart_node(0, ["-debug=http", "-debug=abc", disable_debug_opt, "-debug=rpc", "-debug=net"])
             logging = self.nodes[0].logging()
-            assert not logging['http']
-            assert 'abc' not in logging
-            assert logging['rpc']
-            assert logging['net']
+            assert not logging["http"]
+            assert "abc" not in logging
+            assert logging["rpc"]
+            assert logging["net"]
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     LoggingTest(__file__).main()

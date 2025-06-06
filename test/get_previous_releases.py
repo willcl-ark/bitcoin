@@ -97,26 +97,23 @@ def pushd(new_dir) -> None:
 def download_binary(tag, args) -> int:
     if Path(tag).is_dir():
         if not args.remove_dir:
-            print('Using cached {}'.format(tag))
+            print("Using cached {}".format(tag))
             return 0
         shutil.rmtree(tag)
     Path(tag).mkdir()
-    bin_path = 'bin/bitcoin-core-{}'.format(tag[1:])
-    match = re.compile('v(.*)(rc[0-9]+)$').search(tag)
+    bin_path = "bin/bitcoin-core-{}".format(tag[1:])
+    match = re.compile("v(.*)(rc[0-9]+)$").search(tag)
     if match:
-        bin_path = 'bin/bitcoin-core-{}/test.{}'.format(
-            match.group(1), match.group(2))
+        bin_path = "bin/bitcoin-core-{}/test.{}".format(match.group(1), match.group(2))
     platform = args.platform
     if tag < "v23" and platform in ["x86_64-apple-darwin", "arm64-apple-darwin"]:
         platform = "osx64"
-    tarball = 'bitcoin-{tag}-{platform}.tar.gz'.format(
-        tag=tag[1:], platform=platform)
-    tarballUrl = 'https://bitcoincore.org/{bin_path}/{tarball}'.format(
-        bin_path=bin_path, tarball=tarball)
+    tarball = "bitcoin-{tag}-{platform}.tar.gz".format(tag=tag[1:], platform=platform)
+    tarballUrl = "https://bitcoincore.org/{bin_path}/{tarball}".format(bin_path=bin_path, tarball=tarball)
 
-    print('Fetching: {tarballUrl}'.format(tarballUrl=tarballUrl))
+    print("Fetching: {tarballUrl}".format(tarballUrl=tarballUrl))
 
-    ret = subprocess.run(['curl', '--fail', '--remote-name', tarballUrl]).returncode
+    ret = subprocess.run(["curl", "--fail", "--remote-name", tarballUrl]).returncode
     if ret:
         return ret
 
@@ -125,8 +122,8 @@ def download_binary(tag, args) -> int:
         hasher.update(afile.read())
     tarballHash = hasher.hexdigest()
 
-    if tarballHash not in SHA256_SUMS or SHA256_SUMS[tarballHash]['tarball'] != tarball:
-        if tarball in [v['tarball'] for v in SHA256_SUMS.values()]:
+    if tarballHash not in SHA256_SUMS or SHA256_SUMS[tarballHash]["tarball"] != tarball:
+        if tarball in [v["tarball"] for v in SHA256_SUMS.values()]:
             print("Checksum did not match")
             return 1
 
@@ -135,9 +132,9 @@ def download_binary(tag, args) -> int:
     print("Checksum matched")
 
     # Extract tarball
-    ret = subprocess.run(['tar', '-zxf', tarball, '-C', tag,
-                          '--strip-components=1',
-                          'bitcoin-{tag}'.format(tag=tag[1:])]).returncode
+    ret = subprocess.run(
+        ["tar", "-zxf", tarball, "-C", tag, "--strip-components=1", "bitcoin-{tag}".format(tag=tag[1:])]
+    ).returncode
     if ret != 0:
         print(f"Failed to extract the {tag} tarball")
         return ret
@@ -146,27 +143,23 @@ def download_binary(tag, args) -> int:
 
     if tag >= "v23" and platform == "arm64-apple-darwin":
         # Starting with v23 there are arm64 binaries for ARM (e.g. M1, M2) macs, but they have to be signed to run
-        binary_path = f'{os.getcwd()}/{tag}/bin/'
+        binary_path = f"{os.getcwd()}/{tag}/bin/"
 
         for arm_binary in os.listdir(binary_path):
             # Is it already signed?
             ret = subprocess.run(
-                ['codesign', '-v', binary_path + arm_binary],
+                ["codesign", "-v", binary_path + arm_binary],
                 stderr=subprocess.DEVNULL,  # Suppress expected stderr output
             ).returncode
             if ret == 1:
                 # Have to self-sign the binary
-                ret = subprocess.run(
-                    ['codesign', '-s', '-', binary_path + arm_binary]
-                ).returncode
+                ret = subprocess.run(["codesign", "-s", "-", binary_path + arm_binary]).returncode
                 if ret != 0:
                     print(f"Failed to self-sign {tag} {arm_binary} arm64 binary")
                     return 1
 
                 # Confirm success
-                ret = subprocess.run(
-                    ['codesign', '-v', binary_path + arm_binary]
-                ).returncode
+                ret = subprocess.run(["codesign", "-v", binary_path + arm_binary]).returncode
                 if ret != 0:
                     print(f"Failed to verify the self-signed {tag} {arm_binary} arm64 binary")
                     return 1
@@ -181,33 +174,27 @@ def build_release(tag, args) -> int:
             shutil.rmtree(tag)
     if not Path(tag).is_dir():
         # fetch new tags
-        subprocess.run(
-            ["git", "fetch", githubUrl, "--tags"])
-        output = subprocess.check_output(['git', 'tag', '-l', tag])
+        subprocess.run(["git", "fetch", githubUrl, "--tags"])
+        output = subprocess.check_output(["git", "tag", "-l", tag])
         if not output:
-            print('Tag {} not found'.format(tag))
+            print("Tag {} not found".format(tag))
             return 1
-    ret = subprocess.run([
-        'git', 'clone', f'--branch={tag}', '--depth=1', githubUrl, tag
-    ]).returncode
+    ret = subprocess.run(["git", "clone", f"--branch={tag}", "--depth=1", githubUrl, tag]).returncode
     if ret:
         return ret
     with pushd(tag):
         host = args.host
         if args.depends:
-            with pushd('depends'):
-                ret = subprocess.run(['make', 'NO_QT=1']).returncode
+            with pushd("depends"):
+                ret = subprocess.run(["make", "NO_QT=1"]).returncode
                 if ret:
                     return ret
-                host = os.environ.get(
-                    'HOST', subprocess.check_output(['./config.guess']))
-        config_flags = '--prefix={pwd}/depends/{host} '.format(
-            pwd=os.getcwd(),
-            host=host) + args.config_flags
+                host = os.environ.get("HOST", subprocess.check_output(["./config.guess"]))
+        config_flags = "--prefix={pwd}/depends/{host} ".format(pwd=os.getcwd(), host=host) + args.config_flags
         cmds = [
-            './autogen.sh',
-            './configure {}'.format(config_flags),
-            'make',
+            "./autogen.sh",
+            "./configure {}".format(config_flags),
+            "make",
         ]
         for cmd in cmds:
             ret = subprocess.run(cmd.split()).returncode
@@ -215,31 +202,30 @@ def build_release(tag, args) -> int:
                 return ret
         # Move binaries, so they're in the same place as in the
         # release download
-        Path('bin').mkdir(exist_ok=True)
-        files = ['bitcoind', 'bitcoin-cli', 'bitcoin-tx']
+        Path("bin").mkdir(exist_ok=True)
+        files = ["bitcoind", "bitcoin-cli", "bitcoin-tx"]
         for f in files:
-            Path('src/'+f).rename('bin/'+f)
+            Path("src/" + f).rename("bin/" + f)
     return 0
 
 
 def check_host(args) -> int:
-    args.host = os.environ.get('HOST', subprocess.check_output(
-        './depends/config.guess').decode())
+    args.host = os.environ.get("HOST", subprocess.check_output("./depends/config.guess").decode())
     if args.download_binary:
         platforms = {
-            'aarch64-*-linux*': 'aarch64-linux-gnu',
-            'powerpc64le-*-linux-*': 'powerpc64le-linux-gnu',
-            'riscv64-*-linux*': 'riscv64-linux-gnu',
-            'x86_64-*-linux*': 'x86_64-linux-gnu',
-            'x86_64-apple-darwin*': 'x86_64-apple-darwin',
-            'aarch64-apple-darwin*': 'arm64-apple-darwin',
+            "aarch64-*-linux*": "aarch64-linux-gnu",
+            "powerpc64le-*-linux-*": "powerpc64le-linux-gnu",
+            "riscv64-*-linux*": "riscv64-linux-gnu",
+            "x86_64-*-linux*": "x86_64-linux-gnu",
+            "x86_64-apple-darwin*": "x86_64-apple-darwin",
+            "aarch64-apple-darwin*": "arm64-apple-darwin",
         }
-        args.platform = ''
+        args.platform = ""
         for pattern, target in platforms.items():
             if fnmatch(args.host, pattern):
                 args.platform = target
         if not args.platform:
-            print('Not sure which binary to download for {}'.format(args.host))
+            print("Not sure which binary to download for {}".format(args.host))
             return 1
     return 0
 
@@ -257,8 +243,8 @@ def main(args) -> int:
                 if ret:
                     return ret
         return 0
-    args.config_flags = os.environ.get('CONFIG_FLAGS', '')
-    args.config_flags += ' --without-gui --disable-tests --disable-bench'
+    args.config_flags = os.environ.get("CONFIG_FLAGS", "")
+    args.config_flags += " --without-gui --disable-tests --disable-bench"
     with pushd(args.target_dir):
         for tag in args.tags:
             ret = build_release(tag, args)
@@ -267,22 +253,20 @@ def main(args) -> int:
     return 0
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument('-r', '--remove-dir', action='store_true',
-                        help='remove existing directory.')
-    parser.add_argument('-d', '--depends', action='store_true',
-                        help='use depends.')
-    parser.add_argument('-b', '--download-binary', action='store_true',
-                        help='download release binary.')
-    parser.add_argument('-t', '--target-dir', action='store',
-                        help='target directory.', default='releases')
-    all_tags = sorted([*set([v['tag'] for v in SHA256_SUMS.values()])])
-    parser.add_argument('tags', nargs='*', default=all_tags,
-                        help='release tags. e.g.: v0.18.1 v0.20.0rc2 '
-                        '(if not specified, the full list needed for '
-                        'backwards compatibility tests will be used)'
-                        )
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument("-r", "--remove-dir", action="store_true", help="remove existing directory.")
+    parser.add_argument("-d", "--depends", action="store_true", help="use depends.")
+    parser.add_argument("-b", "--download-binary", action="store_true", help="download release binary.")
+    parser.add_argument("-t", "--target-dir", action="store", help="target directory.", default="releases")
+    all_tags = sorted([*set([v["tag"] for v in SHA256_SUMS.values()])])
+    parser.add_argument(
+        "tags",
+        nargs="*",
+        default=all_tags,
+        help="release tags. e.g.: v0.18.1 v0.20.0rc2 "
+        "(if not specified, the full list needed for "
+        "backwards compatibility tests will be used)",
+    )
     args = parser.parse_args()
     sys.exit(main(args))

@@ -226,6 +226,7 @@ def memory_usage(period, bufsize, when):
 
     return max_mem, mem_mainchain, mem_timewarp
 
+
 def find_bufsize(period, attack_headers, when, max_mem=None, min_bufsize=1):
     """Determine how big bufsize needs to be given a specific period length.
 
@@ -301,7 +302,7 @@ def optimize(when):
         # The buffer size (at a given attack level) cannot shrink as the period grows. Find the
         # largest period smaller than the selected one we know the buffer size for, and use that
         # as a lower bound to find_bufsize.
-        min_bufsize = max([(p, b) for p, b in maps if p < period] + [(0,0)])[1]
+        min_bufsize = max([(p, b) for p, b in maps if p < period] + [(0, 0)])[1]
         bufsize = find_bufsize(period, ATTACK_HEADERS, when, best[2][0], min_bufsize)
         if bufsize is not None:
             # We found a (period, bufsize) configuration with better memory usage than our best
@@ -344,13 +345,15 @@ def analyze(when):
     print()
     print("//! Only feed headers to validation once this many headers on top have been")
     print("//! received and validated against commitments.")
-    print(f"constexpr size_t REDOWNLOAD_BUFFER_SIZE{{{bufsize}}};"
-          f" // {bufsize}/{period} = ~{bufsize/period:.1f} commitments")
+    print(
+        f"constexpr size_t REDOWNLOAD_BUFFER_SIZE{{{bufsize}}};"
+        f" // {bufsize}/{period} = ~{bufsize / period:.1f} commitments"
+    )
     print()
     print("Properties:")
     print(f"- Per-peer memory for mainchain sync: {mem_mainchain / 8192:.3f} KiB")
     print(f"- Per-peer memory for timewarp attack: {mem_timewarp / 8192:.3f} KiB")
-    print(f"- Attack rate: {1/headers_per_attack:.1f} attacks for 1 header of memory growth")
+    print(f"- Attack rate: {1 / headers_per_attack:.1f} attacks for 1 header of memory growth")
     print(f"  (where each attack costs {attack_volume / 8388608:.3f} MiB bandwidth)")
 
 

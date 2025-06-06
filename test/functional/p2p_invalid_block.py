@@ -12,6 +12,7 @@ re-requested.
 4) Invalid block due to future timestamp is later accepted when that timestamp
 becomes valid.
 """
+
 import copy
 import time
 
@@ -86,7 +87,7 @@ class InvalidBlockRequestTest(BitcoinTestFramework):
         assert_equal(orig_hash, block2.rehash())
         assert_not_equal(block2_orig.vtx, block2.vtx)
 
-        peer.send_blocks_and_test([block2], node, success=False, reject_reason='bad-txns-duplicate')
+        peer.send_blocks_and_test([block2], node, success=False, reject_reason="bad-txns-duplicate")
 
         # Check transactions for duplicate inputs (CVE-2018-17144)
         self.log.info("Test duplicate input block.")
@@ -96,7 +97,7 @@ class InvalidBlockRequestTest(BitcoinTestFramework):
         block2_dup.vtx[2].rehash()
         block2_dup.hashMerkleRoot = block2_dup.calc_merkle_root()
         block2_dup.solve()
-        peer.send_blocks_and_test([block2_dup], node, success=False, reject_reason='bad-txns-inputs-duplicate')
+        peer.send_blocks_and_test([block2_dup], node, success=False, reject_reason="bad-txns-inputs-duplicate")
 
         self.log.info("Test very broken block.")
 
@@ -104,8 +105,7 @@ class InvalidBlockRequestTest(BitcoinTestFramework):
         block_time += 1
         block3.solve()
 
-        peer.send_blocks_and_test([block3], node, success=False, reject_reason='bad-cb-amount')
-
+        peer.send_blocks_and_test([block3], node, success=False, reject_reason="bad-cb-amount")
 
         # Complete testing of CVE-2012-2459 by sending the original block.
         # It should be accepted even though it has the same hash as the mutated one.
@@ -126,7 +126,7 @@ class InvalidBlockRequestTest(BitcoinTestFramework):
         block4 = create_block(tip, create_coinbase(height), block_time, txlist=[tx3])
         block4.solve()
         self.log.info("Test inflation by duplicating input")
-        peer.send_blocks_and_test([block4], node, success=False,  reject_reason='bad-txns-inputs-duplicate')
+        peer.send_blocks_and_test([block4], node, success=False, reject_reason="bad-txns-inputs-duplicate")
 
         self.log.info("Test accepting identical block after rejecting it due to a future timestamp.")
         t = int(time.time())
@@ -135,10 +135,10 @@ class InvalidBlockRequestTest(BitcoinTestFramework):
         block = create_block(tip, create_coinbase(height), t + MAX_FUTURE_BLOCK_TIME + 1)
         block.solve()
         # Need force_send because the block will get rejected without a getdata otherwise
-        peer.send_blocks_and_test([block], node, force_send=True, success=False, reject_reason='time-too-new')
+        peer.send_blocks_and_test([block], node, force_send=True, success=False, reject_reason="time-too-new")
         node.setmocktime(t + 1)
         peer.send_blocks_and_test([block], node, success=True)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     InvalidBlockRequestTest(__file__).main()

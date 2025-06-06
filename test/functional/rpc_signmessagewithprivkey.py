@@ -20,44 +20,53 @@ class SignMessagesWithPrivTest(BitcoinTestFramework):
         self.num_nodes = 1
 
     def addresses_from_privkey(self, priv_key):
-        '''Return addresses for a given WIF private key in legacy (P2PKH),
-           nested segwit (P2SH-P2WPKH) and native segwit (P2WPKH) formats.'''
-        descriptors = f'pkh({priv_key})', f'sh(wpkh({priv_key}))', f'wpkh({priv_key})'
+        """Return addresses for a given WIF private key in legacy (P2PKH),
+        nested segwit (P2SH-P2WPKH) and native segwit (P2WPKH) formats."""
+        descriptors = f"pkh({priv_key})", f"sh(wpkh({priv_key}))", f"wpkh({priv_key})"
         return [self.nodes[0].deriveaddresses(descsum_create(desc))[0] for desc in descriptors]
 
     def run_test(self):
-        message = 'This is just a test message'
+        message = "This is just a test message"
 
-        self.log.info('test signing with priv_key')
-        priv_key = 'cUeKHd5orzT3mz8P9pxyREHfsWtVfgsfDjiZZBcjUBAaGk1BTj7N'
-        expected_signature = 'INbVnW4e6PeRmsv2Qgu8NuopvrVjkcxob+sX8OcZG0SALhWybUjzMLPdAsXI46YZGb0KQTRii+wWIQzRpG/U+S0='
+        self.log.info("test signing with priv_key")
+        priv_key = "cUeKHd5orzT3mz8P9pxyREHfsWtVfgsfDjiZZBcjUBAaGk1BTj7N"
+        expected_signature = "INbVnW4e6PeRmsv2Qgu8NuopvrVjkcxob+sX8OcZG0SALhWybUjzMLPdAsXI46YZGb0KQTRii+wWIQzRpG/U+S0="
         signature = self.nodes[0].signmessagewithprivkey(priv_key, message)
         assert_equal(expected_signature, signature)
 
-        self.log.info('test that verifying with P2PKH address succeeds')
+        self.log.info("test that verifying with P2PKH address succeeds")
         addresses = self.addresses_from_privkey(priv_key)
-        assert_equal(addresses[0], 'mpLQjfK79b7CCV4VMJWEWAj5Mpx8Up5zxB')
+        assert_equal(addresses[0], "mpLQjfK79b7CCV4VMJWEWAj5Mpx8Up5zxB")
         assert self.nodes[0].verifymessage(addresses[0], signature, message)
 
-        self.log.info('test that verifying with non-P2PKH addresses throws error')
+        self.log.info("test that verifying with non-P2PKH addresses throws error")
         for non_p2pkh_address in addresses[1:]:
-            assert_raises_rpc_error(-3, "Address does not refer to key", self.nodes[0].verifymessage, non_p2pkh_address, signature, message)
+            assert_raises_rpc_error(
+                -3, "Address does not refer to key", self.nodes[0].verifymessage, non_p2pkh_address, signature, message
+            )
 
-        self.log.info('test parameter validity and error codes')
+        self.log.info("test parameter validity and error codes")
         # signmessagewithprivkey has two required parameters
         for num_params in [0, 1, 3, 4, 5]:
-            param_list = ["dummy"]*num_params
+            param_list = ["dummy"] * num_params
             assert_raises_rpc_error(-1, "signmessagewithprivkey", self.nodes[0].signmessagewithprivkey, *param_list)
         # verifymessage has three required parameters
         for num_params in [0, 1, 2, 4, 5]:
-            param_list = ["dummy"]*num_params
+            param_list = ["dummy"] * num_params
             assert_raises_rpc_error(-1, "verifymessage", self.nodes[0].verifymessage, *param_list)
         # invalid key or address provided
         assert_raises_rpc_error(-5, "Invalid private key", self.nodes[0].signmessagewithprivkey, "invalid_key", message)
         assert_raises_rpc_error(-5, "Invalid address", self.nodes[0].verifymessage, "invalid_addr", signature, message)
         # malformed signature provided
-        assert_raises_rpc_error(-3, "Malformed base64 encoding", self.nodes[0].verifymessage, 'mpLQjfK79b7CCV4VMJWEWAj5Mpx8Up5zxB', "invalid_sig", message)
+        assert_raises_rpc_error(
+            -3,
+            "Malformed base64 encoding",
+            self.nodes[0].verifymessage,
+            "mpLQjfK79b7CCV4VMJWEWAj5Mpx8Up5zxB",
+            "invalid_sig",
+            message,
+        )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     SignMessagesWithPrivTest(__file__).main()

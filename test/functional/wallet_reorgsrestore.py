@@ -17,12 +17,8 @@ from decimal import Decimal
 import shutil
 
 from test_framework.test_framework import BitcoinTestFramework
-from test_framework.util import (
-        assert_equal,
-        assert_greater_than,
-        assert_not_equal,
-        assert_raises_rpc_error
-)
+from test_framework.util import assert_equal, assert_greater_than, assert_not_equal, assert_raises_rpc_error
+
 
 class ReorgsRestoreTest(BitcoinTestFramework):
     def set_test_params(self):
@@ -48,7 +44,7 @@ class ReorgsRestoreTest(BitcoinTestFramework):
         self.nodes[0].createwallet(wallet_name="w0", load_on_startup=True)
         wallet0 = self.nodes[0].get_wallet_rpc("w0")
         self.generatetoaddress(self.nodes[0], 1, wallet0.getnewaddress(), sync_fun=self.no_op)
-        node0_coinbase_tx_hash = wallet0.getblock(wallet0.getbestblockhash(), verbose=1)['tx'][0]
+        node0_coinbase_tx_hash = wallet0.getblock(wallet0.getbestblockhash(), verbose=1)["tx"][0]
 
         # Mine 100 blocks on top to mature the coinbase and create a descendant
         self.generate(self.nodes[0], 101, sync_fun=self.no_op)
@@ -57,7 +53,7 @@ class ReorgsRestoreTest(BitcoinTestFramework):
 
         # Verify balance
         wallet0.syncwithvalidationinterfacequeue()
-        assert(wallet0.getbalances()['mine']['trusted'] > 0)
+        assert wallet0.getbalances()["mine"]["trusted"] > 0
 
         # Now create a fork in node1. This will be used to replace node0's chain later.
         self.nodes[1].createwallet(wallet_name="w1", load_on_startup=True)
@@ -67,7 +63,7 @@ class ReorgsRestoreTest(BitcoinTestFramework):
 
         # Verify both nodes are on a different chain
         block0_best_hash, block1_best_hash = wallet0.getbestblockhash(), wallet1.getbestblockhash()
-        assert(block0_best_hash != block1_best_hash)
+        assert block0_best_hash != block1_best_hash
 
         # Stop both nodes and replace node0 chain entirely for the node1 chain
         self.stop_nodes()
@@ -82,15 +78,17 @@ class ReorgsRestoreTest(BitcoinTestFramework):
         assert_raises_rpc_error(-5, "Block not found", wallet0.getblock, block0_best_hash)
 
         # Verify the coinbase tx was marked as abandoned and balance correctly computed
-        tx_info = wallet0.gettransaction(node0_coinbase_tx_hash)['details'][0]
-        assert_equal(tx_info['abandoned'], True)
-        assert_equal(tx_info['category'], 'orphan')
-        assert(wallet0.getbalances()['mine']['trusted'] == 0)
+        tx_info = wallet0.gettransaction(node0_coinbase_tx_hash)["details"][0]
+        assert_equal(tx_info["abandoned"], True)
+        assert_equal(tx_info["category"], "orphan")
+        assert wallet0.getbalances()["mine"]["trusted"] == 0
         # Verify the coinbase descendant was also marked as abandoned
-        assert_equal(wallet0.gettransaction(descendant_tx_id)['details'][0]['abandoned'], True)
+        assert_equal(wallet0.gettransaction(descendant_tx_id)["details"][0]["abandoned"], True)
 
     def test_reorg_handling_during_unclean_shutdown(self):
-        self.log.info("Test that wallet doesn't crash due to a duplicate block disconnection event after an unclean shutdown")
+        self.log.info(
+            "Test that wallet doesn't crash due to a duplicate block disconnection event after an unclean shutdown"
+        )
         node = self.nodes[0]
         # Receive coinbase reward on a new wallet
         node.createwallet(wallet_name="reorg_crash", load_on_startup=True)
@@ -100,7 +98,7 @@ class ReorgsRestoreTest(BitcoinTestFramework):
         # Restart to ensure node and wallet are flushed
         self.restart_node(0)
         wallet = node.get_wallet_rpc("reorg_crash")
-        assert_greater_than(wallet.getwalletinfo()['immature_balance'], 0)
+        assert_greater_than(wallet.getwalletinfo()["immature_balance"], 0)
 
         # Disconnect tip and sync wallet state
         tip = wallet.getbestblockhash()
@@ -108,9 +106,9 @@ class ReorgsRestoreTest(BitcoinTestFramework):
         wallet.syncwithvalidationinterfacequeue()
 
         # Tip was disconnected, ensure coinbase has been abandoned
-        assert_equal(wallet.getwalletinfo()['immature_balance'], 0)
+        assert_equal(wallet.getwalletinfo()["immature_balance"], 0)
         coinbase_tx_id = wallet.getblock(tip, verbose=1)["tx"][0]
-        assert_equal(wallet.gettransaction(coinbase_tx_id)['details'][0]['abandoned'], True)
+        assert_equal(wallet.gettransaction(coinbase_tx_id)["details"][0]["abandoned"], True)
 
         # Abort process abruptly to mimic an unclean shutdown (no chain state flush to disk)
         node.kill_process()
@@ -123,20 +121,20 @@ class ReorgsRestoreTest(BitcoinTestFramework):
         # Upon reload after the crash, since the chainstate was not flushed, the tip contains the previously abandoned
         # coinbase. This should be rescanned and now un-abandoned.
         wallet = node.get_wallet_rpc("reorg_crash")
-        assert_equal(wallet.gettransaction(coinbase_tx_id)['details'][0]['abandoned'], False)
+        assert_equal(wallet.gettransaction(coinbase_tx_id)["details"][0]["abandoned"], False)
 
         # Previously, a bug caused the node to crash if two block disconnection events occurred consecutively.
         # Ensure this is no longer the case by simulating a new reorg.
         node.invalidateblock(tip)
-        assert(node.getbestblockhash() != tip)
+        assert node.getbestblockhash() != tip
         # Ensure wallet state is consistent now
-        assert_equal(wallet.gettransaction(coinbase_tx_id)['details'][0]['abandoned'], True)
-        assert_equal(wallet.getwalletinfo()['immature_balance'], 0)
+        assert_equal(wallet.gettransaction(coinbase_tx_id)["details"][0]["abandoned"], True)
+        assert_equal(wallet.getwalletinfo()["immature_balance"], 0)
 
         # And finally, verify the state if the block ends up being into the best chain again
         node.reconsiderblock(tip)
-        assert_equal(wallet.gettransaction(coinbase_tx_id)['details'][0]['abandoned'], False)
-        assert_greater_than(wallet.getwalletinfo()['immature_balance'], 0)
+        assert_equal(wallet.gettransaction(coinbase_tx_id)["details"][0]["abandoned"], False)
+        assert_greater_than(wallet.getwalletinfo()["immature_balance"], 0)
 
     def run_test(self):
         # Send a tx from which to conflict outputs later
@@ -158,7 +156,11 @@ class ReorgsRestoreTest(BitcoinTestFramework):
 
         # Disconnect node0 from node2 to broadcast a conflict on their respective chains
         self.disconnect_nodes(0, 2)
-        nA = next(tx_out["vout"] for tx_out in self.nodes[0].gettransaction(txid_conflict_from)["details"] if tx_out["amount"] == Decimal("10"))
+        nA = next(
+            tx_out["vout"]
+            for tx_out in self.nodes[0].gettransaction(txid_conflict_from)["details"]
+            if tx_out["amount"] == Decimal("10")
+        )
         inputs = []
         inputs.append({"txid": txid_conflict_from, "vout": nA})
         outputs_1 = {}
@@ -195,8 +197,11 @@ class ReorgsRestoreTest(BitcoinTestFramework):
 
         # Node0 wallet file is loaded on longest sync'ed node1
         self.stop_node(1)
-        self.nodes[0].backupwallet(self.nodes[0].datadir_path / 'wallet.bak')
-        shutil.copyfile(self.nodes[0].datadir_path / 'wallet.bak', self.nodes[1].chain_path / self.default_wallet_name / self.wallet_data_filename)
+        self.nodes[0].backupwallet(self.nodes[0].datadir_path / "wallet.bak")
+        shutil.copyfile(
+            self.nodes[0].datadir_path / "wallet.bak",
+            self.nodes[1].chain_path / self.default_wallet_name / self.wallet_data_filename,
+        )
         self.start_node(1)
         tx_after_reorg = self.nodes[1].gettransaction(txid)
         # Check that normal confirmed tx is confirmed again but with different blockhash
@@ -214,5 +219,5 @@ class ReorgsRestoreTest(BitcoinTestFramework):
         self.test_reorg_handling_during_unclean_shutdown()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     ReorgsRestoreTest(__file__).main()

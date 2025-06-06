@@ -17,7 +17,7 @@ from test_framework.util import assert_equal, p2p_port
 # FreeBSD:
 # ifconfig lo0 1.1.1.1/32 alias  # to set up
 # ifconfig lo0 1.1.1.1 -alias  # to remove it, after the test
-ADDR = '1.1.1.1'
+ADDR = "1.1.1.1"
 
 # array of tuples [arguments, expected port in localaddresses]
 # fmt: off

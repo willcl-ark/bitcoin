@@ -53,5 +53,5 @@ class SegwitUpgradeTest(BitcoinTestFramework):
         assert softfork_active(node, "segwit")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     SegwitUpgradeTest(__file__).main()

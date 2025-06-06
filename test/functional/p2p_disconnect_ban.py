@@ -3,6 +3,7 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test node disconnect and ban behavior"""
+
 import time
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from test_framework.util import (
     assert_equal,
     assert_raises_rpc_error,
 )
+
 
 class DisconnectBanTest(BitcoinTestFramework):
     def set_test_params(self):
@@ -38,7 +40,7 @@ class DisconnectBanTest(BitcoinTestFramework):
         self.nodes[1].clearbanned()
         assert_equal(len(self.nodes[1].listbanned()), 0)
 
-        self.log.info('Test banlist database recreation')
+        self.log.info("Test banlist database recreation")
         self.stop_node(1)
         target_file = self.nodes[1].chain_path / "banlist.json"
         Path.unlink(target_file)
@@ -56,10 +58,14 @@ class DisconnectBanTest(BitcoinTestFramework):
 
         self.log.info("setban: fail to ban an invalid subnet")
         assert_raises_rpc_error(-30, "Error: Invalid IP/Subnet", self.nodes[1].setban, "127.0.0.1/42", "add")
-        assert_equal(len(self.nodes[1].listbanned()), 1)  # still only one banned ip because 127.0.0.1 is within the range of 127.0.0.0/24
+        assert_equal(
+            len(self.nodes[1].listbanned()), 1
+        )  # still only one banned ip because 127.0.0.1 is within the range of 127.0.0.0/24
 
         self.log.info("setban: fail to ban with past absolute timestamp")
-        assert_raises_rpc_error(-8, "Error: Absolute timestamp is in the past", self.nodes[1].setban, "127.27.0.1", "add", 123, True)
+        assert_raises_rpc_error(
+            -8, "Error: Absolute timestamp is in the past", self.nodes[1].setban, "127.27.0.1", "add", 123, True
+        )
 
         self.log.info("setban remove: fail to unban a non-banned subnet")
         assert_raises_rpc_error(-30, "Error: Unban failed", self.nodes[1].setban, "127.0.0.1", "remove")
@@ -81,7 +87,7 @@ class DisconnectBanTest(BitcoinTestFramework):
         self.nodes[1].setban("192.168.0.1", "add", 1)  # ban for 1 seconds
         self.nodes[1].setban("2001:4d48:ac57:400:cacf:e9ff:fe1d:9c63/19", "add", 1000)  # ban for 1000 seconds
         listBeforeShutdown = self.nodes[1].listbanned()
-        assert_equal("192.168.0.1/32", listBeforeShutdown[2]['address'])
+        assert_equal("192.168.0.1/32", listBeforeShutdown[2]["address"])
 
         self.log.info("setban: test banning with absolute timestamp")
         self.nodes[1].setban("192.168.0.2", "add", old_time + 120, absolute=True)
@@ -92,7 +98,11 @@ class DisconnectBanTest(BitcoinTestFramework):
 
         self.log.info("Test ban_duration and time_remaining")
         for ban in self.nodes[1].listbanned():
-            if ban["address"] in ["127.0.0.0/32", "127.0.0.0/24", "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion"]:
+            if ban["address"] in [
+                "127.0.0.0/32",
+                "127.0.0.0/24",
+                "pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion",
+            ]:
                 assert_equal(ban["ban_duration"], 86400)
                 assert_equal(ban["time_remaining"], 86397)
             elif ban["address"] == "2001:4d48:ac57:400:cacf:e9ff:fe1d:9c63/19":
@@ -104,14 +114,14 @@ class DisconnectBanTest(BitcoinTestFramework):
 
         # Keep mocktime, to avoid ban expiry when restart takes longer than
         # time_remaining
-        self.restart_node(1, extra_args=[f"-mocktime={old_time+4}"])
+        self.restart_node(1, extra_args=[f"-mocktime={old_time + 4}"])
 
         listAfterShutdown = self.nodes[1].listbanned()
-        assert_equal("127.0.0.0/24", listAfterShutdown[0]['address'])
-        assert_equal("127.0.0.0/32", listAfterShutdown[1]['address'])
-        assert_equal("192.168.0.2/32", listAfterShutdown[2]['address'])
-        assert_equal("/19" in listAfterShutdown[3]['address'], True)
-        assert_equal("pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion", listAfterShutdown[4]['address'])
+        assert_equal("127.0.0.0/24", listAfterShutdown[0]["address"])
+        assert_equal("127.0.0.0/32", listAfterShutdown[1]["address"])
+        assert_equal("192.168.0.2/32", listAfterShutdown[2]["address"])
+        assert_equal("/19" in listAfterShutdown[3]["address"], True)
+        assert_equal("pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion", listAfterShutdown[4]["address"])
 
         # Clear ban lists
         self.nodes[1].clearbanned()
@@ -122,29 +132,38 @@ class DisconnectBanTest(BitcoinTestFramework):
         self.log.info("Test disconnectnode RPCs")
 
         self.log.info("disconnectnode: fail to disconnect when calling with address and nodeid")
-        address1 = self.nodes[0].getpeerinfo()[0]['addr']
+        address1 = self.nodes[0].getpeerinfo()[0]["addr"]
         node1 = self.nodes[0].getpeerinfo()[0]["id"]
-        assert_raises_rpc_error(-32602, "Only one of address and nodeid should be provided.", self.nodes[0].disconnectnode, address=address1, nodeid=node1)
+        assert_raises_rpc_error(
+            -32602,
+            "Only one of address and nodeid should be provided.",
+            self.nodes[0].disconnectnode,
+            address=address1,
+            nodeid=node1,
+        )
 
         self.log.info("disconnectnode: fail to disconnect when calling with junk address")
-        assert_raises_rpc_error(-29, "Node not found in connected nodes", self.nodes[0].disconnectnode, address="221B Baker Street")
+        assert_raises_rpc_error(
+            -29, "Node not found in connected nodes", self.nodes[0].disconnectnode, address="221B Baker Street"
+        )
 
         self.log.info("disconnectnode: successfully disconnect node by address")
-        address1 = self.nodes[0].getpeerinfo()[0]['addr']
+        address1 = self.nodes[0].getpeerinfo()[0]["addr"]
         self.nodes[0].disconnectnode(address=address1)
         self.wait_until(lambda: len(self.nodes[1].getpeerinfo()) == 1, timeout=10)
-        assert not [node for node in self.nodes[0].getpeerinfo() if node['addr'] == address1]
+        assert not [node for node in self.nodes[0].getpeerinfo() if node["addr"] == address1]
 
         self.log.info("disconnectnode: successfully reconnect node")
         self.connect_nodes(0, 1)  # reconnect the node
         assert_equal(len(self.nodes[0].getpeerinfo()), 2)
-        assert [node for node in self.nodes[0].getpeerinfo() if node['addr'] == address1]
+        assert [node for node in self.nodes[0].getpeerinfo() if node["addr"] == address1]
 
         self.log.info("disconnectnode: successfully disconnect node by node id")
-        id1 = self.nodes[0].getpeerinfo()[0]['id']
+        id1 = self.nodes[0].getpeerinfo()[0]["id"]
         self.nodes[0].disconnectnode(nodeid=id1)
         self.wait_until(lambda: len(self.nodes[1].getpeerinfo()) == 1, timeout=10)
-        assert not [node for node in self.nodes[0].getpeerinfo() if node['id'] == id1]
+        assert not [node for node in self.nodes[0].getpeerinfo() if node["id"] == id1]
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     DisconnectBanTest(__file__).main()

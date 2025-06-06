@@ -3,7 +3,7 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-""" Test node outbound peer eviction logic
+"""Test node outbound peer eviction logic
 
 A subset of our outbound peers are subject to eviction logic if they cannot keep up
 with our vision of the best chain. This criteria applies only to non-protected peers,
@@ -13,6 +13,7 @@ a certain deadline, or by them not being able to catch up fast enough (under the
 This tests the different eviction paths based on the peer's behavior and on whether they are protected
 or not.
 """
+
 import time
 
 from test_framework.messages import (
@@ -45,12 +46,12 @@ class P2POutEvict(BitcoinTestFramework):
         # Test disconnect due to no block being announced in 22+ minutes (headers are not even exchanged)
         peer = node.add_outbound_p2p_connection(P2PInterface(), p2p_idx=0, connection_type="outbound-full-relay")
         # Wait for over 20 min to trigger the first eviction timeout. This sets the last call past 2 min in the future.
-        cur_mock_time += (CHAIN_SYNC_TIMEOUT + 1)
+        cur_mock_time += CHAIN_SYNC_TIMEOUT + 1
         node.setmocktime(cur_mock_time)
         peer.sync_with_ping()
         # Wait for over 2 more min to trigger the disconnection
         peer.wait_for_getheaders(block_hash=tip_header.hashPrevBlock)
-        cur_mock_time += (HEADERS_RESPONSE_TIME + 1)
+        cur_mock_time += HEADERS_RESPONSE_TIME + 1
         node.setmocktime(cur_mock_time)
         self.log.info("Test that the peer gets evicted")
         peer.wait_for_disconnect()
@@ -63,11 +64,11 @@ class P2POutEvict(BitcoinTestFramework):
         peer.send_and_ping(msg_headers([prev_header]))
 
         # Trigger the timeouts
-        cur_mock_time += (CHAIN_SYNC_TIMEOUT + 1)
+        cur_mock_time += CHAIN_SYNC_TIMEOUT + 1
         node.setmocktime(cur_mock_time)
         peer.sync_with_ping()
         peer.wait_for_getheaders(block_hash=tip_header.hashPrevBlock)
-        cur_mock_time += (HEADERS_RESPONSE_TIME + 1)
+        cur_mock_time += HEADERS_RESPONSE_TIME + 1
         node.setmocktime(cur_mock_time)
         self.log.info("Test that the peer gets evicted")
         peer.wait_for_disconnect()
@@ -91,7 +92,7 @@ class P2POutEvict(BitcoinTestFramework):
             peer.sync_with_ping()
 
             # Advance time but not enough to evict the peer
-            cur_mock_time += (CHAIN_SYNC_TIMEOUT + 1)
+            cur_mock_time += CHAIN_SYNC_TIMEOUT + 1
             node.setmocktime(cur_mock_time)
             peer.sync_with_ping()
 
@@ -110,10 +111,10 @@ class P2POutEvict(BitcoinTestFramework):
         peer.send_and_ping(msg_headers([from_hex(CBlockHeader(), node.getblockheader(best_block_hash, False))]))
 
         # Wait for long enough for the timeouts to have triggered and check that we are still connected
-        cur_mock_time += (CHAIN_SYNC_TIMEOUT + 1)
+        cur_mock_time += CHAIN_SYNC_TIMEOUT + 1
         node.setmocktime(cur_mock_time)
         peer.sync_with_ping()
-        cur_mock_time += (HEADERS_RESPONSE_TIME + 1)
+        cur_mock_time += HEADERS_RESPONSE_TIME + 1
         node.setmocktime(cur_mock_time)
         self.log.info("Test that the peer does not get evicted")
         peer.sync_with_ping()
@@ -138,11 +139,11 @@ class P2POutEvict(BitcoinTestFramework):
 
         self.log.info("Let enough time pass for the timeouts to go off")
         # Trigger the timeouts and check how we are still connected
-        cur_mock_time += (CHAIN_SYNC_TIMEOUT + 1)
+        cur_mock_time += CHAIN_SYNC_TIMEOUT + 1
         node.setmocktime(cur_mock_time)
         peer.sync_with_ping()
         peer.wait_for_getheaders(block_hash=tip_header.hashPrevBlock)
-        cur_mock_time += (HEADERS_RESPONSE_TIME + 1)
+        cur_mock_time += HEADERS_RESPONSE_TIME + 1
         node.setmocktime(cur_mock_time)
         self.log.info("Test that the node does not get evicted")
         peer.sync_with_ping()
@@ -174,14 +175,18 @@ class P2POutEvict(BitcoinTestFramework):
         headers_message = msg_headers([prev_header])
         honest_unprotected_peers = []
         for i in range(2):
-            peer = node.add_outbound_p2p_connection(P2PInterface(), p2p_idx=4+i, connection_type="outbound-full-relay")
+            peer = node.add_outbound_p2p_connection(
+                P2PInterface(), p2p_idx=4 + i, connection_type="outbound-full-relay"
+            )
             peer.send_and_ping(headers_message)
             honest_unprotected_peers.append(peer)
 
         misbehaving_unprotected_peers = []
         for i in range(2):
-            peer = node.add_outbound_p2p_connection(P2PInterface(), p2p_idx=6+i, connection_type="outbound-full-relay")
-            if i%2==0:
+            peer = node.add_outbound_p2p_connection(
+                P2PInterface(), p2p_idx=6 + i, connection_type="outbound-full-relay"
+            )
+            if i % 2 == 0:
                 peer.send_and_ping(headers_message)
             misbehaving_unprotected_peers.append(peer)
 
@@ -193,7 +198,7 @@ class P2POutEvict(BitcoinTestFramework):
         tip_headers_message = msg_headers([tip_header])
 
         # Let the timeouts hit and check back
-        cur_mock_time += (CHAIN_SYNC_TIMEOUT + 1)
+        cur_mock_time += CHAIN_SYNC_TIMEOUT + 1
         node.setmocktime(cur_mock_time)
         for peer in protected_peers + misbehaving_unprotected_peers:
             peer.sync_with_ping()
@@ -202,9 +207,11 @@ class P2POutEvict(BitcoinTestFramework):
             peer.send_and_ping(tip_headers_message)
             peer.wait_for_getheaders(block_hash=target_hash)
 
-        cur_mock_time += (HEADERS_RESPONSE_TIME + 1)
+        cur_mock_time += HEADERS_RESPONSE_TIME + 1
         node.setmocktime(cur_mock_time)
-        self.log.info("Check how none of the honest nor protected peers was evicted but all the misbehaving unprotected were")
+        self.log.info(
+            "Check how none of the honest nor protected peers was evicted but all the misbehaving unprotected were"
+        )
         for peer in protected_peers + honest_unprotected_peers:
             peer.sync_with_ping()
         for peer in misbehaving_unprotected_peers:
@@ -219,7 +226,9 @@ class P2POutEvict(BitcoinTestFramework):
         cur_mock_time = node.mocktime
         tip_header = from_hex(CBlockHeader(), node.getblockheader(node.getbestblockhash(), False))
 
-        self.log.info("Create an blocks-only outbound connection to a peer that shares our tip. This would usually grant protection")
+        self.log.info(
+            "Create an blocks-only outbound connection to a peer that shares our tip. This would usually grant protection"
+        )
         peer = node.add_outbound_p2p_connection(P2PInterface(), p2p_idx=0, connection_type="block-relay-only")
         peer.send_and_ping(msg_headers([tip_header]))
 
@@ -229,17 +238,16 @@ class P2POutEvict(BitcoinTestFramework):
 
         self.log.info("Let enough time pass for the timeouts to go off")
         # Trigger the timeouts and check how the peer gets evicted, since protection is only given to outbound-full-relay peers
-        cur_mock_time += (CHAIN_SYNC_TIMEOUT + 1)
+        cur_mock_time += CHAIN_SYNC_TIMEOUT + 1
         node.setmocktime(cur_mock_time)
         peer.sync_with_ping()
         peer.wait_for_getheaders(block_hash=tip_header.hash)
-        cur_mock_time += (HEADERS_RESPONSE_TIME + 1)
+        cur_mock_time += HEADERS_RESPONSE_TIME + 1
         node.setmocktime(cur_mock_time)
         self.log.info("Test that the peer gets evicted")
         peer.wait_for_disconnect()
 
         node.disconnect_p2ps()
-
 
     def run_test(self):
         self.nodes[0].setmocktime(int(time.time()))
@@ -249,5 +257,5 @@ class P2POutEvict(BitcoinTestFramework):
         self.test_outbound_eviction_blocks_relay_only()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     P2POutEvict(__file__).main()

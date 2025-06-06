@@ -2,17 +2,19 @@
 # Copyright (c) 2012-2021 The Bitcoin Core developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
-'''
+"""
 Extract _("...") strings for translation and convert to Qt stringdefs so that
 they can be picked up by Qt linguist.
-'''
+"""
+
 from subprocess import Popen, PIPE
 import operator
 import os
 import sys
 
-OUT_CPP="qt/bitcoinstrings.cpp"
-EMPTY=['""']
+OUT_CPP = "qt/bitcoinstrings.cpp"
+EMPTY = ['""']
+
 
 def parse_po(text):
     """
@@ -25,9 +27,9 @@ def parse_po(text):
     in_msgid = False
     in_msgstr = False
 
-    for line in text.split('\n'):
-        line = line.rstrip('\r')
-        if line.startswith('msgid '):
+    for line in text.split("\n"):
+        line = line.rstrip("\r")
+        if line.startswith("msgid "):
             if in_msgstr:
                 messages.append((msgid, msgstr))
                 in_msgstr = False
@@ -35,7 +37,7 @@ def parse_po(text):
             in_msgid = True
 
             msgid = [line[6:]]
-        elif line.startswith('msgstr '):
+        elif line.startswith("msgstr "):
             in_msgid = False
             in_msgstr = True
             msgstr = [line[7:]]
@@ -50,20 +52,21 @@ def parse_po(text):
 
     return messages
 
+
 files = sys.argv[1:]
 
 # xgettext -n --keyword=_ $FILES
-XGETTEXT=os.getenv('XGETTEXT', 'xgettext')
+XGETTEXT = os.getenv("XGETTEXT", "xgettext")
 if not XGETTEXT:
-    print('Cannot extract strings: xgettext utility is not installed or not configured.',file=sys.stderr)
-    print('Please install package "gettext" and re-run \'cmake -B build\'.',file=sys.stderr)
+    print("Cannot extract strings: xgettext utility is not installed or not configured.", file=sys.stderr)
+    print("Please install package \"gettext\" and re-run 'cmake -B build'.", file=sys.stderr)
     sys.exit(1)
-child = Popen([XGETTEXT,'--output=-','--from-code=utf-8','-n','--keyword=_'] + files, stdout=PIPE)
+child = Popen([XGETTEXT, "--output=-", "--from-code=utf-8", "-n", "--keyword=_"] + files, stdout=PIPE)
 (out, err) = child.communicate()
 
-messages = parse_po(out.decode('utf-8'))
+messages = parse_po(out.decode("utf-8"))
 
-f = open(OUT_CPP, 'w', encoding="utf8")
+f = open(OUT_CPP, "w", encoding="utf8")
 f.write("""
 
 #include <QtGlobal>
@@ -75,11 +78,11 @@ f.write("""
 #define UNUSED
 #endif
 """)
-f.write('static const char UNUSED *bitcoin_strings[] = {\n')
-f.write('QT_TRANSLATE_NOOP("bitcoin-core", "%s"),\n' % (os.getenv('COPYRIGHT_HOLDERS'),))
+f.write("static const char UNUSED *bitcoin_strings[] = {\n")
+f.write('QT_TRANSLATE_NOOP("bitcoin-core", "%s"),\n' % (os.getenv("COPYRIGHT_HOLDERS"),))
 messages.sort(key=operator.itemgetter(0))
-for (msgid, msgstr) in messages:
+for msgid, msgstr in messages:
     if msgid != EMPTY:
-        f.write('QT_TRANSLATE_NOOP("bitcoin-core", %s),\n' % ('\n'.join(msgid)))
-f.write('};\n')
+        f.write('QT_TRANSLATE_NOOP("bitcoin-core", %s),\n' % ("\n".join(msgid)))
+f.write("};\n")
 f.close()

@@ -13,7 +13,8 @@ from test_framework.util import (
 )
 from test_framework.wallet import MiniWallet
 
-MAX_INITIAL_BROADCAST_DELAY = 15 * 60 # 15 minutes in seconds
+MAX_INITIAL_BROADCAST_DELAY = 15 * 60  # 15 minutes in seconds
+
 
 class MempoolUnbroadcastTest(BitcoinTestFramework):
     def set_test_params(self):
@@ -48,10 +49,10 @@ class MempoolUnbroadcastTest(BitcoinTestFramework):
         unbroadcast_count = 1
         if self.is_wallet_compiled():
             unbroadcast_count += 1
-        assert_equal(mempoolinfo['unbroadcastcount'], unbroadcast_count)
+        assert_equal(mempoolinfo["unbroadcastcount"], unbroadcast_count)
         mempool = self.nodes[0].getrawmempool(True)
         for tx in mempool:
-            assert_equal(mempool[tx]['unbroadcast'], True)
+            assert_equal(mempool[tx]["unbroadcast"], True)
 
         # check that second node doesn't have these two txns
         mempool = self.nodes[1].getrawmempool()
@@ -76,7 +77,7 @@ class MempoolUnbroadcastTest(BitcoinTestFramework):
         # check that transactions are no longer in first node's unbroadcast set
         mempool = self.nodes[0].getrawmempool(True)
         for tx in mempool:
-            assert_equal(mempool[tx]['unbroadcast'], False)
+            assert_equal(mempool[tx]["unbroadcast"], False)
 
         self.log.info("Add another connection & ensure transactions aren't broadcast again")
 
@@ -90,7 +91,7 @@ class MempoolUnbroadcastTest(BitcoinTestFramework):
 
         self.log.info("Rebroadcast transaction and ensure it is not added to unbroadcast set when already in mempool")
         rpc_tx_hsh = node.sendrawtransaction(txFS["hex"])
-        assert not node.getmempoolentry(rpc_tx_hsh)['unbroadcast']
+        assert not node.getmempoolentry(rpc_tx_hsh)["unbroadcast"]
 
     def test_txn_removal(self):
         self.log.info("Test that transactions removed from mempool are removed from unbroadcast set")
@@ -102,7 +103,9 @@ class MempoolUnbroadcastTest(BitcoinTestFramework):
 
         # check transaction was removed from unbroadcast set due to presence in
         # a block
-        removal_reason = "Removed {} from set of unbroadcast txns before confirmation that txn was sent out".format(txhsh)
+        removal_reason = "Removed {} from set of unbroadcast txns before confirmation that txn was sent out".format(
+            txhsh
+        )
         with node.assert_debug_log([removal_reason]):
             self.generate(node, 1, sync_fun=self.no_op)
 

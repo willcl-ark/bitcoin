@@ -11,7 +11,9 @@ import sys
 
 
 def main():
-    tr_strings = subprocess.run(['git', 'grep', '-e', 'tr("[[:space:]]', '--', 'src/qt'], stdout=subprocess.PIPE, text=True).stdout
+    tr_strings = subprocess.run(
+        ["git", "grep", "-e", 'tr("[[:space:]]', "--", "src/qt"], stdout=subprocess.PIPE, text=True
+    ).stdout
 
     if tr_strings.strip():
         print("Avoid leading whitespaces in:")

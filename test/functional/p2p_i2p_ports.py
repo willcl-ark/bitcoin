@@ -6,10 +6,10 @@
 Test ports handling for I2P hosts
 """
 
-
 from test_framework.test_framework import BitcoinTestFramework
 
 PROXY = "127.0.0.1:60000"
+
 
 class I2PPorts(BitcoinTestFramework):
     def set_test_params(self):
@@ -22,7 +22,9 @@ class I2PPorts(BitcoinTestFramework):
 
         self.log.info("Ensure we don't try to connect if port!=0")
         addr = "zsxwyo6qcn3chqzwxnseusqgsnuw3maqnztkiypyfxtya4snkoka.b32.i2p:8333"
-        with node.assert_debug_log(expected_msgs=[f"Error connecting to {addr}, connection refused due to arbitrary port 8333"]):
+        with node.assert_debug_log(
+            expected_msgs=[f"Error connecting to {addr}, connection refused due to arbitrary port 8333"]
+        ):
             node.addnode(node=addr, command="onetry")
 
         self.log.info("Ensure we try to connect if port=0 and get an error due to missing I2P proxy")
@@ -31,5 +33,5 @@ class I2PPorts(BitcoinTestFramework):
             node.addnode(node=addr, command="onetry")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     I2PPorts(__file__).main()

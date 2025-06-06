@@ -3,6 +3,7 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test the wallet accounts properly when there is a double-spend conflict."""
+
 from decimal import Decimal
 
 from test_framework.test_framework import BitcoinTestFramework
@@ -20,8 +21,13 @@ class TxnMallTest(BitcoinTestFramework):
         self.skip_if_no_wallet()
 
     def add_options(self, parser):
-        parser.add_argument("--mineblock", dest="mine_block", default=False, action="store_true",
-                            help="Test double-spend of 1-confirmed transaction")
+        parser.add_argument(
+            "--mineblock",
+            dest="mine_block",
+            default=False,
+            action="store_true",
+            help="Test double-spend of 1-confirmed transaction",
+        )
 
     def setup_network(self):
         # Start with split network:
@@ -32,8 +38,8 @@ class TxnMallTest(BitcoinTestFramework):
         inputs = [utxo]
         tx = self.nodes[0].createrawtransaction(inputs, outputs)
         tx = self.nodes[0].fundrawtransaction(tx)
-        tx = self.nodes[0].signrawtransactionwithwallet(tx['hex'])
-        return self.nodes[0].sendrawtransaction(tx['hex'])
+        tx = self.nodes[0].signrawtransactionwithwallet(tx["hex"])
+        return self.nodes[0].sendrawtransaction(tx["hex"])
 
     def run_test(self):
         # All nodes should start with 1,250 BTC:
@@ -52,22 +58,21 @@ class TxnMallTest(BitcoinTestFramework):
         # Assign coins to foo and bar addresses:
         node0_address_foo = self.nodes[0].getnewaddress()
         fund_foo_utxo = self.create_outpoints(self.nodes[0], outputs=[{node0_address_foo: 1219}])[0]
-        fund_foo_tx = self.nodes[0].gettransaction(fund_foo_utxo['txid'])
+        fund_foo_tx = self.nodes[0].gettransaction(fund_foo_utxo["txid"])
         self.nodes[0].lockunspent(False, [fund_foo_utxo])
 
         node0_address_bar = self.nodes[0].getnewaddress()
         fund_bar_utxo = self.create_outpoints(node=self.nodes[0], outputs=[{node0_address_bar: 29}])[0]
-        fund_bar_tx = self.nodes[0].gettransaction(fund_bar_utxo['txid'])
+        fund_bar_tx = self.nodes[0].gettransaction(fund_bar_utxo["txid"])
 
-        assert_equal(self.nodes[0].getbalance(),
-                     starting_balance + fund_foo_tx["fee"] + fund_bar_tx["fee"])
+        assert_equal(self.nodes[0].getbalance(), starting_balance + fund_foo_tx["fee"] + fund_bar_tx["fee"])
 
         # Coins are sent to node1_address
         node1_address = self.nodes[1].getnewaddress()
 
         # First: use raw transaction API to send 1240 BTC to node1_address,
         # but don't broadcast:
-        doublespend_fee = Decimal('-.02')
+        doublespend_fee = Decimal("-.02")
         inputs = [fund_foo_utxo, fund_bar_utxo]
         change_address = self.nodes[0].getnewaddress()
         outputs = {}
@@ -82,7 +87,7 @@ class TxnMallTest(BitcoinTestFramework):
         txid2 = self.spend_utxo(fund_bar_utxo, {node1_address: 20})
 
         # Have node0 mine a block:
-        if (self.options.mine_block):
+        if self.options.mine_block:
             self.generate(self.nodes[0], 1, sync_fun=lambda: self.sync_blocks(self.nodes[0:2]))
 
         tx1 = self.nodes[0].gettransaction(txid1)
@@ -136,5 +141,5 @@ class TxnMallTest(BitcoinTestFramework):
         assert_equal(self.nodes[1].getbalance(), 1250 + 1240)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     TxnMallTest(__file__).main()

@@ -33,5 +33,5 @@ class NetDeadlockTest(BitcoinTestFramework):
         self.sync_blocks()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     NetDeadlockTest(__file__).main()

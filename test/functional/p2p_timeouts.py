@@ -49,11 +49,11 @@ class TimeoutsTest(BitcoinTestFramework):
         self.mock_forward(0)
 
         # Setup the p2p connections, making sure the connections are established before the mocktime is bumped
-        with self.nodes[0].assert_debug_log(['Added connection peer=0']):
+        with self.nodes[0].assert_debug_log(["Added connection peer=0"]):
             no_verack_node = self.nodes[0].add_p2p_connection(TestP2PConn(), wait_for_verack=False)
-        with self.nodes[0].assert_debug_log(['Added connection peer=1']):
+        with self.nodes[0].assert_debug_log(["Added connection peer=1"]):
             no_version_node = self.nodes[0].add_p2p_connection(TestP2PConn(), send_version=False, wait_for_verack=False)
-        with self.nodes[0].assert_debug_log(['Added connection peer=2']):
+        with self.nodes[0].assert_debug_log(["Added connection peer=2"]):
             no_send_node = self.nodes[0].add_p2p_connection(TestP2PConn(), send_version=False, wait_for_verack=False)
 
         # Wait until we got the verack in response to the version. Though, don't wait for the other node to receive the
@@ -69,7 +69,9 @@ class TimeoutsTest(BitcoinTestFramework):
         with self.nodes[0].assert_debug_log(['Unsupported message "ping" prior to verack from peer=0']):
             no_verack_node.send_without_ping(msg_ping())
 
-        with self.nodes[0].assert_debug_log(['non-version message before version handshake. Message "ping" from peer=1']):
+        with self.nodes[0].assert_debug_log(
+            ['non-version message before version handshake. Message "ping" from peer=1']
+        ):
             no_version_node.send_without_ping(msg_ping())
 
         self.mock_forward(1)
@@ -103,10 +105,10 @@ class TimeoutsTest(BitcoinTestFramework):
 
         self.stop_nodes(0)
         self.nodes[0].assert_start_raises_init_error(
-            expected_msg='Error: peertimeout must be a positive integer.',
-            extra_args=['-peertimeout=0'],
+            expected_msg="Error: peertimeout must be a positive integer.",
+            extra_args=["-peertimeout=0"],
         )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     TimeoutsTest(__file__).main()

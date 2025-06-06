@@ -26,7 +26,7 @@ class MaxTipAgeTest(BitcoinTestFramework):
         node_miner = self.nodes[0]
         node_ibd = self.nodes[1]
 
-        self.restart_node(1, [f'-maxtipage={maxtipage}'] if set_parameter else None)
+        self.restart_node(1, [f"-maxtipage={maxtipage}"] if set_parameter else None)
         self.connect_nodes(0, 1)
         cur_time = int(time.time())
 
@@ -36,12 +36,12 @@ class MaxTipAgeTest(BitcoinTestFramework):
             for delta in [5, 4, 3, 2, 1]:
                 node_miner.setmocktime(cur_time - maxtipage - delta)
                 self.generate(node_miner, 1)
-                assert_equal(node_ibd.getblockchaininfo()['initialblockdownload'], True)
+                assert_equal(node_ibd.getblockchaininfo()["initialblockdownload"], True)
 
         # tip within maximum age -> leave IBD
         node_miner.setmocktime(max(cur_time - maxtipage, 0))
         self.generate(node_miner, 1)
-        assert_equal(node_ibd.getblockchaininfo()['initialblockdownload'], False)
+        assert_equal(node_ibd.getblockchaininfo()["initialblockdownload"], False)
 
         # reset time to system time so we don't have a time offset with the ibd node the next
         # time we connect to it, ensuring TimeOffsets::WarnIfOutOfSync() doesn't output to stderr
@@ -61,5 +61,5 @@ class MaxTipAgeTest(BitcoinTestFramework):
         self.test_maxtipage(max_long_val, test_deltas=False)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     MaxTipAgeTest(__file__).main()

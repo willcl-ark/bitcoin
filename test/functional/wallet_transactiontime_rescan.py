@@ -2,8 +2,7 @@
 # Copyright (c) 2018-2022 The Bitcoin Core developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
-"""Test transaction time during old block rescanning
-"""
+"""Test transaction time during old block rescanning"""
 
 import time
 
@@ -20,20 +19,19 @@ class TransactionTimeRescanTest(BitcoinTestFramework):
     def set_test_params(self):
         self.setup_clean_chain = False
         self.num_nodes = 3
-        self.extra_args = [["-keypool=400"],
-                           ["-keypool=400"],
-                           []
-                          ]
+        self.extra_args = [["-keypool=400"], ["-keypool=400"], []]
 
     def skip_test_if_missing_module(self):
         self.skip_if_no_wallet()
 
     def run_test(self):
-        self.log.info('Prepare nodes and wallet')
+        self.log.info("Prepare nodes and wallet")
 
         minernode = self.nodes[0]  # node used to mine BTC and create transactions
         usernode = self.nodes[1]  # user node with correct time
-        restorenode = self.nodes[2]  # node used to restore user wallet and check time determination in ComputeSmartTime (wallet.cpp)
+        restorenode = self.nodes[
+            2
+        ]  # node used to restore user wallet and check time determination in ComputeSmartTime (wallet.cpp)
 
         # time constant
         cur_time = int(time.time())
@@ -44,8 +42,8 @@ class TransactionTimeRescanTest(BitcoinTestFramework):
         set_node_times(self.nodes, cur_time)
 
         # prepare miner wallet
-        minernode.createwallet(wallet_name='default')
-        miner_wallet = minernode.get_wallet_rpc('default')
+        minernode.createwallet(wallet_name="default")
+        miner_wallet = minernode.get_wallet_rpc("default")
         m1 = miner_wallet.getnewaddress()
 
         # prepare the user wallet with 3 watch only addresses
@@ -56,8 +54,8 @@ class TransactionTimeRescanTest(BitcoinTestFramework):
         wo3 = usernode.getnewaddress()
         wo3_desc = usernode.getaddressinfo(wo3)["desc"]
 
-        usernode.createwallet(wallet_name='wo', disable_private_keys=True)
-        wo_wallet = usernode.get_wallet_rpc('wo')
+        usernode.createwallet(wallet_name="wo", disable_private_keys=True)
+        wo_wallet = usernode.get_wallet_rpc("wo")
 
         import_res = wo_wallet.importdescriptors(
             [
@@ -68,7 +66,7 @@ class TransactionTimeRescanTest(BitcoinTestFramework):
         )
         assert_equal(all([r["success"] for r in import_res]), True)
 
-        self.log.info('Start transactions')
+        self.log.info("Start transactions")
 
         # check blockcount
         assert_equal(minernode.getblockcount(), 200)
@@ -82,7 +80,7 @@ class TransactionTimeRescanTest(BitcoinTestFramework):
         self.sync_all()
         set_node_times(self.nodes, cur_time + ten_days)
         # send 10 btc to user's first watch-only address
-        self.log.info('Send 10 btc to user')
+        self.log.info("Send 10 btc to user")
         miner_wallet.sendtoaddress(wo1, 10)
 
         # generate blocks and check blockcount
@@ -93,7 +91,7 @@ class TransactionTimeRescanTest(BitcoinTestFramework):
         self.sync_all()
         set_node_times(self.nodes, cur_time + ten_days + ten_days)
         # send 5 btc to our second watch-only address
-        self.log.info('Send 5 btc to user')
+        self.log.info("Send 5 btc to user")
         miner_wallet.sendtoaddress(wo2, 5)
 
         # generate blocks and check blockcount
@@ -104,33 +102,33 @@ class TransactionTimeRescanTest(BitcoinTestFramework):
         self.sync_all()
         set_node_times(self.nodes, cur_time + ten_days + ten_days + ten_days)
         # send 1 btc to our third watch-only address
-        self.log.info('Send 1 btc to user')
+        self.log.info("Send 1 btc to user")
         miner_wallet.sendtoaddress(wo3, 1)
 
         # generate more blocks and check blockcount
         self.generatetoaddress(minernode, COINBASE_MATURITY, m1)
         assert_equal(minernode.getblockcount(), initial_mine + 500)
 
-        self.log.info('Check user\'s final balance and transaction count')
+        self.log.info("Check user's final balance and transaction count")
         assert_equal(wo_wallet.getbalance(), 16)
         assert_equal(len(wo_wallet.listtransactions()), 3)
 
-        self.log.info('Check transaction times')
+        self.log.info("Check transaction times")
         for tx in wo_wallet.listtransactions():
-            if tx['address'] == wo1:
-                assert_equal(tx['blocktime'], cur_time + ten_days)
-                assert_equal(tx['time'], cur_time + ten_days)
-            elif tx['address'] == wo2:
-                assert_equal(tx['blocktime'], cur_time + ten_days + ten_days)
-                assert_equal(tx['time'], cur_time + ten_days + ten_days)
-            elif tx['address'] == wo3:
-                assert_equal(tx['blocktime'], cur_time + ten_days + ten_days + ten_days)
-                assert_equal(tx['time'], cur_time + ten_days + ten_days + ten_days)
+            if tx["address"] == wo1:
+                assert_equal(tx["blocktime"], cur_time + ten_days)
+                assert_equal(tx["time"], cur_time + ten_days)
+            elif tx["address"] == wo2:
+                assert_equal(tx["blocktime"], cur_time + ten_days + ten_days)
+                assert_equal(tx["time"], cur_time + ten_days + ten_days)
+            elif tx["address"] == wo3:
+                assert_equal(tx["blocktime"], cur_time + ten_days + ten_days + ten_days)
+                assert_equal(tx["time"], cur_time + ten_days + ten_days + ten_days)
 
         # restore user wallet without rescan
-        self.log.info('Restore user wallet on another node without rescan')
-        restorenode.createwallet(wallet_name='wo', disable_private_keys=True)
-        restorewo_wallet = restorenode.get_wallet_rpc('wo')
+        self.log.info("Restore user wallet on another node without rescan")
+        restorenode.createwallet(wallet_name="wo", disable_private_keys=True)
+        restorewo_wallet = restorenode.get_wallet_rpc("wo")
 
         # importdescriptors with "timestamp": "now" always rescans
         # blocks of the past 2 hours, based on the current MTP timestamp; in order to avoid
@@ -152,38 +150,41 @@ class TransactionTimeRescanTest(BitcoinTestFramework):
         assert_equal(len(restorewo_wallet.listtransactions()), 0)
 
         # proceed to rescan, first with an incomplete one, then with a full rescan
-        self.log.info('Rescan last history part')
+        self.log.info("Rescan last history part")
         restorewo_wallet.rescanblockchain(initial_mine + 350)
-        self.log.info('Rescan all history')
+        self.log.info("Rescan all history")
         restorewo_wallet.rescanblockchain()
 
-        self.log.info('Check user\'s final balance and transaction count after restoration')
+        self.log.info("Check user's final balance and transaction count after restoration")
         assert_equal(restorewo_wallet.getbalance(), 16)
         assert_equal(len(restorewo_wallet.listtransactions()), 3)
 
-        self.log.info('Check transaction times after restoration')
+        self.log.info("Check transaction times after restoration")
         for tx in restorewo_wallet.listtransactions():
-            if tx['address'] == wo1:
-                assert_equal(tx['blocktime'], cur_time + ten_days)
-                assert_equal(tx['time'], cur_time + ten_days)
-            elif tx['address'] == wo2:
-                assert_equal(tx['blocktime'], cur_time + ten_days + ten_days)
-                assert_equal(tx['time'], cur_time + ten_days + ten_days)
-            elif tx['address'] == wo3:
-                assert_equal(tx['blocktime'], cur_time + ten_days + ten_days + ten_days)
-                assert_equal(tx['time'], cur_time + ten_days + ten_days + ten_days)
+            if tx["address"] == wo1:
+                assert_equal(tx["blocktime"], cur_time + ten_days)
+                assert_equal(tx["time"], cur_time + ten_days)
+            elif tx["address"] == wo2:
+                assert_equal(tx["blocktime"], cur_time + ten_days + ten_days)
+                assert_equal(tx["time"], cur_time + ten_days + ten_days)
+            elif tx["address"] == wo3:
+                assert_equal(tx["blocktime"], cur_time + ten_days + ten_days + ten_days)
+                assert_equal(tx["time"], cur_time + ten_days + ten_days + ten_days)
 
-
-        self.log.info('Test handling of invalid parameters for rescanblockchain')
+        self.log.info("Test handling of invalid parameters for rescanblockchain")
         assert_raises_rpc_error(-8, "Invalid start_height", restorewo_wallet.rescanblockchain, -1, 10)
         assert_raises_rpc_error(-8, "Invalid stop_height", restorewo_wallet.rescanblockchain, 1, -1)
-        assert_raises_rpc_error(-8, "stop_height must be greater than start_height", restorewo_wallet.rescanblockchain, 20, 10)
+        assert_raises_rpc_error(
+            -8, "stop_height must be greater than start_height", restorewo_wallet.rescanblockchain, 20, 10
+        )
 
         self.log.info("Test `rescanblockchain` fails when wallet is encrypted and locked")
         usernode.createwallet(wallet_name="enc_wallet", passphrase="passphrase")
         enc_wallet = usernode.get_wallet_rpc("enc_wallet")
-        assert_raises_rpc_error(-13, "Error: Please enter the wallet passphrase with walletpassphrase first.", enc_wallet.rescanblockchain)
+        assert_raises_rpc_error(
+            -13, "Error: Please enter the wallet passphrase with walletpassphrase first.", enc_wallet.rescanblockchain
+        )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     TransactionTimeRescanTest(__file__).main()

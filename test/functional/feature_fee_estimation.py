@@ -3,6 +3,7 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test fee estimation code."""
+
 from copy import deepcopy
 from decimal import Decimal, ROUND_DOWN
 import os
@@ -26,9 +27,8 @@ from test_framework.wallet import MiniWallet
 MAX_FILE_AGE = 60
 SECONDS_PER_HOUR = 60 * 60
 
-def small_txpuzzle_randfee(
-    wallet, from_node, conflist, unconflist, amount, min_fee, fee_increment, batch_reqs
-):
+
+def small_txpuzzle_randfee(wallet, from_node, conflist, unconflist, amount, min_fee, fee_increment, batch_reqs):
     """Create and send a transaction with a random fee using MiniWallet.
 
     The function takes a list of confirmed outputs and unconfirmed outputs
@@ -82,9 +82,7 @@ def check_raw_estimates(node, fees_seen):
             assert_greater_than(feerate, 0)
 
             if feerate + delta < min(fees_seen) or feerate - delta > max(fees_seen):
-                raise AssertionError(
-                    f"Estimated fee ({feerate}) out of range ({min(fees_seen)},{max(fees_seen)})"
-                )
+                raise AssertionError(f"Estimated fee ({feerate}) out of range ({min(fees_seen)},{max(fees_seen)})")
 
 
 def check_smart_estimates(node, fees_seen):
@@ -102,9 +100,7 @@ def check_smart_estimates(node, fees_seen):
         assert_greater_than_or_equal(feerate, float(minRelaytxFee))
 
         if feerate + delta < min(fees_seen) or feerate - delta > max(fees_seen):
-            raise AssertionError(
-                f"Estimated fee ({feerate}) out of range ({min(fees_seen)},{max(fees_seen)})"
-            )
+            raise AssertionError(f"Estimated fee ({feerate}) out of range ({min(fees_seen)},{max(fees_seen)})")
         if feerate - delta > last_feerate:
             raise AssertionError(
                 f"Estimated fee ({feerate}) larger than last fee ({last_feerate}) for lower number of confirms"
@@ -129,10 +125,11 @@ def make_tx(wallet, utxo, feerate):
         fee_rate=Decimal(feerate * 1000) / COIN,
     )
 
+
 def check_fee_estimates_btw_modes(node, expected_conservative, expected_economical):
-    fee_est_conservative = node.estimatesmartfee(1, estimate_mode="conservative")['feerate']
-    fee_est_economical = node.estimatesmartfee(1, estimate_mode="economical")['feerate']
-    fee_est_default = node.estimatesmartfee(1)['feerate']
+    fee_est_conservative = node.estimatesmartfee(1, estimate_mode="conservative")["feerate"]
+    fee_est_economical = node.estimatesmartfee(1, estimate_mode="economical")["feerate"]
+    fee_est_default = node.estimatesmartfee(1)["feerate"]
     assert_equal(fee_est_conservative, expected_conservative)
     assert_equal(fee_est_economical, expected_economical)
     assert_equal(fee_est_default, expected_economical)
@@ -202,9 +199,8 @@ class EstimateFeeTest(BitcoinTestFramework):
     def initial_split(self, node):
         """Split two coinbase UTxOs into many small coins"""
         self.confutxo = self.wallet.send_self_transfer_multi(
-            from_node=node,
-            utxos_to_spend=[self.wallet.get_utxo() for _ in range(2)],
-            num_outputs=2048)['new_utxos']
+            from_node=node, utxos_to_spend=[self.wallet.get_utxo() for _ in range(2)], num_outputs=2048
+        )["new_utxos"]
         while len(node.getrawmempool()) > 0:
             self.generate(node, 1, sync_fun=self.no_op)
 
@@ -216,16 +212,12 @@ class EstimateFeeTest(BitcoinTestFramework):
         self.log.info("Will output estimates for 1/2/3/6/15/25 blocks")
 
         for _ in range(2):
-            self.log.info(
-                "Creating transactions and mining them with a block size that can't keep up"
-            )
+            self.log.info("Creating transactions and mining them with a block size that can't keep up")
             # Create transactions and mine 10 small blocks with node 2, but create txs faster than we can mine
             self.transact_and_mine(10, self.nodes[2])
             check_estimates(self.nodes[1], self.fees_per_kb)
 
-            self.log.info(
-                "Creating transactions and mining them at a block size that is just big enough"
-            )
+            self.log.info("Creating transactions and mining them at a block size that is just big enough")
             # Generate transactions while mining 10 more blocks, this time with node1
             # which mines blocks with capacity just above the rate that transactions are being created
             self.transact_and_mine(10, self.nodes[1])
@@ -289,9 +281,10 @@ class EstimateFeeTest(BitcoinTestFramework):
                 tx = make_tx(self.wallet, u, high_feerate)
                 node.sendrawtransaction(tx["hex"])
                 txs.append(tx)
-            dec_txs = [res["result"] for res in node.batch([node.decoderawtransaction.get_request(tx["hex"]) for tx in txs])]
+            dec_txs = [
+                res["result"] for res in node.batch([node.decoderawtransaction.get_request(tx["hex"]) for tx in txs])
+            ]
             self.wallet.scan_txs(dec_txs)
-
 
         # Mine the last replacement txs
         self.sync_mempools(wait=0.1, nodes=[node, miner])
@@ -299,7 +292,7 @@ class EstimateFeeTest(BitcoinTestFramework):
 
         # Only 10% of the transactions were really confirmed with a low feerate,
         # the rest needed to be RBF'd. We must return the 90% conf rate feerate.
-        high_feerate_kvb = Decimal(high_feerate) / COIN * 10 ** 3
+        high_feerate_kvb = Decimal(high_feerate) / COIN * 10**3
         est_feerate = node.estimatesmartfee(2)["feerate"]
         assert_equal(est_feerate, high_feerate_kvb)
 
@@ -321,7 +314,6 @@ class EstimateFeeTest(BitcoinTestFramework):
         # Start node and ensure the fee_estimates.dat file was not read
         self.start_node(0)
         assert_equal(self.nodes[0].estimatesmartfee(1)["errors"], ["Insufficient data or no feerate found"])
-
 
     def test_estimate_dat_is_flushed_periodically(self):
         fee_dat = self.nodes[0].chain_path / "fee_estimates.dat"
@@ -374,7 +366,6 @@ class EstimateFeeTest(BitcoinTestFramework):
         fee_dat_current_content = open(fee_dat, "rb").read()
         assert_not_equal(fee_dat_current_content, fee_dat_initial_content)
 
-
     def test_acceptstalefeeestimates_option(self):
         # Get the initial fee rate while node is running
         fee_rate = self.nodes[0].estimatesmartfee(1)["feerate"]
@@ -388,7 +379,7 @@ class EstimateFeeTest(BitcoinTestFramework):
         os.utime(fee_dat, (last_modified_time, last_modified_time))
 
         # Restart node with -acceptstalefeeestimates option to ensure fee_estimate.dat file is read
-        self.start_node(0,extra_args=["-acceptstalefeeestimates"])
+        self.start_node(0, extra_args=["-acceptstalefeeestimates"])
         assert_equal(self.nodes[0].estimatesmartfee(1)["feerate"], fee_rate)
 
     def clear_estimates(self):
@@ -426,7 +417,6 @@ class EstimateFeeTest(BitcoinTestFramework):
         # Check the fee estimates for both modes after mining low fee transactions.
         check_fee_estimates_btw_modes(self.nodes[0], high_feerate, low_feerate)
 
-
     def run_test(self):
         self.log.info("This test is time consuming, please be patient")
         self.log.info("Splitting inputs so we can generate tx's")
@@ -453,9 +443,7 @@ class EstimateFeeTest(BitcoinTestFramework):
         self.test_estimate_dat_is_flushed_periodically()
 
         # check that the effective feerate is greater than or equal to the mempoolminfee even for high mempoolminfee
-        self.log.info(
-            "Test fee rate estimation after restarting node with high MempoolMinFee"
-        )
+        self.log.info("Test fee rate estimation after restarting node with high MempoolMinFee")
         self.test_feerate_mempoolminfee()
 
         self.log.info("Test acceptstalefeeestimates option")
@@ -475,9 +463,7 @@ class EstimateFeeTest(BitcoinTestFramework):
 
         self.log.info("Testing that fee estimation is disabled in blocksonly.")
         self.restart_node(0, ["-blocksonly"])
-        assert_raises_rpc_error(
-            -32603, "Fee estimation disabled", self.nodes[0].estimatesmartfee, 2
-        )
+        assert_raises_rpc_error(-32603, "Fee estimation disabled", self.nodes[0].estimatesmartfee, 2)
 
 
 if __name__ == "__main__":

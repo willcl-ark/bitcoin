@@ -37,8 +37,8 @@ class P2PAddrFetch(BitcoinTestFramework):
         info = self.nodes[0].getpeerinfo()
         assert_equal(len(info), num_peers)
         for n in range(0, num_peers):
-            assert_equal(info[n]['id'], peer_ids[n])
-            assert_equal(info[n]['connection_type'], 'addr-fetch')
+            assert_equal(info[n]["id"], peer_ids[n])
+            assert_equal(info[n]["connection_type"], "addr-fetch")
 
     def run_test(self):
         node = self.nodes[0]
@@ -50,8 +50,8 @@ class P2PAddrFetch(BitcoinTestFramework):
         self.log.info("Check that we send getaddr but don't try to sync headers with the addr-fetch peer")
         peer.sync_with_ping()
         with p2p_lock:
-            assert peer.message_count['getaddr'] == 1
-            assert peer.message_count['getheaders'] == 0
+            assert peer.message_count["getaddr"] == 1
+            assert peer.message_count["getheaders"] == 0
 
         self.log.info("Check that answering the getaddr with a single address does not lead to disconnect")
         # This prevents disconnecting on self-announcements
@@ -82,5 +82,5 @@ class P2PAddrFetch(BitcoinTestFramework):
         self.assert_getpeerinfo(peer_ids=[])
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     P2PAddrFetch(__file__).main()

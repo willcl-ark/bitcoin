@@ -12,14 +12,16 @@ from test_framework.util import (
     assert_raises_rpc_error,
 )
 
+
 def reset_balance(node, discardaddr):
-    '''Throw away all owned coins by the node so it gets a balance of 0.'''
+    """Throw away all owned coins by the node so it gets a balance of 0."""
     balance = node.getbalance(avoid_reuse=False)
     if balance > 0.5:
         node.sendtoaddress(address=discardaddr, amount=balance, subtractfeefromamount=True, avoid_reuse=False)
 
+
 def count_unspent(node):
-    '''Count the unspent outputs for the given node and return various statistics'''
+    """Count the unspent outputs for the given node and return various statistics"""
     r = {
         "total": {
             "count": 0,
@@ -43,8 +45,11 @@ def count_unspent(node):
     r["reused"]["supported"] = supports_reused
     return r
 
-def assert_unspent(node, total_count=None, total_sum=None, reused_supported=None, reused_count=None, reused_sum=None, margin=0.001):
-    '''Make assertions about a node's unspent output statistics'''
+
+def assert_unspent(
+    node, total_count=None, total_sum=None, reused_supported=None, reused_count=None, reused_sum=None, margin=0.001
+):
+    """Make assertions about a node's unspent output statistics"""
     stats = count_unspent(node)
     if total_count is not None:
         assert_equal(stats["total"]["count"], total_count)
@@ -57,11 +62,13 @@ def assert_unspent(node, total_count=None, total_sum=None, reused_supported=None
     if reused_sum is not None:
         assert_approx(stats["reused"]["sum"], reused_sum, margin)
 
+
 def assert_balances(node, mine, margin=0.001):
-    '''Make assertions about a node's getbalances output'''
+    """Make assertions about a node's getbalances output"""
     got = node.getbalances()["mine"]
-    for k,v in mine.items():
+    for k, v in mine.items():
         assert_approx(got[k], v, margin)
+
 
 class AvoidReuseTest(BitcoinTestFramework):
     def set_test_params(self):
@@ -73,7 +80,7 @@ class AvoidReuseTest(BitcoinTestFramework):
         self.skip_if_no_wallet()
 
     def run_test(self):
-        '''Set up initial chain and run tests defined below'''
+        """Set up initial chain and run tests defined below"""
 
         self.test_persistence()
         self.test_immutable()
@@ -96,11 +103,11 @@ class AvoidReuseTest(BitcoinTestFramework):
         self.test_all_destination_groups_are_used()
 
     def test_persistence(self):
-        '''Test that wallet files persist the avoid_reuse flag.'''
+        """Test that wallet files persist the avoid_reuse flag."""
         self.log.info("Test wallet files persist avoid_reuse flag")
 
         # Configure node 1 to use avoid_reuse
-        self.nodes[1].setwalletflag('avoid_reuse')
+        self.nodes[1].setwalletflag("avoid_reuse")
 
         # Flags should be node1.avoid_reuse=false, node2.avoid_reuse=true
         assert_equal(self.nodes[0].getwalletinfo()["avoid_reuse"], False)
@@ -114,10 +121,14 @@ class AvoidReuseTest(BitcoinTestFramework):
         assert_equal(self.nodes[1].getwalletinfo()["avoid_reuse"], True)
 
         # Attempting to set flag to its current state should throw
-        assert_raises_rpc_error(-8, "Wallet flag is already set to false", self.nodes[0].setwalletflag, 'avoid_reuse', False)
-        assert_raises_rpc_error(-8, "Wallet flag is already set to true", self.nodes[1].setwalletflag, 'avoid_reuse', True)
+        assert_raises_rpc_error(
+            -8, "Wallet flag is already set to false", self.nodes[0].setwalletflag, "avoid_reuse", False
+        )
+        assert_raises_rpc_error(
+            -8, "Wallet flag is already set to true", self.nodes[1].setwalletflag, "avoid_reuse", True
+        )
 
-        assert_raises_rpc_error(-8, "Unknown wallet flag: abc", self.nodes[0].setwalletflag, 'abc', True)
+        assert_raises_rpc_error(-8, "Unknown wallet flag: abc", self.nodes[0].setwalletflag, "abc", True)
 
         # Create a wallet with avoid reuse, and test that disabling it afterwards persists
         self.nodes[1].createwallet(wallet_name="avoid_reuse_persist", avoid_reuse=True)
@@ -131,11 +142,11 @@ class AvoidReuseTest(BitcoinTestFramework):
         w.unloadwallet()
 
     def test_immutable(self):
-        '''Test immutable wallet flags'''
+        """Test immutable wallet flags"""
         self.log.info("Test immutable wallet flags")
 
         # Attempt to set the disable_private_keys flag; this should not work
-        assert_raises_rpc_error(-8, "Wallet flag is immutable", self.nodes[1].setwalletflag, 'disable_private_keys')
+        assert_raises_rpc_error(-8, "Wallet flag is immutable", self.nodes[1].setwalletflag, "disable_private_keys")
 
         tempwallet = ".wallet_avoidreuse.py_test_immutable_wallet.dat"
 
@@ -144,7 +155,7 @@ class AvoidReuseTest(BitcoinTestFramework):
         w = self.nodes[1].get_wallet_rpc(tempwallet)
 
         # Attempt to unset the disable_private_keys flag; this should not work
-        assert_raises_rpc_error(-8, "Wallet flag is immutable", w.setwalletflag, 'disable_private_keys', False)
+        assert_raises_rpc_error(-8, "Wallet flag is immutable", w.setwalletflag, "disable_private_keys", False)
 
         # Unload temp wallet
         self.nodes[1].unloadwallet(tempwallet)
@@ -155,30 +166,30 @@ class AvoidReuseTest(BitcoinTestFramework):
         reset_balance(node, node.getnewaddress())
         addr = node.getnewaddress()
         txid = node.sendtoaddress(addr, 1)
-        out = node.listunspent(minconf=0, query_options={'minimumAmount': 2})
+        out = node.listunspent(minconf=0, query_options={"minimumAmount": 2})
         assert_equal(len(out), 1)
-        assert_equal(out[0]['txid'], txid)
-        changeaddr = out[0]['address']
+        assert_equal(out[0]["txid"], txid)
+        changeaddr = out[0]["address"]
 
         # Make sure it's starting out as change as expected
-        assert node.getaddressinfo(changeaddr)['ischange']
+        assert node.getaddressinfo(changeaddr)["ischange"]
         for logical_tx in node.listtransactions():
-            assert_not_equal(logical_tx.get('address'), changeaddr)
+            assert_not_equal(logical_tx.get("address"), changeaddr)
 
         # Spend it
         reset_balance(node, node.getnewaddress())
 
         # It should still be change
-        assert node.getaddressinfo(changeaddr)['ischange']
+        assert node.getaddressinfo(changeaddr)["ischange"]
         for logical_tx in node.listtransactions():
-            assert_not_equal(logical_tx.get('address'), changeaddr)
+            assert_not_equal(logical_tx.get("address"), changeaddr)
 
     def test_sending_from_reused_address_without_avoid_reuse(self):
-        '''
+        """
         Test the same as test_sending_from_reused_address_fails, except send the 10 BTC with
         the avoid_reuse flag set to false. This means the 10 BTC send should succeed,
         where it fails in test_sending_from_reused_address_fails.
-        '''
+        """
         self.log.info("Test sending from reused address with avoid_reuse=false")
 
         fundaddr = self.nodes[1].getnewaddress()
@@ -222,14 +233,14 @@ class AvoidReuseTest(BitcoinTestFramework):
         assert_approx(self.nodes[1].getbalance(avoid_reuse=False), 5, 0.001)
 
     def test_sending_from_reused_address_fails(self, second_addr_type):
-        '''
+        """
         Test the simple case where [1] generates a new address A, then
         [0] sends 10 BTC to A.
         [1] spends 5 BTC from A. (leaving roughly 5 BTC useable)
         [0] sends 10 BTC to A again.
         [1] tries to spend 10 BTC (fails; dirty).
         [1] tries to spend 4 BTC (succeeds; change address sufficient)
-        '''
+        """
         self.log.info("Test sending from reused {} address fails".format(second_addr_type))
 
         fundaddr = self.nodes[1].getnewaddress(label="", address_type="legacy")
@@ -252,11 +263,11 @@ class AvoidReuseTest(BitcoinTestFramework):
         assert_balances(self.nodes[1], mine={"used": 0, "trusted": 5})
 
     def test_getbalances_used(self):
-        '''
+        """
         getbalances and listunspent should pick up on reused addresses
         immediately, even for address reusing outputs created before the first
         transaction was spending from that address
-        '''
+        """
         self.log.info("Test getbalances used category")
 
         # node under test should be completely empty
@@ -281,13 +292,13 @@ class AvoidReuseTest(BitcoinTestFramework):
         assert_balances(self.nodes[1], mine={"used": 1, "trusted": 95}, margin=0.01)
 
     def test_full_destination_group_is_preferred(self):
-        '''
+        """
         Test the case where [1] only has 101 outputs of 1 BTC in the same reused
         address and tries to send a small payment of 0.5 BTC. The wallet
         should use 100 outputs from the reused address as inputs and not a
         single 1 BTC input, in order to join several outputs from the reused
         address.
-        '''
+        """
         self.log.info("Test that full destination groups are preferred in coin selection")
 
         # Node under test should be empty
@@ -311,11 +322,11 @@ class AvoidReuseTest(BitcoinTestFramework):
         assert_equal(len(inputs), 100)
 
     def test_all_destination_groups_are_used(self):
-        '''
+        """
         Test the case where [1] only has 202 outputs of 1 BTC in the same reused
         address and tries to send a payment of 200.5 BTC. The wallet
         should use all 202 outputs from the reused address as inputs.
-        '''
+        """
         self.log.info("Test that all destination groups are used")
 
         # Node under test should be empty
@@ -339,5 +350,5 @@ class AvoidReuseTest(BitcoinTestFramework):
         assert_equal(len(inputs), 202)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     AvoidReuseTest(__file__).main()

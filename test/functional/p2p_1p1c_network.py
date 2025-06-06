@@ -34,16 +34,19 @@ from test_framework.wallet import (
 # 1sat/vB feerate denominated in BTC/KvB
 FEERATE_1SAT_VB = Decimal("0.00001000")
 
+
 class PackageRelayTest(BitcoinTestFramework):
     def set_test_params(self):
         self.setup_clean_chain = True
         self.num_nodes = 4
         # hugely speeds up the test, as it involves multiple hops of tx relay.
         self.noban_tx_relay = True
-        self.extra_args = [[
-            "-datacarriersize=100000",
-            "-maxmempool=5",
-        ]] * self.num_nodes
+        self.extra_args = [
+            [
+                "-datacarriersize=100000",
+                "-maxmempool=5",
+            ]
+        ] * self.num_nodes
         self.supports_cli = False
 
     def raise_network_minfee(self):
@@ -51,12 +54,14 @@ class PackageRelayTest(BitcoinTestFramework):
 
         self.log.debug("Check that all nodes' mempool minimum feerates are above min relay feerate")
         for node in self.nodes:
-            assert_equal(node.getmempoolinfo()['minrelaytxfee'], FEERATE_1SAT_VB)
-            assert_greater_than(node.getmempoolinfo()['mempoolminfee'], FEERATE_1SAT_VB)
+            assert_equal(node.getmempoolinfo()["minrelaytxfee"], FEERATE_1SAT_VB)
+            assert_greater_than(node.getmempoolinfo()["mempoolminfee"], FEERATE_1SAT_VB)
 
     def create_basic_1p1c(self, wallet):
         low_fee_parent = wallet.create_self_transfer(fee_rate=FEERATE_1SAT_VB, confirmed_only=True)
-        high_fee_child = wallet.create_self_transfer(utxo_to_spend=low_fee_parent["new_utxo"], fee_rate=999*FEERATE_1SAT_VB)
+        high_fee_child = wallet.create_self_transfer(
+            utxo_to_spend=low_fee_parent["new_utxo"], fee_rate=999 * FEERATE_1SAT_VB
+        )
         package_hex_basic = [low_fee_parent["hex"], high_fee_child["hex"]]
         return package_hex_basic, low_fee_parent["tx"], high_fee_child["tx"]
 
@@ -82,16 +87,20 @@ class PackageRelayTest(BitcoinTestFramework):
         # Now create the child
         high_fee_child_2outs = wallet.create_self_transfer_multi(
             utxos_to_spend=low_fee_parent_2outs["new_utxos"][::-1],
-            fee_per_output=fee_2outs*100,
+            fee_per_output=fee_2outs * 100,
         )
-        return [low_fee_parent_2outs["hex"], high_fee_child_2outs["hex"]], low_fee_parent_2outs["tx"], high_fee_child_2outs["tx"]
+        return (
+            [low_fee_parent_2outs["hex"], high_fee_child_2outs["hex"]],
+            low_fee_parent_2outs["tx"],
+            high_fee_child_2outs["tx"],
+        )
 
     def create_package_2p1c(self, wallet):
-        parent1 = wallet.create_self_transfer(fee_rate=FEERATE_1SAT_VB*10, confirmed_only=True)
-        parent2 = wallet.create_self_transfer(fee_rate=FEERATE_1SAT_VB*20, confirmed_only=True)
+        parent1 = wallet.create_self_transfer(fee_rate=FEERATE_1SAT_VB * 10, confirmed_only=True)
+        parent2 = wallet.create_self_transfer(fee_rate=FEERATE_1SAT_VB * 20, confirmed_only=True)
         child = wallet.create_self_transfer_multi(
             utxos_to_spend=[parent1["new_utxo"], parent2["new_utxo"]],
-            fee_per_output=999*parent1["tx"].get_vsize(),
+            fee_per_output=999 * parent1["tx"].get_vsize(),
         )
         return [parent1["hex"], parent2["hex"], child["hex"]], parent1["tx"], parent2["tx"], child["tx"]
 
@@ -119,7 +128,7 @@ class PackageRelayTest(BitcoinTestFramework):
             [],
             [child_1, child_2, parent_31, child_3, child_4],
             [parent_31],
-            [parent_1, parent_2, parent_31, parent_4]
+            [parent_1, parent_2, parent_31, parent_4],
         ]
 
         return packages_to_submit, txns_to_send
@@ -140,7 +149,7 @@ class PackageRelayTest(BitcoinTestFramework):
         self.peers = [self.nodes[i].add_p2p_connection(P2PInterface()) for i in range(self.num_nodes)]
 
         self.log.info("Pre-send some transactions to nodes")
-        for (i, peer) in enumerate(self.peers):
+        for i, peer in enumerate(self.peers):
             for tx in transactions_to_presend[i]:
                 peer.send_and_ping(msg_tx(tx))
 
@@ -158,5 +167,5 @@ class PackageRelayTest(BitcoinTestFramework):
         self.sync_mempools()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     PackageRelayTest(__file__).main()

@@ -3,6 +3,7 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test GETDATA processing behavior"""
+
 from collections import defaultdict
 
 from test_framework.messages import (
@@ -45,5 +46,5 @@ class GetdataTest(BitcoinTestFramework):
         p2p_block_store.wait_until(lambda: p2p_block_store.blocks[best_block] == 1)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     GetdataTest(__file__).main()

@@ -62,7 +62,9 @@ class WalletGetHDKeyTest(BitcoinTestFramework):
         assert_equal(xpub_info[0]["has_private"], True)
 
         self.log.info("HD privkey can be retrieved from encrypted wallets")
-        assert_raises_rpc_error(-13, "Error: Please enter the wallet passphrase with walletpassphrase first", wallet.gethdkeys, private=True)
+        assert_raises_rpc_error(
+            -13, "Error: Please enter the wallet passphrase with walletpassphrase first", wallet.gethdkeys, private=True
+        )
         with WalletUnlock(wallet, "pass"):
             xpub_info = wallet.gethdkeys(active_only=True, private=True)[0]
             assert_not_equal(xpub_info["xprv"], xprv)
@@ -103,14 +105,15 @@ class WalletGetHDKeyTest(BitcoinTestFramework):
             else:
                 assert False
 
-
     def test_lone_key_imports(self):
         self.log.info("Non-HD keys do not appear in gethdkeys")
         self.nodes[0].createwallet("lonekey", blank=True)
         wallet = self.nodes[0].get_wallet_rpc("lonekey")
 
         assert_equal(wallet.gethdkeys(), [])
-        wallet.importdescriptors([{"desc": descsum_create("wpkh(cTe1f5rdT8A8DFgVWTjyPwACsDPJM9ff4QngFxUixCSvvbg1x6sh)"), "timestamp": "now"}])
+        wallet.importdescriptors(
+            [{"desc": descsum_create("wpkh(cTe1f5rdT8A8DFgVWTjyPwACsDPJM9ff4QngFxUixCSvvbg1x6sh)"), "timestamp": "now"}]
+        )
         assert_equal(wallet.gethdkeys(), [])
 
         self.log.info("HD keys of non-ranged descriptors should appear in gethdkeys")
@@ -179,5 +182,5 @@ class WalletGetHDKeyTest(BitcoinTestFramework):
         assert_equal(found_desc["active"], False)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     WalletGetHDKeyTest(__file__).main()

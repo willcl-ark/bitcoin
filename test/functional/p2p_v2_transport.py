@@ -5,23 +5,25 @@
 """
 Test v2 transport
 """
+
 import socket
 
 from test_framework.messages import MAGIC_BYTES, NODE_P2P_V2
 from test_framework.test_framework import BitcoinTestFramework
-from test_framework.util import (
-    assert_not_equal,
-    assert_equal,
-    p2p_port,
-    assert_raises_rpc_error
-)
+from test_framework.util import assert_not_equal, assert_equal, p2p_port, assert_raises_rpc_error
 
 
 class V2TransportTest(BitcoinTestFramework):
     def set_test_params(self):
         self.setup_clean_chain = True
         self.num_nodes = 5
-        self.extra_args = [["-v2transport=1"], ["-v2transport=1"], ["-v2transport=0"], ["-v2transport=0"], ["-v2transport=0"]]
+        self.extra_args = [
+            ["-v2transport=1"],
+            ["-v2transport=1"],
+            ["-v2transport=0"],
+            ["-v2transport=0"],
+            ["-v2transport=0"],
+        ]
 
     def run_test(self):
         sending_handshake = "start sending v2 handshake to peer"
@@ -42,8 +44,7 @@ class V2TransportTest(BitcoinTestFramework):
         # V2 nodes can sync with V2 nodes
         assert_equal(self.nodes[0].getblockcount(), 0)
         assert_equal(self.nodes[1].getblockcount(), 0)
-        with self.nodes[0].assert_debug_log(expected_msgs=[sending_handshake],
-                                            unexpected_msgs=[downgrading_to_v1]):
+        with self.nodes[0].assert_debug_log(expected_msgs=[sending_handshake], unexpected_msgs=[downgrading_to_v1]):
             self.connect_nodes(0, 1, peer_advertises_v2=True)
         self.generate(self.nodes[0], 5, sync_fun=lambda: self.sync_all(self.nodes[0:2]))
         assert_equal(self.nodes[1].getblockcount(), 5)
@@ -64,10 +65,16 @@ class V2TransportTest(BitcoinTestFramework):
 
         # addnode rpc error when v2transport requested but not enabled
         ip_port = "127.0.0.1:{}".format(p2p_port(3))
-        assert_raises_rpc_error(-8, "Error: v2transport requested but not enabled (see -v2transport)", self.nodes[2].addnode, node=ip_port, command='add', v2transport=True)
+        assert_raises_rpc_error(
+            -8,
+            "Error: v2transport requested but not enabled (see -v2transport)",
+            self.nodes[2].addnode,
+            node=ip_port,
+            command="add",
+            v2transport=True,
+        )
 
-        with self.nodes[2].assert_debug_log(expected_msgs=[],
-                                            unexpected_msgs=[sending_handshake, downgrading_to_v1]):
+        with self.nodes[2].assert_debug_log(expected_msgs=[], unexpected_msgs=[sending_handshake, downgrading_to_v1]):
             self.connect_nodes(2, 3, peer_advertises_v2=False)
         self.generate(self.nodes[2], 8, sync_fun=lambda: self.sync_all(self.nodes[2:4]))
         assert_equal(self.nodes[3].getblockcount(), 8)
@@ -85,9 +92,8 @@ class V2TransportTest(BitcoinTestFramework):
         # V1 nodes can sync with V2 nodes
         self.disconnect_nodes(0, 1)
         self.disconnect_nodes(2, 3)
-        with self.nodes[2].assert_debug_log(expected_msgs=[],
-                                            unexpected_msgs=[sending_handshake, downgrading_to_v1]):
-            self.connect_nodes(2, 1, peer_advertises_v2=False) # cannot enable v2 on v1 node
+        with self.nodes[2].assert_debug_log(expected_msgs=[], unexpected_msgs=[sending_handshake, downgrading_to_v1]):
+            self.connect_nodes(2, 1, peer_advertises_v2=False)  # cannot enable v2 on v1 node
         self.sync_all(self.nodes[1:3])
         assert_equal(self.nodes[1].getblockcount(), 8)
         assert_not_equal(self.nodes[0].getbestblockhash(), self.nodes[1].getbestblockhash())
@@ -103,8 +109,7 @@ class V2TransportTest(BitcoinTestFramework):
 
         # V2 nodes can sync with V1 nodes
         self.disconnect_nodes(1, 2)
-        with self.nodes[0].assert_debug_log(expected_msgs=[],
-                                            unexpected_msgs=[sending_handshake, downgrading_to_v1]):
+        with self.nodes[0].assert_debug_log(expected_msgs=[], unexpected_msgs=[sending_handshake, downgrading_to_v1]):
             self.connect_nodes(0, 3, peer_advertises_v2=False)
         self.sync_all([self.nodes[0], self.nodes[3]])
         assert_equal(self.nodes[0].getblockcount(), 8)
@@ -122,11 +127,11 @@ class V2TransportTest(BitcoinTestFramework):
         self.connect_nodes(0, 1, peer_advertises_v2=True)
         self.connect_nodes(1, 2, peer_advertises_v2=False)
         self.generate(self.nodes[1], 1, sync_fun=lambda: self.sync_all(self.nodes[0:4]))
-        assert_equal(self.nodes[0].getblockcount(), 9) # sync_all() verifies tip hashes match
+        assert_equal(self.nodes[0].getblockcount(), 9)  # sync_all() verifies tip hashes match
 
         # V1 node mines another block and everyone gets it
         self.generate(self.nodes[3], 2, sync_fun=lambda: self.sync_all(self.nodes[0:4]))
-        assert_equal(self.nodes[2].getblockcount(), 11) # sync_all() verifies tip hashes match
+        assert_equal(self.nodes[2].getblockcount(), 11)  # sync_all() verifies tip hashes match
 
         assert_equal(self.nodes[4].getblockcount(), 0)
         # Peer 4 is v1 p2p, but is falsely advertised as v2.
@@ -159,14 +164,14 @@ class V2TransportTest(BitcoinTestFramework):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             with self.nodes[0].wait_for_new_peer():
                 s.connect(("127.0.0.1", p2p_port(0)))
-            s.sendall(b'\x00' * (MAX_KEY_GARB_AND_GARBTERM_LEN - 1))
+            s.sendall(b"\x00" * (MAX_KEY_GARB_AND_GARBTERM_LEN - 1))
             self.wait_until(lambda: self.nodes[0].getpeerinfo()[-1]["bytesrecv"] == MAX_KEY_GARB_AND_GARBTERM_LEN - 1)
             with self.nodes[0].assert_debug_log(["V2 transport error: missing garbage terminator"]):
                 peer_id = self.nodes[0].getpeerinfo()[-1]["id"]
-                s.sendall(b'\x00')  # send out last byte
+                s.sendall(b"\x00")  # send out last byte
                 # should disconnect immediately
                 self.wait_until(lambda: peer_id not in [p["id"] for p in self.nodes[0].getpeerinfo()])
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     V2TransportTest(__file__).main()

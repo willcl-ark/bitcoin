@@ -6,10 +6,7 @@
 
 import time
 
-from test_framework.p2p import (
-    P2PInterface,
-    p2p_lock
-)
+from test_framework.p2p import P2PInterface, p2p_lock
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
     assert_not_equal,
@@ -23,7 +20,6 @@ MAX_PCT_ADDR_TO_SEND = 23
 
 
 class AddrReceiver(P2PInterface):
-
     def __init__(self):
         super().__init__()
         self.received_addrs = None
@@ -52,7 +48,7 @@ class AddrTest(BitcoinTestFramework):
         ]
 
     def run_test(self):
-        self.log.info('Fill peer AddrMan with a lot of records')
+        self.log.info("Fill peer AddrMan with a lot of records")
         for i in range(10000):
             first_octet = i >> 8
             second_octet = i % 256
@@ -66,7 +62,7 @@ class AddrTest(BitcoinTestFramework):
         last_response_on_local_bind = None
         last_response_on_onion_bind1 = None
         last_response_on_onion_bind2 = None
-        self.log.info('Send many addr requests within short time to receive same response')
+        self.log.info("Send many addr requests within short time to receive same response")
         N = 5
         cur_mock_time = int(time.time())
         for i in range(N):
@@ -101,7 +97,7 @@ class AddrTest(BitcoinTestFramework):
         cur_mock_time += 3 * 24 * 60 * 60
         self.nodes[0].setmocktime(cur_mock_time)
 
-        self.log.info('After time passed, see a new response to addr request')
+        self.log.info("After time passed, see a new response to addr request")
         addr_receiver_local = self.nodes[0].add_p2p_connection(AddrReceiver())
         addr_receiver_onion1 = self.nodes[0].add_p2p_connection(AddrReceiver(), dstport=self.onion_port1)
         addr_receiver_onion2 = self.nodes[0].add_p2p_connection(AddrReceiver(), dstport=self.onion_port2)
@@ -119,5 +115,5 @@ class AddrTest(BitcoinTestFramework):
         assert_not_equal(set(last_response_on_onion_bind2), set(addr_receiver_onion2.get_received_addrs()))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     AddrTest(__file__).main()

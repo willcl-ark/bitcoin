@@ -78,6 +78,7 @@ class EncryptedP2PState:
 
         encrypt/decrypt v2 P2P messages using v2_enc_packet() and v2_receive_packet().
     """
+
     def __init__(self, *, initiating, net):
         self.initiating = initiating  # True if initiator
         self.net = net
@@ -92,7 +93,7 @@ class EncryptedP2PState:
         # has been decrypted. set to -1 if decryption hasn't been done yet.
         self.contents_len = -1
         self.found_garbage_terminator = False
-        self.transport_version = b''
+        self.transport_version = b""
 
     @staticmethod
     def v2_ecdh(priv, ellswift_theirs, ellswift_ours, initiating):
@@ -135,7 +136,7 @@ class EncryptedP2PState:
                  - returns b"" if more bytes need to be received before we can respond and start the v2 handshake.
                  - returns -1 to downgrade the connection to v1 P2P.
         """
-        v1_prefix = MAGIC_BYTES[self.net] + b'version\x00\x00\x00\x00\x00'
+        v1_prefix = MAGIC_BYTES[self.net] + b"version\x00\x00\x00\x00\x00"
         while len(self.received_prefix) < 16:
             byte = response.read(1)
             # return b"" if we need to receive more bytes
@@ -148,7 +149,7 @@ class EncryptedP2PState:
         return len(self.received_prefix), -1
 
     def complete_handshake(self, response):
-        """ Instantiates the encrypted transport and
+        """Instantiates the encrypted transport and
         sends garbage terminator + optional decoy packets + transport version packet.
         Done by both initiator and responder.
 
@@ -163,18 +164,18 @@ class EncryptedP2PState:
         ecdh_secret = self.v2_ecdh(self.privkey_ours, ellswift_theirs, self.ellswift_ours, self.initiating)
         self.initialize_v2_transport(ecdh_secret)
         # Send garbage terminator
-        msg_to_send = self.peer['send_garbage_terminator']
+        msg_to_send = self.peer["send_garbage_terminator"]
         # Optionally send decoy packets after garbage terminator.
         aad = self.sent_garbage
         for decoy_content_len in [random.randint(1, 100) for _ in range(random.randint(0, 10))]:
-            msg_to_send += self.v2_enc_packet(decoy_content_len * b'\x00', aad=aad, ignore=True)
-            aad = b''
+            msg_to_send += self.v2_enc_packet(decoy_content_len * b"\x00", aad=aad, ignore=True)
+            aad = b""
         # Send version packet.
         msg_to_send += self.v2_enc_packet(self.transport_version, aad=aad)
         return 64 - len(self.received_prefix), msg_to_send
 
     def authenticate_handshake(self, response):
-        """ Ensures that the received optional decoy packets and transport version packet are authenticated.
+        """Ensures that the received optional decoy packets and transport version packet are authenticated.
         Marks the v2 handshake as complete. Done by both initiator and responder.
 
         Returns:
@@ -189,7 +190,7 @@ class EncryptedP2PState:
             response = response[16:]
             processed_length = len(received_garbage)
             for i in range(MAX_GARBAGE_LEN + 1):
-                if received_garbage[-16:] == self.peer['recv_garbage_terminator']:
+                if received_garbage[-16:] == self.peer["recv_garbage_terminator"]:
                     # Receive, decode, and ignore version packet.
                     # This includes skipping decoys and authenticating the received garbage.
                     self.found_garbage_terminator = True
@@ -226,39 +227,39 @@ class EncryptedP2PState:
     def initialize_v2_transport(self, ecdh_secret):
         """Sets the peer object with various BIP324 derived keys and ciphers."""
         peer = {}
-        salt = b'bitcoin_v2_shared_secret' + MAGIC_BYTES[self.net]
-        for name in ('initiator_L', 'initiator_P', 'responder_L', 'responder_P', 'garbage_terminators', 'session_id'):
-            peer[name] = hkdf_sha256(salt=salt, ikm=ecdh_secret, info=name.encode('utf-8'), length=32)
+        salt = b"bitcoin_v2_shared_secret" + MAGIC_BYTES[self.net]
+        for name in ("initiator_L", "initiator_P", "responder_L", "responder_P", "garbage_terminators", "session_id"):
+            peer[name] = hkdf_sha256(salt=salt, ikm=ecdh_secret, info=name.encode("utf-8"), length=32)
         if self.initiating:
-            self.peer['send_L'] = FSChaCha20(peer['initiator_L'])
-            self.peer['send_P'] = FSChaCha20Poly1305(peer['initiator_P'])
-            self.peer['send_garbage_terminator'] = peer['garbage_terminators'][:16]
-            self.peer['recv_L'] = FSChaCha20(peer['responder_L'])
-            self.peer['recv_P'] = FSChaCha20Poly1305(peer['responder_P'])
-            self.peer['recv_garbage_terminator'] = peer['garbage_terminators'][16:]
+            self.peer["send_L"] = FSChaCha20(peer["initiator_L"])
+            self.peer["send_P"] = FSChaCha20Poly1305(peer["initiator_P"])
+            self.peer["send_garbage_terminator"] = peer["garbage_terminators"][:16]
+            self.peer["recv_L"] = FSChaCha20(peer["responder_L"])
+            self.peer["recv_P"] = FSChaCha20Poly1305(peer["responder_P"])
+            self.peer["recv_garbage_terminator"] = peer["garbage_terminators"][16:]
         else:
-            self.peer['send_L'] = FSChaCha20(peer['responder_L'])
-            self.peer['send_P'] = FSChaCha20Poly1305(peer['responder_P'])
-            self.peer['send_garbage_terminator'] = peer['garbage_terminators'][16:]
-            self.peer['recv_L'] = FSChaCha20(peer['initiator_L'])
-            self.peer['recv_P'] = FSChaCha20Poly1305(peer['initiator_P'])
-            self.peer['recv_garbage_terminator'] = peer['garbage_terminators'][:16]
-        self.peer['session_id'] = peer['session_id']
+            self.peer["send_L"] = FSChaCha20(peer["responder_L"])
+            self.peer["send_P"] = FSChaCha20Poly1305(peer["responder_P"])
+            self.peer["send_garbage_terminator"] = peer["garbage_terminators"][16:]
+            self.peer["recv_L"] = FSChaCha20(peer["initiator_L"])
+            self.peer["recv_P"] = FSChaCha20Poly1305(peer["initiator_P"])
+            self.peer["recv_garbage_terminator"] = peer["garbage_terminators"][:16]
+        self.peer["session_id"] = peer["session_id"]
 
-    def v2_enc_packet(self, contents, aad=b'', ignore=False):
+    def v2_enc_packet(self, contents, aad=b"", ignore=False):
         """Encrypt a BIP324 packet.
 
         Returns:
         bytes - encrypted packet contents
         """
         assert len(contents) <= 2**24 - 1
-        header = (ignore << IGNORE_BIT_POS).to_bytes(HEADER_LEN, 'little')
+        header = (ignore << IGNORE_BIT_POS).to_bytes(HEADER_LEN, "little")
         plaintext = header + contents
-        aead_ciphertext = self.peer['send_P'].encrypt(aad, plaintext)
-        enc_plaintext_len = self.peer['send_L'].crypt(len(contents).to_bytes(LENGTH_FIELD_LEN, 'little'))
+        aead_ciphertext = self.peer["send_P"].encrypt(aad, plaintext)
+        enc_plaintext_len = self.peer["send_L"].crypt(len(contents).to_bytes(LENGTH_FIELD_LEN, "little"))
         return enc_plaintext_len + aead_ciphertext
 
-    def v2_receive_packet(self, response, aad=b''):
+    def v2_receive_packet(self, response, aad=b""):
         """Decrypt a BIP324 packet
 
         Returns:
@@ -269,12 +270,12 @@ class EncryptedP2PState:
             if len(response) < LENGTH_FIELD_LEN:
                 return 0, None
             enc_contents_len = response[:LENGTH_FIELD_LEN]
-            self.contents_len = int.from_bytes(self.peer['recv_L'].crypt(enc_contents_len), 'little')
+            self.contents_len = int.from_bytes(self.peer["recv_L"].crypt(enc_contents_len), "little")
         response = response[LENGTH_FIELD_LEN:]
         if len(response) < HEADER_LEN + self.contents_len + CHACHA20POLY1305_EXPANSION:
             return 0, None
-        aead_ciphertext = response[:HEADER_LEN + self.contents_len + CHACHA20POLY1305_EXPANSION]
-        plaintext = self.peer['recv_P'].decrypt(aad, aead_ciphertext)
+        aead_ciphertext = response[: HEADER_LEN + self.contents_len + CHACHA20POLY1305_EXPANSION]
+        plaintext = self.peer["recv_P"].decrypt(aad, aead_ciphertext)
         if plaintext is None:
             return -1, None  # disconnect
         header = plaintext[:HEADER_LEN]

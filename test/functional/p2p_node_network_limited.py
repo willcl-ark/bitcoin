@@ -8,6 +8,7 @@ Tests that a node configured with -prune=550 signals NODE_NETWORK_LIMITED correc
 and that it responds to getdata requests for blocks correctly:
     - send a block within 288 + 2 of the tip
     - disconnect peers who request blocks older than that."""
+
 from test_framework.messages import (
     CInv,
     MSG_BLOCK,
@@ -18,36 +19,39 @@ from test_framework.messages import (
 )
 from test_framework.p2p import P2PInterface
 from test_framework.test_framework import BitcoinTestFramework
-from test_framework.util import (
-    assert_equal,
-    assert_raises_rpc_error,
-    try_rpc
-)
+from test_framework.util import assert_equal, assert_raises_rpc_error, try_rpc
 
 # Minimum blocks required to signal NODE_NETWORK_LIMITED #
 NODE_NETWORK_LIMITED_MIN_BLOCKS = 288
 
+
 class P2PIgnoreInv(P2PInterface):
     firstAddrnServices = 0
+
     def on_inv(self, message):
         # The node will send us invs for other blocks. Ignore them.
         pass
+
     def on_addr(self, message):
         self.firstAddrnServices = message.addrs[0].nServices
+
     def wait_for_addr(self, timeout=5):
         def test_function():
             return self.last_message.get("addr")
+
         self.wait_until(test_function, timeout=timeout)
+
     def send_getdata_for_block(self, blockhash):
         getdata_request = msg_getdata()
         getdata_request.inv.append(CInv(MSG_BLOCK, int(blockhash, 16)))
         self.send_without_ping(getdata_request)
 
+
 class NodeNetworkLimitedTest(BitcoinTestFramework):
     def set_test_params(self):
         self.setup_clean_chain = True
         self.num_nodes = 3
-        self.extra_args = [['-prune=550'], [], []]
+        self.extra_args = [["-prune=550"], [], []]
 
     def disconnect_all(self):
         self.disconnect_nodes(0, 1)
@@ -71,7 +75,7 @@ class NodeNetworkLimitedTest(BitcoinTestFramework):
 
         # Verify peers are out of IBD
         for node in self.nodes:
-            assert not node.getblockchaininfo()['initialblockdownload']
+            assert not node.getblockchaininfo()["initialblockdownload"]
 
         # Isolate full_node (the node will remain out of IBD)
         full_node.setnetworkactive(False)
@@ -93,8 +97,13 @@ class NodeNetworkLimitedTest(BitcoinTestFramework):
 
         # Wait until the full_node is headers-wise sync
         best_block_hash = pruned_node.getbestblockhash()
-        default_value = {'status': ''}  # No status
-        self.wait_until(lambda: next(filter(lambda x: x['hash'] == best_block_hash, full_node.getchaintips()), default_value)['status'] == "headers-only")
+        default_value = {"status": ""}  # No status
+        self.wait_until(
+            lambda: next(filter(lambda x: x["hash"] == best_block_hash, full_node.getchaintips()), default_value)[
+                "status"
+            ]
+            == "headers-only"
+        )
 
         # Now, since the node aims to download a window of 1024 blocks,
         # ensure it requests the blocks below the threshold only (with a
@@ -103,10 +112,19 @@ class NodeNetworkLimitedTest(BitcoinTestFramework):
         tip_height = pruned_node.getblockcount()
         limit_buffer = 2
         # Prevent races by waiting for the tip to arrive first
-        self.wait_until(lambda: not try_rpc(-1, "Block not available (not fully downloaded)", full_node.getblock, pruned_node.getbestblockhash()))
+        self.wait_until(
+            lambda: not try_rpc(
+                -1, "Block not available (not fully downloaded)", full_node.getblock, pruned_node.getbestblockhash()
+            )
+        )
         for height in range(start_height_full_node + 1, tip_height + 1):
             if height <= tip_height - (NODE_NETWORK_LIMITED_MIN_BLOCKS - limit_buffer):
-                assert_raises_rpc_error(-1, "Block not available (not fully downloaded)", full_node.getblock, pruned_node.getblockhash(height))
+                assert_raises_rpc_error(
+                    -1,
+                    "Block not available (not fully downloaded)",
+                    full_node.getblock,
+                    pruned_node.getblockhash(height),
+                )
             else:
                 full_node.getblock(pruned_node.getblockhash(height))  # just assert it does not throw an exception
 
@@ -127,7 +145,7 @@ class NodeNetworkLimitedTest(BitcoinTestFramework):
         assert_equal(node.nServices, expected_services)
 
         self.log.info("Check that the localservices is as expected.")
-        assert_equal(int(self.nodes[0].getnetworkinfo()['localservices'], 16), expected_services)
+        assert_equal(int(self.nodes[0].getnetworkinfo()["localservices"], 16), expected_services)
 
         self.log.info("Mine enough blocks to reach the NODE_NETWORK_LIMITED range.")
         self.connect_nodes(0, 1)
@@ -150,7 +168,7 @@ class NodeNetworkLimitedTest(BitcoinTestFramework):
         except Exception:
             pass
         # node2 must remain at height 0
-        assert_equal(self.nodes[2].getblockheader(self.nodes[2].getbestblockhash())['height'], 0)
+        assert_equal(self.nodes[2].getblockheader(self.nodes[2].getbestblockhash())["height"], 0)
 
         # now connect also to node 1 (non pruned)
         self.connect_nodes(1, 2)
@@ -172,5 +190,6 @@ class NodeNetworkLimitedTest(BitcoinTestFramework):
 
         self.test_avoid_requesting_historical_blocks()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     NodeNetworkLimitedTest(__file__).main()

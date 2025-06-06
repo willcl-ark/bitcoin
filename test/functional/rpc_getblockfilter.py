@@ -6,10 +6,13 @@
 
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
-    assert_equal, assert_is_hex_string, assert_raises_rpc_error,
-    )
+    assert_equal,
+    assert_is_hex_string,
+    assert_raises_rpc_error,
+)
 
 FILTER_TYPES = ["basic"]
+
 
 class GetBlockFilterTest(BitcoinTestFramework):
     def set_test_params(self):
@@ -38,13 +41,13 @@ class GetBlockFilterTest(BitcoinTestFramework):
         for block_hash in chain1_hashes:
             for filter_type in FILTER_TYPES:
                 result = self.nodes[0].getblockfilter(block_hash, filter_type)
-                assert_is_hex_string(result['filter'])
+                assert_is_hex_string(result["filter"])
 
         # Test getblockfilter returns a filter for all blocks and filter types on stale chain
         for block_hash in chain0_hashes:
             for filter_type in FILTER_TYPES:
                 result = self.nodes[0].getblockfilter(block_hash, filter_type)
-                assert_is_hex_string(result['filter'])
+                assert_is_hex_string(result["filter"])
 
         # Test getblockfilter with unknown block
         bad_block_hash = "0123456789abcdef" * 4
@@ -57,8 +60,14 @@ class GetBlockFilterTest(BitcoinTestFramework):
         # Test getblockfilter fails on node without compact block filter index
         self.restart_node(0, extra_args=["-blockfilterindex=0"])
         for filter_type in FILTER_TYPES:
-            assert_raises_rpc_error(-1, "Index is not enabled for filtertype {}".format(filter_type),
-                                    self.nodes[0].getblockfilter, genesis_hash, filter_type)
+            assert_raises_rpc_error(
+                -1,
+                "Index is not enabled for filtertype {}".format(filter_type),
+                self.nodes[0].getblockfilter,
+                genesis_hash,
+                filter_type,
+            )
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     GetBlockFilterTest(__file__).main()

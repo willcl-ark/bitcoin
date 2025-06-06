@@ -42,42 +42,42 @@ ADDRESS_TYPES = [
 def is_bech32_address(node, addr):
     """Check if an address contains a bech32 output."""
     addr_info = node.getaddressinfo(addr)
-    return addr_info['desc'].startswith('wpkh(')
+    return addr_info["desc"].startswith("wpkh(")
 
 
 def is_bech32m_address(node, addr):
     """Check if an address contains a bech32m output."""
     addr_info = node.getaddressinfo(addr)
-    return addr_info['desc'].startswith('tr(')
+    return addr_info["desc"].startswith("tr(")
 
 
 def is_p2sh_segwit_address(node, addr):
     """Check if an address contains a P2SH-Segwit output.
-       Note: this function does not actually determine the type
-       of P2SH output, but is sufficient for this test in that
-       we are only generating P2SH-Segwit outputs.
+    Note: this function does not actually determine the type
+    of P2SH output, but is sufficient for this test in that
+    we are only generating P2SH-Segwit outputs.
     """
     addr_info = node.getaddressinfo(addr)
-    return addr_info['desc'].startswith('sh(wpkh(')
+    return addr_info["desc"].startswith("sh(wpkh(")
 
 
 def is_legacy_address(node, addr):
     """Check if an address contains a legacy output."""
     addr_info = node.getaddressinfo(addr)
-    return addr_info['desc'].startswith('pkh(')
+    return addr_info["desc"].startswith("pkh(")
 
 
 def is_same_type(node, tx):
     """Check that all inputs are of the same OutputType"""
-    vins = node.getrawtransaction(tx, True)['vin']
+    vins = node.getrawtransaction(tx, True)["vin"]
     inputs = []
     for vin in vins:
-        prev_tx, n = vin['txid'], vin['vout']
+        prev_tx, n = vin["txid"], vin["vout"]
         inputs.append(
             node.getrawtransaction(
                 prev_tx,
                 True,
-            )['vout'][n]['scriptPubKey']['address']
+            )["vout"][n]["scriptPubKey"]["address"]
         )
     has_legacy = False
     has_p2sh = False
@@ -94,7 +94,7 @@ def is_same_type(node, tx):
         if is_bech32m_address(node, addr):
             has_bech32m = True
 
-    return (sum([has_legacy, has_p2sh, has_bech32, has_bech32m]) == 1)
+    return sum([has_legacy, has_p2sh, has_bech32, has_bech32m]) == 1
 
 
 def generate_payment_values(n, m):
@@ -135,7 +135,6 @@ class AddressInputTypeGrouping(BitcoinTestFramework):
         return tx
 
     def run_test(self):
-
         # alias self.nodes[i] to A, B for readability
         A, B = self.nodes[0], self.nodes[1]
         self.generate(A, COINBASE_MATURITY + 5)
@@ -161,9 +160,7 @@ class AddressInputTypeGrouping(BitcoinTestFramework):
 
         self.log.info("Sending payments from B to A")
         for v in generate_payment_values(5, 9):
-            tx = self.make_payment(
-                A, B, v, random.choice(ADDRESS_TYPES)
-            )
+            tx = self.make_payment(A, B, v, random.choice(ADDRESS_TYPES))
             self.generate(A, 1)
             assert is_same_type(B, tx)
 
@@ -171,5 +168,5 @@ class AddressInputTypeGrouping(BitcoinTestFramework):
         assert not is_same_type(B, tx)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     AddressInputTypeGrouping(__file__).main()

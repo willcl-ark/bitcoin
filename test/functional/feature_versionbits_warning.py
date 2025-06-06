@@ -7,6 +7,7 @@
 Generate chains with block versions that appear to be signalling unknown
 soft-forks, and test that warning alerts are generated.
 """
+
 import os
 import re
 
@@ -15,14 +16,15 @@ from test_framework.messages import msg_block
 from test_framework.p2p import P2PInterface
 from test_framework.test_framework import BitcoinTestFramework
 
-VB_PERIOD = 144           # versionbits period length for regtest
-VB_THRESHOLD = 108        # versionbits activation threshold for regtest
+VB_PERIOD = 144  # versionbits period length for regtest
+VB_THRESHOLD = 108  # versionbits activation threshold for regtest
 VB_TOP_BITS = 0x20000000
-VB_UNKNOWN_BIT = 27       # Choose a bit unassigned to any deployment
+VB_UNKNOWN_BIT = 27  # Choose a bit unassigned to any deployment
 VB_UNKNOWN_VERSION = VB_TOP_BITS | (1 << VB_UNKNOWN_BIT)
 
 WARN_UNKNOWN_RULES_ACTIVE = f"Unknown new rules activated (versionbit {VB_UNKNOWN_BIT})"
 VB_PATTERN = re.compile("Unknown new rules activated.*versionbit")
+
 
 class VersionBitsWarningTest(BitcoinTestFramework):
     def set_test_params(self):
@@ -32,9 +34,9 @@ class VersionBitsWarningTest(BitcoinTestFramework):
     def setup_network(self):
         self.alert_filename = os.path.join(self.options.tmpdir, "alert.txt")
         # Open and close to create zero-length file
-        with open(self.alert_filename, 'w', encoding='utf8'):
+        with open(self.alert_filename, "w", encoding="utf8"):
             pass
-        self.extra_args = [[f"-alertnotify=echo %s >> \"{self.alert_filename}\""]]
+        self.extra_args = [[f'-alertnotify=echo %s >> "{self.alert_filename}"']]
         self.setup_nodes()
 
     def send_blocks_with_version(self, peer, numblocks, version):
@@ -55,7 +57,7 @@ class VersionBitsWarningTest(BitcoinTestFramework):
 
     def versionbits_in_alert_file(self):
         """Test that the versionbits warning has been written to the alert file."""
-        with open(self.alert_filename, 'r', encoding='utf8') as f:
+        with open(self.alert_filename, "r", encoding="utf8") as f:
             alert_text = f.read()
         return VB_PATTERN.search(alert_text) is not None
 
@@ -67,7 +69,9 @@ class VersionBitsWarningTest(BitcoinTestFramework):
         # Mine one period worth of blocks
         self.generatetoaddress(node, VB_PERIOD, node_deterministic_address)
 
-        self.log.info("Check that there is no warning if previous VB_BLOCKS have <VB_THRESHOLD blocks with unknown versionbits version.")
+        self.log.info(
+            "Check that there is no warning if previous VB_BLOCKS have <VB_THRESHOLD blocks with unknown versionbits version."
+        )
         # Build one period of blocks with < VB_THRESHOLD blocks signaling some unknown bit
         self.send_blocks_with_version(peer, VB_THRESHOLD - 1, VB_UNKNOWN_VERSION)
         self.generatetoaddress(node, VB_PERIOD - VB_THRESHOLD + 1, node_deterministic_address)
@@ -80,7 +84,9 @@ class VersionBitsWarningTest(BitcoinTestFramework):
         self.send_blocks_with_version(peer, VB_THRESHOLD, VB_UNKNOWN_VERSION)
         self.generatetoaddress(node, VB_PERIOD - VB_THRESHOLD, node_deterministic_address)
 
-        self.log.info("Check that there is a warning if previous VB_BLOCKS have >=VB_THRESHOLD blocks with unknown versionbits version.")
+        self.log.info(
+            "Check that there is a warning if previous VB_BLOCKS have >=VB_THRESHOLD blocks with unknown versionbits version."
+        )
         # Mine a period worth of expected blocks so the generic block-version warning
         # is cleared. This will move the versionbit state to ACTIVE.
         self.generatetoaddress(node, VB_PERIOD, node_deterministic_address)
@@ -90,7 +96,7 @@ class VersionBitsWarningTest(BitcoinTestFramework):
 
         # Generating one block guarantees that we'll get out of IBD
         self.generatetoaddress(node, 1, node_deterministic_address)
-        self.wait_until(lambda: not node.getblockchaininfo()['initialblockdownload'])
+        self.wait_until(lambda: not node.getblockchaininfo()["initialblockdownload"])
         # Generating one more block will be enough to generate an error.
         self.generatetoaddress(node, 1, node_deterministic_address)
         # Check that get*info() shows the versionbits unknown rules warning
@@ -99,5 +105,6 @@ class VersionBitsWarningTest(BitcoinTestFramework):
         # Check that the alert file shows the versionbits unknown rules warning
         self.wait_until(lambda: self.versionbits_in_alert_file())
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     VersionBitsWarningTest(__file__).main()

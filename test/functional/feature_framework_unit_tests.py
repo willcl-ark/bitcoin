@@ -37,12 +37,8 @@ TEST_FRAMEWORK_MODULES = [
 def run_unit_tests():
     test_framework_tests = unittest.TestSuite()
     for module in TEST_FRAMEWORK_MODULES:
-        test_framework_tests.addTest(
-            unittest.TestLoader().loadTestsFromName(f"test_framework.{module}")
-        )
-    result = unittest.TextTestRunner(stream=sys.stdout, verbosity=1, failfast=True).run(
-        test_framework_tests
-    )
+        test_framework_tests.addTest(unittest.TestLoader().loadTestsFromName(f"test_framework.{module}"))
+    result = unittest.TextTestRunner(stream=sys.stdout, verbosity=1, failfast=True).run(test_framework_tests)
     if not result.wasSuccessful():
         sys.exit(TEST_EXIT_FAILED)
     sys.exit(TEST_EXIT_PASSED)
@@ -50,4 +46,3 @@ def run_unit_tests():
 
 if __name__ == "__main__":
     run_unit_tests()
-

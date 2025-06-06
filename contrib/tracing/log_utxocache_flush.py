@@ -41,12 +41,7 @@ int trace_flush(struct pt_regs *ctx) {
 }
 """
 
-FLUSH_MODES = [
-    'NONE',
-    'IF_NEEDED',
-    'PERIODIC',
-    'ALWAYS'
-]
+FLUSH_MODES = ["NONE", "IF_NEEDED", "PERIODIC", "ALWAYS"]
 
 
 class Data(ctypes.Structure):
@@ -56,18 +51,21 @@ class Data(ctypes.Structure):
         ("mode", ctypes.c_uint32),
         ("coins_count", ctypes.c_uint64),
         ("coins_mem_usage", ctypes.c_uint64),
-        ("is_flush_for_prune", ctypes.c_bool)
+        ("is_flush_for_prune", ctypes.c_bool),
     ]
 
 
 def print_event(event):
-    print("%-15d %-10s %-15d %-15s %-8s" % (
-        event.duration,
-        FLUSH_MODES[event.mode],
-        event.coins_count,
-        "%.2f kB" % (event.coins_mem_usage/1000),
-        event.is_flush_for_prune
-    ))
+    print(
+        "%-15d %-10s %-15d %-15s %-8s"
+        % (
+            event.duration,
+            FLUSH_MODES[event.mode],
+            event.coins_count,
+            "%.2f kB" % (event.coins_mem_usage / 1000),
+            event.is_flush_for_prune,
+        )
+    )
 
 
 def main(pid):
@@ -76,21 +74,18 @@ def main(pid):
 
     # attaching the trace functions defined in the BPF program
     # to the tracepoints
-    bitcoind_with_usdts.enable_probe(
-        probe="flush", fn_name="trace_flush")
+    bitcoind_with_usdts.enable_probe(probe="flush", fn_name="trace_flush")
     b = BPF(text=program, usdt_contexts=[bitcoind_with_usdts])
 
     def handle_flush(_, data, size):
-        """ Coins Flush handler.
-          Called each time coin caches and indexes are flushed."""
+        """Coins Flush handler.
+        Called each time coin caches and indexes are flushed."""
         event = ctypes.cast(data, ctypes.POINTER(Data)).contents
         print_event(event)
 
     b["flush"].open_perf_buffer(handle_flush)
     print("Logging utxocache flushes. Ctrl-C to end...")
-    print("%-15s %-10s %-15s %-15s %-8s" % ("Duration (µs)", "Mode",
-                                            "Coins Count", "Memory Usage",
-                                            "Flush for Prune"))
+    print("%-15s %-10s %-15s %-15s %-8s" % ("Duration (µs)", "Mode", "Coins Count", "Memory Usage", "Flush for Prune"))
 
     while True:
         try:
