@@ -161,8 +161,13 @@ $(package)_config_env_darwin := OBJC="$$($(package)_cc)"
 $(package)_config_env_darwin += OBJCXX="$$($(package)_cxx)"
 
 $(package)_cmake_opts := -DCMAKE_PREFIX_PATH=$(host_prefix)
+$(package)_cmake_opts += -DCMAKE_NO_SYSTEM_FROM_IMPORTED=TRUE
+$(package)_cmake_opts += -DCMAKE_FIND_ROOT_PATH=$(host_prefix)
+$(package)_cmake_opts += -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY
 $(package)_cmake_opts += -DQT_FEATURE_cxx20=ON
 $(package)_cmake_opts += -DQT_ENABLE_CXX_EXTENSIONS=OFF
+$(package)_cmake_opts += -DQT_LIBRARY_DIR=$(host_prefix)/lib
+$(package)_cmake_opts += -DQT_INCLUDE_DIR=$(host_prefix)/include
 ifneq ($(V),)
 $(package)_cmake_opts += --log-level=STATUS
 endif
