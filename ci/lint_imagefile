@@ -4,7 +4,8 @@
 
 # See test/lint/README.md for usage.
 
-FROM mirror.gcr.io/ubuntu:24.04
+FROM mirror.gcr.io/rust:slim-bullseye
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LC_ALL=C.UTF-8
@@ -14,11 +15,19 @@ COPY ./.python-version /.python-version
 COPY ./ci/lint/container-entrypoint.sh /entrypoint.sh
 COPY ./ci/lint/04_install.sh /install.sh
 
-RUN /install.sh && \
-  echo 'alias lint="./ci/lint/06_script.sh"' >> ~/.bashrc && \
-  chmod 755 /entrypoint.sh && \
-  rm -rf /var/lib/apt/lists/*
+RUN uv venv --python 3.11 /venv \
+  && . /venv/bin/activate \
+  && uv pip install codespell==2.4.1 \
+    lief==0.16.6 \
+    mypy==1.4.1 \
+    pyzmq==25.1.0 \
+    ruff==0.5.5 \
+    vulture==2.6
 
+RUN /install.sh \
+  && echo 'alias lint="./ci/lint/06_script.sh"' >> ~/.bashrc \
+  && chmod 755 /entrypoint.sh \
+  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /bitcoin
 ENTRYPOINT ["/entrypoint.sh"]

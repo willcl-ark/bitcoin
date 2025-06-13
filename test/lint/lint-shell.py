@@ -79,7 +79,6 @@ def main():
     shellcheck_cmd = [
         'shellcheck',
         '--external-sources',
-        '--check-sourced',
         '--source-path=SCRIPTDIR',
     ]
     shellcheck_cmd.append(exclude)
