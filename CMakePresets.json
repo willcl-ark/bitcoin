@@ -79,6 +79,8 @@
         "ENABLE_EXTERNAL_SIGNER": "ON",
         "ENABLE_WALLET": "ON",
         "ENABLE_IPC": "ON",
+        "SECP256K1_BUILD_TESTS": "ON",
+        "SECP256K1_BUILD_EXHAUSTIVE_TESTS": "ON",
         "WITH_QRENCODE": "ON",
         "WITH_USDT": "ON",
         "WITH_ZMQ": "ON"

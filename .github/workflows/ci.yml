@@ -83,6 +83,48 @@ jobs:
           # Run tests on commits after the last merge commit and before the PR head commit
           git rebase --exec "git merge --no-commit origin/${GITHUB_BASE_REF} && python3 ./.github/ci-test-each-commit-exec.py && git reset --hard" ${{ env.TEST_BASE }}
 
+  run-secp256k1-tests:
+    name: 'run secp256k1 tests'
+    runs-on: ubuntu-24.04
+    if: github.event_name == 'pull_request'
+    timeout-minutes: 120
+    steps:
+      - name: Determine fetch depth
+        run: echo "FETCH_DEPTH=$((${{ github.event.pull_request.commits }} + 2))" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: ${{ env.FETCH_DEPTH }}
+      - name: Check for secp256k1 changes
+        id: check-secp256k1
+        run: |
+          git fetch origin "${{ github.base_ref }}"
+          # Check if any commits in this PR modify src/secp256k1/
+          if git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -q "^src/secp256k1/"; then
+            echo "secp256k1_changed=true" >> "$GITHUB_OUTPUT"
+            echo "secp256k1 changes detected - will run secp256k1 tests"
+          else
+            echo "secp256k1_changed=false" >> "$GITHUB_OUTPUT"
+            echo "No secp256k1 changes detected - skipping secp256k1 tests"
+          fi
+      - name: Install dependencies
+        if: steps.check-secp256k1.outputs.secp256k1_changed == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkgconf python3 libevent-dev libboost-dev libsqlite3-dev
+      - name: Build with secp256k1 tests enabled
+        if: steps.check-secp256k1.outputs.secp256k1_changed == 'true'
+        run: |
+          cmake -B build \
+            -DSECP256K1_BUILD_TESTS=ON \
+            -DSECP256K1_BUILD_EXHAUSTIVE_TESTS=ON
+          cmake --build build -j $(nproc)
+      - name: Run secp256k1 tests
+        if: steps.check-secp256k1.outputs.secp256k1_changed == 'true'
+        run: |
+          # Run only the secp256k1 tests
+          ctest --test-dir build --output-on-failure -R "secp256k1" -j $(nproc)
+
   macos-native-arm64:
     name: ${{ matrix.job-name }}
     # Use any image to support the xcode-select below, but hardcode version to avoid silent upgrades (and breaks).
