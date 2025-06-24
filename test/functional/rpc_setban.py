@@ -74,5 +74,158 @@ class SetBanTests(BitcoinTestFramework):
         banned = self.nodes[1].listbanned()[0]
         assert_equal(banned['ban_duration'], 1234)
 
+        self.log.info("Test AS banning functionality")
+        self.test_as_banning()
+
+    def test_as_banning(self):
+        """Test AS (Autonomous System) banning functionality"""
+        node = self.nodes[1]
+
+        # Clear any existing bans
+        node.clearbanned()
+        assert_equal(len(node.listbanned()), 0)
+
+        self.log.info("Test basic AS ban add/remove")
+        # Test banning a valid AS number
+        as_number = "AS1234"
+        node.setban(as_number, "add")
+
+        # Check that the AS is in the banned list
+        banned_list = node.listbanned()
+        assert_equal(len(banned_list), 1)
+        assert_equal(banned_list[0]['address'], as_number)
+        assert 'ban_created' in banned_list[0]
+        assert 'banned_until' in banned_list[0]
+        assert 'ban_duration' in banned_list[0]
+        assert 'time_remaining' in banned_list[0]
+
+        # Test removing the AS ban
+        node.setban(as_number, "remove")
+        assert_equal(len(node.listbanned()), 0)
+
+        self.log.info("Test AS ban case insensitivity")
+        # Test that both "AS1234" and "as1234" work
+        node.setban("as5678", "add")
+        banned_list = node.listbanned()
+        assert_equal(len(banned_list), 1)
+        assert_equal(banned_list[0]['address'], "AS5678")  # JSON serialization uses uppercase
+        node.setban("AS5678", "remove")  # Remove using uppercase
+        assert_equal(len(node.listbanned()), 0)
+
+        self.log.info("Test AS ban with custom ban time")
+        # Test AS ban with specific ban duration
+        node.setban("AS9999", "add", 3600)  # 1 hour
+        banned_list = node.listbanned()
+        assert_equal(len(banned_list), 1)
+        assert_equal(banned_list[0]['address'], "AS9999")
+        assert_equal(banned_list[0]['ban_duration'], 3600)
+        node.setban("AS9999", "remove")
+
+        self.log.info("Test multiple AS bans")
+        # Test multiple AS bans at once
+        node.setban("AS1111", "add")
+        node.setban("AS2222", "add")
+        node.setban("AS3333", "add")
+
+        banned_list = node.listbanned()
+        assert_equal(len(banned_list), 3)
+        banned_addresses = {ban['address'] for ban in banned_list}
+        assert_equal(banned_addresses, {"AS1111", "AS2222", "AS3333"})
+
+        # Test clearbanned removes all AS bans
+        node.clearbanned()
+        assert_equal(len(node.listbanned()), 0)
+
+        self.log.info("Test mixed IP and AS bans")
+        # Test that IP and AS bans can coexist
+        node.setban("192.168.1.0/24", "add")
+        node.setban("AS4444", "add")
+
+        banned_list = node.listbanned()
+        assert_equal(len(banned_list), 2)
+        banned_addresses = {ban['address'] for ban in banned_list}
+        assert "192.168.1.0/24" in banned_addresses
+        assert "AS4444" in banned_addresses
+
+        # Remove just the AS ban
+        node.setban("AS4444", "remove")
+        banned_list = node.listbanned()
+        assert_equal(len(banned_list), 1)
+        assert_equal(banned_list[0]['address'], "192.168.1.0/24")
+
+        # Remove the IP ban
+        node.setban("192.168.1.0/24", "remove")
+        assert_equal(len(node.listbanned()), 0)
+
+        self.log.info("Test AS ban persistence across restarts")
+        # Test that AS bans persist across node restarts
+        node.setban("AS7777", "add", 86400)  # 24 hour ban
+        node.setban("AS8888", "add", 86400)  # 24 hour ban
+
+        # Verify bans are active
+        banned_list = node.listbanned()
+        assert_equal(len(banned_list), 2)
+        banned_addresses = {ban['address'] for ban in banned_list}
+        assert_equal(banned_addresses, {"AS7777", "AS8888"})
+
+        # Restart the node
+        self.restart_node(1, [])
+
+        # Verify bans survived the restart
+        banned_list = node.listbanned()
+        assert_equal(len(banned_list), 2)
+        banned_addresses = {ban['address'] for ban in banned_list}
+        assert_equal(banned_addresses, {"AS7777", "AS8888"})
+
+        # Clean up
+        node.clearbanned()
+        assert_equal(len(node.listbanned()), 0)
+
+        self.log.info("Test AS ban error cases")
+        # Test invalid AS numbers
+        try:
+            node.setban("AS0", "add")  # AS0 is reserved and invalid
+            assert False, "Should have failed to ban AS0"
+        except Exception as e:
+            assert "Invalid AS number" in str(e)
+
+        try:
+            node.setban("AS99999999999", "add")  # Too large AS number
+            assert False, "Should have failed to ban large AS number"
+        except Exception as e:
+            assert "Invalid AS number" in str(e)
+
+        try:
+            node.setban("AS", "add")  # Missing AS number
+            assert False, "Should have failed to ban incomplete AS"
+        except Exception as e:
+            # This falls back to IP/subnet validation, so expect that error
+            assert ("Invalid AS number" in str(e) or "Invalid IP/Subnet" in str(e))
+
+        try:
+            node.setban("ASABC", "add")  # Non-numeric AS number
+            assert False, "Should have failed to ban non-numeric AS"
+        except Exception as e:
+            assert "Invalid AS number" in str(e)
+
+        # Test double-banning the same AS
+        node.setban("AS5555", "add")
+        try:
+            node.setban("AS5555", "add")
+            assert False, "Should have failed to double-ban AS"
+        except Exception as e:
+            assert "already banned" in str(e)
+
+        # Test unbanning non-existent AS
+        try:
+            node.setban("AS6666", "remove")
+            assert False, "Should have failed to unban non-existent AS"
+        except Exception as e:
+            assert "not previously manually banned" in str(e)
+
+        # Clean up
+        node.setban("AS5555", "remove")
+        assert_equal(len(node.listbanned()), 0)
+
 if __name__ == '__main__':
     SetBanTests(__file__).main()
