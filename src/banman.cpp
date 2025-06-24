@@ -92,6 +92,8 @@ bool BanMan::IsBanned(const CNetAddr& net_addr)
 {
     auto current_time = GetTime();
     LOCK(m_banned_mutex);
+
+    // IP/subnet bans
     for (const auto& it : m_banned) {
         CSubNet sub_net = it.first;
         CBanEntry ban_entry = it.second;
@@ -100,6 +102,19 @@ bool BanMan::IsBanned(const CNetAddr& net_addr)
             return true;
         }
     }
+
+    // AS bans
+    uint32_t as_number = GetAddressAS(net_addr);
+    if (as_number != 0) {
+        auto as_it = m_banned_as.find(as_number);
+        if (as_it != m_banned_as.end()) {
+            const CBanEntry& ban_entry = as_it->second;
+            if (current_time < ban_entry.nBanUntil) {
+                return true;
+            }
+        }
+    }
+
     return false;
 }
 
@@ -248,6 +263,8 @@ void BanMan::SweepBanned()
 
     int64_t now = GetTime();
     bool notify_ui = false;
+
+    // expired IP/subnet bans
     banmap_t::iterator it = m_banned.begin();
     while (it != m_banned.end()) {
         CSubNet sub_net = (*it).first;
@@ -259,6 +276,21 @@ void BanMan::SweepBanned()
             LogDebug(BCLog::NET, "Removed banned node address/subnet: %s\n", sub_net.ToString());
         } else {
             ++it;
+        }
+    }
+
+    // expired AS bans
+    auto as_it = m_banned_as.begin();
+    while (as_it != m_banned_as.end()) {
+        uint32_t as_number = as_it->first;
+        const CBanEntry& ban_entry = as_it->second;
+        if (now > ban_entry.nBanUntil) {
+            as_it = m_banned_as.erase(as_it);
+            m_is_dirty = true;
+            notify_ui = true;
+            LogDebug(BCLog::NET, "Removed banned AS: %u\n", as_number);
+        } else {
+            ++as_it;
         }
     }
 
