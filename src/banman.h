@@ -90,6 +90,7 @@ public:
     bool Unban(const CSubNet& sub_net) EXCLUSIVE_LOCKS_REQUIRED(!m_banned_mutex);
     bool Unban(uint32_t as_number) EXCLUSIVE_LOCKS_REQUIRED(!m_banned_mutex);
     void GetBanned(banmap_t& banmap) EXCLUSIVE_LOCKS_REQUIRED(!m_banned_mutex);
+    void GetBannedAS(std::map<uint32_t, CBanEntry>& banmap) EXCLUSIVE_LOCKS_REQUIRED(!m_banned_mutex);
     void DumpBanlist() EXCLUSIVE_LOCKS_REQUIRED(!m_banned_mutex);
 
 private:

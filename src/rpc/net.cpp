@@ -860,13 +860,13 @@ static RPCHelpMan listbanned()
 {
     return RPCHelpMan{
         "listbanned",
-        "List all manually banned IPs/Subnets.\n",
+        "List all manually banned IPs/Subnets and ASes.\n",
                 {},
         RPCResult{RPCResult::Type::ARR, "", "",
             {
                 {RPCResult::Type::OBJ, "", "",
                     {
-                        {RPCResult::Type::STR, "address", "The IP/Subnet of the banned node"},
+                        {RPCResult::Type::STR, "address", "The IP/Subnet of the banned node or AS number (e.g. \"AS1234\")"},
                         {RPCResult::Type::NUM_TIME, "ban_created", "The " + UNIX_EPOCH_TIME + " the ban was created"},
                         {RPCResult::Type::NUM_TIME, "banned_until", "The " + UNIX_EPOCH_TIME + " the ban expires"},
                         {RPCResult::Type::NUM_TIME, "ban_duration", "The ban duration, in seconds"},
@@ -883,14 +883,32 @@ static RPCHelpMan listbanned()
 
     banmap_t banMap;
     banman.GetBanned(banMap);
+    std::map<uint32_t, CBanEntry> asBanMap;
+    banman.GetBannedAS(asBanMap);
     const int64_t current_time{GetTime()};
 
     UniValue bannedAddresses(UniValue::VARR);
+
+    // Add IP/subnet bans
     for (const auto& entry : banMap)
     {
         const CBanEntry& banEntry = entry.second;
         UniValue rec(UniValue::VOBJ);
         rec.pushKV("address", entry.first.ToString());
+        rec.pushKV("ban_created", banEntry.nCreateTime);
+        rec.pushKV("banned_until", banEntry.nBanUntil);
+        rec.pushKV("ban_duration", (banEntry.nBanUntil - banEntry.nCreateTime));
+        rec.pushKV("time_remaining", (banEntry.nBanUntil - current_time));
+
+        bannedAddresses.push_back(std::move(rec));
+    }
+
+    // Add AS bans
+    for (const auto& entry : asBanMap)
+    {
+        const CBanEntry& banEntry = entry.second;
+        UniValue rec(UniValue::VOBJ);
+        rec.pushKV("address", "AS" + std::to_string(entry.first));
         rec.pushKV("ban_created", banEntry.nCreateTime);
         rec.pushKV("banned_until", banEntry.nBanUntil);
         rec.pushKV("ban_duration", (banEntry.nBanUntil - banEntry.nCreateTime));

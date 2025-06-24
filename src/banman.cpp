@@ -257,6 +257,14 @@ void BanMan::GetBanned(banmap_t& banmap)
     banmap = m_banned; // create a thread safe copy
 }
 
+void BanMan::GetBannedAS(std::map<uint32_t, CBanEntry>& banmap)
+{
+    LOCK(m_banned_mutex);
+    // Sweep the banlist so expired bans are not returned
+    SweepBanned();
+    banmap = m_banned_as; //create a thread safe copy
+}
+
 void BanMan::SweepBanned()
 {
     AssertLockHeld(m_banned_mutex);
