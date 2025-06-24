@@ -735,18 +735,20 @@ static RPCHelpMan setban()
 {
     return RPCHelpMan{
         "setban",
-        "Attempts to add or remove an IP/Subnet from the banned list.\n",
+        "Attempts to add or remove an IP/Subnet or AS from the banned list.\n",
                 {
-                    {"subnet", RPCArg::Type::STR, RPCArg::Optional::NO, "The IP/Subnet (see getpeerinfo for nodes IP) with an optional netmask (default is /32 = single IP)"},
-                    {"command", RPCArg::Type::STR, RPCArg::Optional::NO, "'add' to add an IP/Subnet to the list, 'remove' to remove an IP/Subnet from the list"},
-                    {"bantime", RPCArg::Type::NUM, RPCArg::Default{0}, "time in seconds how long (or until when if [absolute] is set) the IP is banned (0 or empty means using the default time of 24h which can also be overwritten by the -bantime startup argument)"},
+                    {"subnet", RPCArg::Type::STR, RPCArg::Optional::NO, "The IP/Subnet (see getpeerinfo for nodes IP) with an optional netmask (default is /32 = single IP), or AS number prefixed with 'AS' (e.g. 'AS1234')"},
+                    {"command", RPCArg::Type::STR, RPCArg::Optional::NO, "'add' to add an IP/Subnet/AS to the list, 'remove' to remove an IP/Subnet/AS from the list"},
+                    {"bantime", RPCArg::Type::NUM, RPCArg::Default{0}, "time in seconds how long (or until when if [absolute] is set) the IP/AS is banned (0 or empty means using the default time of 24h which can also be overwritten by the -bantime startup argument)"},
                     {"absolute", RPCArg::Type::BOOL, RPCArg::Default{false}, "If set, the bantime must be an absolute timestamp expressed in " + UNIX_EPOCH_TIME},
                 },
                 RPCResult{RPCResult::Type::NONE, "", ""},
                 RPCExamples{
                     HelpExampleCli("setban", "\"192.168.0.6\" \"add\" 86400")
                             + HelpExampleCli("setban", "\"192.168.0.0/24\" \"add\"")
+                            + HelpExampleCli("setban", "\"AS1234\" \"add\" 86400")
                             + HelpExampleRpc("setban", "\"192.168.0.6\", \"add\", 86400")
+                            + HelpExampleRpc("setban", "\"AS1234\", \"add\", 86400")
                 },
         [&](const RPCHelpMan& help, const JSONRPCRequest& request) -> UniValue
 {
@@ -759,34 +761,61 @@ static RPCHelpMan setban()
     NodeContext& node = EnsureAnyNodeContext(request.context);
     BanMan& banman = EnsureBanman(node);
 
+    std::string input = request.params[0].get_str();
     CSubNet subNet;
     CNetAddr netAddr;
+    uint32_t asNumber = 0;
     bool isSubnet = false;
+    bool isAS = false;
 
-    if (request.params[0].get_str().find('/') != std::string::npos)
-        isSubnet = true;
+    // Check if input is an AS number (starts with "AS")
+    if (input.length() > 2 && (input.substr(0, 2) == "AS" || input.substr(0, 2) == "as")) {
+        isAS = true;
+        std::string asStr = input.substr(2);
+        try {
+            unsigned long parsed = std::stoul(asStr);
+            if (parsed == 0 || parsed > UINT32_MAX) {
+                throw JSONRPCError(RPC_CLIENT_INVALID_IP_OR_SUBNET, "Error: Invalid AS number (must be 1-4294967295)");
+            }
+            asNumber = static_cast<uint32_t>(parsed);
+        } catch (const std::exception&) {
+            throw JSONRPCError(RPC_CLIENT_INVALID_IP_OR_SUBNET, "Error: Invalid AS number format");
+        }
+    } else {
+        // Handle IP/subnet as before
+        if (input.find('/') != std::string::npos) {
+            isSubnet = true;
+        }
+        if (!isSubnet) {
+            const std::optional<CNetAddr> addr{LookupHost(input, false)};
+            if (addr.has_value()) {
+                netAddr = static_cast<CNetAddr>(MaybeFlipIPv6toCJDNS(CService{addr.value(), /*port=*/0}));
+            }
+        } else {
+            subNet = LookupSubNet(input);
+        }
 
-    if (!isSubnet) {
-        const std::optional<CNetAddr> addr{LookupHost(request.params[0].get_str(), false)};
-        if (addr.has_value()) {
-            netAddr = static_cast<CNetAddr>(MaybeFlipIPv6toCJDNS(CService{addr.value(), /*port=*/0}));
+        if (! (isSubnet ? subNet.IsValid() : netAddr.IsValid()) ) {
+            throw JSONRPCError(RPC_CLIENT_INVALID_IP_OR_SUBNET, "Error: Invalid IP/Subnet");
         }
     }
-    else
-        subNet = LookupSubNet(request.params[0].get_str());
-
-    if (! (isSubnet ? subNet.IsValid() : netAddr.IsValid()) )
-        throw JSONRPCError(RPC_CLIENT_INVALID_IP_OR_SUBNET, "Error: Invalid IP/Subnet");
 
     if (strCommand == "add")
     {
-        if (isSubnet ? banman.IsBanned(subNet) : banman.IsBanned(netAddr)) {
-            throw JSONRPCError(RPC_CLIENT_NODE_ALREADY_ADDED, "Error: IP/Subnet already banned");
+        if (isAS) {
+            if (banman.IsBanned(asNumber)) {
+                throw JSONRPCError(RPC_CLIENT_NODE_ALREADY_ADDED, "Error: AS already banned");
+            }
+        } else {
+            if (isSubnet ? banman.IsBanned(subNet) : banman.IsBanned(netAddr)) {
+                throw JSONRPCError(RPC_CLIENT_NODE_ALREADY_ADDED, "Error: IP/Subnet already banned");
+            }
         }
 
         int64_t banTime = 0; //use standard bantime if not specified
-        if (!request.params[2].isNull())
+        if (!request.params[2].isNull()) {
             banTime = request.params[2].getInt<int64_t>();
+        }
 
         const bool absolute{request.params[3].isNull() ? false : request.params[3].get_bool()};
 
@@ -794,7 +823,11 @@ static RPCHelpMan setban()
             throw JSONRPCError(RPC_INVALID_PARAMETER, "Error: Absolute timestamp is in the past");
         }
 
-        if (isSubnet) {
+        if (isAS) {
+            banman.Ban(asNumber, banTime, absolute);
+            // Note: We don't disconnect AS nodes immediately as that would require
+            // iterating through all connections and checking their AS numbers
+        } else if (isSubnet) {
             banman.Ban(subNet, banTime, absolute);
             if (node.connman) {
                 node.connman->DisconnectNode(subNet);
@@ -808,8 +841,14 @@ static RPCHelpMan setban()
     }
     else if(strCommand == "remove")
     {
-        if (!( isSubnet ? banman.Unban(subNet) : banman.Unban(netAddr) )) {
-            throw JSONRPCError(RPC_CLIENT_INVALID_IP_OR_SUBNET, "Error: Unban failed. Requested address/subnet was not previously manually banned.");
+        if (isAS) {
+            if (!banman.Unban(asNumber)) {
+                throw JSONRPCError(RPC_CLIENT_INVALID_IP_OR_SUBNET, "Error: Unban failed. Requested AS was not previously manually banned.");
+            }
+        } else {
+            if (!( isSubnet ? banman.Unban(subNet) : banman.Unban(netAddr) )) {
+                throw JSONRPCError(RPC_CLIENT_INVALID_IP_OR_SUBNET, "Error: Unban failed. Requested address/subnet was not previously manually banned.");
+            }
         }
     }
     return UniValue::VNULL;
