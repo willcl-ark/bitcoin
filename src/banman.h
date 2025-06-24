@@ -11,6 +11,8 @@
 #include <sync.h>
 #include <util/fs.h>
 
+#include <cstdint>
+
 #include <chrono>
 #include <cstdint>
 #include <memory>
@@ -24,6 +26,7 @@ static constexpr std::chrono::minutes DUMP_BANS_INTERVAL{15};
 class CClientUIInterface;
 class CNetAddr;
 class CSubNet;
+class NetGroupManager;
 
 // Banman manages two related but distinct concepts:
 //
@@ -64,9 +67,10 @@ class BanMan
 {
 public:
     ~BanMan();
-    BanMan(fs::path ban_file, CClientUIInterface* client_interface, int64_t default_ban_time);
+    BanMan(fs::path ban_file, CClientUIInterface* client_interface, int64_t default_ban_time, const NetGroupManager* netgroupman = nullptr);
     void Ban(const CNetAddr& net_addr, int64_t ban_time_offset = 0, bool since_unix_epoch = false) EXCLUSIVE_LOCKS_REQUIRED(!m_banned_mutex);
     void Ban(const CSubNet& sub_net, int64_t ban_time_offset = 0, bool since_unix_epoch = false) EXCLUSIVE_LOCKS_REQUIRED(!m_banned_mutex);
+    void Ban(uint32_t as_number, int64_t ban_time_offset = 0, bool since_unix_epoch = false) EXCLUSIVE_LOCKS_REQUIRED(!m_banned_mutex);
     void Discourage(const CNetAddr& net_addr) EXCLUSIVE_LOCKS_REQUIRED(!m_banned_mutex);
     void ClearBanned() EXCLUSIVE_LOCKS_REQUIRED(!m_banned_mutex);
 
@@ -76,11 +80,15 @@ public:
     //! Return whether sub_net is exactly banned
     bool IsBanned(const CSubNet& sub_net) EXCLUSIVE_LOCKS_REQUIRED(!m_banned_mutex);
 
+    //! Return whether AS number is banned
+    bool IsBanned(uint32_t as_number) EXCLUSIVE_LOCKS_REQUIRED(!m_banned_mutex);
+
     //! Return whether net_addr is discouraged.
     bool IsDiscouraged(const CNetAddr& net_addr) EXCLUSIVE_LOCKS_REQUIRED(!m_banned_mutex);
 
     bool Unban(const CNetAddr& net_addr) EXCLUSIVE_LOCKS_REQUIRED(!m_banned_mutex);
     bool Unban(const CSubNet& sub_net) EXCLUSIVE_LOCKS_REQUIRED(!m_banned_mutex);
+    bool Unban(uint32_t as_number) EXCLUSIVE_LOCKS_REQUIRED(!m_banned_mutex);
     void GetBanned(banmap_t& banmap) EXCLUSIVE_LOCKS_REQUIRED(!m_banned_mutex);
     void DumpBanlist() EXCLUSIVE_LOCKS_REQUIRED(!m_banned_mutex);
 
@@ -88,13 +96,17 @@ private:
     void LoadBanlist() EXCLUSIVE_LOCKS_REQUIRED(!m_banned_mutex);
     //!clean unused entries (if bantime has expired)
     void SweepBanned() EXCLUSIVE_LOCKS_REQUIRED(m_banned_mutex);
+    //! Get AS number for address, returns 0 if not available
+    uint32_t GetAddressAS(const CNetAddr& net_addr) const;
 
     Mutex m_banned_mutex;
     banmap_t m_banned GUARDED_BY(m_banned_mutex);
+    std::map<uint32_t, CBanEntry> m_banned_as GUARDED_BY(m_banned_mutex);
     bool m_is_dirty GUARDED_BY(m_banned_mutex){false};
     CClientUIInterface* m_client_interface = nullptr;
     CBanDB m_ban_db;
     const int64_t m_default_ban_time;
+    const NetGroupManager* m_netgroupman;
     CRollingBloomFilter m_discouraged GUARDED_BY(m_banned_mutex) {50000, 0.000001};
 };
 

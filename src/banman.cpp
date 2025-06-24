@@ -8,14 +8,15 @@
 #include <common/system.h>
 #include <logging.h>
 #include <netaddress.h>
+#include <netgroup.h>
 #include <node/interface_ui.h>
 #include <sync.h>
 #include <util/time.h>
 #include <util/translation.h>
 
 
-BanMan::BanMan(fs::path ban_file, CClientUIInterface* client_interface, int64_t default_ban_time)
-    : m_client_interface(client_interface), m_ban_db(std::move(ban_file)), m_default_ban_time(default_ban_time)
+BanMan::BanMan(fs::path ban_file, CClientUIInterface* client_interface, int64_t default_ban_time, const NetGroupManager* netgroupman)
+    : m_client_interface(client_interface), m_ban_db(std::move(ban_file)), m_default_ban_time(default_ban_time), m_netgroupman(netgroupman)
 {
     LoadBanlist();
     DumpBanlist();
@@ -74,9 +75,10 @@ void BanMan::ClearBanned()
     {
         LOCK(m_banned_mutex);
         m_banned.clear();
+        m_banned_as.clear();
         m_is_dirty = true;
     }
-    DumpBanlist(); //store banlist to disk
+    DumpBanlist(); // store banlist to disk
     if (m_client_interface) m_client_interface->BannedListChanged();
 }
 
@@ -108,6 +110,24 @@ bool BanMan::IsBanned(const CSubNet& sub_net)
     banmap_t::iterator i = m_banned.find(sub_net);
     if (i != m_banned.end()) {
         CBanEntry ban_entry = (*i).second;
+        if (current_time < ban_entry.nBanUntil) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool BanMan::IsBanned(uint32_t as_number)
+{
+    if (as_number == 0) {
+        return false;
+    }
+
+    auto current_time = GetTime();
+    LOCK(m_banned_mutex);
+    auto it = m_banned_as.find(as_number);
+    if (it != m_banned_as.end()) {
+        const CBanEntry& ban_entry = it->second;
         if (current_time < ban_entry.nBanUntil) {
             return true;
         }
@@ -149,7 +169,38 @@ void BanMan::Ban(const CSubNet& sub_net, int64_t ban_time_offset, bool since_uni
     }
     if (m_client_interface) m_client_interface->BannedListChanged();
 
-    //store banlist to disk immediately
+    // store banlist to disk immediately
+    DumpBanlist();
+}
+
+void BanMan::Ban(uint32_t as_number, int64_t ban_time_offset, bool since_unix_epoch)
+{
+    if (as_number == 0) {
+        return; // AS0 is reserved, cannot ban
+    }
+
+    CBanEntry ban_entry(GetTime());
+
+    int64_t normalized_ban_time_offset = ban_time_offset;
+    bool normalized_since_unix_epoch = since_unix_epoch;
+    if (ban_time_offset <= 0) {
+        normalized_ban_time_offset = m_default_ban_time;
+        normalized_since_unix_epoch = false;
+    }
+    ban_entry.nBanUntil = (normalized_since_unix_epoch ? 0 : GetTime()) + normalized_ban_time_offset;
+
+    {
+        LOCK(m_banned_mutex);
+        if (m_banned_as[as_number].nBanUntil < ban_entry.nBanUntil) {
+            m_banned_as[as_number] = ban_entry;
+            m_is_dirty = true;
+        } else {
+            return;
+        }
+    }
+    if (m_client_interface) m_client_interface->BannedListChanged();
+
+    // store banlist to disk immediately
     DumpBanlist();
 }
 
@@ -167,7 +218,19 @@ bool BanMan::Unban(const CSubNet& sub_net)
         m_is_dirty = true;
     }
     if (m_client_interface) m_client_interface->BannedListChanged();
-    DumpBanlist(); //store banlist to disk immediately
+    DumpBanlist(); // store banlist to disk immediately
+    return true;
+}
+
+bool BanMan::Unban(uint32_t as_number)
+{
+    {
+        LOCK(m_banned_mutex);
+        if (m_banned_as.erase(as_number) == 0) return false;
+        m_is_dirty = true;
+    }
+    if (m_client_interface) m_client_interface->BannedListChanged();
+    DumpBanlist(); // store banlist to disk immediately
     return true;
 }
 
@@ -176,7 +239,7 @@ void BanMan::GetBanned(banmap_t& banmap)
     LOCK(m_banned_mutex);
     // Sweep the banlist so expired bans are not returned
     SweepBanned();
-    banmap = m_banned; //create a thread safe copy
+    banmap = m_banned; // create a thread safe copy
 }
 
 void BanMan::SweepBanned()
@@ -203,4 +266,12 @@ void BanMan::SweepBanned()
     if (notify_ui && m_client_interface) {
         m_client_interface->BannedListChanged();
     }
+}
+
+uint32_t BanMan::GetAddressAS(const CNetAddr& net_addr) const
+{
+    if (!m_netgroupman) {
+        return 0;
+    }
+    return m_netgroupman->GetMappedAS(net_addr);
 }
