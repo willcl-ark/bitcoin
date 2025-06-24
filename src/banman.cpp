@@ -34,14 +34,16 @@ void BanMan::LoadBanlist()
     if (m_client_interface) m_client_interface->InitMessage(_("Loading banlist…"));
 
     const auto start{SteadyClock::now()};
-    if (m_ban_db.Read(m_banned)) {
+    if (m_ban_db.Read(m_banned, m_banned_as)) {
         SweepBanned(); // sweep out unused entries
 
-        LogDebug(BCLog::NET, "Loaded %d banned node addresses/subnets  %dms\n", m_banned.size(),
+        LogDebug(BCLog::NET, "Loaded %d banned node addresses/subnets and %d banned AS numbers  %dms\n", 
+                 m_banned.size(), m_banned_as.size(),
                  Ticks<std::chrono::milliseconds>(SteadyClock::now() - start));
     } else {
         LogPrintf("Recreating the banlist database\n");
         m_banned = {};
+        m_banned_as = {};
         m_is_dirty = true;
     }
 }
@@ -52,21 +54,24 @@ void BanMan::DumpBanlist()
     LOCK(dump_mutex);
 
     banmap_t banmap;
+    std::map<uint32_t, CBanEntry> asBanmap;
     {
         LOCK(m_banned_mutex);
         SweepBanned();
         if (!m_is_dirty) return;
         banmap = m_banned;
+        asBanmap = m_banned_as;
         m_is_dirty = false;
     }
 
     const auto start{SteadyClock::now()};
-    if (!m_ban_db.Write(banmap)) {
+    if (!m_ban_db.Write(banmap, asBanmap)) {
         LOCK(m_banned_mutex);
         m_is_dirty = true;
     }
 
-    LogDebug(BCLog::NET, "Flushed %d banned node addresses/subnets to disk  %dms\n", banmap.size(),
+    LogDebug(BCLog::NET, "Flushed %d banned node addresses/subnets and %d banned AS numbers to disk  %dms\n", 
+             banmap.size(), asBanmap.size(),
              Ticks<std::chrono::milliseconds>(SteadyClock::now() - start));
 }
 

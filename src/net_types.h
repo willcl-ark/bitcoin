@@ -57,4 +57,20 @@ UniValue BanMapToJson(const banmap_t& bans);
  */
 void BanMapFromJson(const UniValue& bans_json, banmap_t& bans);
 
+/**
+ * Convert an AS ban map to a JSON array.
+ * @param[in] bans AS bans list to convert.
+ * @return a JSON array suitable for passing to `ASBanMapFromJson()`.
+ */
+UniValue ASBanMapToJson(const std::map<uint32_t, CBanEntry>& bans);
+
+/**
+ * Convert a JSON array to an AS ban map.
+ * @param[in] bans_json JSON to convert, must be as returned by `ASBanMapToJson()`.
+ * @param[out] bans AS bans list to create from the JSON.
+ * @throws std::runtime_error if the JSON does not have the expected fields or they contain
+ * unparsable values.
+ */
+void ASBanMapFromJson(const UniValue& bans_json, std::map<uint32_t, CBanEntry>& bans);
+
 #endif // BITCOIN_NET_TYPES_H

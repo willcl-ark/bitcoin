@@ -134,10 +134,14 @@ CBanDB::CBanDB(fs::path ban_list_path)
 {
 }
 
-bool CBanDB::Write(const banmap_t& banSet)
+bool CBanDB::Write(const banmap_t& banSet, const std::map<uint32_t, CBanEntry>& asBanSet)
 {
     std::vector<std::string> errors;
-    if (common::WriteSettings(m_banlist_json, {{JSON_KEY, BanMapToJson(banSet)}}, errors)) {
+    std::map<std::string, common::SettingsValue> settings;
+    settings[JSON_KEY] = BanMapToJson(banSet);
+    settings[JSON_AS_KEY] = ASBanMapToJson(asBanSet);
+
+    if (common::WriteSettings(m_banlist_json, settings, errors)) {
         return true;
     }
 
@@ -147,12 +151,11 @@ bool CBanDB::Write(const banmap_t& banSet)
     return false;
 }
 
-bool CBanDB::Read(banmap_t& banSet)
+bool CBanDB::Read(banmap_t& banSet, std::map<uint32_t, CBanEntry>& asBanSet)
 {
     if (fs::exists(m_banlist_dat)) {
         LogPrintf("banlist.dat ignored because it can only be read by " CLIENT_NAME " version 22.x. Remove %s to silence this warning.\n", fs::quoted(fs::PathToString(m_banlist_dat)));
     }
-    // If the JSON banlist does not exist, then recreate it
     if (!fs::exists(m_banlist_json)) {
         return false;
     }
@@ -168,7 +171,15 @@ bool CBanDB::Read(banmap_t& banSet)
     }
 
     try {
-        BanMapFromJson(settings[JSON_KEY], banSet);
+        // Load IP/subnet bans
+        if (settings.find(JSON_KEY) != settings.end()) {
+            BanMapFromJson(settings[JSON_KEY], banSet);
+        }
+
+        // Load AS bans (optional for backward compatibility)
+        if (settings.find(JSON_AS_KEY) != settings.end()) {
+            ASBanMapFromJson(settings[JSON_AS_KEY], asBanSet);
+        }
     } catch (const std::runtime_error& e) {
         LogPrintf("Cannot parse banlist %s: %s\n", fs::PathToString(m_banlist_json), e.what());
         return false;

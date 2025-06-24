@@ -32,20 +32,24 @@ private:
      * JSON key under which the data is stored in the json database.
      */
     static constexpr const char* JSON_KEY = "banned_nets";
+    static constexpr const char* JSON_AS_KEY = "banned_as";
 
     const fs::path m_banlist_dat;
     const fs::path m_banlist_json;
+
 public:
     explicit CBanDB(fs::path ban_list_path);
-    bool Write(const banmap_t& banSet);
+    bool Write(const banmap_t& banSet, const std::map<uint32_t, CBanEntry>& asBanSet);
 
     /**
      * Read the banlist from disk.
-     * @param[out] banSet The loaded list. Set if `true` is returned, otherwise it is left
+     * @param[out] banSet The loaded IP/subnet ban list. Set if `true` is returned, otherwise it is left
+     * in an undefined state.
+     * @param[out] asBanSet The loaded AS ban list. Set if `true` is returned, otherwise it is left
      * in an undefined state.
      * @return true on success
      */
-    bool Read(banmap_t& banSet);
+    bool Read(banmap_t& banSet, std::map<uint32_t, CBanEntry>& asBanSet);
 };
 
 /** Returns an error string on failure */

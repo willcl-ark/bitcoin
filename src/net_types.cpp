@@ -72,3 +72,45 @@ void BanMapFromJson(const UniValue& bans_json, banmap_t& bans)
         bans.insert_or_assign(subnet, CBanEntry{ban_entry_json});
     }
 }
+
+UniValue ASBanMapToJson(const std::map<uint32_t, CBanEntry>& bans)
+{
+    UniValue bans_json(UniValue::VARR);
+    for (const auto& it : bans) {
+        const auto& as_number = it.first;
+        const auto& ban_entry = it.second;
+        UniValue j = ban_entry.ToJson();
+        j.pushKV(BANMAN_JSON_ADDR_KEY, "AS" + std::to_string(as_number));
+        bans_json.push_back(std::move(j));
+    }
+    return bans_json;
+}
+
+void ASBanMapFromJson(const UniValue& bans_json, std::map<uint32_t, CBanEntry>& bans)
+{
+    for (const auto& ban_entry_json : bans_json.getValues()) {
+        const int version{ban_entry_json[BANMAN_JSON_VERSION_KEY].getInt<int>()};
+        if (version != CBanEntry::CURRENT_VERSION) {
+            LogPrintf("Dropping AS entry with unknown version (%s) from ban list\n", version);
+            continue;
+        }
+        const auto& as_str = ban_entry_json[BANMAN_JSON_ADDR_KEY].get_str();
+        // Check if it's an AS number (starts with "AS")
+        if (as_str.length() > 2 && as_str.substr(0, 2) == "AS") {
+            try {
+                uint32_t as_number = std::stoul(as_str.substr(2));
+                if (as_number == 0) {
+                    LogPrintf("Dropping entry with invalid AS number (AS0) from ban list\n");
+                    continue;
+                }
+                bans.insert_or_assign(as_number, CBanEntry{ban_entry_json});
+            } catch (const std::exception&) {
+                LogPrintf("Dropping entry with unparseable AS number (%s) from ban list\n", as_str);
+                continue;
+            }
+        } else {
+            LogPrintf("Dropping entry with invalid AS format (%s) from ban list\n", as_str);
+            continue;
+        }
+    }
+}
