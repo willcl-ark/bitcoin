@@ -437,7 +437,7 @@ class MemPoolAccept
 public:
     explicit MemPoolAccept(CTxMemPool& mempool, Chainstate& active_chainstate) :
         m_pool(mempool),
-        m_view(&m_dummy),
+        m_view(&m_dummy, active_chainstate.m_chainman.m_options.traces),
         m_viewmempool(&active_chainstate.CoinsTip(), m_pool),
         m_active_chainstate(active_chainstate)
     {
@@ -1850,11 +1850,11 @@ CoinsViews::CoinsViews(DBParams db_params, CoinsViewOptions options)
     : m_dbview{std::move(db_params), std::move(options)},
       m_catcherview(&m_dbview) {}
 
-void CoinsViews::InitCache()
+void CoinsViews::InitCache(kernel::Traces* traces)
 {
     AssertLockHeld(::cs_main);
-    m_cacheview = std::make_unique<CCoinsViewCache>(&m_catcherview);
-    m_connect_block_view = std::make_unique<CoinsViewOverlay>(&*m_cacheview);
+    m_cacheview = std::make_unique<CCoinsViewCache>(&m_catcherview, traces);
+    m_connect_block_view = std::make_unique<CoinsViewOverlay>(&*m_cacheview, traces);
 }
 
 Chainstate::Chainstate(
@@ -1930,7 +1930,7 @@ void Chainstate::InitCoinsCache(size_t cache_size_bytes)
     AssertLockHeld(::cs_main);
     assert(m_coins_views != nullptr);
     m_coinstip_cache_size_bytes = cache_size_bytes;
-    m_coins_views->InitCache();
+    m_coins_views->InitCache(m_chainman.m_options.traces);
 }
 
 // Lock-free: depends on `m_cached_is_ibd`, which is latched by `UpdateIBDStatus()`.
@@ -2940,7 +2940,7 @@ bool Chainstate::DisconnectTip(BlockValidationState& state, DisconnectedBlockTra
     // Apply the block atomically to the chain state.
     const auto time_start{SteadyClock::now()};
     {
-        CCoinsViewCache view(&CoinsTip());
+        CCoinsViewCache view(&CoinsTip(), m_chainman.m_options.traces);
         assert(view.GetBestBlock() == pindexDelete->GetBlockHash());
         if (DisconnectBlock(block, pindexDelete, view) != DISCONNECT_OK) {
             LogError("DisconnectTip(): DisconnectBlock %s failed\n", pindexDelete->GetBlockHash().ToString());
@@ -4551,7 +4551,7 @@ BlockValidationState TestBlockValidity(
     index_dummy.pprev = tip;
     index_dummy.nHeight = tip->nHeight + 1;
     index_dummy.phashBlock = &block_hash;
-    CCoinsViewCache view_dummy(&chainstate.CoinsTip());
+    CCoinsViewCache view_dummy(&chainstate.CoinsTip(), chainstate.m_chainman.m_options.traces);
 
     // Set fJustCheck to true in order to update, and not clear, validation caches.
     if(!chainstate.ConnectBlock(block, state, &index_dummy, view_dummy, /*fJustCheck=*/true)) {
@@ -4659,7 +4659,7 @@ VerifyDBResult CVerifyDB::VerifyDB(
     }
     nCheckLevel = std::max(0, std::min(4, nCheckLevel));
     LogInfo("Verifying last %i blocks at level %i", nCheckDepth, nCheckLevel);
-    CCoinsViewCache coins(&coinsview);
+    CCoinsViewCache coins(&coinsview, chainstate.m_chainman.m_options.traces);
     CBlockIndex* pindex;
     CBlockIndex* pindexFailure = nullptr;
     int nGoodTransactions = 0;
@@ -4808,7 +4808,7 @@ bool Chainstate::ReplayBlocks()
     LOCK(cs_main);
 
     CCoinsView& db = this->CoinsDB();
-    CCoinsViewCache cache(&db);
+    CCoinsViewCache cache(&db, m_chainman.m_options.traces);
 
     std::vector<uint256> hashHeads = db.GetHeadBlocks();
     if (hashHeads.empty()) return true; // We're already in a consistent state.

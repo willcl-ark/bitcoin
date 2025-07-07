@@ -74,7 +74,7 @@ public:
 class CCoinsViewCacheTest : public CCoinsViewCache
 {
 public:
-    explicit CCoinsViewCacheTest(CCoinsView* _base) : CCoinsViewCache(_base) {}
+    explicit CCoinsViewCacheTest(CCoinsView* _base) : CCoinsViewCache(_base, /*traces=*/nullptr) {}
 
     void SelfTest(bool sanity_check = true) const
     {

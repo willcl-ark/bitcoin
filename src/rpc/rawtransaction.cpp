@@ -624,7 +624,7 @@ static RPCHelpMan combinerawtransaction()
 
     // Fetch previous transactions (inputs):
     CCoinsView viewDummy;
-    CCoinsViewCache view(&viewDummy);
+    CCoinsViewCache view(&viewDummy, /*traces=*/nullptr);
     {
         NodeContext& node = EnsureAnyNodeContext(request.context);
         const CTxMemPool& mempool = EnsureMemPool(node);

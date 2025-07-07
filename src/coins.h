@@ -9,6 +9,7 @@
 #include <attributes.h>
 #include <compressor.h>
 #include <core_memusage.h>
+#include <kernel/traces.h>
 #include <memusage.h>
 #include <primitives/transaction.h>
 #include <serialize.h>
@@ -394,7 +395,9 @@ protected:
     virtual std::optional<Coin> FetchCoinFromBase(const COutPoint& outpoint) const;
 
 public:
-    CCoinsViewCache(CCoinsView *baseIn, bool deterministic = false);
+    kernel::Traces* m_traces;
+
+    CCoinsViewCache(CCoinsView *baseIn, kernel::Traces* traces, bool deterministic = false);
 
     /**
      * By deleting the copy constructor, we prevent accidentally using it when one intends to create a cache on top of a base cache.
