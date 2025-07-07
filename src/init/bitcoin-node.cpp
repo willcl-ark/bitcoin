@@ -9,6 +9,7 @@
 #include <interfaces/init.h>
 #include <interfaces/ipc.h>
 #include <interfaces/node.h>
+#include <interfaces/tracing.h>
 #include <interfaces/wallet.h>
 #include <ipc/context.h>
 #include <node/context.h>
@@ -51,6 +52,7 @@ public:
     std::unique_ptr<interfaces::Chain> makeChain() override { return interfaces::MakeChain(m_node); }
     std::unique_ptr<interfaces::Mining> makeMining() override { return interfaces::MakeMining(m_node); }
     std::unique_ptr<interfaces::Echo> makeEcho() override { return interfaces::MakeEcho(); }
+    std::unique_ptr<interfaces::Tracing> makeTracing() override { return interfaces::MakeTracing(m_node); }
     interfaces::Ipc* ipc() override { return m_ipc.get(); }
     bool canListenIpc() override { return true; }
     const char* exeName() override { return EXE_NAME; }

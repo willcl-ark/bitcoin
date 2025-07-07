@@ -5,6 +5,7 @@
 #ifndef BITCOIN_IPC_CAPNP_HANDLER_TYPES_H
 #define BITCOIN_IPC_CAPNP_HANDLER_TYPES_H
 
+#include <ipc/capnp/handler.capnp.proxy.h>
 #include <mp/type-context.h>
 
 #endif // BITCOIN_IPC_CAPNP_HANDLER_TYPES_H

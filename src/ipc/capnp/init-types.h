@@ -10,6 +10,7 @@
 #include <ipc/capnp/init.capnp.proxy.h>
 #include <ipc/capnp/mining.capnp.proxy-types.h>
 #include <ipc/capnp/node.capnp.proxy-types.h>
+#include <ipc/capnp/tracing.capnp.proxy-types.h>
 
 namespace mp {
 //! Specialization of makeWalletLoader needed because it takes a Chain& reference
