@@ -20,25 +20,20 @@ ${CI_RETRY_EXE} apt-get update
 # - gpg (used by verify-commits)
 ${CI_RETRY_EXE} apt-get install -y cargo curl xz-utils git gpg
 
-PYTHON_PATH="/python_build"
-if [ ! -d "${PYTHON_PATH}/bin" ]; then
-  (
-    ${CI_RETRY_EXE} git clone --depth=1 https://github.com/pyenv/pyenv.git
-    cd pyenv/plugins/python-build || exit 1
-    ./install.sh
-  )
-  # For dependencies see https://github.com/pyenv/pyenv/wiki#suggested-build-environment
-  ${CI_RETRY_EXE} apt-get install -y build-essential libssl-dev zlib1g-dev \
-    libbz2-dev libreadline-dev libsqlite3-dev curl llvm \
-    libncursesw5-dev xz-utils tk-dev libxml2-dev libxmlsec1-dev libffi-dev liblzma-dev \
-    clang
-  env CC=clang python-build "$(cat "/.python-version")" "${PYTHON_PATH}"
-fi
-export PATH="${PYTHON_PATH}/bin:${PATH}"
+# Install uv and python
+curl -LsSf https://astral.sh/uv/install.sh | sh
+# shellcheck disable=SC1091
+source "$HOME/.local/bin/env"
+uv python install "$(cat /.python-version)"
+uv venv --python "$(cat /.python-version)" "$PYTHON_VENV"
+
+# Instead of sourcing a venv activate script, just add venv to PATH.
+# Otherwise shellcheck's `--check-sourced` fails on the activation script syntax
+export PATH="$PYTHON_VENV/bin:$PATH"
 command -v python3
 python3 --version
 
-${CI_RETRY_EXE} pip3 install \
+${CI_RETRY_EXE} uv pip install \
   codespell==2.4.1 \
   lief==0.16.6 \
   mypy==1.4.1 \

@@ -10,8 +10,6 @@ export LC_ALL=C
 # of the mounted bitcoin src dir.
 git config --global --add safe.directory /bitcoin
 
-export PATH="/python_build/bin:${PATH}"
-
 if [ -z "$1" ]; then
   bash -ic "./ci/lint/06_script.sh"
 else

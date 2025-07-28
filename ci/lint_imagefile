@@ -8,6 +8,7 @@ FROM mirror.gcr.io/ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LC_ALL=C.UTF-8
+ENV PYTHON_VENV=/opt/venv
 
 COPY ./ci/retry/retry /ci_retry
 COPY ./.python-version /.python-version
@@ -19,6 +20,6 @@ RUN /install.sh && \
   chmod 755 /entrypoint.sh && \
   rm -rf /var/lib/apt/lists/*
 
-
+ENV PATH="$PYTHON_VENV/bin:$PATH"
 WORKDIR /bitcoin
 ENTRYPOINT ["/entrypoint.sh"]
