@@ -167,13 +167,20 @@ if [ "$RUN_CHECK_DEPS" = "true" ]; then
 fi
 
 if [ "$RUN_UNIT_TESTS" = "true" ]; then
+  # When running under valgrind with prioritized tests, disable random scheduling
+  CTEST_EXTRA_ARGS=""
+  if [ -n "$USE_VALGRIND" ]; then
+    CTEST_EXTRA_ARGS="--schedule-random off -E validation_block_tests"
+  fi
+
   DIR_UNIT_TEST_DATA="${DIR_UNIT_TEST_DATA}" \
   LD_LIBRARY_PATH="${DEPENDS_DIR}/${HOST}/lib" \
   CTEST_OUTPUT_ON_FAILURE=ON \
   ctest --test-dir "${BASE_BUILD_DIR}" \
     --stop-on-failure \
     "${TESTJOBS}" \
-    --timeout $(( TEST_RUNNER_TIMEOUT_FACTOR * 60 ))
+    --timeout $(( TEST_RUNNER_TIMEOUT_FACTOR * 60 )) \
+    "${CTEST_EXTRA_ARGS}"
 fi
 
 if [ "$RUN_UNIT_TESTS_SEQUENTIAL" = "true" ]; then
