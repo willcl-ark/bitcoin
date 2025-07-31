@@ -4,6 +4,8 @@
 
 # Do not use generator expressions in test sources because the
 # SOURCES property is processed to gather test suite macros.
+
+option(PRIORITIZE_LONG_TESTS "Set COST properties to run long tests first (useful for valgrind)" OFF)
 add_executable(test_bitcoin
   main.cpp
   addrman_tests.cpp
@@ -213,5 +215,41 @@ function(add_all_test_targets)
 endfunction()
 
 add_all_test_targets()
+
+# Optionally prioritize long-running tests by setting COST properties
+# This is useful for valgrind runs where test execution is much slower
+if(PRIORITIZE_LONG_TESTS)
+  message(STATUS "Prioritizing long-running tests by setting COST properties")
+
+  # COST values are based on some recorded average runtimes * 100
+  # CTest runs tests in descending order of cost when --schedule-random is off
+
+  # Top 5 slowest tests
+  set_tests_properties(coinselector_tests PROPERTIES COST 37103)
+  set_tests_properties(coins_tests_dbbase PROPERTIES COST 29227)
+  set_tests_properties(random_tests PROPERTIES COST 25033)
+  set_tests_properties(coins_tests_base PROPERTIES COST 19135)
+  set_tests_properties(transaction_tests PROPERTIES COST 16410)
+
+  # Other slow tests (>60 seconds)
+  set_tests_properties(coins_tests PROPERTIES COST 14598)
+  set_tests_properties(miner_tests PROPERTIES COST 14604)
+  set_tests_properties(script_tests PROPERTIES COST 14000)
+  set_tests_properties(miniscript_tests PROPERTIES COST 13391)
+  set_tests_properties(net_tests PROPERTIES COST 12950)
+  set_tests_properties(wallet_tests PROPERTIES COST 11761)
+  set_tests_properties(argsman_tests PROPERTIES COST 10183)
+  set_tests_properties(crypto_tests PROPERTIES COST 10010)
+  set_tests_properties(serfloat_tests PROPERTIES COST 9046)
+  set_tests_properties(txrequest_tests PROPERTIES COST 8916)
+  set_tests_properties(policyestimator_tests PROPERTIES COST 8474)
+  set_tests_properties(txvalidationcache_tests PROPERTIES COST 8232)
+  set_tests_properties(merkle_tests PROPERTIES COST 7662)
+  set_tests_properties(descriptor_tests PROPERTIES COST 6980)
+  set_tests_properties(validation_block_tests PROPERTIES COST 6966)
+  set_tests_properties(validation_chainstatemanager_tests PROPERTIES COST 6446)
+  set_tests_properties(spend_tests PROPERTIES COST 6153)
+  set_tests_properties(skiplist_tests PROPERTIES COST 6016)
+endif()
 
 install_binary_component(test_bitcoin)

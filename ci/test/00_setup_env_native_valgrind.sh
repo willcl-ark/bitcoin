@@ -17,4 +17,5 @@ export GOAL="install"
 # TODO enable GUI
 export BITCOIN_CONFIG="\
  -DWITH_ZMQ=ON -DBUILD_GUI=OFF \
+ -DPRIORITIZE_LONG_TESTS=ON \
 "
