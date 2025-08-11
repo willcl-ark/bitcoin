@@ -209,6 +209,9 @@
             chmod +x depends/config.guess
             chmod +x depends/config.sub
 
+            # Fix gen_id shebang for NixOS
+            patchShebangs depends/gen_id
+
             # Create sources directory and copy pre-fetched sources
             mkdir -p depends/sources
 
