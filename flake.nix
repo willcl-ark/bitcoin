@@ -224,8 +224,47 @@
               )
               fetchedSources)}
 
+            # =======================
+            # All lines until the following "====" are specific to freebsd workarounds.
+            # I don't like how clunky these are, and not sure they are worth keeping.
+            # But for now, here they are...
+
+            ${lib.optionalString (triplet == "x86_64-unknown-freebsd") ''
+              mkdir -p $PWD/bin
+
+              # The llvm-binutils are all prefixed with x86_64-unknown-freebsd-
+              # but the depends build system expects unprefixed names for native builds
+              ln -sf ${pkgs.pkgsCross.x86_64-freebsd.stdenv.cc.bintools}/bin/x86_64-unknown-freebsd-ar $PWD/bin/ar
+              ln -sf ${pkgs.pkgsCross.x86_64-freebsd.stdenv.cc.bintools}/bin/x86_64-unknown-freebsd-nm $PWD/bin/nm
+              ln -sf ${pkgs.pkgsCross.x86_64-freebsd.stdenv.cc.bintools}/bin/x86_64-unknown-freebsd-ranlib $PWD/bin/ranlib
+              ln -sf ${pkgs.pkgsCross.x86_64-freebsd.stdenv.cc.bintools}/bin/x86_64-unknown-freebsd-strip $PWD/bin/strip
+
+              # For native builds, we need g++ and gcc to point to clang
+              ln -sf ${pkgs.clang}/bin/clang++ $PWD/bin/g++
+              ln -sf ${pkgs.clang}/bin/clang $PWD/bin/gcc
+
+              export PATH="$PWD/bin:$PATH"
+
+              # Also set up the cross-compilation environment variables
+              export CXX_x86_64_unknown_freebsd="${targetPkgs.stdenv.cc}/bin/x86_64-unknown-freebsd-c++"
+              export CC_x86_64_unknown_freebsd="${targetPkgs.stdenv.cc}/bin/x86_64-unknown-freebsd-cc"
+              export AR_x86_64_unknown_freebsd="${targetPkgs.stdenv.cc.bintools}/bin/x86_64-unknown-freebsd-ar"
+              export NM_x86_64_unknown_freebsd="${targetPkgs.stdenv.cc.bintools}/bin/x86_64-unknown-freebsd-nm"
+              export RANLIB_x86_64_unknown_freebsd="${targetPkgs.stdenv.cc.bintools}/bin/x86_64-unknown-freebsd-ranlib"
+              export STRIP_x86_64_unknown_freebsd="${targetPkgs.stdenv.cc.bintools}/bin/x86_64-unknown-freebsd-strip"
+            ''}
+
             # Build depends
-            make -C depends -j$NIX_BUILD_CORES HOST=${triplet} NO_QT=1 NO_QR=1 NO_WALLET= NO_ZMQ= NO_USDT=1 MULTIPROCESS=
+            ${lib.optionalString (triplet == "x86_64-unknown-freebsd") ''
+              # Pass FreeBSD-specific flags as Make overrides to bypass the host file definitions
+              make -C depends -j$NIX_BUILD_CORES HOST=${triplet} NO_QT=1 NO_QR=1 NO_WALLET=0 NO_ZMQ=0 NO_USDT=1 MULTIPROCESS=0 freebsd_CXXFLAGS="-isystem ${targetPkgs.llvmPackages.libcxx.dev}/include/c++/v1 -isystem ${targetPkgs.stdenv.cc.libc_dev}/include" x86_64_freebsd_CXXFLAGS="-isystem ${targetPkgs.llvmPackages.libcxx.dev}/include/c++/v1 -isystem ${targetPkgs.stdenv.cc.libc_dev}/include" freebsd_CFLAGS="-isystem ${targetPkgs.stdenv.cc.libc_dev}/include" x86_64_freebsd_CFLAGS="-isystem ${targetPkgs.stdenv.cc.libc_dev}/include"
+            ''}
+
+            # =======================
+
+            ${lib.optionalString (triplet != "x86_64-unknown-freebsd") ''
+              make -C depends -j$NIX_BUILD_CORES HOST=${triplet} NO_QT=1 NO_QR=1 NO_WALLET=0 NO_ZMQ=0 NO_USDT=1 MULTIPROCESS=0
+            ''}
           '';
 
           cmakeFlags = [
