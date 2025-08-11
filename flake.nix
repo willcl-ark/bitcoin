@@ -2,7 +2,7 @@
   description = "Bitcoin core build derivation with depends";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
@@ -157,6 +157,8 @@
           then "aarch64-linux-gnu"
           else if stdenv.hostPlatform.config == "x86_64-w64-mingw32"
           then "x86_64-w64-mingw32"
+          else if stdenv.hostPlatform.config == "x86_64-w64-windows-gnu"
+          then "x86_64-w64-mingw32"
           else if stdenv.hostPlatform.config == "aarch64-apple-darwin"
           then "aarch64-apple-darwin"
           else if stdenv.hostPlatform.config == "x86_64-apple-darwin"
@@ -169,6 +171,10 @@
           then "s390x-linux-gnu"
           else if stdenv.hostPlatform.config == "x86_64-unknown-freebsd"
           then "x86_64-unknown-freebsd"
+          else if stdenv.hostPlatform.config == "i686-unknown-linux-gnu"
+          then "i686-pc-linux-gnu"
+          else if stdenv.hostPlatform.config == "powerpc64le-unknown-linux-gnu"
+          then "powerpc64le-linux-gnu"
           else stdenv.hostPlatform.config;
 
         triplet = getTriplet targetPkgs.stdenv;
@@ -195,7 +201,10 @@
               xz
             ]
             ++ lib.optionals isMinGW [
-              pkgs.pkgsCross.mingwW64.stdenv.cc
+              targetPkgs.stdenv.cc
+              # Native build tools for depends native packages
+              gcc
+              binutils
             ];
 
           # No runtime dependencies - they're all built by depends!
@@ -263,7 +272,7 @@
             # =======================
 
             ${lib.optionalString (triplet != "x86_64-unknown-freebsd") ''
-              make -C depends -j$NIX_BUILD_CORES HOST=${triplet} NO_QT=1 NO_QR=1 NO_WALLET=0 NO_ZMQ=0 NO_USDT=1 MULTIPROCESS=0
+              make -C depends -j$NIX_BUILD_CORES HOST=${triplet} NO_QT=1 NO_QR=1 NO_WALLET= NO_ZMQ= NO_USDT=1 MULTIPROCESS=
             ''}
           '';
 
@@ -280,6 +289,8 @@
           env = {
             CMAKE_GENERATOR = "Ninja";
             LC_ALL = "C";
+            # Ensure native binaries can find their runtime libraries
+            LD_LIBRARY_PATH = "${pkgs.stdenv.cc.cc.lib}/lib:${pkgs.glibc}/lib";
           };
 
           withStatic = true;
@@ -292,16 +303,29 @@
           };
         };
     in {
-      # Here we use a combination of `pkgsCross` and `pkgsStatic` to get static libs and cross-compilers as necessary
+      # Here we use a combination of `pkgsCross` and `pkgsStatic` to get static libs and cross-compilers as necessary.
+      # Use (mainly) Nix-native package target names.
+      # The bitcoin ones (for compatibility) would be misleading as we use musl toolchains for static builds anyway.
       packages = {
+        # pkgsCross resets everything, so the pkgsStatic comes last.
         default = mkBitcoinDerivation pkgs.pkgsStatic;
         aarch64-darwin = mkBitcoinDerivation pkgs.pkgsCross.aarch64-darwin.pkgsStatic; # Can only compile from darwin currently
         aarch64-linux = mkBitcoinDerivation pkgs.pkgsCross.aarch64-multiplatform.pkgsStatic;
+        i686-linux = mkBitcoinDerivation pkgs.pkgsCross.gnu32.pkgsStatic;
+        mingwW64 = mkBitcoinDerivation (import nixpkgs {
+          inherit system;
+          crossSystem = {
+            config = "x86_64-w64-mingw32";
+            libc = "msvcrt";
+          };
+        });
+        powerpc64le-linux = mkBitcoinDerivation pkgs.pkgsCross.powernv.pkgsStatic;
         raspberryPi = mkBitcoinDerivation pkgs.pkgsCross.raspberryPi.pkgsStatic;
         riscv64 = mkBitcoinDerivation pkgs.pkgsCross.riscv64.pkgsStatic;
         s390x = mkBitcoinDerivation pkgs.pkgsCross.s390x.pkgsStatic;
+        x86_64-darwin = mkBitcoinDerivation pkgs.pkgsCross.x86_64-darwin.pkgsStatic;
         x86_64-freebsd = mkBitcoinDerivation pkgs.pkgsCross.x86_64-freebsd.pkgsStatic;
-        x86_64-windows = mkBitcoinDerivation pkgs.pkgsCross.mingwW64.pkgsStatic;
+        x86_64-linux = mkBitcoinDerivation pkgs.pkgsCross.gnu64.pkgsStatic; # Not convinced this works for cross-compiling
       };
 
       devShells.default = let
