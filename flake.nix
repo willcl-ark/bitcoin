@@ -191,7 +191,7 @@
               perl
               pkg-config
               python3
-              # which # Needed by Qt
+              which # Needed by depends!
               xz
             ]
             ++ lib.optionals isMinGW [
@@ -201,7 +201,6 @@
           # No runtime dependencies - they're all built by depends!
           buildInputs = [];
 
-          # Run depends build in preConfigure
           preConfigure = ''
             echo "Building dependencies with depends for triplet: ${triplet}"
 
@@ -222,11 +221,10 @@
               )
               fetchedSources)}
 
-            # Build depends (NO_WALLET= with empty value means wallet is enabled)
+            # Build depends
             make -C depends -j$NIX_BUILD_CORES HOST=${triplet} NO_QT=1 NO_QR=1 NO_WALLET= NO_ZMQ= NO_USDT=1 MULTIPROCESS=
           '';
 
-          # Use the generated toolchain file
           cmakeFlags = [
             "--toolchain=depends/${triplet}/toolchain.cmake"
           ];
@@ -242,7 +240,6 @@
             LC_ALL = "C";
           };
 
-          # Make static binaries
           withStatic = true;
 
           meta = with lib; {
@@ -274,9 +271,6 @@
           CMAKE_GENERATOR = "Ninja";
           shellHook = ''
             echo "Bitcoin Core development environment with depends build system"
-            echo "To build dependencies: make -C depends -j\$(nproc)"
-            echo "To configure: cmake -B build --toolchain depends/<platform>/toolchain.cmake"
-            echo "To build: cmake --build build --parallel"
           '';
         };
 
