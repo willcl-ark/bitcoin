@@ -62,6 +62,10 @@
         "powerpc64le-unknown-linux-gnu" = "powerpc64le-linux-gnu";
       };
 
+      # Package metadata
+      pname = "bitcoin-core";
+      version = "29.99.0";
+
       # Common native build inputs
       commonNativeBuildInputs = with pkgs; [
         autoconf
@@ -103,8 +107,7 @@
           else targetPkgs.stdenv;
       in
         customStdEnv.mkDerivation ({
-            pname = "bitcoin-core";
-            version = "29.99.0";
+            inherit pname version;
             src = ./.;
             nativeBuildInputs = commonNativeBuildInputs;
             buildInputs = [];
@@ -190,7 +193,31 @@
           }
           // extraConfig);
     in {
-      packages = {
+      packages = let
+        mkDockerImage = targetPkgs:
+          pkgs.dockerTools.buildLayeredImage {
+            name = pname;
+            tag = "${version}-${targetPkgs.stdenv.hostPlatform.linuxArch}";
+            contents = [
+              (mkBitcoinDerivation {
+                inherit targetPkgs;
+                extraConfig = {
+                  installPhase = ''
+                    mkdir -p $out/bin
+                    cp bin/bitcoind $out/bin/
+                  '';
+                };
+              })
+              pkgs.bash
+              pkgs.coreutils
+            ];
+            config = {
+              Cmd = ["/bin/bitcoind" "-printtoconsole"];
+              ExposedPorts = {"8333/tcp" = {};};
+              Volumes = {"/root/.bitcoin" = {};};
+            };
+          };
+      in {
         default = mkBitcoinDerivation {targetPkgs = pkgs.pkgsStatic;};
         aarch64-darwin = mkBitcoinDerivation {targetPkgs = pkgs.pkgsCross.aarch64-darwin.pkgsStatic;};
         aarch64-linux = mkBitcoinDerivation {targetPkgs = pkgs.pkgsCross.aarch64-multiplatform.pkgsStatic;};
@@ -215,6 +242,9 @@
         x86_64-darwin = mkBitcoinDerivation {targetPkgs = pkgs.pkgsCross.x86_64-darwin.pkgsStatic;};
         x86_64-freebsd = mkBitcoinDerivation {targetPkgs = pkgs.pkgsCross.x86_64-freebsd.pkgsStatic;};
         x86_64-linux = mkBitcoinDerivation {targetPkgs = pkgs.pkgsCross.gnu64.pkgsStatic;};
+        # Some "free" docker images
+        docker-x64 = mkDockerImage pkgs.pkgsCross.gnu64.pkgsStatic;
+        docker-aarch64 = mkDockerImage pkgs.pkgsCross.aarch64-multiplatform.pkgsStatic;
       };
 
       devShells.default = pkgs.mkShell {
