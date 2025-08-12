@@ -248,7 +248,7 @@
       };
 
       devShells.default = pkgs.mkShell {
-        nativeBuildInputs = commonNativeBuildInputs;
+        nativeBuildInputs = commonNativeBuildInputs ++ [ pkgs.ccache ];
         buildInputs = [];
         CMAKE_GENERATOR = "Ninja";
         shellHook = ''
