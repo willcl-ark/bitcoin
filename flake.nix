@@ -203,7 +203,6 @@
 
             env = {
               LC_ALL = "C";
-              LD_LIBRARY_PATH = lib.makeLibraryPath [pkgs.stdenv.cc.cc pkgs.glibc];
             };
           }
           // extraConfig);
