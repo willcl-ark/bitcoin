@@ -254,8 +254,12 @@
           };
         };
         x86_64-darwin = {targetPkgs = pkgs.pkgsCross.x86_64-darwin.pkgsStatic;};
-        x86_64-freebsd = {targetPkgs = pkgs.pkgsCross.x86_64-freebsd.pkgsStatic;};
         x86_64-linux = {targetPkgs = pkgs.pkgsCross.gnu64.pkgsStatic;};
+      } // lib.optionalAttrs (pkgs.stdenv.isLinux) {
+        # compat for freebsd only runs on linux
+        x86_64-freebsd = {
+          targetPkgs = pkgs.pkgsCross.x86_64-freebsd.pkgsStatic;
+        };
       };
 
       mkDockerImage = {
