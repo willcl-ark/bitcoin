@@ -104,7 +104,7 @@
         customStdEnv.mkDerivation ({
             pname = packageName;
             version = "depends";
-            src = ./.;
+            src = builtins.path { path = ./.; name = "source"; };
             nativeBuildInputs = commonNativeBuildInputs ++ [pkgs.curl];
             buildInputs = [];
             dontConfigure = true;
@@ -198,7 +198,7 @@
       in
         customStdEnv.mkDerivation ({
             inherit pname version;
-            src = ./.;
+            src = builtins.path { path = ./.; name = "source"; };
             nativeBuildInputs = commonNativeBuildInputs;
             buildInputs = builtins.attrValues dependencies;
             env = {
