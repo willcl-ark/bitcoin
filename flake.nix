@@ -161,13 +161,17 @@
                   echo "Processing CMake config: $cmake_config"
 
                   # Replace hardcoded build paths with the current Nix store path
+                  # Handle various temporary path formats on different platforms, currently linux and macOS
                   sed -i "s|/build/[^/]*/depends/${triplet}|$out|g" "$cmake_config"
                   sed -i "s|/build/[^/]*-source/depends/[^/]*|$out|g" "$cmake_config"
+                  sed -i "s|/tmp/nix-build-[^/]*/source/depends/${triplet}|$out|g" "$cmake_config"
+                  sed -i "s|/private/tmp/nix-build-[^/]*/source/depends/${triplet}|$out|g" "$cmake_config"
+                  sed -i "s|set(_IMPORT_PREFIX \"[^\"]*\")|set(_IMPORT_PREFIX \"$out\")|g" "$cmake_config"
 
                   # For libevent specifically, fix target import paths
                   if [[ "${packageName}" == "libevent" ]]; then
                     sed -i "s|IMPORTED_LOCATION_STATIC \"[^\"]*\(lib[^/]*\.a\)\"|IMPORTED_LOCATION_STATIC \"$out/lib/\1\"|g" "$cmake_config"
-                    sed -i "s|\"/build/[^\"]*\(/lib/[^\"]*\)\"|\"\''${_IMPORT_PREFIX}\1\"|g" "$cmake_config"
+                    sed -i "s|IMPORTED_LOCATION_NONE \"[^\"]*\(lib[^/]*\.a\)\"|IMPORTED_LOCATION_NONE \"\''${_IMPORT_PREFIX}/lib/\1\"|g" "$cmake_config"
                   fi
 
                   echo "Fixed paths in: $cmake_config"
