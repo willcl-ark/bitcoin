@@ -104,7 +104,10 @@
         customStdEnv.mkDerivation ({
             pname = packageName;
             version = "depends";
-            src = builtins.path { path = ./.; name = "source"; };
+            src = builtins.path {
+              path = ./.;
+              name = "source";
+            };
             nativeBuildInputs = commonNativeBuildInputs ++ [pkgs.curl];
             buildInputs = [];
             dontConfigure = true;
@@ -202,7 +205,10 @@
       in
         customStdEnv.mkDerivation ({
             inherit pname version;
-            src = builtins.path { path = ./.; name = "source"; };
+            src = builtins.path {
+              path = ./.;
+              name = "source";
+            };
             nativeBuildInputs = commonNativeBuildInputs;
             buildInputs = builtins.attrValues dependencies;
             env = {
@@ -235,36 +241,38 @@
             };
           }
           // extraConfig);
-      platforms = {
-        default = {targetPkgs = pkgs.pkgsStatic;};
-        aarch64-darwin = {targetPkgs = pkgs.pkgsCross.aarch64-darwin.pkgsStatic;};
-        aarch64-linux = {targetPkgs = pkgs.pkgsCross.aarch64-multiplatform.pkgsStatic;};
-        i686-linux = {targetPkgs = pkgs.pkgsCross.gnu32.pkgsStatic;};
-        powerpc64le-linux = {targetPkgs = pkgs.pkgsCross.powernv.pkgsStatic;};
-        raspberryPi = {targetPkgs = pkgs.pkgsCross.raspberryPi.pkgsStatic;};
-        riscv64 = {targetPkgs = pkgs.pkgsCross.riscv64.pkgsStatic;};
-        s390x = {targetPkgs = pkgs.pkgsCross.s390x.pkgsStatic;};
-        ucrt64 = {
-          targetPkgs = import nixpkgs {
-            inherit system;
-            crossSystem = {
-              config = "x86_64-w64-mingw32";
-              libc = "ucrt";
-              threadsCross = {
-                model = "posix";
-                package = pkgs.pkgsCross.mingwW64.threads;
+      platforms =
+        {
+          default = {targetPkgs = pkgs.pkgsStatic;};
+          aarch64-darwin = {targetPkgs = pkgs.pkgsCross.aarch64-darwin.pkgsStatic;};
+          aarch64-linux = {targetPkgs = pkgs.pkgsCross.aarch64-multiplatform.pkgsStatic;};
+          i686-linux = {targetPkgs = pkgs.pkgsCross.gnu32.pkgsStatic;};
+          powerpc64le-linux = {targetPkgs = pkgs.pkgsCross.powernv.pkgsStatic;};
+          raspberryPi = {targetPkgs = pkgs.pkgsCross.raspberryPi.pkgsStatic;};
+          riscv64 = {targetPkgs = pkgs.pkgsCross.riscv64.pkgsStatic;};
+          s390x = {targetPkgs = pkgs.pkgsCross.s390x.pkgsStatic;};
+          ucrt64 = {
+            targetPkgs = import nixpkgs {
+              inherit system;
+              crossSystem = {
+                config = "x86_64-w64-mingw32";
+                libc = "ucrt";
+                threadsCross = {
+                  model = "posix";
+                  package = pkgs.pkgsCross.mingwW64.threads;
+                };
               };
             };
           };
+          x86_64-darwin = {targetPkgs = pkgs.pkgsCross.x86_64-darwin.pkgsStatic;};
+          x86_64-linux = {targetPkgs = pkgs.pkgsCross.gnu64.pkgsStatic;};
+        }
+        // lib.optionalAttrs (pkgs.stdenv.isLinux) {
+          # compat for freebsd only runs on linux
+          x86_64-freebsd = {
+            targetPkgs = pkgs.pkgsCross.x86_64-freebsd.pkgsStatic;
+          };
         };
-        x86_64-darwin = {targetPkgs = pkgs.pkgsCross.x86_64-darwin.pkgsStatic;};
-        x86_64-linux = {targetPkgs = pkgs.pkgsCross.gnu64.pkgsStatic;};
-      } // lib.optionalAttrs (pkgs.stdenv.isLinux) {
-        # compat for freebsd only runs on linux
-        x86_64-freebsd = {
-          targetPkgs = pkgs.pkgsCross.x86_64-freebsd.pkgsStatic;
-        };
-      };
 
       mkDockerImage = {
         targetPkgs,
