@@ -60,6 +60,8 @@
                 ''-DCMAKE_C_FLAGS=-isystem${targetPkgs.stdenv.cc.libc_dev}/include''
               ];
             withStatic = true;
+            separateDebugInfo = !targetPkgs.stdenv.hostPlatform.isDarwin; # Symbols on Darwin are different
+            stripAllList = ["bin"]; # Use stripAll to remove everything possible, not only debug symbols
             meta = {
               description = "Bitcoin Core client";
               homepage = "https://bitcoincore.org/";
