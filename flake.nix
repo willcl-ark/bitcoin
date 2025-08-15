@@ -10,12 +10,16 @@
     nixpkgs,
     flake-utils,
     ...
-  }:
-    flake-utils.lib.eachDefaultSystem (system: let
-      pkgs = import nixpkgs {inherit system;};
+  }: let
+    # Return pkgs for a system
+    pkgsFor = system: import nixpkgs {inherit system;};
+
+    pname = "bitcoin-core";
+    version = "29.99.0";
+
+    mkBitcoinForSystem = system: let
+      pkgs = pkgsFor system;
       lib = pkgs.lib;
-      pname = "bitcoin-core";
-      version = "29.99.0";
       dependencies = import ./depends {inherit pkgs lib;};
 
       mkBitcoinDerivation = {
@@ -70,6 +74,7 @@
             };
           }
           // extraConfig);
+
       platforms =
         {
           default = {
@@ -135,6 +140,15 @@
           };
         };
     in {
+      inherit mkBitcoinDerivation platforms mkDockerImage;
+    };
+  in
+    (flake-utils.lib.eachDefaultSystem (system: let
+      inherit (mkBitcoinForSystem system) mkBitcoinDerivation platforms mkDockerImage;
+      pkgs = pkgsFor system;
+      lib = pkgs.lib;
+      dependencies = import ./depends {inherit pkgs lib;};
+    in {
       packages =
         lib.mapAttrs (name: cfg: mkBitcoinDerivation cfg) platforms
         // {
@@ -158,5 +172,16 @@
       };
 
       formatter = pkgs.alejandra;
-    });
+    }))
+    // {
+      hydraJobs = let
+        system = "x86_64-linux";
+        inherit (mkBitcoinForSystem system) mkBitcoinDerivation platforms;
+        lib = (pkgsFor system).lib;
+        # Build all platforms except Darwin (which don't cross-compile well from Linux) and default
+        # TODO: Does this actually work on hydra though?
+        nonDarwinPlatforms = lib.filterAttrs (name: _: !lib.hasSuffix "darwin" name && name != "default") platforms;
+      in
+        lib.mapAttrs (_: platformConfig: mkBitcoinDerivation platformConfig) nonDarwinPlatforms;
+    };
 }
