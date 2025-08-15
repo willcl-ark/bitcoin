@@ -2,14 +2,18 @@
   pkgs,
   lib,
 }: let
+  # Individual cached source derivations - each tarball is cached separately in the nix store for re-use.
+  # Let Nix garbage collection etc. manage their lifetime like any other package.
   dependsSources = {
     boost = pkgs.fetchurl {
       url = "https://github.com/boostorg/boost/releases/download/boost-1.88.0/boost-1.88.0-cmake.tar.gz";
       sha256 = "dcea50f40ba1ecfc448fdf886c0165cf3e525fef2c9e3e080b9804e8117b9694";
+      name = "boost-1.88.0-cmake.tar.gz";
     };
     libevent = pkgs.fetchurl {
       url = "https://github.com/libevent/libevent/releases/download/release-2.1.12-stable/libevent-2.1.12-stable.tar.gz";
       sha256 = "92e6de1be9ec176428fd2367677e61ceffc2ee1cb119035037a27d346b0403bb";
+      name = "libevent-2.1.12-stable.tar.gz";
     };
   };
 
@@ -105,7 +109,8 @@
         postUnpack = ''
           mkdir -p $sourceRoot/sources
           ${lib.optionalString (dependsSources ? ${packageName}) ''
-            cp ${dependsSources.${packageName}} $sourceRoot/sources/${dependsSources.${packageName}.name or dependsSources.${packageName}.name}
+            # Link cached source from Nix store instead of downloading
+            ln -s ${dependsSources.${packageName}} $sourceRoot/sources/${dependsSources.${packageName}.name}
           ''}
 
           # Fixup shebangs for Nix
