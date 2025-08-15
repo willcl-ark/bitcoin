@@ -42,17 +42,13 @@
     autoconf
     automake
     bison
+    cmake
     gnumake
     libtool
     patch
     perl
     which
     xz
-    # primary
-    cmake
-    ninja
-    pkg-config
-    python3
   ];
 
   # Platform-specific stdenv setup
