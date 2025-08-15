@@ -31,7 +31,12 @@
               path = ./.;
               name = "source";
             };
-            nativeBuildInputs = dependencies.commonNativeBuildInputs;
+            nativeBuildInputs = with pkgs; [
+              cmake
+              ninja
+              pkg-config
+              python3
+            ];
             buildInputs = builtins.attrValues deps;
             env = {
               CMAKE_GENERATOR = "Ninja";
