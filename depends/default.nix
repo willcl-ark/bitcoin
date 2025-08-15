@@ -113,6 +113,10 @@
             ln -s ${dependsSources.${packageName}} $sourceRoot/sources/${dependsSources.${packageName}.name}
           ''}
 
+          # Copy patches to expected location for depends build system
+          mkdir -p $sourceRoot/patches
+          cp -r ${./patches}/* $sourceRoot/patches/
+
           # Fixup shebangs for Nix
           chmod +x $sourceRoot/gen_id
           patchShebangs $sourceRoot/gen_id
