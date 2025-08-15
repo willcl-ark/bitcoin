@@ -16,7 +16,7 @@
       lib = pkgs.lib;
       pname = "bitcoin-core";
       version = "29.99.0";
-      dependencies = import ./depends/dependencies.nix {inherit pkgs lib;};
+      dependencies = import ./depends {inherit pkgs lib;};
 
       mkBitcoinDerivation = {
         targetPkgs,
