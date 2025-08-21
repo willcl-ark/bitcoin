@@ -59,7 +59,7 @@
                 ''-DCMAKE_CXX_FLAGS=-isystem${targetPkgs.llvmPackages.libcxx.dev}/include/c++/v1''
                 ''-DCMAKE_C_FLAGS=-isystem${targetPkgs.stdenv.cc.libc_dev}/include''
               ];
-            withStatic = true;
+            withStatic = !targetPkgs.stdenv.hostPlatform.isDarwin; # No static linking on Darwin
             separateDebugInfo = !targetPkgs.stdenv.hostPlatform.isDarwin; # Symbols on Darwin are different
             stripAllList = ["bin"]; # Use stripAll to remove everything possible, not only debug symbols
             meta = {
@@ -72,8 +72,10 @@
           // extraConfig);
       platforms =
         {
-          default = {targetPkgs = pkgs.pkgsStatic;};
-          aarch64-darwin = {targetPkgs = pkgs.pkgsCross.aarch64-darwin.pkgsStatic;};
+          default = {
+            targetPkgs = if pkgs.stdenv.isDarwin then pkgs else pkgs.pkgsStatic;
+          };
+          aarch64-darwin = {targetPkgs = pkgs.pkgsCross.aarch64-darwin;};
           aarch64-linux = {targetPkgs = pkgs.pkgsCross.aarch64-multiplatform.pkgsStatic;};
           i686-linux = {targetPkgs = pkgs.pkgsCross.gnu32.pkgsStatic;};
           powerpc64le-linux = {targetPkgs = pkgs.pkgsCross.powernv.pkgsStatic;};
@@ -93,7 +95,7 @@
               };
             };
           };
-          x86_64-darwin = {targetPkgs = pkgs.pkgsCross.x86_64-darwin.pkgsStatic;};
+          x86_64-darwin = {targetPkgs = pkgs.pkgsCross.x86_64-darwin;};
           x86_64-linux = {targetPkgs = pkgs.pkgsCross.gnu64.pkgsStatic;};
         }
         // lib.optionalAttrs (pkgs.stdenv.isLinux) {
