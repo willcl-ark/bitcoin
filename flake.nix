@@ -116,7 +116,7 @@
               extraConfig = {
                 installPhase = ''
                   mkdir -p $out/bin
-                  cp bin/bitcoind $out/bin/
+                  cp bin/* $out/bin/
                 '';
               };
             })
