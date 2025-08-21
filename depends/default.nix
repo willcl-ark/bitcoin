@@ -198,12 +198,15 @@
 
   # Build all dependencies for a target platform
   mkDependencies = targetPkgs:
-    lib.mapAttrs (name: _:
+    lib.filterAttrs
+    # Skip capnp for MinGW targets (Windows) as it's not supported
+    (name: _: !(name == "capnp" && targetPkgs.stdenv.hostPlatform.isMinGW))
+    (lib.mapAttrs (name: _:
       mkDependency {
         inherit targetPkgs;
         packageName = name;
       })
-    dependsSources;
+    dependsSources);
 in {
   inherit
     dependsSources

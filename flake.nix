@@ -73,7 +73,10 @@
       platforms =
         {
           default = {
-            targetPkgs = if pkgs.stdenv.isDarwin then pkgs else pkgs.pkgsStatic;
+            targetPkgs =
+              if pkgs.stdenv.isDarwin
+              then pkgs
+              else pkgs.pkgsStatic;
           };
           aarch64-darwin = {targetPkgs = pkgs.pkgsCross.aarch64-darwin;};
           aarch64-linux = {targetPkgs = pkgs.pkgsCross.aarch64-multiplatform.pkgsStatic;};
