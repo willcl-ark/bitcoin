@@ -227,6 +227,8 @@ $(1)_cmake=env CC="$$($(1)_cc)" \
                -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
                -DCMAKE_VERBOSE_MAKEFILE:BOOL=$(V) \
                -DCMAKE_EXPORT_NO_PACKAGE_REGISTRY:BOOL=TRUE \
+               -DCMAKE_C_LINKER_DEPFILE_SUPPORTED=FALSE \
+               -DCMAKE_CXX_LINKER_DEPFILE_SUPPORTED=FALSE \
                $$($(1)_config_opts)
 ifeq ($($(1)_type),build)
 $(1)_cmake += -DCMAKE_INSTALL_RPATH:PATH="$$($($(1)_type)_prefix)/lib"

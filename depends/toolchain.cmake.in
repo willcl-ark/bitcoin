@@ -81,6 +81,19 @@ set(CMAKE_STRIP "@STRIP@")
 set(CMAKE_OBJCOPY "@OBJCOPY@")
 set(CMAKE_OBJDUMP "@OBJDUMP@")
 
+# Zig fixes
+if(CMAKE_AR MATCHES "zig-ar")
+  # We require assertions enabled in release builds. Undefine NDEBUG for release builds.
+  string(APPEND CMAKE_C_FLAGS_RELEASE " -UNDEBUG")
+  string(APPEND CMAKE_CXX_FLAGS_RELEASE " -UNDEBUG")
+  string(APPEND CMAKE_C_FLAGS_RELWITHDEBINFO " -UNDEBUG")
+  string(APPEND CMAKE_CXX_FLAGS_RELWITHDEBINFO " -UNDEBUG")
+
+  # Zig doesn't support linker dependency files and cmake seems to not detect this automagically.
+  set(CMAKE_C_LINKER_DEPFILE_SUPPORTED FALSE)
+  set(CMAKE_CXX_LINKER_DEPFILE_SUPPORTED FALSE)
+endif()
+
 # Using our own built dependencies should not be
 # affected by a potentially random environment.
 set(CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH OFF)

@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if ! command -v zig > /dev/null 2>&1; then
+    echo "Error: zig is not found in PATH"
+    exit 1
+fi
+
+if [ -z "${HOST:-}" ]; then
+    echo "HOST environment variable is not set."
+    echo "Run 'zig targets' to see available targets, then set HOST=<target>"
+    echo "Example: HOST=riscv64-linux-musl $0"
+    exit 1
+fi
+export HOST="${HOST}"
+
+dir="$PWD"
+export MAKEJOBS=${MAKEJOBS:--j$(if command -v nproc > /dev/null 2>&1; then nproc; else sysctl -n hw.logicalcpu; fi)}
+
+export CMAKE_C_COMPILER="zig cc --target=$HOST"
+export CMAKE_CXX_COMPILER="zig c++ --target=$HOST"
+export CC="zig cc --target=$HOST"
+export CXX="zig c++ --target=$HOST"
+export AR="$dir/zig-ar"
+export RANLIB="$dir/zig-ranlib"
+
+export NO_QT=1
+
+gmake -C depends "$MAKEJOBS" HOST="$HOST"
+cmake -B build --toolchain "$dir/depends/$HOST/toolchain.cmake"
+cmake --build build "$MAKEJOBS" --target bitcoind
