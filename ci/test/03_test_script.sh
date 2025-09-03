@@ -181,9 +181,25 @@ if [ "$RUN_UNIT_TESTS_SEQUENTIAL" = "true" ]; then
 fi
 
 if [ "$RUN_FUNCTIONAL_TESTS" = "true" ]; then
-  echo "=== DIR SIZE INFO ==="
-  du -h / 2>/dev/null | sort -hr | head -100 || echo "Failed to get directory sizes"
-  echo "=== END DIR SIZE INFO ==="
+  echo "=== DISK USAGE BEFORE FUNCTIONAL TESTS ==="
+  echo "Available disk space:"
+  df -h
+  echo ""
+  echo "Top 50 largest files in the system:"
+  find / -type f -exec ls -lh {} + 2>/dev/null | sort -k5 -hr | head -50 || echo "Failed to get file sizes"
+  echo ""
+
+  echo "Cleaning up unnecessary files to free disk space..."
+  echo "Removing object files (*.o)..."
+  find "${BASE_BUILD_DIR}" -name "*.o" -delete 2>/dev/null || echo "No object files found"
+  echo "Removing duplicate installed binaries in ci/scratch/out..."
+  rm -rf "${BASE_SCRATCH_DIR}/out" 2>/dev/null || echo "No installed binaries found to remove"
+  echo ""
+
+  echo "Disk space after cleanup:"
+  df -h
+  echo "=== END DISK USAGE ==="
+
   # parses TEST_RUNNER_EXTRA as an array which allows for multiple arguments such as TEST_RUNNER_EXTRA='--exclude "rpc_bind.py --ipv6"'
   eval "TEST_RUNNER_EXTRA=($TEST_RUNNER_EXTRA)"
   LD_LIBRARY_PATH="${DEPENDS_DIR}/${HOST}/lib" \
