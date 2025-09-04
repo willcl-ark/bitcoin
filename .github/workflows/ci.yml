@@ -312,6 +312,7 @@ jobs:
         shell: cmd
         run: py -3 test\functional\test_runner.py --jobs %NUMBER_OF_PROCESSORS% --ci --quiet --tmpdirprefix=%RUNNER_TEMP% --combinedlogslen=99999999 --timeout-factor=%TEST_RUNNER_TIMEOUT_FACTOR% %TEST_RUNNER_EXTRA%
 
+  ci-matrix:
     name: ${{ matrix.name }}
     needs: runners
     runs-on: ${{ needs.runners.outputs.use-cirrus-runners == 'true' && matrix.cirrus-runner || matrix.fallback-runner }}
@@ -339,7 +340,7 @@ jobs:
             file-env: './ci/test/00_setup_env_win64.sh'
 
           - name: 'ASan + LSan + UBSan + integer, no depends, USDT'
-            cirrus-runner: 'ghcr.io/cirruslabs/ubuntu-runner-amd64:24.04-lg' # has to match container in ci/test/00_setup_env_native_asan.sh for tracing tools
+            cirrus-runner: 'ghcr.io/cirruslabs/ubuntu-runner-amd64:24.04-md' # has to match container in ci/test/00_setup_env_native_asan.sh for tracing tools
             fallback-runner: 'ubuntu-24.04'
             timeout-minutes: 120
             file-env: './ci/test/00_setup_env_native_asan.sh'
@@ -351,7 +352,7 @@ jobs:
             file-env: './ci/test/00_setup_env_mac_cross.sh'
 
           - name: 'No wallet, libbitcoinkernel'
-            cirrus-runner: 'ghcr.io/cirruslabs/ubuntu-runner-amd64:24.04-md'
+            cirrus-runner: 'ghcr.io/cirruslabs/ubuntu-runner-amd64:24.04-sm'
             fallback-runner: 'ubuntu-24.04'
             timeout-minutes: 120
             file-env: './ci/test/00_setup_env_native_nowallet_libbitcoinkernel.sh'
@@ -434,7 +435,7 @@ jobs:
   lint:
     name: 'lint'
     needs: runners
-    runs-on: ${{ needs.runners.outputs.use-cirrus-runners == 'true' && 'ghcr.io/cirruslabs/ubuntu-runner-amd64:24.04-sm' || 'ubuntu-24.04' }}
+    runs-on: ${{ needs.runners.outputs.use-cirrus-runners == 'true' && 'ghcr.io/cirruslabs/ubuntu-runner-amd64:24.04-xs' || 'ubuntu-24.04' }}
     if: ${{ vars.SKIP_BRANCH_PUSH != 'true' || github.event_name == 'pull_request' }}
     timeout-minutes: 20
     env:
