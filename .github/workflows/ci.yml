@@ -18,9 +18,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Ensure the latest merged pull request state is used, even on re-runs.
-  YAML_KEY_01: &CHECKOUT_REF_TMPL ${{ github.event_name == 'pull_request' && github.ref || '' }}
-
   CI_FAILFAST_TEST_LEAVE_DANGLING: 1  # GHA does not care about dangling processes and setting this variable avoids killing the CI script itself on error
   CIRRUS_CACHE_HOST: http://127.0.0.1:12321/ # When using Cirrus Runners this host can be used by the docker `gha` build cache type.
   REPO_USE_CIRRUS_RUNNERS: 'bitcoin/bitcoin' # Use cirrus runners and cache for this repo, instead of falling back to the slow GHA runners
@@ -135,10 +132,11 @@ jobs:
       BASE_ROOT_DIR: ${{ github.workspace }}
 
     steps:
-      - name: Checkout
+      - &Checkout
+        name: Checkout
         uses: actions/checkout@v5
         with:
-          ref: *CHECKOUT_REF_TMPL
+          ref: &CHECKOUT_REF_TMPL ${{ github.event_name == 'pull_request' && github.ref || '' }}
 
       - name: Clang version
         run: |
@@ -204,10 +202,7 @@ jobs:
             job-name: 'Windows native, fuzz, VS 2022'
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-        with:
-          ref: *CHECKOUT_REF_TMPL
+      - *Checkout
 
       - name: Configure Developer Command Prompt for Microsoft Visual C++
         # Using microsoft/setup-msbuild is not enough.
@@ -317,10 +312,7 @@ jobs:
       DANGER_CI_ON_HOST_FOLDERS: 1
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-        with:
-          ref: *CHECKOUT_REF_TMPL
+      - *Checkout
 
       - name: Configure environment
         uses: ./.github/actions/configure-environment
@@ -360,10 +352,7 @@ jobs:
       TEST_RUNNER_TIMEOUT_FACTOR: 40
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-        with:
-          ref: *CHECKOUT_REF_TMPL
+      - *Checkout
 
       - name: Download built executables
         uses: actions/download-artifact@v4
@@ -504,10 +493,7 @@ jobs:
             file-env: './ci/test/00_setup_env_native_msan.sh'
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-        with:
-          ref: *CHECKOUT_REF_TMPL
+      - *Checkout
 
       - name: Configure environment
         uses: ./.github/actions/configure-environment
