@@ -1,0 +1,56 @@
+name: merge check
+
+on:
+  workflow_dispatch: # Must be run manually
+    inputs:
+      pr_number:
+        description: 'Pull request number to test'
+        required: true
+        type: string
+
+jobs:
+  check:
+    name: Check mergeability
+    runs-on: ubuntu-latest
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+
+    steps:
+      - name: Checkout fresh master
+        uses: actions/checkout@v5
+        with:
+          ref: master
+          fetch-depth: 1
+
+      - name: Merge PR into master
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git fetch --depth=1 origin pull/${{ inputs.pr_number }}/head:pr-${{ inputs.pr_number }}
+          git merge pr-${{ inputs.pr_number }} --no-ff -m "Test merge of PR #${{ inputs.pr_number }} into master"
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+        with:
+          determinate: true
+          extra-conf: lazy-trees = true
+
+      - name: Set Up Cachix
+        uses: cachix/cachix-action@v15
+        with:
+          name: bitcoin-core
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - name: Ccache cache
+        uses: cirruslabs/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ github.run_id }}
+
+      - name: Run `nix flake check`
+        run: nix flake check ci/
+
+      - name: Build bitcoind
+        run: |
+          export CCACHE_DIR=${{ env.CCACHE_DIR }}
+          nix build ci/ --option extra-sandbox-paths "${{ env.CCACHE_DIR }}"
