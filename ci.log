@@ -1,0 +1,824 @@
+2025-09-10T09:21:34.2607370Z Current runner version: '2.328.0'
+2025-09-10T09:21:34.2641571Z ##[group]Runner Image Provisioner
+2025-09-10T09:21:34.2643039Z Hosted Compute Agent
+2025-09-10T09:21:34.2643979Z Version: 20250829.383
+2025-09-10T09:21:34.2645008Z Commit: 27cb235aab5b0e52e153a26cd86b4742e89dac5d
+2025-09-10T09:21:34.2646209Z Build Date: 2025-08-29T13:48:48Z
+2025-09-10T09:21:34.2647213Z ##[endgroup]
+2025-09-10T09:21:34.2648341Z ##[group]Operating System
+2025-09-10T09:21:34.2649321Z Ubuntu
+2025-09-10T09:21:34.2650086Z 24.04.3
+2025-09-10T09:21:34.2651426Z LTS
+2025-09-10T09:21:34.2652215Z ##[endgroup]
+2025-09-10T09:21:34.2653110Z ##[group]Runner Image
+2025-09-10T09:21:34.2654212Z Image: ubuntu-24.04
+2025-09-10T09:21:34.2655042Z Version: 20250907.24.1
+2025-09-10T09:21:34.2656838Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20250907.24/images/ubuntu/Ubuntu2404-Readme.md
+2025-09-10T09:21:34.2659728Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20250907.24
+2025-09-10T09:21:34.2661835Z ##[endgroup]
+2025-09-10T09:21:34.2666162Z ##[group]GITHUB_TOKEN Permissions
+2025-09-10T09:21:34.2669361Z Actions: write
+2025-09-10T09:21:34.2670505Z Attestations: write
+2025-09-10T09:21:34.2671558Z Checks: write
+2025-09-10T09:21:34.2672717Z Contents: write
+2025-09-10T09:21:34.2673600Z Deployments: write
+2025-09-10T09:21:34.2675179Z Discussions: write
+2025-09-10T09:21:34.2676209Z Issues: write
+2025-09-10T09:21:34.2677005Z Metadata: read
+2025-09-10T09:21:34.2678039Z Models: read
+2025-09-10T09:21:34.2678907Z Packages: write
+2025-09-10T09:21:34.2679796Z Pages: write
+2025-09-10T09:21:34.2681004Z PullRequests: write
+2025-09-10T09:21:34.2681969Z RepositoryProjects: write
+2025-09-10T09:21:34.2682955Z SecurityEvents: write
+2025-09-10T09:21:34.2684040Z Statuses: write
+2025-09-10T09:21:34.2684886Z ##[endgroup]
+2025-09-10T09:21:34.2688380Z Secret source: Actions
+2025-09-10T09:21:34.2689521Z Prepare workflow directory
+2025-09-10T09:21:34.3171511Z Prepare all required actions
+2025-09-10T09:21:34.3228247Z Getting action download info
+2025-09-10T09:21:34.5488509Z Download action repository 'actions/checkout@v5' (SHA:08c6903cd8c0fde910a37f88322edcfb5dd907a8)
+2025-09-10T09:21:34.7770056Z Download action repository 'cachix/install-nix-action@v31' (SHA:56a7bb7b56d9a92d4fd1bc05758de7eea4a370a8)
+2025-09-10T09:21:34.9314286Z Download action repository 'cachix/cachix-action@v15' (SHA:ad2ddac53f961de1989924296a1f236fcfbaa4fc)
+2025-09-10T09:21:35.4800567Z Complete job name: Check mergeability
+2025-09-10T09:21:35.5582812Z ##[group]Run actions/checkout@v5
+2025-09-10T09:21:35.5583936Z with:
+2025-09-10T09:21:35.5584547Z   ref: refs/pull/32/merge
+2025-09-10T09:21:35.5585274Z   fetch-depth: 1
+2025-09-10T09:21:35.5585938Z   repository: willcl-ark/bitcoin
+2025-09-10T09:21:35.5586999Z   token: ***
+2025-09-10T09:21:35.5587606Z   ssh-strict: true
+2025-09-10T09:21:35.5588230Z   ssh-user: git
+2025-09-10T09:21:35.5588883Z   persist-credentials: true
+2025-09-10T09:21:35.5589622Z   clean: true
+2025-09-10T09:21:35.5590280Z   sparse-checkout-cone-mode: true
+2025-09-10T09:21:35.5591362Z   fetch-tags: false
+2025-09-10T09:21:35.5592009Z   show-progress: true
+2025-09-10T09:21:35.5592670Z   lfs: false
+2025-09-10T09:21:35.5593274Z   submodules: false
+2025-09-10T09:21:35.5593937Z   set-safe-directory: true
+2025-09-10T09:21:35.5594929Z ##[endgroup]
+2025-09-10T09:21:35.6508406Z Syncing repository: willcl-ark/bitcoin
+2025-09-10T09:21:35.6510907Z ##[group]Getting Git version info
+2025-09-10T09:21:35.6512171Z Working directory is '/home/runner/work/bitcoin/bitcoin'
+2025-09-10T09:21:35.6513734Z [command]/usr/bin/git version
+2025-09-10T09:21:35.6601666Z git version 2.51.0
+2025-09-10T09:21:35.6623806Z ##[endgroup]
+2025-09-10T09:21:35.6640166Z Temporarily overriding HOME='/home/runner/work/_temp/972161ea-c2f4-4065-9747-3512d2c6de07' before making global git config changes
+2025-09-10T09:21:35.6644818Z Adding repository directory to the temporary git global config as a safe directory
+2025-09-10T09:21:35.6648122Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/bitcoin/bitcoin
+2025-09-10T09:21:35.6685088Z Deleting the contents of '/home/runner/work/bitcoin/bitcoin'
+2025-09-10T09:21:35.6688794Z ##[group]Initializing the repository
+2025-09-10T09:21:35.6694176Z [command]/usr/bin/git init /home/runner/work/bitcoin/bitcoin
+2025-09-10T09:21:35.6824316Z hint: Using 'master' as the name for the initial branch. This default branch name
+2025-09-10T09:21:35.6826799Z hint: is subject to change. To configure the initial branch name to use in all
+2025-09-10T09:21:35.6828952Z hint: of your new repositories, which will suppress this warning, call:
+2025-09-10T09:21:35.6830369Z hint:
+2025-09-10T09:21:35.6831854Z hint: 	git config --global init.defaultBranch <name>
+2025-09-10T09:21:35.6833575Z hint:
+2025-09-10T09:21:35.6835192Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2025-09-10T09:21:35.6837962Z hint: 'development'. The just-created branch can be renamed via this command:
+2025-09-10T09:21:35.6840108Z hint:
+2025-09-10T09:21:35.6841404Z hint: 	git branch -m <name>
+2025-09-10T09:21:35.6842625Z hint:
+2025-09-10T09:21:35.6844277Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2025-09-10T09:21:35.6847140Z Initialized empty Git repository in /home/runner/work/bitcoin/bitcoin/.git/
+2025-09-10T09:21:35.6850047Z [command]/usr/bin/git remote add origin https://github.com/willcl-ark/bitcoin
+2025-09-10T09:21:35.6879156Z ##[endgroup]
+2025-09-10T09:21:35.6881337Z ##[group]Disabling automatic garbage collection
+2025-09-10T09:21:35.6883236Z [command]/usr/bin/git config --local gc.auto 0
+2025-09-10T09:21:35.6911680Z ##[endgroup]
+2025-09-10T09:21:35.6913589Z ##[group]Setting up auth
+2025-09-10T09:21:35.6919115Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2025-09-10T09:21:35.6951247Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2025-09-10T09:21:35.7308789Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2025-09-10T09:21:35.7341838Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2025-09-10T09:21:35.7563759Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2025-09-10T09:21:35.7599424Z ##[endgroup]
+2025-09-10T09:21:35.7601589Z ##[group]Fetching the repository
+2025-09-10T09:21:35.7610041Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +refs/pull/32/merge:refs/remotes/pull/32/merge
+2025-09-10T09:21:36.8789802Z From https://github.com/willcl-ark/bitcoin
+2025-09-10T09:21:36.8792109Z  * [new ref]         refs/pull/32/merge -> pull/32/merge
+2025-09-10T09:21:36.8824283Z ##[endgroup]
+2025-09-10T09:21:36.8825178Z ##[group]Determining the checkout info
+2025-09-10T09:21:36.8827577Z ##[endgroup]
+2025-09-10T09:21:36.8833233Z [command]/usr/bin/git sparse-checkout disable
+2025-09-10T09:21:36.8876887Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2025-09-10T09:21:36.8903345Z ##[group]Checking out the ref
+2025-09-10T09:21:36.8908163Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/32/merge
+2025-09-10T09:21:37.1426247Z Note: switching to 'refs/remotes/pull/32/merge'.
+2025-09-10T09:21:37.1426855Z
+2025-09-10T09:21:37.1427238Z You are in 'detached HEAD' state. You can look around, make experimental
+2025-09-10T09:21:37.1428116Z changes and commit them, and you can discard any commits you make in this
+2025-09-10T09:21:37.1428943Z state without impacting any branches by switching back to a branch.
+2025-09-10T09:21:37.1429435Z
+2025-09-10T09:21:37.1429759Z If you want to create a new branch to retain commits you create, you may
+2025-09-10T09:21:37.1430639Z do so (now or later) by using -c with the switch command. Example:
+2025-09-10T09:21:37.1431811Z
+2025-09-10T09:21:37.1431997Z   git switch -c <new-branch-name>
+2025-09-10T09:21:37.1432327Z
+2025-09-10T09:21:37.1432511Z Or undo this operation with:
+2025-09-10T09:21:37.1432795Z
+2025-09-10T09:21:37.1432947Z   git switch -
+2025-09-10T09:21:37.1433189Z
+2025-09-10T09:21:37.1434006Z Turn off this advice by setting config variable advice.detachedHead to false
+2025-09-10T09:21:37.1434584Z
+2025-09-10T09:21:37.1435055Z HEAD is now at 478c3b9 Merge 1500bb359ef8aaee439c306a3c6ad01040edad9d into 6d820f024a93ff5f343fb64f7a714b12d263a5c0
+2025-09-10T09:21:37.1444484Z ##[endgroup]
+2025-09-10T09:21:37.1483360Z [command]/usr/bin/git log -1 --format=%H
+2025-09-10T09:21:37.1505919Z 478c3b91c915b970ffb4abf4abecc9db8887621b
+2025-09-10T09:21:37.1709994Z ##[group]Run cachix/install-nix-action@v31
+2025-09-10T09:21:37.1710301Z with:
+2025-09-10T09:21:37.1710510Z   nix_path: nixpkgs=channel:nixos-25.05
+2025-09-10T09:21:37.1711113Z   extra_nix_config: extra-sandbox-paths = /var/cache/ccache
+
+2025-09-10T09:21:37.1711451Z   enable_kvm: true
+2025-09-10T09:21:37.1711645Z   set_as_trusted_user: true
+2025-09-10T09:21:37.1711848Z ##[endgroup]
+2025-09-10T09:21:37.1796052Z ##[group]Run ${GITHUB_ACTION_PATH}/install-nix.sh
+2025-09-10T09:21:37.1796482Z [36;1m${GITHUB_ACTION_PATH}/install-nix.sh[0m
+2025-09-10T09:21:37.1913198Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2025-09-10T09:21:37.1913542Z env:
+2025-09-10T09:21:37.1913822Z   INPUT_EXTRA_NIX_CONFIG: extra-sandbox-paths = /var/cache/ccache
+
+2025-09-10T09:21:37.1914161Z   INPUT_GITHUB_ACCESS_TOKEN:
+2025-09-10T09:21:37.1914391Z   INPUT_INSTALL_OPTIONS:
+2025-09-10T09:21:37.1914601Z   INPUT_INSTALL_URL:
+2025-09-10T09:21:37.1914873Z   INPUT_NIX_PATH: nixpkgs=channel:nixos-25.05
+2025-09-10T09:21:37.1915131Z   INPUT_ENABLE_KVM: true
+2025-09-10T09:21:37.1915357Z   INPUT_SET_AS_TRUSTED_USER: true
+2025-09-10T09:21:37.1915803Z   GITHUB_TOKEN: ***
+2025-09-10T09:21:37.1915992Z ##[endgroup]
+2025-09-10T09:21:37.2009195Z ##[group]Enabling KVM support
+2025-09-10T09:21:37.2075917Z KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"
+2025-09-10T09:21:37.2370252Z Enabled KVM
+2025-09-10T09:21:37.2371184Z ##[endgroup]
+2025-09-10T09:21:37.2371727Z ##[group]Installing Nix
+2025-09-10T09:21:37.2654813Z installer options: --no-channel-add --nix-extra-conf-file /tmp/tmp.65dbGzIchU/nix.conf --daemon --daemon-user-count 8
+2025-09-10T09:21:37.4521172Z * Host releases.nixos.org:443 was resolved.
+2025-09-10T09:21:37.4526504Z * IPv6: 2a04:4e42:77::729
+2025-09-10T09:21:37.4526779Z * IPv4: 146.75.30.217
+2025-09-10T09:21:37.4527029Z *   Trying 146.75.30.217:443...
+2025-09-10T09:21:37.4533323Z * Connected to releases.nixos.org (146.75.30.217) port 443
+2025-09-10T09:21:37.4547158Z * ALPN: curl offers h2,http/1.1
+2025-09-10T09:21:37.4548776Z } [5 bytes data]
+2025-09-10T09:21:37.4549193Z * TLSv1.3 (OUT), TLS handshake, Client hello (1):
+2025-09-10T09:21:37.4549513Z } [512 bytes data]
+2025-09-10T09:21:37.4761203Z *  CAfile: /etc/ssl/certs/ca-certificates.crt
+2025-09-10T09:21:37.4761754Z *  CApath: /etc/ssl/certs
+2025-09-10T09:21:37.4762108Z { [5 bytes data]
+2025-09-10T09:21:37.4762500Z * TLSv1.3 (IN), TLS handshake, Server hello (2):
+2025-09-10T09:21:37.4762947Z { [104 bytes data]
+2025-09-10T09:21:37.4763323Z * TLSv1.2 (IN), TLS handshake, Certificate (11):
+2025-09-10T09:21:37.4763767Z { [2827 bytes data]
+2025-09-10T09:21:37.4768711Z * TLSv1.2 (IN), TLS handshake, Server key exchange (12):
+2025-09-10T09:21:37.4769253Z { [300 bytes data]
+2025-09-10T09:21:37.4771115Z * TLSv1.2 (IN), TLS handshake, Server finished (14):
+2025-09-10T09:21:37.4771611Z { [4 bytes data]
+2025-09-10T09:21:37.4772020Z * TLSv1.2 (OUT), TLS handshake, Client key exchange (16):
+2025-09-10T09:21:37.4772486Z } [37 bytes data]
+2025-09-10T09:21:37.4772925Z * TLSv1.2 (OUT), TLS change cipher, Change cipher spec (1):
+2025-09-10T09:21:37.4773393Z } [1 bytes data]
+2025-09-10T09:21:37.4773738Z * TLSv1.2 (OUT), TLS handshake, Finished (20):
+2025-09-10T09:21:37.4774157Z } [16 bytes data]
+2025-09-10T09:21:37.4784595Z * TLSv1.2 (IN), TLS handshake, Finished (20):
+2025-09-10T09:21:37.4785062Z { [16 bytes data]
+2025-09-10T09:21:37.4785598Z * SSL connection using TLSv1.2 / ECDHE-RSA-CHACHA20-POLY1305 / X25519 / RSASSA-PSS
+2025-09-10T09:21:37.4786244Z * ALPN: server accepted h2
+2025-09-10T09:21:37.4786602Z * Server certificate:
+2025-09-10T09:21:37.4786954Z *  subject: CN=releases.nixos.org
+2025-09-10T09:21:37.4787348Z *  start date: Aug 14 21:00:27 2025 GMT
+2025-09-10T09:21:37.4787766Z *  expire date: Sep 15 21:00:26 2026 GMT
+2025-09-10T09:21:37.4788396Z *  subjectAltName: host "releases.nixos.org" matched cert's "releases.nixos.org"
+2025-09-10T09:21:37.4789208Z *  issuer: C=BE; O=GlobalSign nv-sa; CN=GlobalSign Atlas R3 DV TLS CA 2025 Q3
+2025-09-10T09:21:37.4790117Z *  SSL certificate verify ok.
+2025-09-10T09:21:37.4790632Z *   Certificate level 0: Public key type RSA (2048/112 Bits/secBits), signed using sha256WithRSAEncryption
+2025-09-10T09:21:37.4791565Z *   Certificate level 1: Public key type RSA (2048/112 Bits/secBits), signed using sha256WithRSAEncryption
+2025-09-10T09:21:37.4792253Z *   Certificate level 2: Public key type RSA (2048/112 Bits/secBits), signed using sha256WithRSAEncryption
+2025-09-10T09:21:37.4792734Z } [5 bytes data]
+2025-09-10T09:21:37.4792931Z * using HTTP/2
+2025-09-10T09:21:37.4793279Z * [HTTP/2] [1] OPENED stream for https://releases.nixos.org/nix/nix-2.31.0/install
+2025-09-10T09:21:37.4793694Z * [HTTP/2] [1] [:method: GET]
+2025-09-10T09:21:37.4793938Z * [HTTP/2] [1] [:scheme: https]
+2025-09-10T09:21:37.4794203Z * [HTTP/2] [1] [:authority: releases.nixos.org]
+2025-09-10T09:21:37.4794746Z * [HTTP/2] [1] [:path: /nix/nix-2.31.0/install]
+2025-09-10T09:21:37.4795144Z * [HTTP/2] [1] [user-agent: curl/8.5.0]
+2025-09-10T09:21:37.4795588Z * [HTTP/2] [1] [accept: */*]
+2025-09-10T09:21:37.4795937Z } [5 bytes data]
+2025-09-10T09:21:37.4796223Z > GET /nix/nix-2.31.0/install HTTP/2
+2025-09-10T09:21:37.4796622Z > Host: releases.nixos.org
+2025-09-10T09:21:37.4796869Z > User-Agent: curl/8.5.0
+2025-09-10T09:21:37.4797093Z > Accept: */*
+2025-09-10T09:21:37.4797283Z >
+2025-09-10T09:21:37.4797469Z { [5 bytes data]
+2025-09-10T09:21:37.4801732Z < HTTP/2 200
+2025-09-10T09:21:37.4802115Z < last-modified: Mon, 25 Aug 2025 08:25:33 GMT
+2025-09-10T09:21:37.4802618Z < etag: "20e655186ebb912eee96d1214355c4e3"
+2025-09-10T09:21:37.4803136Z < x-amz-server-side-encryption: AES256
+2025-09-10T09:21:37.4803565Z < content-type: text/plain
+2025-09-10T09:21:37.4803905Z < server: AmazonS3
+2025-09-10T09:21:37.4804386Z < via: 1.1 varnish, 1.1 varnish
+2025-09-10T09:21:37.4804781Z < access-control-allow-origin: *
+2025-09-10T09:21:37.4805163Z < accept-ranges: bytes
+2025-09-10T09:21:37.4805516Z < date: Wed, 10 Sep 2025 09:21:37 GMT
+2025-09-10T09:21:37.4805789Z < age: 88271
+2025-09-10T09:21:37.4806055Z < x-served-by: cache-dub4379-DUB, cache-iad-kiad7000073-IAD
+2025-09-10T09:21:37.4806350Z < x-cache: HIT, HIT
+2025-09-10T09:21:37.4806539Z < x-cache-hits: 3, 3
+2025-09-10T09:21:37.4806739Z < content-length: 4267
+2025-09-10T09:21:37.4806927Z <
+2025-09-10T09:21:37.4807083Z { [4267 bytes data]
+2025-09-10T09:21:37.4807315Z * Connection #0 to host releases.nixos.org left intact
+2025-09-10T09:21:37.4871036Z downloading Nix 2.31.0 binary tarball for x86_64-linux from 'https://releases.nixos.org/nix/nix-2.31.0/nix-2.31.0-x86_64-linux.tar.xz' to '/tmp/nix-binary-tarball-unpack.w7VaAl7o1W'...
+2025-09-10T09:21:37.4917865Z   % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+2025-09-10T09:21:37.4918570Z                                  Dload  Upload   Total   Spent    Left  Speed
+2025-09-10T09:21:37.4918815Z
+2025-09-10T09:21:37.5933892Z   0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0
+2025-09-10T09:21:37.5934370Z 100 24.6M  100 24.6M    0     0   242M      0 --:--:-- --:--:-- --:--:--  244M
+2025-09-10T09:21:39.2969694Z Note: a multi-user installation is possible. See https://nix.dev/manual/nix/stable/installation/installing-binary.html#multi-user-installation
+2025-09-10T09:21:39.2980015Z [1;31mSwitching to the Multi-user Installer[0m
+2025-09-10T09:21:39.3084592Z [32mWelcome to the Multi-User Nix Installation
+2025-09-10T09:21:39.3095033Z [0m
+2025-09-10T09:21:39.3095840Z This installation tool will set up your computer with the Nix package
+2025-09-10T09:21:39.3096508Z manager. This will happen in a few stages:
+2025-09-10T09:21:39.3096828Z
+2025-09-10T09:21:39.3097110Z 1. Make sure your computer doesn't already have Nix. If it does, I
+2025-09-10T09:21:39.3097794Z    will show you instructions on how to clean up your old install.
+2025-09-10T09:21:39.3098211Z
+2025-09-10T09:21:39.3098454Z 2. Show you what I am going to install and where. Then I will ask
+2025-09-10T09:21:39.3098990Z    if you are ready to continue.
+2025-09-10T09:21:39.3099245Z
+2025-09-10T09:21:39.3100077Z 3. Create the system users [34m(uids [30001..30008])[0m and groups [34m(gid 30000)[0m
+2025-09-10T09:21:39.3101127Z    that the Nix daemon uses to run builds. To create system users
+2025-09-10T09:21:39.3101738Z    in a different range, exit and run this tool again with
+2025-09-10T09:21:39.3102237Z    NIX_FIRST_BUILD_UID set.
+2025-09-10T09:21:39.3102478Z
+2025-09-10T09:21:39.3102720Z 4. Perform the basic installation of the Nix files daemon.
+2025-09-10T09:21:39.3103092Z
+2025-09-10T09:21:39.3103383Z 5. Configure your shell to import special Nix Profile files, so you
+2025-09-10T09:21:39.3103913Z    can use Nix.
+2025-09-10T09:21:39.3104098Z
+2025-09-10T09:21:39.3104229Z 6. Start the Nix daemon.
+2025-09-10T09:21:39.3104530Z
+2025-09-10T09:21:39.3105007Z [32m[4;32mWould you like to see a more detailed list of what I will do?
+2025-09-10T09:21:39.3105692Z [0mNo TTY, assuming you would say yes :)
+2025-09-10T09:21:39.3109706Z
+2025-09-10T09:21:39.3109927Z I will:
+2025-09-10T09:21:39.3110161Z
+2025-09-10T09:21:39.3110415Z  - make sure your computer doesn't already have Nix files
+2025-09-10T09:21:39.3111217Z    (if it does, I will tell you how to clean them up.)
+2025-09-10T09:21:39.3111840Z  - create local users (see the list above for the users I'll make)
+2025-09-10T09:21:39.3112392Z  - create a local group (nixbld)
+2025-09-10T09:21:39.3112657Z  - install Nix in /nix
+2025-09-10T09:21:39.3112889Z  - create a configuration file in /etc/nix
+2025-09-10T09:21:39.3113217Z  - set up the "default profile" by creating some Nix-related files in
+2025-09-10T09:21:39.3113523Z    /root
+2025-09-10T09:21:39.3126952Z  - back up /etc/bash.bashrc to /etc/bash.bashrc.backup-before-nix
+2025-09-10T09:21:39.3127646Z  - update /etc/bash.bashrc to include some Nix configuration
+2025-09-10T09:21:39.3138684Z  - load and start a service (at /etc/systemd/system/nix-daemon.service
+2025-09-10T09:21:39.3139410Z    and /etc/systemd/system/nix-daemon.socket) for nix-daemon
+2025-09-10T09:21:39.3139807Z
+2025-09-10T09:21:39.3141369Z [32m[4;32mReady to continue?
+2025-09-10T09:21:39.3141923Z [0mNo TTY, assuming you would say yes :)
+2025-09-10T09:21:39.3173432Z
+2025-09-10T09:21:39.3173867Z [34m---- let's talk about sudo -----------------------------------------------------
+2025-09-10T09:21:39.3184015Z [0mThis script is going to call sudo a lot. Normally, it would show you
+2025-09-10T09:21:39.3184734Z exactly what commands it is running and why. However, the script is
+2025-09-10T09:21:39.3185227Z run in a headless fashion, like this:
+2025-09-10T09:21:39.3185390Z
+2025-09-10T09:21:39.3185527Z   $ curl -L https://nixos.org/nix/install | sh
+2025-09-10T09:21:39.3185857Z
+2025-09-10T09:21:39.3186116Z or maybe in a CI pipeline. Because of that, I'm going to skip the
+2025-09-10T09:21:39.3186538Z verbose output in the interest of brevity.
+2025-09-10T09:21:39.3186712Z
+2025-09-10T09:21:39.3186789Z If you would like to
+2025-09-10T09:21:39.3186979Z see the output, try like this:
+2025-09-10T09:21:39.3187122Z
+2025-09-10T09:21:39.3187313Z   $ curl -L -o install-nix https://nixos.org/nix/install
+2025-09-10T09:21:39.3187830Z   $ sh ./install-nix
+2025-09-10T09:21:39.3188025Z
+2025-09-10T09:21:39.3188037Z
+2025-09-10T09:21:39.3188366Z [32m~~> Checking for artifacts of previous installs
+2025-09-10T09:21:39.3197134Z [0mBefore I try to install, I'll check for signs Nix already is or has
+2025-09-10T09:21:39.3197485Z been installed on this system.
+2025-09-10T09:21:39.3243022Z
+2025-09-10T09:21:39.3243765Z [34m---- Nix config report ---------------------------------------------------------
+2025-09-10T09:21:39.3244454Z [0m[1m        Temp Dir[0m:	/tmp/tmp.31xcprhV4U
+2025-09-10T09:21:39.3244928Z [1m        Nix Root[0m:	/nix
+2025-09-10T09:21:39.3245299Z [1m     Build Users[0m:	8
+2025-09-10T09:21:39.3245610Z [1m  Build Group ID[0m:	30000
+2025-09-10T09:21:39.3245853Z [1mBuild Group Name[0m:	nixbld
+2025-09-10T09:21:39.3246004Z
+2025-09-10T09:21:39.3246095Z [4;34mbuild users:
+2025-09-10T09:21:39.3318909Z [0m[1m    Username[0m:	UID
+2025-09-10T09:21:39.3320194Z [1m     nixbld1[0m:	30001
+2025-09-10T09:21:39.3320913Z [1m     nixbld2[0m:	30002
+2025-09-10T09:21:39.3321442Z [1m     nixbld3[0m:	30003
+2025-09-10T09:21:39.3321879Z [1m     nixbld4[0m:	30004
+2025-09-10T09:21:39.3322241Z [1m     nixbld5[0m:	30005
+2025-09-10T09:21:39.3331752Z [1m     nixbld6[0m:	30006
+2025-09-10T09:21:39.3341916Z [1m     nixbld7[0m:	30007
+2025-09-10T09:21:39.3352096Z [1m     nixbld8[0m:	30008
+2025-09-10T09:21:39.3352356Z
+2025-09-10T09:21:39.3353803Z [32m[4;32mReady to continue?
+2025-09-10T09:21:39.3354326Z [0mNo TTY, assuming you would say yes :)
+2025-09-10T09:21:39.3354636Z
+2025-09-10T09:21:39.3354868Z [32m~~> Setting up the build group nixbld
+2025-09-10T09:21:39.3727933Z [0m[1m            Created[0m:	Yes
+2025-09-10T09:21:39.3749874Z
+2025-09-10T09:21:39.3750303Z [32m~~> Setting up the build user nixbld1
+2025-09-10T09:21:39.3938880Z useradd warning: nixbld1's uid 30001 is greater than SYS_UID_MAX 999
+2025-09-10T09:21:39.4065096Z [0m[1m           Created[0m:	Yes
+2025-09-10T09:21:39.4070239Z [1m            Hidden[0m:	Yes
+2025-09-10T09:21:39.4088183Z [1m    Home Directory[0m:	/var/empty
+2025-09-10T09:21:39.4108012Z [1m              Note[0m:	Nix build user 1
+2025-09-10T09:21:39.4125626Z [1m   Logins Disabled[0m:	Yes
+2025-09-10T09:21:39.4153741Z [1m  Member of nixbld[0m:	Yes
+2025-09-10T09:21:39.4171502Z [1m    PrimaryGroupID[0m:	30000
+2025-09-10T09:21:39.4181719Z
+2025-09-10T09:21:39.4182084Z [32m~~> Setting up the build user nixbld2
+2025-09-10T09:21:39.4325178Z useradd warning: nixbld2's uid 30002 is greater than SYS_UID_MAX 999
+2025-09-10T09:21:39.4436203Z [0m[1m           Created[0m:	Yes
+2025-09-10T09:21:39.4441566Z [1m            Hidden[0m:	Yes
+2025-09-10T09:21:39.4459611Z [1m    Home Directory[0m:	/var/empty
+2025-09-10T09:21:39.4479697Z [1m              Note[0m:	Nix build user 2
+2025-09-10T09:21:39.4497468Z [1m   Logins Disabled[0m:	Yes
+2025-09-10T09:21:39.4516127Z [1m  Member of nixbld[0m:	Yes
+2025-09-10T09:21:39.4533897Z [1m    PrimaryGroupID[0m:	30000
+2025-09-10T09:21:39.4544730Z
+2025-09-10T09:21:39.4545137Z [32m~~> Setting up the build user nixbld3
+2025-09-10T09:21:39.4694088Z useradd warning: nixbld3's uid 30003 is greater than SYS_UID_MAX 999
+2025-09-10T09:21:39.4809775Z [0m[1m           Created[0m:	Yes
+2025-09-10T09:21:39.4815219Z [1m            Hidden[0m:	Yes
+2025-09-10T09:21:39.4833274Z [1m    Home Directory[0m:	/var/empty
+2025-09-10T09:21:39.4853585Z [1m              Note[0m:	Nix build user 3
+2025-09-10T09:21:39.4871636Z [1m   Logins Disabled[0m:	Yes
+2025-09-10T09:21:39.4889418Z [1m  Member of nixbld[0m:	Yes
+2025-09-10T09:21:39.4907817Z [1m    PrimaryGroupID[0m:	30000
+2025-09-10T09:21:39.4918794Z
+2025-09-10T09:21:39.4919166Z [32m~~> Setting up the build user nixbld4
+2025-09-10T09:21:39.5059234Z useradd warning: nixbld4's uid 30004 is greater than SYS_UID_MAX 999
+2025-09-10T09:21:39.5176221Z [0m[1m           Created[0m:	Yes
+2025-09-10T09:21:39.5181681Z [1m            Hidden[0m:	Yes
+2025-09-10T09:21:39.5199642Z [1m    Home Directory[0m:	/var/empty
+2025-09-10T09:21:39.5219966Z [1m              Note[0m:	Nix build user 4
+2025-09-10T09:21:39.5238017Z [1m   Logins Disabled[0m:	Yes
+2025-09-10T09:21:39.5256378Z [1m  Member of nixbld[0m:	Yes
+2025-09-10T09:21:39.5275153Z [1m    PrimaryGroupID[0m:	30000
+2025-09-10T09:21:39.5285367Z
+2025-09-10T09:21:39.5285646Z [32m~~> Setting up the build user nixbld5
+2025-09-10T09:21:39.5432420Z useradd warning: nixbld5's uid 30005 is greater than SYS_UID_MAX 999
+2025-09-10T09:21:39.5553825Z [0m[1m           Created[0m:	Yes
+2025-09-10T09:21:39.5558970Z [1m            Hidden[0m:	Yes
+2025-09-10T09:21:39.5576803Z [1m    Home Directory[0m:	/var/empty
+2025-09-10T09:21:39.5596658Z [1m              Note[0m:	Nix build user 5
+2025-09-10T09:21:39.5614568Z [1m   Logins Disabled[0m:	Yes
+2025-09-10T09:21:39.5632965Z [1m  Member of nixbld[0m:	Yes
+2025-09-10T09:21:39.5650904Z [1m    PrimaryGroupID[0m:	30000
+2025-09-10T09:21:39.5661533Z
+2025-09-10T09:21:39.5662027Z [32m~~> Setting up the build user nixbld6
+2025-09-10T09:21:39.5807858Z useradd warning: nixbld6's uid 30006 is greater than SYS_UID_MAX 999
+2025-09-10T09:21:39.5934397Z [0m[1m           Created[0m:	Yes
+2025-09-10T09:21:39.5939593Z [1m            Hidden[0m:	Yes
+2025-09-10T09:21:39.5957507Z [1m    Home Directory[0m:	/var/empty
+2025-09-10T09:21:39.5977815Z [1m              Note[0m:	Nix build user 6
+2025-09-10T09:21:39.5995557Z [1m   Logins Disabled[0m:	Yes
+2025-09-10T09:21:39.6014467Z [1m  Member of nixbld[0m:	Yes
+2025-09-10T09:21:39.6032289Z [1m    PrimaryGroupID[0m:	30000
+2025-09-10T09:21:39.6043141Z
+2025-09-10T09:21:39.6179052Z useradd warning: nixbld7's uid 30007 is greater than SYS_UID_MAX 999
+2025-09-10T09:21:39.6179532Z [32m~~> Setting up the build user nixbld7
+2025-09-10T09:21:39.6293027Z [0m[1m           Created[0m:	Yes
+2025-09-10T09:21:39.6298610Z [1m            Hidden[0m:	Yes
+2025-09-10T09:21:39.6321295Z [1m    Home Directory[0m:	/var/empty
+2025-09-10T09:21:39.6343880Z [1m              Note[0m:	Nix build user 7
+2025-09-10T09:21:39.6365726Z [1m   Logins Disabled[0m:	Yes
+2025-09-10T09:21:39.6390193Z [1m  Member of nixbld[0m:	Yes
+2025-09-10T09:21:39.6412478Z [1m    PrimaryGroupID[0m:	30000
+2025-09-10T09:21:39.6425240Z
+2025-09-10T09:21:39.6425683Z [32m~~> Setting up the build user nixbld8
+2025-09-10T09:21:39.6572131Z useradd warning: nixbld8's uid 30008 is greater than SYS_UID_MAX 999
+2025-09-10T09:21:39.6695786Z [0m[1m           Created[0m:	Yes
+2025-09-10T09:21:39.6702571Z [1m            Hidden[0m:	Yes
+2025-09-10T09:21:39.6720826Z [1m    Home Directory[0m:	/var/empty
+2025-09-10T09:21:39.6740929Z [1m              Note[0m:	Nix build user 8
+2025-09-10T09:21:39.6759021Z [1m   Logins Disabled[0m:	Yes
+2025-09-10T09:21:39.6778182Z [1m  Member of nixbld[0m:	Yes
+2025-09-10T09:21:39.6796208Z [1m    PrimaryGroupID[0m:	30000
+2025-09-10T09:21:39.6796505Z
+2025-09-10T09:21:39.6797266Z [32m~~> Setting up the basic directory structure
+2025-09-10T09:21:39.6993137Z [0minstall: creating directory '/nix'
+2025-09-10T09:21:39.6993771Z install: creating directory '/nix/var'
+2025-09-10T09:21:39.6994347Z install: creating directory '/nix/var/log'
+2025-09-10T09:21:39.6994921Z install: creating directory '/nix/var/log/nix'
+2025-09-10T09:21:39.6995607Z install: creating directory '/nix/var/log/nix/drvs'
+2025-09-10T09:21:39.6996251Z install: creating directory '/nix/var/nix'
+2025-09-10T09:21:39.6996864Z install: creating directory '/nix/var/nix/db'
+2025-09-10T09:21:39.6997513Z install: creating directory '/nix/var/nix/gcroots'
+2025-09-10T09:21:39.6998187Z install: creating directory '/nix/var/nix/profiles'
+2025-09-10T09:21:39.6998881Z install: creating directory '/nix/var/nix/temproots'
+2025-09-10T09:21:39.6999442Z install: creating directory '/nix/var/nix/userpool'
+2025-09-10T09:21:39.7000038Z install: creating directory '/nix/var/nix/daemon-socket'
+2025-09-10T09:21:39.7000876Z install: creating directory '/nix/var/nix/gcroots/per-user'
+2025-09-10T09:21:39.7001468Z install: creating directory '/nix/var/nix/profiles/per-user'
+2025-09-10T09:21:39.7072613Z install: creating directory '/nix/store'
+2025-09-10T09:21:39.7150504Z install: creating directory '/etc/nix'
+2025-09-10T09:21:39.7160166Z
+2025-09-10T09:21:39.7160469Z [32m~~> Installing Nix
+2025-09-10T09:21:39.9238993Z [0m      Alright! We have our first nix at /nix/store/ps7946ckblckgay23hljq2pyd9p4ixbi-nix-2.31.0
+2025-09-10T09:21:39.9699774Z       Just finished getting the nix database ready.
+2025-09-10T09:21:39.9702490Z
+2025-09-10T09:21:39.9703796Z [32m~~> Setting up shell profiles: /etc/bashrc /etc/profile.d/nix.sh /etc/zshrc /etc/bash.bashrc /etc/zsh/zshrc
+2025-09-10T09:21:39.9867412Z [0m
+2025-09-10T09:21:39.9867678Z # Nix
+2025-09-10T09:21:39.9868201Z if [ -e '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh' ]; then
+2025-09-10T09:21:39.9868679Z   . '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh'
+2025-09-10T09:21:39.9868980Z fi
+2025-09-10T09:21:39.9869135Z # End Nix
+2025-09-10T09:21:39.9869228Z
+2025-09-10T09:21:40.0035794Z
+2025-09-10T09:21:40.0035935Z # Nix
+2025-09-10T09:21:40.0036287Z if [ -e '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh' ]; then
+2025-09-10T09:21:40.0036882Z   . '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh'
+2025-09-10T09:21:40.0037421Z fi
+2025-09-10T09:21:40.0037685Z # End Nix
+2025-09-10T09:21:40.0037850Z
+2025-09-10T09:21:40.0203925Z
+2025-09-10T09:21:40.0204082Z # Nix
+2025-09-10T09:21:40.0204608Z if [ -e '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh' ]; then
+2025-09-10T09:21:40.0205285Z   . '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh'
+2025-09-10T09:21:40.0205580Z fi
+2025-09-10T09:21:40.0205735Z # End Nix
+2025-09-10T09:21:40.0205830Z
+2025-09-10T09:21:40.0370008Z
+2025-09-10T09:21:40.0370172Z # Nix
+2025-09-10T09:21:40.0371155Z if [ -e '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh' ]; then
+2025-09-10T09:21:40.0371763Z   . '/nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh'
+2025-09-10T09:21:40.0372076Z fi
+2025-09-10T09:21:40.0372238Z # End Nix
+2025-09-10T09:21:40.0372402Z
+2025-09-10T09:21:40.0394967Z
+2025-09-10T09:21:40.0396091Z [32m~~> Setting up shell profiles for Fish with conf.d/nix.fish inside /etc/fish /usr/local/etc/fish /opt/homebrew/etc/fish /opt/local/etc/fish
+2025-09-10T09:21:40.0533132Z [0m
+2025-09-10T09:21:40.0533532Z [32m~~> Setting up the default profile
+2025-09-10T09:21:40.0835744Z installing 'nix-2.31.0'
+2025-09-10T09:21:40.0979462Z building '/nix/store/n3qx3wjxl8vzywkz472siwc2y9ympcc4-user-environment.drv'...
+2025-09-10T09:21:40.1393737Z installing 'nss-cacert-3.113.1'
+2025-09-10T09:21:40.1533694Z building '/nix/store/2nvwvf2fcnh7a6xinvnczyl7712z5vhn-user-environment.drv'...
+2025-09-10T09:21:40.1752429Z [0m
+2025-09-10T09:21:40.1752879Z [32m~~> Setting up the nix-daemon systemd service
+2025-09-10T09:21:40.2119306Z Created symlink /etc/systemd/system/nix-daemon.service → /nix/var/nix/profiles/default/lib/systemd/system/nix-daemon.service.
+2025-09-10T09:21:40.4874170Z Created symlink /etc/systemd/system/nix-daemon.socket → /nix/var/nix/profiles/default/lib/systemd/system/nix-daemon.socket.
+2025-09-10T09:21:40.4875642Z Created symlink /etc/systemd/system/sockets.target.wants/nix-daemon.socket → /nix/var/nix/profiles/default/lib/systemd/system/nix-daemon.socket.
+2025-09-10T09:21:41.0594819Z [0m[32mAlright! We're done!
+2025-09-10T09:21:41.0615710Z [0mTry it! Open a new terminal, and type:
+2025-09-10T09:21:41.0616573Z
+2025-09-10T09:21:41.0616927Z   $ nix-shell -p nix-info --run "nix-info -m"
+2025-09-10T09:21:41.0617278Z
+2025-09-10T09:21:41.0617555Z Thank you for using this installer. If you have any feedback or need
+2025-09-10T09:21:41.0618107Z help, don't hesitate:
+2025-09-10T09:21:41.0618310Z
+2025-09-10T09:21:41.0618438Z You can open an issue at
+2025-09-10T09:21:41.0619043Z https://github.com/NixOS/nix/issues/new?labels=installer&template=installer.md
+2025-09-10T09:21:41.0619547Z
+2025-09-10T09:21:41.0619794Z Or get in touch with the community: https://nixos.org/community
+2025-09-10T09:21:41.0637205Z
+2025-09-10T09:21:41.0637945Z [34m---- Reminders -----------------------------------------------------------------
+2025-09-10T09:21:41.0638695Z [0m[34m[ 1 ][0m
+2025-09-10T09:21:41.0639165Z Nix won't work in active shell sessions until you restart them.
+2025-09-10T09:21:41.0639858Z
+2025-09-10T09:21:41.1382356Z ##[endgroup]
+2025-09-10T09:21:41.1444910Z ##[group]Run sudo mkdir -m0775 -p /var/cache/ccache
+2025-09-10T09:21:41.1445275Z [36;1msudo mkdir -m0775 -p /var/cache/ccache[0m
+2025-09-10T09:21:41.1445607Z [36;1msudo chown -R --reference=/nix/store /var/cache/ccache[0m
+2025-09-10T09:21:41.1445916Z [36;1msudo cat /etc/nix/nix.conf[0m
+2025-09-10T09:21:41.1479286Z shell: /usr/bin/bash -e {0}
+2025-09-10T09:21:41.1479513Z env:
+2025-09-10T09:21:41.1479701Z   NIX_PATH: nixpkgs=channel:nixos-25.05
+2025-09-10T09:21:41.1479961Z   TMPDIR: /home/runner/work/_temp
+2025-09-10T09:21:41.1480183Z ##[endgroup]
+2025-09-10T09:21:41.1734243Z show-trace = true
+2025-09-10T09:21:41.1734544Z max-jobs = auto
+2025-09-10T09:21:41.1734745Z trusted-users = root runner
+2025-09-10T09:21:41.1735370Z access-tokens = github.com=***
+2025-09-10T09:21:41.1735808Z extra-sandbox-paths = /var/cache/ccache
+2025-09-10T09:21:41.1736131Z
+2025-09-10T09:21:41.1736317Z experimental-features = nix-command flakes
+2025-09-10T09:21:41.1736852Z always-allow-substitutes = true
+2025-09-10T09:21:41.1737258Z build-users-group = nixbld
+2025-09-10T09:21:41.1801239Z ##[group]Run cachix/cachix-action@v15
+2025-09-10T09:21:41.1801528Z with:
+2025-09-10T09:21:41.1801701Z   name: bitcoin-core
+2025-09-10T09:21:41.1802614Z   authToken: ***
+2025-09-10T09:21:41.1802811Z   skipPush: false
+2025-09-10T09:21:41.1803005Z   skipAddingSubstituter: false
+2025-09-10T09:21:41.1803221Z   useDaemon: true
+2025-09-10T09:21:41.1803381Z env:
+2025-09-10T09:21:41.1803555Z   NIX_PATH: nixpkgs=channel:nixos-25.05
+2025-09-10T09:21:41.1803808Z   TMPDIR: /home/runner/work/_temp
+2025-09-10T09:21:41.1804016Z ##[endgroup]
+2025-09-10T09:21:41.2238505Z ##[group]Cachix: installing
+2025-09-10T09:21:41.2279996Z [command]/usr/bin/bash -c nix-env --quiet -j8 -iA cachix -f https://cachix.org/api/v1/install
+2025-09-10T09:21:43.2392886Z ##[endgroup]
+2025-09-10T09:21:43.2394977Z ##[group]Cachix: checking version
+2025-09-10T09:21:43.2395499Z [command]/home/runner/.nix-profile/bin/cachix --version
+2025-09-10T09:21:43.2771524Z cachix 1.7.9
+2025-09-10T09:21:43.2811770Z ##[endgroup]
+2025-09-10T09:21:43.2815072Z [command]/home/runner/.nix-profile/bin/cachix authtoken ***
+2025-09-10T09:21:43.3183523Z Written to /home/runner/.config/cachix/cachix.dhall
+2025-09-10T09:21:43.3223406Z ##[group]Cachix: using cache bitcoin-core
+2025-09-10T09:21:43.3225761Z [command]/home/runner/.nix-profile/bin/cachix use bitcoin-core
+2025-09-10T09:21:43.4885486Z No config at /home/runner/.config/nix/nix.conf:
+2025-09-10T09:21:43.4886166Z
+2025-09-10T09:21:43.4886602Z /home/runner/.config/nix/nix.conf: openFile: does not exist (No such file or directory)
+2025-09-10T09:21:43.4887150Z
+2025-09-10T09:21:43.4887609Z Configured https://bitcoin-core.cachix.org binary cache in /home/runner/.config/nix/nix.conf
+2025-09-10T09:21:43.4974899Z ##[endgroup]
+2025-09-10T09:21:43.5411259Z ##[group]Run nix flake check ci/
+2025-09-10T09:21:43.5411584Z [36;1mnix flake check ci/[0m
+2025-09-10T09:21:43.5442403Z shell: /usr/bin/bash -e {0}
+2025-09-10T09:21:43.5442629Z env:
+2025-09-10T09:21:43.5442810Z   NIX_PATH: nixpkgs=channel:nixos-25.05
+2025-09-10T09:21:43.5443062Z   TMPDIR: /home/runner/work/_temp
+2025-09-10T09:21:43.5443578Z   NIX_USER_CONF_FILES: /home/runner/work/_temp/cachix-daemon-3mdA9y/nix.conf:/home/runner/.config/nix/nix.conf:/etc/xdg/nix/nix.conf
+2025-09-10T09:21:43.5444172Z   CACHIX_DAEMON_DIR: /home/runner/work/_temp/cachix-daemon-3mdA9y
+2025-09-10T09:21:43.5444477Z ##[endgroup]
+2025-09-10T09:21:43.8562037Z evaluating flake...
+2025-09-10T09:21:44.1125886Z unpacking 'github:numtide/flake-utils/11707dc2f618dd54ca8739b309ec4fc024de578b?narHash=sha256-l0KFg5HjrsfsO/JpG%2Br7fRrqm12kzFHyUHqHCVpMMbI%3D' into the Git cache...
+2025-09-10T09:21:44.3055454Z unpacking 'github:nix-systems/default/da67096a3b9bf56a91d16901293e51ba5b49a27e?narHash=sha256-Vy1rq5AaRuLzOxct8nz4T6wlgyUR7zLU309k9mBC768%3D' into the Git cache...
+2025-09-10T09:21:44.4249002Z checking flake output 'formatter'...
+2025-09-10T09:21:44.4250053Z checking derivation formatter.x86_64-linux...
+2025-09-10T09:21:44.4334482Z copying path '/nix/store/7xjjbj14r58g4k9iihcrb9r6j6ib9mi2-source' from 'https://cache.nixos.org'...
+2025-09-10T09:22:06.5527012Z derivation evaluated to /nix/store/a8kqazzzxsf72n4bgvk48lm9ch9i4i2n-alejandra-4.0.0.drv
+2025-09-10T09:22:06.5527553Z checking flake output 'packages'...
+2025-09-10T09:22:06.5527854Z checking derivation packages.x86_64-linux.bitcoind...
+2025-09-10T09:22:07.5422102Z derivation evaluated to /nix/store/xgsp00lznps8287qcj8q37s123lvq7hw-bitcoin-core-unstable.drv
+2025-09-10T09:22:07.5423677Z checking derivation packages.x86_64-linux.default...
+2025-09-10T09:22:07.5424488Z derivation evaluated to /nix/store/xgsp00lznps8287qcj8q37s123lvq7hw-bitcoin-core-unstable.drv
+2025-09-10T09:22:07.5425475Z warning: The check omitted these incompatible systems: aarch64-darwin, aarch64-linux, x86_64-darwin
+2025-09-10T09:22:07.5426206Z Use '--all-systems' to check all.
+2025-09-10T09:22:07.5587758Z ##[group]Run nix build ci/
+2025-09-10T09:22:07.5588170Z [36;1mnix build ci/[0m
+2025-09-10T09:22:07.5627173Z shell: /usr/bin/bash -e {0}
+2025-09-10T09:22:07.5627518Z env:
+2025-09-10T09:22:07.5627802Z   NIX_PATH: nixpkgs=channel:nixos-25.05
+2025-09-10T09:22:07.5628225Z   TMPDIR: /home/runner/work/_temp
+2025-09-10T09:22:07.5629095Z   NIX_USER_CONF_FILES: /home/runner/work/_temp/cachix-daemon-3mdA9y/nix.conf:/home/runner/.config/nix/nix.conf:/etc/xdg/nix/nix.conf
+2025-09-10T09:22:07.5630103Z   CACHIX_DAEMON_DIR: /home/runner/work/_temp/cachix-daemon-3mdA9y
+2025-09-10T09:22:07.5630609Z ##[endgroup]
+2025-09-10T09:22:09.1744594Z this derivation will be built:
+2025-09-10T09:22:09.1745984Z   /nix/store/xgsp00lznps8287qcj8q37s123lvq7hw-bitcoin-core-unstable.drv
+2025-09-10T09:22:09.1746786Z these 95 paths will be fetched (353.42 MiB download, 2257.75 MiB unpacked):
+2025-09-10T09:22:09.1747616Z   /nix/store/smkzrg2vvp3lng3hq7v9svfni5mnqjh2-bash-interactive-5.2p37
+2025-09-10T09:22:09.1748521Z   /nix/store/hcn4hc7dw4dkwyvgsln9kj4mh083l28n-bcc-0.34.0
+2025-09-10T09:22:09.1749185Z   /nix/store/ap35np2bkwaba3rxs3qlxpma57n2awyb-binutils-2.44
+2025-09-10T09:22:09.1749875Z   /nix/store/6lgw1bymkzkld77zz4xfy6cmkjpcy2i6-binutils-2.44-lib
+2025-09-10T09:22:09.1750524Z   /nix/store/rbx0k3r451k51yi0plp9jm4p7267ix08-binutils-2.44-lib
+2025-09-10T09:22:09.1751381Z   /nix/store/87zpmcmwvn48z4lbrfba74b312h22s6c-binutils-wrapper-2.44
+2025-09-10T09:22:09.1752051Z   /nix/store/yjs2s4jpzfcpkwcjrm3iknl61g1hsj5a-boost-1.87.0
+2025-09-10T09:22:09.1752684Z   /nix/store/g646zmxwkmss17zijhq8vdkfi5rj3j5d-boost-1.87.0-dev
+2025-09-10T09:22:09.1753332Z   /nix/store/pqz8f7rii6bziayh1mqfajyxq26csvy2-bpftrace-0.23.2
+2025-09-10T09:22:09.1753961Z   /nix/store/5gmj3ir468k28nnp5r9nsfbdnm7qv3dc-brotli-1.1.0-lib
+2025-09-10T09:22:09.1754581Z   /nix/store/w1pxx760yidi7n9vbi5bhpii9xxl5vdj-bzip2-1.0.8-bin
+2025-09-10T09:22:09.1755129Z   /nix/store/y475cj1vkm11pvyk39zsfizja1k2qk22-c-ares-1.34.5
+2025-09-10T09:22:09.1755637Z   /nix/store/za4fd1fwdy0l0dj7fyv9cxn9a632w4as-capnproto-1.1.0
+2025-09-10T09:22:09.1756106Z   /nix/store/zkkxwl2sq6r4drnrng91f1xi5n5j3sm6-ccache-4.11.3
+2025-09-10T09:22:09.1756580Z   /nix/store/aqazb1z8zc3c2hrzr8hw6n8blvj36hmx-ccache-links-4.11.3
+2025-09-10T09:22:09.1757200Z   /nix/store/ykl5lmarj8xgajnvkalh8qrfqx3jczzp-ccache-links-wrapper-4.11.3
+2025-09-10T09:22:09.1757853Z   /nix/store/4nz33fw2m4739a6kkq17q1jf3jczv013-clang-19.1.7-lib
+2025-09-10T09:22:09.1758540Z   /nix/store/fxpx9xaw1p55zk1jyri15w9zlb0s3g6z-cmake-3.31.6
+2025-09-10T09:22:09.1759235Z   /nix/store/rry6qingvsrqmc7ll7jgaqpybcbdgf5v-coreutils-9.7
+2025-09-10T09:22:09.1759912Z   /nix/store/8cgz0wf5p8q62d921q3rf5il8g711h3l-curl-8.14.1
+2025-09-10T09:22:09.1760558Z   /nix/store/nvga2xaf1gjhlbmqa7vcn5hp0z43yw0x-curl-8.14.1
+2025-09-10T09:22:09.1761226Z   /nix/store/j4sf3wqqddj6ir03930nvn9p2l4bf7bl-curl-8.14.1-bin
+2025-09-10T09:22:09.1761718Z   /nix/store/5s8y8icfns6agrcn7ks6d7vfv5mkfnpa-curl-8.14.1-dev
+2025-09-10T09:22:09.1762438Z   /nix/store/il40mgzbwhh6rfyyyxnxd1055cdsra5v-curl-8.14.1-man
+2025-09-10T09:22:09.1763163Z   /nix/store/xw0mf3shymq3k7zlncf09rm8917sdi4h-diffutils-3.12
+2025-09-10T09:22:09.1764152Z   /nix/store/89wrfml7fd8g1vjy29p67vfgxiaj6b12-ed-1.21.1
+2025-09-10T09:22:09.1764724Z   /nix/store/vf3hfbbl7h32axb73fa2b0dbqg0gmjgi-elfutils-0.192
+2025-09-10T09:22:09.1765165Z   /nix/store/ywk0kqz3cgb5am3wd7vwjs34mqrjap9a-expand-response-params
+2025-09-10T09:22:09.1765669Z   /nix/store/070s6fml7n4g0c2n32bzydc06955b6ab-expat-2.7.1
+2025-09-10T09:22:09.1766310Z   /nix/store/xlmpcglsq8l09qh03rf0virz0331pjdc-file-5.45
+2025-09-10T09:22:09.1766990Z   /nix/store/392hs9nhm6wfw4imjllbvb1wil1n39qx-findutils-4.10.0
+2025-09-10T09:22:09.1767657Z   /nix/store/83svl851ryvx5sb74aamx7ygvq3g632m-fmt-10.2.1
+2025-09-10T09:22:09.1768288Z   /nix/store/c1z5j28ndxljf1ihqzag57bwpfpzms0g-gawk-5.3.2
+2025-09-10T09:22:09.1768923Z   /nix/store/8adzgnxs3s0pbj22qhk9zjxi1fqmz3xv-gcc-14.3.0
+2025-09-10T09:22:09.1769562Z   /nix/store/8b2h0alxwlfqs3mzafilz5wx68zignpj-gdbm-1.25-lib
+2025-09-10T09:22:09.1770537Z   /nix/store/p2ixvjsas4qw58dcwk01d22skwq4fyka-glibc-2.40-66-bin
+2025-09-10T09:22:09.1771791Z   /nix/store/m3n0h7646c7qwf6dbvdqhslmxmv2dg3z-glibc-2.40-66-dev
+2025-09-10T09:22:09.1772464Z   /nix/store/hm778ivyb4qyqc8qz367l966x69m6a9i-gmp-6.3.0
+2025-09-10T09:22:09.1773167Z   /nix/store/x477rxqxm6cgsz0s8w05zkp1xl3ssp92-gmp-with-cxx-6.3.0
+2025-09-10T09:22:09.1773954Z   /nix/store/khmqxw6b9q7rgkv6hf3gcqf2igk03z1g-gnu-config-2024-01-01
+2025-09-10T09:22:09.1774673Z   /nix/store/l2wvwyg680h0v2la18hz3yiznxy2naqw-gnugrep-3.11
+2025-09-10T09:22:09.1775342Z   /nix/store/xk0d14zpm0njxzdm182dd722aqhav2cc-gnumake-4.4.1
+2025-09-10T09:22:09.1775990Z   /nix/store/4rpiqv9yr2pw5094v4wc33ijkqjpm9sa-gnused-4.9
+2025-09-10T09:22:09.1776624Z   /nix/store/w60s4xh1pjg6dwbw7j0b4xzlpp88q5qg-gnutar-1.35
+2025-09-10T09:22:09.1777251Z   /nix/store/xd9m9jkvrs8pbxvmkzkwviql33rd090j-gzip-1.14
+2025-09-10T09:22:09.1777874Z   /nix/store/x3wp58zy4nc04iwn58qzhqdshd80qifh-hiredis-1.2.0
+2025-09-10T09:22:09.1778545Z   /nix/store/girp43cxvqpjq4ad56r8girsq8na5bxh-icu4c-76.1
+2025-09-10T09:22:09.1779147Z   /nix/store/15735ivvp62hw8z7s6h0817kzy0zpriq-isl-0.20
+2025-09-10T09:22:09.1779763Z   /nix/store/785x3swha2nh7rzmrp3pbb4mv8l1xw51-json-c-0.18
+2025-09-10T09:22:09.1780442Z   /nix/store/w0f8xky11vffkwpv1xvizmvsg7kmdfs3-krb5-1.21.3
+2025-09-10T09:22:09.1781303Z   /nix/store/a8m6p8ygk1x871xlvyxs2ld53wzgnyzf-krb5-1.21.3-dev
+2025-09-10T09:22:09.1782052Z   /nix/store/4w8f5zmwdsalc5ichgj074rawiswplw2-libarchive-3.8.0-lib
+2025-09-10T09:22:09.1782793Z   /nix/store/rqy2m7cv165g936v8m50r3shiwpram7a-libbpf-1.5.0
+2025-09-10T09:22:09.1783510Z   /nix/store/w73qkh9c1xb1n3jvr59pclfaxyqrdq7m-libedit-20240808-3.1
+2025-09-10T09:22:09.1784170Z   /nix/store/11kcqadpxxrhz28hl2xipqq9hh8d2y8s-libev-4.33
+2025-09-10T09:22:09.1784853Z   /nix/store/lzx9m6bx8iibw9w9dfq6kfyha8j69rss-libevent-2.1.12
+2025-09-10T09:22:09.1785468Z   /nix/store/qiva7ivwg23nf7rz7svcjpkc385nvrrj-libevent-2.1.12-dev
+2025-09-10T09:22:09.1786174Z   /nix/store/l04amlbq17hzhmlj7naagxbwz7sgp7n8-libevent-2.1.12-openssl
+2025-09-10T09:22:09.1786815Z   /nix/store/adfh8p731fy9iahv0mccbx0is6i96diy-libffi-3.4.8
+2025-09-10T09:22:09.1787486Z   /nix/store/a20nrbk40cbjdfxlzinv7rfgw8ys8a3p-libmpc-1.3.1
+2025-09-10T09:22:09.1787988Z   /nix/store/548rz1yd3c0y1dx7aiz63x8lgll16ryn-libpsl-0.21.5
+2025-09-10T09:22:09.1788696Z   /nix/store/1r801xjbssyyk9pf64ydk7c0dv5dgxbc-libssh2-1.11.1-dev
+2025-09-10T09:22:09.1789483Z   /nix/store/q1rka4yaw5nssmx0pkv20vkfyisakrwd-libsystemtap-5.2
+2025-09-10T09:22:09.1790108Z   /nix/store/dc88ji0n2kkqfml96j9znyrqr6lh7gv0-libuv-1.51.0
+2025-09-10T09:22:09.1790957Z   /nix/store/mqdzkx7md35lbx1klh4hjlwn5912gmvd-libxcrypt-4.4.38
+2025-09-10T09:22:09.1791643Z   /nix/store/ah4525ca553drv47jhvgpl9sl87i7a1d-libxml2-2.13.8
+2025-09-10T09:22:09.1792380Z   /nix/store/3s46ky4siqwkg82rjjqm83slbiqadav5-linux-headers-6.12.7
+2025-09-10T09:22:09.1793109Z   /nix/store/f8ypm53ipg502d7n6cmn1mavlh22fsyw-llvm-19.1.7-lib
+2025-09-10T09:22:09.1793804Z   /nix/store/kkhl6l3brvbsf2pz8n2nxddga1l0jdhx-mailcap-2.1.54
+2025-09-10T09:22:09.1794529Z   /nix/store/9qcwva0ilyd2m2n82571am6figv24k1d-mpdecimal-4.0.0
+2025-09-10T09:22:09.1795470Z   /nix/store/srjwrr5y5lpyw92ka48iairjjr5shb80-mpfr-4.2.2
+2025-09-10T09:22:09.1796127Z   /nix/store/yw7vb4hamv9mqgbgf7598zvis7k2spyx-ncurses-6.5
+2025-09-10T09:22:09.1796792Z   /nix/store/0q1gjdckw2c2rfjkmznmral88aaz9gb2-nghttp2-1.65.0
+2025-09-10T09:22:09.1797442Z   /nix/store/m3p3d9q3m8ak0vrkh0zph2xsxqpnxicy-nghttp2-1.65.0-dev
+2025-09-10T09:22:09.1798039Z   /nix/store/0gk4i8rv9vppwwbig525k1fkhkph6vwx-ninja-1.12.1
+2025-09-10T09:22:09.1798442Z   /nix/store/5yz8z98k3azjmv4f2idgzaprnw5600gn-openssl-3.4.2-bin
+2025-09-10T09:22:09.1799113Z   /nix/store/wr6qvslzqrd3rsf2mw0ssxwmyi2sqjdh-openssl-3.4.2-dev
+2025-09-10T09:22:09.1799644Z   /nix/store/gj54zvf7vxll1mzzmqhqi1p4jiws3mfb-patch-2.7.6
+2025-09-10T09:22:09.1800337Z   /nix/store/g7i75czfbw9sy5f8v7rjbama6lr3ya3s-patchelf-0.15.0
+2025-09-10T09:22:09.1801346Z   /nix/store/kbca643cz8wdjl3hziq1rz4722090pw4-pkg-config-0.29.2
+2025-09-10T09:22:09.1802099Z   /nix/store/284df5f5mq01h1wmsz9grrqzraa3r9vi-pkg-config-wrapper-0.29.2
+2025-09-10T09:22:09.1802575Z   /nix/store/vxl8pzgkkw8vdb4agzwm58imrfclmfrx-python3-3.12.11
+2025-09-10T09:22:09.1803007Z   /nix/store/7ppw2zlky3qhb7wbd3288kdy9j5ikvhs-python3.12-netaddr-1.3.0
+2025-09-10T09:22:09.1803424Z   /nix/store/891nfqhbkq47fa8sg0lml9c5ja3jqv26-readline-8.2p13
+2025-09-10T09:22:09.1803785Z   /nix/store/zd981nbd860ky9czyqbw83s1sfxxmywf-rhash-1.4.4
+2025-09-10T09:22:09.1804158Z   /nix/store/dp49537fvfdlkvm4p7m3vch5ni2p6c37-sqlite-3.48.0-bin
+2025-09-10T09:22:09.1804550Z   /nix/store/mj7x8yqc3552rbayzbsx9if0ldd8g2zq-sqlite-3.48.0-dev
+2025-09-10T09:22:09.1804930Z   /nix/store/aw2qcm25v69gk8xxjnnib89lfvwgjkfl-stdenv-linux
+2025-09-10T09:22:09.1805281Z   /nix/store/f7yb9lhi1z8dk4x8gy3c5xf3gvn3yi1s-tzdata-2025b
+2025-09-10T09:22:09.1805746Z   /nix/store/gi6g289i9ydm3z896x67q210y0qq29zg-update-autotools-gnu-config-scripts-hook
+2025-09-10T09:22:09.1806302Z   /nix/store/dsjnlcin903bggszyv7yskcqfsxb5yll-util-linux-minimal-2.41.1-lib
+2025-09-10T09:22:09.1806745Z   /nix/store/prjqqydf18jfvrbflhpgg7lpc9azx1ay-xxHash-0.8.3
+2025-09-10T09:22:09.1807106Z   /nix/store/22rpb6790f346c55iqi6s9drr5qgmyjf-xz-5.8.1-bin
+2025-09-10T09:22:09.1807450Z   /nix/store/30b8zh0s2f5jxrvl5v488hgrqipssl25-zeromq-4.3.5
+2025-09-10T09:22:09.1807804Z   /nix/store/wqahxs411zx3nykdqa8c2j3d127r3cff-zlib-1.3.1-dev
+2025-09-10T09:22:09.2621953Z copying path '/nix/store/q1rka4yaw5nssmx0pkv20vkfyisakrwd-libsystemtap-5.2' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.2647622Z copying path '/nix/store/il40mgzbwhh6rfyyyxnxd1055cdsra5v-curl-8.14.1-man' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.2675509Z copying path '/nix/store/rbx0k3r451k51yi0plp9jm4p7267ix08-binutils-2.44-lib' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.2680097Z copying path '/nix/store/070s6fml7n4g0c2n32bzydc06955b6ab-expat-2.7.1' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.2682435Z copying path '/nix/store/xlmpcglsq8l09qh03rf0virz0331pjdc-file-5.45' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.2684166Z copying path '/nix/store/83svl851ryvx5sb74aamx7ygvq3g632m-fmt-10.2.1' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.2686743Z copying path '/nix/store/c1z5j28ndxljf1ihqzag57bwpfpzms0g-gawk-5.3.2' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.2691218Z copying path '/nix/store/khmqxw6b9q7rgkv6hf3gcqf2igk03z1g-gnu-config-2024-01-01' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.2699778Z copying path '/nix/store/3s46ky4siqwkg82rjjqm83slbiqadav5-linux-headers-6.12.7' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.2702443Z copying path '/nix/store/0gk4i8rv9vppwwbig525k1fkhkph6vwx-ninja-1.12.1' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.2703790Z copying path '/nix/store/kkhl6l3brvbsf2pz8n2nxddga1l0jdhx-mailcap-2.1.54' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.2708075Z copying path '/nix/store/f7yb9lhi1z8dk4x8gy3c5xf3gvn3yi1s-tzdata-2025b' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.2713659Z copying path '/nix/store/30b8zh0s2f5jxrvl5v488hgrqipssl25-zeromq-4.3.5' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.2763047Z copying path '/nix/store/w1pxx760yidi7n9vbi5bhpii9xxl5vdj-bzip2-1.0.8-bin' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.2764480Z copying path '/nix/store/8cgz0wf5p8q62d921q3rf5il8g711h3l-curl-8.14.1' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.2904298Z copying path '/nix/store/89wrfml7fd8g1vjy29p67vfgxiaj6b12-ed-1.21.1' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.2923425Z copying path '/nix/store/6lgw1bymkzkld77zz4xfy6cmkjpcy2i6-binutils-2.44-lib' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.2997222Z copying path '/nix/store/5gmj3ir468k28nnp5r9nsfbdnm7qv3dc-brotli-1.1.0-lib' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.3026838Z copying path '/nix/store/y475cj1vkm11pvyk39zsfizja1k2qk22-c-ares-1.34.5' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.3048875Z copying path '/nix/store/ywk0kqz3cgb5am3wd7vwjs34mqrjap9a-expand-response-params' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.3077541Z copying path '/nix/store/8b2h0alxwlfqs3mzafilz5wx68zignpj-gdbm-1.25-lib' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.3121141Z copying path '/nix/store/p2ixvjsas4qw58dcwk01d22skwq4fyka-glibc-2.40-66-bin' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.3176462Z copying path '/nix/store/hm778ivyb4qyqc8qz367l966x69m6a9i-gmp-6.3.0' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.3287242Z copying path '/nix/store/x477rxqxm6cgsz0s8w05zkp1xl3ssp92-gmp-with-cxx-6.3.0' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.3350232Z copying path '/nix/store/l2wvwyg680h0v2la18hz3yiznxy2naqw-gnugrep-3.11' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.3579348Z copying path '/nix/store/xk0d14zpm0njxzdm182dd722aqhav2cc-gnumake-4.4.1' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.4095996Z copying path '/nix/store/w60s4xh1pjg6dwbw7j0b4xzlpp88q5qg-gnutar-1.35' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.4116315Z copying path '/nix/store/4rpiqv9yr2pw5094v4wc33ijkqjpm9sa-gnused-4.9' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.4262940Z copying path '/nix/store/xd9m9jkvrs8pbxvmkzkwviql33rd090j-gzip-1.14' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.4514689Z copying path '/nix/store/x3wp58zy4nc04iwn58qzhqdshd80qifh-hiredis-1.2.0' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.4516728Z copying path '/nix/store/j4sf3wqqddj6ir03930nvn9p2l4bf7bl-curl-8.14.1-bin' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.4525748Z copying path '/nix/store/11kcqadpxxrhz28hl2xipqq9hh8d2y8s-libev-4.33' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.4531602Z copying path '/nix/store/785x3swha2nh7rzmrp3pbb4mv8l1xw51-json-c-0.18' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.4538387Z copying path '/nix/store/girp43cxvqpjq4ad56r8girsq8na5bxh-icu4c-76.1' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.4593718Z copying path '/nix/store/15735ivvp62hw8z7s6h0817kzy0zpriq-isl-0.20' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.4679552Z copying path '/nix/store/rry6qingvsrqmc7ll7jgaqpybcbdgf5v-coreutils-9.7' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.4786063Z copying path '/nix/store/lzx9m6bx8iibw9w9dfq6kfyha8j69rss-libevent-2.1.12' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.4800335Z copying path '/nix/store/l04amlbq17hzhmlj7naagxbwz7sgp7n8-libevent-2.1.12-openssl' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.4846709Z copying path '/nix/store/adfh8p731fy9iahv0mccbx0is6i96diy-libffi-3.4.8' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.4934862Z copying path '/nix/store/548rz1yd3c0y1dx7aiz63x8lgll16ryn-libpsl-0.21.5' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.4984830Z copying path '/nix/store/dc88ji0n2kkqfml96j9znyrqr6lh7gv0-libuv-1.51.0' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.5079828Z copying path '/nix/store/mqdzkx7md35lbx1klh4hjlwn5912gmvd-libxcrypt-4.4.38' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.5205062Z copying path '/nix/store/9qcwva0ilyd2m2n82571am6figv24k1d-mpdecimal-4.0.0' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.5209370Z copying path '/nix/store/ah4525ca553drv47jhvgpl9sl87i7a1d-libxml2-2.13.8' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.5343408Z copying path '/nix/store/ap35np2bkwaba3rxs3qlxpma57n2awyb-binutils-2.44' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.5453860Z copying path '/nix/store/srjwrr5y5lpyw92ka48iairjjr5shb80-mpfr-4.2.2' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.5468984Z copying path '/nix/store/yw7vb4hamv9mqgbgf7598zvis7k2spyx-ncurses-6.5' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.5515285Z copying path '/nix/store/0q1gjdckw2c2rfjkmznmral88aaz9gb2-nghttp2-1.65.0' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.5660019Z copying path '/nix/store/gj54zvf7vxll1mzzmqhqi1p4jiws3mfb-patch-2.7.6' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.5662249Z copying path '/nix/store/5yz8z98k3azjmv4f2idgzaprnw5600gn-openssl-3.4.2-bin' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.5738492Z copying path '/nix/store/g7i75czfbw9sy5f8v7rjbama6lr3ya3s-patchelf-0.15.0' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.5999408Z copying path '/nix/store/nvga2xaf1gjhlbmqa7vcn5hp0z43yw0x-curl-8.14.1' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.6033439Z copying path '/nix/store/kbca643cz8wdjl3hziq1rz4722090pw4-pkg-config-0.29.2' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.6172516Z copying path '/nix/store/zd981nbd860ky9czyqbw83s1sfxxmywf-rhash-1.4.4' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.6175810Z copying path '/nix/store/dp49537fvfdlkvm4p7m3vch5ni2p6c37-sqlite-3.48.0-bin' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.6212511Z copying path '/nix/store/m3n0h7646c7qwf6dbvdqhslmxmv2dg3z-glibc-2.40-66-dev' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.6254540Z copying path '/nix/store/qiva7ivwg23nf7rz7svcjpkc385nvrrj-libevent-2.1.12-dev' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.6425448Z copying path '/nix/store/gi6g289i9ydm3z896x67q210y0qq29zg-update-autotools-gnu-config-scripts-hook' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.6427050Z copying path '/nix/store/a20nrbk40cbjdfxlzinv7rfgw8ys8a3p-libmpc-1.3.1' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.6440895Z copying path '/nix/store/dsjnlcin903bggszyv7yskcqfsxb5yll-util-linux-minimal-2.41.1-lib' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.6522659Z copying path '/nix/store/wr6qvslzqrd3rsf2mw0ssxwmyi2sqjdh-openssl-3.4.2-dev' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.6706355Z copying path '/nix/store/xw0mf3shymq3k7zlncf09rm8917sdi4h-diffutils-3.12' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.6715071Z copying path '/nix/store/392hs9nhm6wfw4imjllbvb1wil1n39qx-findutils-4.10.0' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.6843773Z copying path '/nix/store/4w8f5zmwdsalc5ichgj074rawiswplw2-libarchive-3.8.0-lib' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.7057273Z copying path '/nix/store/f8ypm53ipg502d7n6cmn1mavlh22fsyw-llvm-19.1.7-lib' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.7112742Z copying path '/nix/store/m3p3d9q3m8ak0vrkh0zph2xsxqpnxicy-nghttp2-1.65.0-dev' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.7141987Z copying path '/nix/store/284df5f5mq01h1wmsz9grrqzraa3r9vi-pkg-config-wrapper-0.29.2' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.7223603Z copying path '/nix/store/prjqqydf18jfvrbflhpgg7lpc9azx1ay-xxHash-0.8.3' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.7401236Z copying path '/nix/store/22rpb6790f346c55iqi6s9drr5qgmyjf-xz-5.8.1-bin' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.7592867Z copying path '/nix/store/vf3hfbbl7h32axb73fa2b0dbqg0gmjgi-elfutils-0.192' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.7635672Z copying path '/nix/store/wqahxs411zx3nykdqa8c2j3d127r3cff-zlib-1.3.1-dev' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.7945250Z copying path '/nix/store/1r801xjbssyyk9pf64ydk7c0dv5dgxbc-libssh2-1.11.1-dev' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.8264922Z copying path '/nix/store/mj7x8yqc3552rbayzbsx9if0ldd8g2zq-sqlite-3.48.0-dev' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.8402947Z copying path '/nix/store/zkkxwl2sq6r4drnrng91f1xi5n5j3sm6-ccache-4.11.3' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.8426487Z copying path '/nix/store/za4fd1fwdy0l0dj7fyv9cxn9a632w4as-capnproto-1.1.0' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.8652077Z copying path '/nix/store/8adzgnxs3s0pbj22qhk9zjxi1fqmz3xv-gcc-14.3.0' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.8653686Z copying path '/nix/store/fxpx9xaw1p55zk1jyri15w9zlb0s3g6z-cmake-3.31.6' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.9523551Z copying path '/nix/store/w73qkh9c1xb1n3jvr59pclfaxyqrdq7m-libedit-20240808-3.1' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.9526769Z copying path '/nix/store/891nfqhbkq47fa8sg0lml9c5ja3jqv26-readline-8.2p13' from 'https://cache.nixos.org'...
+2025-09-10T09:22:09.9754566Z copying path '/nix/store/rqy2m7cv165g936v8m50r3shiwpram7a-libbpf-1.5.0' from 'https://cache.nixos.org'...
+2025-09-10T09:22:10.1282558Z copying path '/nix/store/smkzrg2vvp3lng3hq7v9svfni5mnqjh2-bash-interactive-5.2p37' from 'https://cache.nixos.org'...
+2025-09-10T09:22:10.1315003Z copying path '/nix/store/vxl8pzgkkw8vdb4agzwm58imrfclmfrx-python3-3.12.11' from 'https://cache.nixos.org'...
+2025-09-10T09:22:10.1324536Z copying path '/nix/store/w0f8xky11vffkwpv1xvizmvsg7kmdfs3-krb5-1.21.3' from 'https://cache.nixos.org'...
+2025-09-10T09:22:10.3347385Z copying path '/nix/store/87zpmcmwvn48z4lbrfba74b312h22s6c-binutils-wrapper-2.44' from 'https://cache.nixos.org'...
+2025-09-10T09:22:10.3584708Z copying path '/nix/store/a8m6p8ygk1x871xlvyxs2ld53wzgnyzf-krb5-1.21.3-dev' from 'https://cache.nixos.org'...
+2025-09-10T09:22:10.6479511Z copying path '/nix/store/5s8y8icfns6agrcn7ks6d7vfv5mkfnpa-curl-8.14.1-dev' from 'https://cache.nixos.org'...
+2025-09-10T09:22:10.6811069Z copying path '/nix/store/yjs2s4jpzfcpkwcjrm3iknl61g1hsj5a-boost-1.87.0' from 'https://cache.nixos.org'...
+2025-09-10T09:22:11.0602088Z copying path '/nix/store/g646zmxwkmss17zijhq8vdkfi5rj3j5d-boost-1.87.0-dev' from 'https://cache.nixos.org'...
+2025-09-10T09:22:12.5093568Z copying path '/nix/store/7ppw2zlky3qhb7wbd3288kdy9j5ikvhs-python3.12-netaddr-1.3.0' from 'https://cache.nixos.org'...
+2025-09-10T09:22:13.8306796Z copying path '/nix/store/aqazb1z8zc3c2hrzr8hw6n8blvj36hmx-ccache-links-4.11.3' from 'https://cache.nixos.org'...
+2025-09-10T09:22:13.8406913Z copying path '/nix/store/ykl5lmarj8xgajnvkalh8qrfqx3jczzp-ccache-links-wrapper-4.11.3' from 'https://cache.nixos.org'...
+2025-09-10T09:22:13.8512839Z copying path '/nix/store/aw2qcm25v69gk8xxjnnib89lfvwgjkfl-stdenv-linux' from 'https://cache.nixos.org'...
+2025-09-10T09:22:15.4302817Z copying path '/nix/store/hcn4hc7dw4dkwyvgsln9kj4mh083l28n-bcc-0.34.0' from 'https://cache.nixos.org'...
+2025-09-10T09:22:15.4304427Z copying path '/nix/store/4nz33fw2m4739a6kkq17q1jf3jczv013-clang-19.1.7-lib' from 'https://cache.nixos.org'...
+2025-09-10T09:22:20.3580340Z copying path '/nix/store/pqz8f7rii6bziayh1mqfajyxq26csvy2-bpftrace-0.23.2' from 'https://cache.nixos.org'...
+2025-09-10T09:22:20.4928180Z building '/nix/store/xgsp00lznps8287qcj8q37s123lvq7hw-bitcoin-core-unstable.drv'...
+2025-09-10T09:22:21.4368813Z error: Cannot build '/nix/store/xgsp00lznps8287qcj8q37s123lvq7hw-bitcoin-core-unstable.drv'.
+2025-09-10T09:22:21.4369519Z        Reason: builder failed with exit code 1.
+2025-09-10T09:22:21.4369883Z        Output paths:
+2025-09-10T09:22:21.4370339Z          /nix/store/vrcc05944znbjzyn5wdwgn0r8v0s73mn-bitcoin-core-unstable
+2025-09-10T09:22:21.4371019Z        Last 25 log lines:
+2025-09-10T09:22:21.4371583Z        >     "/nix/store/ykl5lmarj8xgajnvkalh8qrfqx3jczzp-ccache-links-wrapper-4.11.3/bin/g++"
+2025-09-10T09:22:21.4372184Z        >
+2025-09-10T09:22:21.4372480Z        >   is not able to compile a simple test program.
+2025-09-10T09:22:21.4372902Z        >
+2025-09-10T09:22:21.4373193Z        >   It fails with the following output:
+2025-09-10T09:22:21.4373617Z        >
+2025-09-10T09:22:21.4374269Z        >     Change Dir: '/build/scx8nnibhm155vj7fbgi5cxy8jrcz44l-source/build/CMakeFiles/CMakeScratch/TryCompile-OCgrDg'
+2025-09-10T09:22:21.4375379Z        >
+2025-09-10T09:22:21.4376037Z        >     Run Build Command(s): /nix/store/0gk4i8rv9vppwwbig525k1fkhkph6vwx-ninja-1.12.1/bin/ninja -v cmTC_eca8d
+2025-09-10T09:22:21.4378065Z        >     [1/2] /nix/store/ykl5lmarj8xgajnvkalh8qrfqx3jczzp-ccache-links-wrapper-4.11.3/bin/g++    -o CMakeFiles/cmTC_eca8d.dir/testCXXCompiler.cxx.o -c /build/scx8nnibhm155vj7fbgi5cxy8jrcz44l-source/build/CMakeFiles/CMakeScratch/TryCompile-OCgrDg/testCXXCompiler.cxx
+2025-09-10T09:22:21.4379875Z        >     FAILED: CMakeFiles/cmTC_eca8d.dir/testCXXCompiler.cxx.o
+2025-09-10T09:22:21.4382015Z        >     /nix/store/ykl5lmarj8xgajnvkalh8qrfqx3jczzp-ccache-links-wrapper-4.11.3/bin/g++    -o CMakeFiles/cmTC_eca8d.dir/testCXXCompiler.cxx.o -c /build/scx8nnibhm155vj7fbgi5cxy8jrcz44l-source/build/CMakeFiles/CMakeScratch/TryCompile-OCgrDg/testCXXCompiler.cxx
+2025-09-10T09:22:21.4383847Z        >     ccache: error: Permission denied
+2025-09-10T09:22:21.4384312Z        >     ninja: build stopped: subcommand failed.
+2025-09-10T09:22:21.4384713Z        >
+2025-09-10T09:22:21.4384936Z        >
+2025-09-10T09:22:21.4385139Z        >
+2025-09-10T09:22:21.4385345Z        >
+2025-09-10T09:22:21.4385557Z        >
+2025-09-10T09:22:21.4385877Z        >   CMake will not be able to correctly generate this project.
+2025-09-10T09:22:21.4386342Z        > Call Stack (most recent call first):
+2025-09-10T09:22:21.4386712Z        >   CMakeLists.txt:77 (enable_language)
+2025-09-10T09:22:21.4387047Z        >
+2025-09-10T09:22:21.4387260Z        >
+2025-09-10T09:22:21.4387557Z        > -- Configuring incomplete, errors occurred!
+2025-09-10T09:22:21.4387946Z        For full logs, run:
+2025-09-10T09:22:21.4388460Z          nix log /nix/store/xgsp00lznps8287qcj8q37s123lvq7hw-bitcoin-core-unstable.drv
+2025-09-10T09:22:21.4472242Z ##[error]Process completed with exit code 1.
+2025-09-10T09:22:21.4585105Z Post job cleanup.
+2025-09-10T09:22:21.5139431Z ##[group]Cachix: push
+2025-09-10T09:22:21.5194914Z [command]/home/runner/.nix-profile/bin/cachix daemon stop --socket /home/runner/work/_temp/cachix-daemon-3mdA9y/daemon.sock
+2025-09-10T09:22:21.5231304Z [2025-09-10 09:21:43][Info] Starting Cachix Daemon
+2025-09-10T09:22:21.5231853Z [2025-09-10 09:21:43][Info] Configuration:
+2025-09-10T09:22:21.5232317Z PID: 2809
+2025-09-10T09:22:21.5232781Z Socket: /home/runner/work/_temp/cachix-daemon-3mdA9y/daemon.sock
+2025-09-10T09:22:21.5233362Z Workers: 8
+2025-09-10T09:22:21.5233676Z Cache name: bitcoin-core
+2025-09-10T09:22:21.5234106Z Cache URI: https://bitcoin-core.cachix.org
+2025-09-10T09:22:21.5234929Z Cache public keys: ["bitcoin-core.cachix.org-1:1rooQkRyp17ekY7dlhUrcOWmwkBFpXHZBMWWXORN7OM="]
+2025-09-10T09:22:21.5235710Z Cache is public: True
+2025-09-10T09:22:21.5236069Z Compression: ZSTD
+2025-09-10T09:22:21.5634621Z [2025-09-10 09:22:21][Info] Shutting down daemon...
+2025-09-10T09:22:21.5640144Z [2025-09-10 09:22:21][Info] Daemon shut down. Exiting.
+2025-09-10T09:22:22.5717642Z ##[endgroup]
+2025-09-10T09:22:22.5833706Z Post job cleanup.
+2025-09-10T09:22:22.6603073Z [command]/usr/bin/git version
+2025-09-10T09:22:22.6638478Z git version 2.51.0
+2025-09-10T09:22:22.6678405Z Temporarily overriding HOME='/home/runner/work/_temp/82e6e589-7b41-41f1-8476-4e1ccc1d4b0f' before making global git config changes
+2025-09-10T09:22:22.6679594Z Adding repository directory to the temporary git global config as a safe directory
+2025-09-10T09:22:22.6683975Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/bitcoin/bitcoin
+2025-09-10T09:22:22.6720319Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2025-09-10T09:22:22.6752667Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2025-09-10T09:22:22.6980451Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2025-09-10T09:22:22.7001720Z http.https://github.com/.extraheader
+2025-09-10T09:22:22.7012965Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2025-09-10T09:22:22.7048182Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2025-09-10T09:22:22.7375081Z Cleaning up orphan processes
