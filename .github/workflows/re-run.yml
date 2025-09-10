@@ -1,0 +1,65 @@
+name: merge check
+
+on:
+  workflow_dispatch: # Must be run manually
+    inputs:
+      pr_number:
+        description: 'Pull request number to test'
+        required: true
+        type: string
+
+jobs:
+  check:
+    name: Check mergeability
+    runs-on: ubuntu-latest
+    env:
+      CCACHE_DIR: /home/runner/.ccache
+
+    steps:
+      - name: Checkout PR merge commit
+        uses: actions/checkout@v5
+        with:
+          ref: refs/pull/${{ inputs.pr_number }}/merge
+          fetch-depth: 1
+
+      - name: Create ccache dir
+        run: |
+          mkdir -p ${{ env.CCACHE_DIR }}
+
+      - name: Restore ccache
+        uses: actions/cache@v3
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-25.05
+
+      - name: Set Up Cachix
+        uses: cachix/cachix-action@v15
+        with:
+          name: bitcoin-core
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - name: Build bitcoind with ccache
+        run: |
+          nix develop ci/ --command bash -c "
+            cmake -B build \
+              -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+              -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DBUILD_DAEMON=ON \
+              -DBUILD_BITCOIN_BIN=OFF \
+              -DBUILD_CLI=OFF \
+              -DBUILD_TX=OFF \
+              -DBUILD_UTIL=OFF \
+              -DBUILD_WALLET_TOOL=OFF \
+              -DBUILD_TESTS=OFF \
+              -DBUILD_BENCH=OFF \
+              -DENABLE_WALLET=OFF \
+              -DENABLE_EXTERNAL_SIGNER=OFF
+            cmake --build build --target bitcoind
+          "
