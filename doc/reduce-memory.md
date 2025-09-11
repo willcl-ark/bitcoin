@@ -10,6 +10,27 @@ The size of some in-memory caches can be reduced. As caches trade off memory usa
   - The minimum value for `-dbcache` is 4.
   - A lower `-dbcache` makes initial sync time much longer. After the initial sync, the effect is less pronounced for most use-cases, unless fast validation of blocks is important, such as for mining.
 
+>[!NOTE]
+> For versions of Bitcoin Core >= v29.0, common Unix utilities like `top`
+> will report higher RAM usage of the `bitcoind` process than for previous
+> Bitcoin Core versions.
+>
+> The size of LevelDB files was increased from 2 MiB to 32 MiB in PR
+> [#30039](https://github.com/bitcoin/bitcoin/pull/30039). LevelDB caches its
+> on-disk files using [`mmap`](https://en.wikipedia.org/wiki/Mmap) and will
+> cache up to 1000 files by default, although our fork increased this number to
+> 4096 (see
+> [bitcoin-core/leveldb-subtree#52](https://github.com/bitcoin-core/leveldb-subtree/pull/52)).
+> This means that if there is enough available memory the full chainstate
+> database will be cached resulting in a faster IBD.
+>
+> However this is not memory actually _used_ by the `bitcoind` process, only
+> on-disk database files cached for faster future reads. Therefore in case of
+> memory pressure the host's kernel will not kill the `bitcoind` process but
+> just drop the `mmap` pages. Although common utilities will report that
+> Bitcoin Core >= v29.0 uses more memory it is not so and it will not lead to
+> OOM.
+
 ## Memory pool
 
 - In Bitcoin Core there is a memory pool limiter which can be configured with `-maxmempool=<n>`, where `<n>` is the size in MB (1000). The default value is `300`.
