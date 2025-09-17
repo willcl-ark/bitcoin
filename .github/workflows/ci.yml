@@ -188,7 +188,7 @@ jobs:
 
   windows-native-dll:
     name: ${{ matrix.job-name }}
-    runs-on: windows-2022
+    runs-on: warp-windows-2022-x64-8x # Need to update with conditional
 
     if: ${{ vars.SKIP_BRANCH_PUSH != 'true' || github.event_name == 'pull_request' }}
 
@@ -241,7 +241,7 @@ jobs:
           key: ${{ github.job }}-vcpkg-tools
 
       - name: Restore vcpkg binary cache
-        uses: actions/cache/restore@v4
+        uses: WarpBuilds/cache/restore@v1
         id: vcpkg-binary-cache
         with:
           path: ~/AppData/Local/vcpkg/archives
@@ -252,7 +252,7 @@ jobs:
           cmake -B build -Werror=dev --preset vs2022 -DCMAKE_TOOLCHAIN_FILE="${VCPKG_INSTALLATION_ROOT}/scripts/buildsystems/vcpkg.cmake" ${{ matrix.generate-options }}
 
       - name: Save vcpkg binary cache
-        uses: actions/cache/save@v4
+        uses: WarpBuilds/cache/save@v1
         if: github.event_name != 'pull_request' && steps.vcpkg-binary-cache.outputs.cache-hit != 'true' && matrix.job-type == 'standard'
         with:
           path: ~/AppData/Local/vcpkg/archives
