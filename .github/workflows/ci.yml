@@ -4,6 +4,8 @@
 
 name: CI
 on:
+  # See: https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/events-that-trigger-workflows#workflow_dispatch.
+  workflow_dispatch:
   # See: https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/events-that-trigger-workflows#pull_request.
   pull_request:
   # See: https://docs.github.com/en/actions/writing-workflows/choosing-when-your-workflow-runs/events-that-trigger-workflows#push.
@@ -48,7 +50,7 @@ jobs:
   test-each-commit:
     name: 'test each commit'
     runs-on: ubuntu-24.04
-    if: github.event_name == 'pull_request' && github.event.pull_request.commits != 1
+    if: github.event_name == 'pull_request' && github.event.pull_request.commits != 1 && github.event_name != 'workflow_dispatch'
     timeout-minutes: 360  # Use maximum time, see https://docs.github.com/en/actions/writing-workflows/workflow-syntax-for-github-actions#jobsjob_idtimeout-minutes. Assuming a worst case time of 1 hour per commit, this leads to a --max-count=6 below.
     env:
       MAX_COUNT: 6
@@ -112,7 +114,7 @@ jobs:
     # one for the branch push and one for the pull request.
     # This can be avoided by setting SKIP_BRANCH_PUSH=true as a custom env variable
     # in Github repository settings.
-    if: ${{ vars.SKIP_BRANCH_PUSH != 'true' || github.event_name == 'pull_request' }}
+    if: ${{ (vars.SKIP_BRANCH_PUSH != 'true' || github.event_name == 'pull_request') && github.event_name != 'workflow_dispatch' }}
 
     timeout-minutes: 120
 
@@ -190,7 +192,7 @@ jobs:
     name: ${{ matrix.job-name }}
     runs-on: windows-2022
 
-    if: ${{ vars.SKIP_BRANCH_PUSH != 'true' || github.event_name == 'pull_request' }}
+    if: ${{ (vars.SKIP_BRANCH_PUSH != 'true' || github.event_name == 'pull_request') && github.event_name != 'workflow_dispatch' }}
 
     env:
       PYTHONUTF8: 1
@@ -313,7 +315,7 @@ jobs:
     name: 'Linux->Windows cross, no tests'
     needs: runners
     runs-on: ${{ needs.runners.outputs.use-cirrus-runners == 'true' && 'ghcr.io/cirruslabs/ubuntu-runner-amd64:24.04-sm' || 'ubuntu-24.04' }}
-    if: ${{ vars.SKIP_BRANCH_PUSH != 'true' || github.event_name == 'pull_request' }}
+    if: ${{ (vars.SKIP_BRANCH_PUSH != 'true' || github.event_name == 'pull_request') && github.event_name != 'workflow_dispatch' }}
 
     env:
       FILE_ENV: './ci/test/00_setup_env_win64.sh'
@@ -423,7 +425,7 @@ jobs:
     name: ${{ matrix.name }}
     needs: runners
     runs-on: ${{ needs.runners.outputs.use-cirrus-runners == 'true' && matrix.cirrus-runner || matrix.fallback-runner }}
-    if: ${{ vars.SKIP_BRANCH_PUSH != 'true' || github.event_name == 'pull_request' }}
+    if: ${{ vars.SKIP_BRANCH_PUSH != 'true' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
     timeout-minutes: ${{ matrix.timeout-minutes }}
 
     env:
@@ -475,6 +477,7 @@ jobs:
             fallback-runner: 'ubuntu-24.04'
             timeout-minutes: 120
             file-env: './ci/test/00_setup_env_native_previous_releases.sh'
+            silent-merge-check: true
 
           - name: 'CentOS, depends, gui'
             cirrus-runner: 'ghcr.io/cirruslabs/ubuntu-runner-amd64:24.04-lg'
@@ -501,6 +504,13 @@ jobs:
             file-env: './ci/test/00_setup_env_native_msan.sh'
 
     steps:
+      - name: Is silent merge check
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ matrix.silent-merge-check }}" != "true" ]]; then
+            echo "Job skipped for silent merge check"
+            echo "skip=true" >> $GITHUB_OUTPUT
+          fi
+
       - *CHECKOUT
 
       - name: Configure environment
