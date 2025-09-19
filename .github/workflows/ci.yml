@@ -481,6 +481,7 @@ jobs:
             fallback-runner: 'ubuntu-24.04'
             timeout-minutes: 120
             file-env: './ci/test/00_setup_env_s390x.sh'
+            use-qemu: true
 
           - name: 'CentOS, depends, gui'
             cirrus-runner: 'ghcr.io/cirruslabs/ubuntu-runner-amd64:24.04-lg'
@@ -520,6 +521,7 @@ jobs:
         uses: ./.github/actions/configure-docker
         with:
           use-cirrus: ${{ needs.runners.outputs.use-cirrus-runners }}
+          use-qemu: ${{ matrix.use-qemu }}
 
       - name: Enable bpfcc script
         if: ${{ env.CONTAINER_NAME == 'ci_native_asan' }}
