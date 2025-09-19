@@ -48,16 +48,17 @@
             };
             cmakeFlags =
               [
-                "-DBUILD_BITCOIN_BIN=OFF"
+                "-DBUILD_BITCOIN_BIN=ON"
                 "-DBUILD_DAEMON=ON"
-                "-DBUILD_CLI=OFF"
-                "-DBUILD_TX=OFF"
-                "-DBUILD_UTIL=OFF"
-                "-DBUILD_WALLET_TOOL=OFF"
+                "-DBUILD_CLI=ON"
+                "-DBUILD_TX=ON"
+                "-DBUILD_UTIL=ON"
+                "-DBUILD_WALLET_TOOL=ON"
                 "-DBUILD_TESTS=OFF"
                 "-DBUILD_BENCH=OFF"
-                "-DENABLE_WALLET=OFF"
+                "-DENABLE_WALLET=ON"
                 "-DENABLE_EXTERNAL_SIGNER=OFF"
+                "-DWITH_ZMQ=ON"
               ]
               ++ lib.optionals targetPkgs.stdenv.hostPlatform.isFreeBSD [
                 ''-DCMAKE_CXX_FLAGS=-isystem${targetPkgs.llvmPackages.libcxx.dev}/include/c++/v1''
