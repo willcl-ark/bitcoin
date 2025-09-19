@@ -21,6 +21,22 @@
         name = "libevent-2.1.12-stable.tar.gz";
       };
     };
+    sqlite = {
+      version = "3460100";
+      tarball = pkgs.fetchurl {
+        url = "https://sqlite.org/2024/sqlite-autoconf-3460100.tar.gz";
+        sha256 = "67d3fe6d268e6eaddcae3727fce58fcc8e9c53869bdd07a0c61e38ddf2965071";
+        name = "sqlite-autoconf-3460100.tar.gz";
+      };
+    };
+    zeromq = {
+      version = "4.3.5";
+      tarball = pkgs.fetchurl {
+        url = "https://github.com/zeromq/libzmq/releases/download/v4.3.5/zeromq-4.3.5.tar.gz";
+        sha256 = "6653ef5910f17954861fe72332e68b03ca6e4d9c7160eb3a8de5a5a913bfab43";
+        name = "zeromq-4.3.5.tar.gz";
+      };
+    };
   };
 
   # Triplet mapping for cross-compilation
