@@ -59,6 +59,7 @@
                 "-DENABLE_WALLET=ON"
                 "-DENABLE_EXTERNAL_SIGNER=OFF"
                 "-DWITH_ZMQ=ON"
+                "-DENABLE_IPC=ON"
               ]
               ++ lib.optionals targetPkgs.stdenv.hostPlatform.isFreeBSD [
                 ''-DCMAKE_CXX_FLAGS=-isystem${targetPkgs.llvmPackages.libcxx.dev}/include/c++/v1''
