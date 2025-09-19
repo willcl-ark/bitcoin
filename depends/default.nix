@@ -37,6 +37,14 @@
         name = "zeromq-4.3.5.tar.gz";
       };
     };
+    capnp = {
+      version = "1.2.0";
+      tarball = pkgs.fetchurl {
+        url = "https://capnproto.org/capnproto-c++-1.2.0.tar.gz";
+        sha256 = "ed00e44ecbbda5186bc78a41ba64a8dc4a861b5f8d4e822959b0144ae6fd42ef";
+        name = "capnproto-cxx-1.2.0.tar.gz";
+      };
+    };
   };
 
   # Triplet mapping for cross-compilation
