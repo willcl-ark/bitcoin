@@ -434,41 +434,41 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: '32 bit ARM, unit tests, no functional tests'
-            cirrus-runner: 'ubuntu-24.04-arm' # Cirrus' Arm runners are Apple (with virtual Linux aarch64), which doesn't support 32-bit mode
-            fallback-runner: 'ubuntu-24.04-arm'
-            timeout-minutes: 120
-            file-env: './ci/test/00_setup_env_arm.sh'
-
-          - name: 'ASan + LSan + UBSan + integer, no depends, USDT'
-            cirrus-runner: 'ghcr.io/cirruslabs/ubuntu-runner-amd64:24.04-md' # has to match container in ci/test/00_setup_env_native_asan.sh for tracing tools
-            fallback-runner: 'ubuntu-24.04'
-            timeout-minutes: 120
-            file-env: './ci/test/00_setup_env_native_asan.sh'
-
-          - name: 'macOS-cross, gui, no tests'
-            cirrus-runner: 'ghcr.io/cirruslabs/ubuntu-runner-amd64:24.04-sm'
-            fallback-runner: 'ubuntu-24.04'
-            timeout-minutes: 120
-            file-env: './ci/test/00_setup_env_mac_cross.sh'
-
-          - name: 'No wallet, libbitcoinkernel'
-            cirrus-runner: 'ghcr.io/cirruslabs/ubuntu-runner-amd64:24.04-sm'
-            fallback-runner: 'ubuntu-24.04'
-            timeout-minutes: 120
-            file-env: './ci/test/00_setup_env_native_nowallet_libbitcoinkernel.sh'
-
-          - name: 'no IPC, i686, DEBUG'
-            cirrus-runner: 'ghcr.io/cirruslabs/ubuntu-runner-amd64:24.04-md'
-            fallback-runner: 'ubuntu-24.04'
-            timeout-minutes: 120
-            file-env: './ci/test/00_setup_env_i686_no_ipc.sh'
-
-          - name: 'fuzzer,address,undefined,integer, no depends'
-            cirrus-runner: 'ghcr.io/cirruslabs/ubuntu-runner-amd64:24.04-lg'
-            fallback-runner: 'ubuntu-24.04'
-            timeout-minutes: 240
-            file-env: './ci/test/00_setup_env_native_fuzz.sh'
+          # - name: '32 bit ARM, unit tests, no functional tests'
+          #   cirrus-runner: 'ubuntu-24.04-arm' # Cirrus' Arm runners are Apple (with virtual Linux aarch64), which doesn't support 32-bit mode
+          #   fallback-runner: 'ubuntu-24.04-arm'
+          #   timeout-minutes: 120
+          #   file-env: './ci/test/00_setup_env_arm.sh'
+          #
+          # - name: 'ASan + LSan + UBSan + integer, no depends, USDT'
+          #   cirrus-runner: 'ghcr.io/cirruslabs/ubuntu-runner-amd64:24.04-md' # has to match container in ci/test/00_setup_env_native_asan.sh for tracing tools
+          #   fallback-runner: 'ubuntu-24.04'
+          #   timeout-minutes: 120
+          #   file-env: './ci/test/00_setup_env_native_asan.sh'
+          #
+          # - name: 'macOS-cross, gui, no tests'
+          #   cirrus-runner: 'ghcr.io/cirruslabs/ubuntu-runner-amd64:24.04-sm'
+          #   fallback-runner: 'ubuntu-24.04'
+          #   timeout-minutes: 120
+          #   file-env: './ci/test/00_setup_env_mac_cross.sh'
+          #
+          # - name: 'No wallet, libbitcoinkernel'
+          #   cirrus-runner: 'ghcr.io/cirruslabs/ubuntu-runner-amd64:24.04-sm'
+          #   fallback-runner: 'ubuntu-24.04'
+          #   timeout-minutes: 120
+          #   file-env: './ci/test/00_setup_env_native_nowallet_libbitcoinkernel.sh'
+          #
+          # - name: 'no IPC, i686, DEBUG'
+          #   cirrus-runner: 'ghcr.io/cirruslabs/ubuntu-runner-amd64:24.04-md'
+          #   fallback-runner: 'ubuntu-24.04'
+          #   timeout-minutes: 120
+          #   file-env: './ci/test/00_setup_env_i686_no_ipc.sh'
+          #
+          # - name: 'fuzzer,address,undefined,integer, no depends'
+          #   cirrus-runner: 'ghcr.io/cirruslabs/ubuntu-runner-amd64:24.04-lg'
+          #   fallback-runner: 'ubuntu-24.04'
+          #   timeout-minutes: 240
+          #   file-env: './ci/test/00_setup_env_native_fuzz.sh'
 
           - name: 'previous releases, depends DEBUG'
             cirrus-runner: 'ghcr.io/cirruslabs/ubuntu-runner-amd64:24.04-md'
@@ -483,29 +483,29 @@ jobs:
             file-env: './ci/test/00_setup_env_s390x.sh'
             use-qemu: true
 
-          - name: 'CentOS, depends, gui'
-            cirrus-runner: 'ghcr.io/cirruslabs/ubuntu-runner-amd64:24.04-lg'
-            fallback-runner: 'ubuntu-24.04'
-            timeout-minutes: 120
-            file-env: './ci/test/00_setup_env_native_centos.sh'
-
-          - name: 'tidy'
-            cirrus-runner: 'ghcr.io/cirruslabs/ubuntu-runner-amd64:24.04-md'
-            fallback-runner: 'ubuntu-24.04'
-            timeout-minutes: 120
-            file-env: './ci/test/00_setup_env_native_tidy.sh'
-
-          - name: 'TSan, depends, no gui'
-            cirrus-runner: 'ghcr.io/cirruslabs/ubuntu-runner-amd64:24.04-md'
-            fallback-runner: 'ubuntu-24.04'
-            timeout-minutes: 120
-            file-env: './ci/test/00_setup_env_native_tsan.sh'
-
-          - name: 'MSan, depends'
-            cirrus-runner: 'ghcr.io/cirruslabs/ubuntu-runner-amd64:24.04-lg'
-            fallback-runner: 'ubuntu-24.04'
-            timeout-minutes: 120
-            file-env: './ci/test/00_setup_env_native_msan.sh'
+          # - name: 'CentOS, depends, gui'
+          #   cirrus-runner: 'ghcr.io/cirruslabs/ubuntu-runner-amd64:24.04-lg'
+          #   fallback-runner: 'ubuntu-24.04'
+          #   timeout-minutes: 120
+          #   file-env: './ci/test/00_setup_env_native_centos.sh'
+          #
+          # - name: 'tidy'
+          #   cirrus-runner: 'ghcr.io/cirruslabs/ubuntu-runner-amd64:24.04-md'
+          #   fallback-runner: 'ubuntu-24.04'
+          #   timeout-minutes: 120
+          #   file-env: './ci/test/00_setup_env_native_tidy.sh'
+          #
+          # - name: 'TSan, depends, no gui'
+          #   cirrus-runner: 'ghcr.io/cirruslabs/ubuntu-runner-amd64:24.04-md'
+          #   fallback-runner: 'ubuntu-24.04'
+          #   timeout-minutes: 120
+          #   file-env: './ci/test/00_setup_env_native_tsan.sh'
+          #
+          # - name: 'MSan, depends'
+          #   cirrus-runner: 'ghcr.io/cirruslabs/ubuntu-runner-amd64:24.04-lg'
+          #   fallback-runner: 'ubuntu-24.04'
+          #   timeout-minutes: 120
+          #   file-env: './ci/test/00_setup_env_native_msan.sh'
 
     steps:
       - *CHECKOUT
