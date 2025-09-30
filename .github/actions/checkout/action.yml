@@ -1,0 +1,18 @@
+name: 'Checkout current merge commit'
+description: 'Always check out a current merge commit, even on re-runs'
+outputs:
+  commit:
+    description: 'Commit hash checked out'
+    value: ${{ steps.hash.outputs.commit }}
+runs:
+  using: 'composite'
+  steps:
+    - name: Checkout
+      uses: actions/checkout@v5
+      with:
+        # Ensure the latest merged pull request state is used, even on re-runs.
+        ref: ${{ github.event_name == 'pull_request' && github.ref || '' }}
+    - id: hash
+      shell: bash
+      run: |
+        echo "commit=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
