@@ -311,6 +311,8 @@ jobs:
     needs: runners
     runs-on: ${{ needs.runners.outputs.provider == 'cirrus' && 'ghcr.io/cirruslabs/ubuntu-runner-amd64:24.04-sm' || 'ubuntu-24.04' }}
     if: ${{ vars.SKIP_BRANCH_PUSH != 'true' || github.event_name == 'pull_request' }}
+    outputs:
+      commit: ${{ steps.checkout.outputs.commit }}
 
     env:
       FILE_ENV: './ci/test/00_setup_env_win64.sh'
@@ -318,6 +320,7 @@ jobs:
 
     steps:
       - name: Checkout merge commit
+        id: checkout
         uses: ./.github/actions/checkout
 
       - name: Configure environment
@@ -358,8 +361,10 @@ jobs:
       TEST_RUNNER_TIMEOUT_FACTOR: 40
 
     steps:
-      - name: Checkout merge commit
-        uses: ./.github/actions/checkout
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.windows-cross.outputs.commit }}
 
       - name: Download built executables
         uses: actions/download-artifact@v4
