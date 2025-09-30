@@ -7,11 +7,17 @@ outputs:
 runs:
   using: 'composite'
   steps:
-    - name: Checkout
+    - name: Checkout base
       uses: actions/checkout@v5
-      with:
-        # Ensure the latest merged pull request state is used, even on re-runs.
-        ref: ${{ github.event_name == 'pull_request' && github.ref || '' }}
+
+    - name: Merge to master
+      shell: bash
+      run: |
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          git fetch origin ${{ github.ref }}
+          git merge --no-edit ${{ github.sha }}
+        fi
+
     - id: hash
       shell: bash
       run: |
