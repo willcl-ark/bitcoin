@@ -1,7 +1,8 @@
 {
   pkgs,
   lib,
-}: let
+}:
+let
   # Individual cached source derivations - each tarball is cached separately in the nix store for re-use.
   # Let Nix garbage collection etc. manage their lifetime like any other package.
   dependsSources = {
@@ -82,29 +83,34 @@
   ];
 
   # Platform-specific stdenv setup
-  mkPlatformStdenv = targetPkgs:
-    if targetPkgs.stdenv.hostPlatform.isMinGW
-    then
+  mkPlatformStdenv =
+    targetPkgs:
+    if targetPkgs.stdenv.hostPlatform.isMinGW then
       # The nix stdenv for MinGW seems to have great difficulty finding pthread headers, so add and copy them manually
       # TODO: fix this
       targetPkgs.stdenv.override {
         cc = targetPkgs.stdenv.cc.override {
-          extraPackages = [targetPkgs.windows.pthreads targetPkgs.windows.mcfgthreads];
+          extraPackages = [
+            targetPkgs.windows.pthreads
+            targetPkgs.windows.mcfgthreads
+          ];
           extraBuildCommands = ''
             echo "-I${targetPkgs.windows.pthreads}/include" >> $out/nix-support/cc-cflags
             echo "-L${targetPkgs.windows.pthreads}/lib -lpthread" >> $out/nix-support/cc-ldflags
           '';
         };
       }
-    else targetPkgs.stdenv;
+    else
+      targetPkgs.stdenv;
 
   # Custom toolchain setup. Only needed for minGW currently
-  setupCustomToolchain = {
-    targetPkgs,
-    customStdEnv,
-    triplet,
-    sourceRoot,
-  }:
+  setupCustomToolchain =
+    {
+      targetPkgs,
+      customStdEnv,
+      triplet,
+      sourceRoot,
+    }:
     lib.optionalString targetPkgs.stdenv.hostPlatform.isMinGW ''
       # Add Windows threading library directories to CMake configuration
       mkdir -p ${sourceRoot}/${triplet}
@@ -112,23 +118,27 @@
     '';
 
   # Build a single dependency package
-  mkDependency = {
-    targetPkgs,
-    packageName,
-    extraConfig ? {},
-  }: let
-    triplet = tripletMap.${targetPkgs.stdenv.hostPlatform.config} or targetPkgs.stdenv.hostPlatform.config;
-    customStdEnv = mkPlatformStdenv targetPkgs;
-  in
-    customStdEnv.mkDerivation ({
+  mkDependency =
+    {
+      targetPkgs,
+      packageName,
+      extraConfig ? { },
+    }:
+    let
+      triplet =
+        tripletMap.${targetPkgs.stdenv.hostPlatform.config} or targetPkgs.stdenv.hostPlatform.config;
+      customStdEnv = mkPlatformStdenv targetPkgs;
+    in
+    customStdEnv.mkDerivation (
+      {
         pname = packageName;
         version = dependsSources.${packageName}.version;
         src = builtins.path {
           path = ./.;
           name = "depends-source";
         };
-        nativeBuildInputs = commonNativeBuildInputs ++ [pkgs.curl];
-        buildInputs = [];
+        nativeBuildInputs = commonNativeBuildInputs ++ [ pkgs.curl ];
+        buildInputs = [ ];
         dontConfigure = true;
         dontUseCmakeConfigure = true;
 
@@ -137,15 +147,16 @@
           mkdir -p $sourceRoot/sources
           mkdir -p $sourceRoot/sources/download-stamps
 
-          ${lib.concatStringsSep "\n" (lib.mapAttrsToList (name: src: ''
+          ${lib.concatStringsSep "\n" (
+            lib.mapAttrsToList (name: src: ''
               # Link the source file
               ln -sf ${src.tarball} $sourceRoot/sources/${src.tarball.name}
 
               # Create the stamp file that the depends system expects
               # The stamp file format is from funcs.mk:250
               echo "${src.tarball.outputHash}  ${src.tarball.name}" > $sourceRoot/sources/download-stamps/.stamp_fetched-${name}-${src.tarball.name}.hash
-            '')
-            dependsSources)}
+            '') dependsSources
+          )}
 
           # Copy patches to expected location for depends build system
           mkdir -p $sourceRoot/patches
@@ -218,24 +229,27 @@
           LC_ALL = "C";
         };
       }
-      // extraConfig);
+      // extraConfig
+    );
 
   # Build all dependencies for a target platform
-  mkDependencies = targetPkgs: let
-    # Filter out capnp packages for Windows targets
-    filteredSources = lib.filterAttrs (name: _:
-      if targetPkgs.stdenv.hostPlatform.isMinGW
-      then name != "capnp"
-      else true
-    ) dependsSources;
-  in
-    lib.mapAttrs (name: _:
+  mkDependencies =
+    targetPkgs:
+    let
+      # Filter out capnp packages for Windows targets
+      filteredSources = lib.filterAttrs (
+        name: _: if targetPkgs.stdenv.hostPlatform.isMinGW then name != "capnp" else true
+      ) dependsSources;
+    in
+    lib.mapAttrs (
+      name: _:
       mkDependency {
         inherit targetPkgs;
         packageName = name;
-      })
-    filteredSources;
-in {
+      }
+    ) filteredSources;
+in
+{
   inherit
     dependsSources
     tripletMap
