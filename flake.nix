@@ -15,7 +15,7 @@
     pkgsFor = system: import nixpkgs {inherit system;};
 
     pname = "bitcoin-core";
-    version = "29.99.0";
+    version = "30.99.0";
 
     mkBitcoinForSystem = system: let
       pkgs = pkgsFor system;
@@ -54,7 +54,7 @@
                 "-DBUILD_TX=ON"
                 "-DBUILD_UTIL=ON"
                 "-DBUILD_WALLET_TOOL=ON"
-                "-DBUILD_TESTS=OFF"
+                "-DBUILD_TESTS=ON"
                 "-DBUILD_BENCH=OFF"
                 "-DENABLE_WALLET=ON"
                 "-DENABLE_EXTERNAL_SIGNER=OFF"
