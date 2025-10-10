@@ -133,11 +133,19 @@
         dontUseCmakeConfigure = true;
 
         postUnpack = ''
+          # Create a sources directory and link all dependency sources
           mkdir -p $sourceRoot/sources
-          ${lib.optionalString (dependsSources ? ${packageName}) ''
-            # Link cached source from Nix store instead of downloading
-            ln -s ${dependsSources.${packageName}.tarball} $sourceRoot/sources/${dependsSources.${packageName}.tarball.name}
-          ''}
+          mkdir -p $sourceRoot/sources/download-stamps
+
+          ${lib.concatStringsSep "\n" (lib.mapAttrsToList (name: src: ''
+              # Link the source file
+              ln -sf ${src.tarball} $sourceRoot/sources/${src.tarball.name}
+
+              # Create the stamp file that the depends system expects
+              # The stamp file format is from funcs.mk:250
+              echo "${src.tarball.outputHash}  ${src.tarball.name}" > $sourceRoot/sources/download-stamps/.stamp_fetched-${name}-${src.tarball.name}.hash
+            '')
+            dependsSources)}
 
           # Copy patches to expected location for depends build system
           mkdir -p $sourceRoot/patches
@@ -213,13 +221,20 @@
       // extraConfig);
 
   # Build all dependencies for a target platform
-  mkDependencies = targetPkgs:
+  mkDependencies = targetPkgs: let
+    # Filter out capnp packages for Windows targets
+    filteredSources = lib.filterAttrs (name: _:
+      if targetPkgs.stdenv.hostPlatform.isMinGW
+      then name != "capnp"
+      else true
+    ) dependsSources;
+  in
     lib.mapAttrs (name: _:
       mkDependency {
         inherit targetPkgs;
         packageName = name;
       })
-    dependsSources;
+    filteredSources;
 in {
   inherit
     dependsSources
