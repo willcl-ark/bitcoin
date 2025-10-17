@@ -155,7 +155,7 @@ public:
  * @tparam Element should be a movable and copyable type
  * @tparam Hash should be a function/callable which takes a template parameter
  * hash_select and an Element and extracts a hash from it. Should return
- * high-entropy uint32_t hashes for `Hash h; h<0>(e) ... h<7>(e)`.
+ * high-entropy uint32_t hashes for `Hash h; h<0>(e) ... h<1>(e)`.
  */
 template <typename Element, typename Hash>
 class cache
@@ -237,16 +237,10 @@ private:
      * @param e The element whose hashes will be returned
      * @returns Deterministic hashes derived from `e` uniformly mapped onto the range [0, size)
      */
-    inline std::array<uint32_t, 8> compute_hashes(const Element& e) const
+    inline std::array<uint32_t, 2> compute_hashes(const Element& e) const
     {
         return {{FastRange32(hash_function.template operator()<0>(e), size),
-                 FastRange32(hash_function.template operator()<1>(e), size),
-                 FastRange32(hash_function.template operator()<2>(e), size),
-                 FastRange32(hash_function.template operator()<3>(e), size),
-                 FastRange32(hash_function.template operator()<4>(e), size),
-                 FastRange32(hash_function.template operator()<5>(e), size),
-                 FastRange32(hash_function.template operator()<6>(e), size),
-                 FastRange32(hash_function.template operator()<7>(e), size)}};
+                 FastRange32(hash_function.template operator()<1>(e), size)}};
     }
 
     /** invalid returns a special index that can never be inserted to
@@ -375,7 +369,7 @@ public:
 
     /** insert loops at most depth_limit times trying to insert a hash
      * at various locations in the table via a variant of the Cuckoo Algorithm
-     * with eight hash locations.
+     * with two hash locations.
      *
      * It drops the last tried element if it runs out of depth before
      * encountering an open slot.
@@ -399,7 +393,7 @@ public:
         epoch_check();
         uint32_t last_loc = invalid();
         bool last_epoch = true;
-        std::array<uint32_t, 8> locs = compute_hashes(e);
+        std::array<uint32_t, 2> locs = compute_hashes(e);
         // Make sure we have not already inserted this element
         // If we have, make sure that it does not get deleted
         for (const uint32_t loc : locs)
@@ -424,7 +418,7 @@ public:
             * 1. On first iteration, last_loc == invalid(), find returns last, so
             *    last_loc defaults to locs[0].
             * 2. On further iterations, where last_loc == locs[k], last_loc will
-            *    go to locs[k+1 % 8], i.e., next of the 8 indices wrapping around
+            *    go to locs[k+1 % 2], i.e., next of the 2 indices wrapping around
             *    to 0 if needed.
             *
             * This prevents moving the element we just put in.
@@ -432,7 +426,7 @@ public:
             * The swap is not a move -- we must switch onto the evicted element
             * for the next iteration.
             */
-            last_loc = locs[(1 + (std::find(locs.begin(), locs.end(), last_loc) - locs.begin())) & 7];
+            last_loc = locs[(1 + (std::find(locs.begin(), locs.end(), last_loc) - locs.begin())) & 1];
             std::swap(table[last_loc], e);
             // Can't std::swap a std::vector<bool>::reference and a bool&.
             bool epoch = last_epoch;
@@ -473,7 +467,7 @@ public:
      */
     inline bool contains(const Element& e, const bool erase) const
     {
-        std::array<uint32_t, 8> locs = compute_hashes(e);
+        std::array<uint32_t, 2> locs = compute_hashes(e);
         for (const uint32_t loc : locs)
             if (table[loc] == e) {
                 if (erase)
