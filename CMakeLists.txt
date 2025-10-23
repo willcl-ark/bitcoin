@@ -82,6 +82,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 list(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake/module)
 include(ProcessConfigurations)
 
+# Include CDash dashboard testing module
+include(CTest)
+
 # Flatten static lib dependencies.
 # Without this, if libfoo.a depends on libbar.a, libfoo's objects can't begin
 # to be compiled until libbar.a has been created.
