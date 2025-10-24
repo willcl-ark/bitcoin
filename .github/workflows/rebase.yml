@@ -1,0 +1,74 @@
+# Copyright (c) 2025-present The Bitcoin Core developers
+# Distributed under the MIT software license, see the accompanying
+# file COPYING or https://opensource.org/license/mit.
+
+name: rebase-upstream
+
+on:
+  schedule:
+    - cron: "50 23 * * *"  # run nightly at 23:55
+  workflow_dispatch:       # run manually
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  rebase:
+    name: 'rebase on upstream'
+    runs-on: ubuntu-latest
+    if: github.repository != 'bitcoin/bitcoin'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 1000
+      - name: Authenticate with REBASE_TOKEN
+        env:
+          REBASE_TOKEN: ${{ secrets.REBASE_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          echo "$REBASE_TOKEN" | gh auth login --with-token
+          git remote set-url origin https://x-access-token:$REBASE_TOKEN@github.com/$REPO.git
+      - name: sync
+        env:
+          BRANCH: 'master'
+          DEPTH: 10
+          UPSTREAM: 'bitcoin/bitcoin'
+        run: |
+          set -ex
+
+          if [ -z "$UPSTREAM" ]; then
+              UPSTREAM=$(gh api repos/:owner/:repo --jq .parent.full_name)
+              if [ -z "$UPSTREAM" ]; then echo "Can't find upstream" >&2 && exit 1; fi
+          fi
+
+          if [[ ! "$UPSTREAM" =~ ^(http|git@) ]]; then
+              UPSTREAM="https://github.com/$UPSTREAM.git"
+          fi
+
+          DEPTH_FLAG=""
+          if [ "$DEPTH" -ne 0 ]; then
+              DEPTH_FLAG="--depth=$DEPTH"
+          fi
+
+          git remote add upstream "$UPSTREAM"
+
+          git fetch upstream "$BRANCH" $DEPTH_FLAG
+
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --local user.name  "GitHub Actions"
+
+          LOCAL_HEAD=$(git rev-parse HEAD)
+          UPSTREAM_HEAD=$(git rev-parse upstream/"$BRANCH")
+
+          if [ "$LOCAL_HEAD" != "$UPSTREAM_HEAD" ]; then
+              echo "Rebasing onto upstream/$BRANCH..."
+              git rebase upstream/"$BRANCH"
+
+              git fetch origin $(git branch --show-current)
+              git push origin $(git branch --show-current) --force
+              echo "Rebase completed and pushed"
+          else
+              echo "Already up to date with upstream/$BRANCH - no rebase needed"
+          fi
