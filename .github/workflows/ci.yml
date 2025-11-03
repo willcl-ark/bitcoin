@@ -41,7 +41,7 @@ jobs:
             echo "provider=cirrus" >> "$GITHUB_OUTPUT"
             echo "::notice title=Runner Selection::Using Cirrus Runners"
           else
-            echo "provider=gha" >> "$GITHUB_OUTPUT"
+            echo "provider=unknown-input" >> "$GITHUB_OUTPUT"
             echo "::notice title=Runner Selection::Using GitHub-hosted runners"
           fi
 
