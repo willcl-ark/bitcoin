@@ -23,8 +23,26 @@
         system:
         let
           pkgs = pkgsFor system;
-          lib = pkgs.lib;
-          dependencies = import ./depends { inherit pkgs lib; };
+          inherit (pkgs) lib;
+
+          # Construct our build env
+          mkPlatformStdenv =
+            targetPkgs:
+            if targetPkgs.stdenv.hostPlatform.isMinGW then
+              targetPkgs.stdenv.override {
+                cc = targetPkgs.stdenv.cc.override {
+                  extraPackages = [
+                    targetPkgs.windows.pthreads
+                    targetPkgs.windows.mcfgthreads
+                  ];
+                  extraBuildCommands = ''
+                    echo "-I${targetPkgs.windows.pthreads}/include" >> $out/nix-support/cc-cflags
+                    echo "-L${targetPkgs.windows.pthreads}/lib -lpthread" >> $out/nix-support/cc-ldflags
+                  '';
+                };
+              }
+            else
+              targetPkgs.stdenv;
 
           mkBitcoinDerivation =
             {
@@ -32,8 +50,12 @@
               extraConfig ? { },
             }:
             let
-              deps = dependencies.mkDependencies targetPkgs;
-              customStdEnv = dependencies.mkPlatformStdenv targetPkgs;
+              customStdEnv = mkPlatformStdenv targetPkgs;
+              dependsPackages = import ./depends {
+                hostPkgs = pkgs;
+                inherit targetPkgs customStdEnv version;
+                inherit (targetPkgs) lib;
+              };
             in
             customStdEnv.mkDerivation (
               {
@@ -42,16 +64,23 @@
                   path = ./.;
                   name = "source";
                 };
-                nativeBuildInputs = with pkgs; [
-                  cmake
-                  ninja
-                  pkg-config
-                  python3
-                ];
-                buildInputs = builtins.attrValues deps;
+                nativeBuildInputs =
+                  with pkgs;
+                  [
+                    cmake
+                    ninja
+                    pkg-config
+                    python3
+                  ]
+                  ++ builtins.attrValues dependsPackages.native;
+                buildInputs = builtins.attrValues dependsPackages.target;
                 env = {
                   CMAKE_GENERATOR = "Ninja";
                   LC_ALL = "C";
+                }
+                // lib.optionalAttrs targetPkgs.stdenv.hostPlatform.isFreeBSD {
+                  CXXFLAGS = "-isystem${targetPkgs.llvmPackages.libcxx.dev}/include/c++/v1 -isystem${targetPkgs.stdenv.cc.libc_dev}/include";
+                  CFLAGS = "-isystem${targetPkgs.stdenv.cc.libc_dev}/include";
                 };
                 cmakeFlags = [
                   "-DBUILD_BITCOIN_BIN=ON"
@@ -66,13 +95,10 @@
                   "-DENABLE_EXTERNAL_SIGNER=OFF"
                   "-DWITH_ZMQ=ON"
                   "-DENABLE_IPC=ON"
-                ]
-                ++ lib.optionals targetPkgs.stdenv.hostPlatform.isFreeBSD [
-                  ''-DCMAKE_CXX_FLAGS=-isystem${targetPkgs.llvmPackages.libcxx.dev}/include/c++/v1''
-                  ''-DCMAKE_C_FLAGS=-isystem${targetPkgs.stdenv.cc.libc_dev}/include''
+                  "-DMPGEN_EXECUTABLE=${dependsPackages.native.nativeLibmultiprocess}/bin/mpgen"
                 ];
                 withStatic = true;
-                separateDebugInfo = !targetPkgs.stdenv.hostPlatform.isDarwin; # Symbols on Darwin are different
+                separateDebugInfo = !targetPkgs.stdenv.hostPlatform.isDarwin; # TODO: Symbols on Darwin are different
                 stripAllList = [ "bin" ]; # Use stripAll to remove everything possible, not only debug symbols
                 meta = {
                   description = "Bitcoin Core client";
@@ -129,7 +155,7 @@
               targetPkgs = pkgs.pkgsCross.gnu64.pkgsStatic;
             };
           }
-          // lib.optionalAttrs (pkgs.stdenv.isLinux) {
+          // lib.optionalAttrs pkgs.stdenv.isLinux {
             # compat for freebsd only runs on linux
             x86_64-freebsd = {
               targetPkgs = pkgs.pkgsCross.x86_64-freebsd.pkgsStatic;
@@ -180,11 +206,11 @@
       let
         inherit (mkBitcoinForSystem system) mkBitcoinDerivation platforms mkDockerImage;
         pkgs = pkgsFor system;
-        lib = pkgs.lib;
+        inherit (pkgs) lib;
         dependencies = import ./depends { inherit pkgs lib; };
       in
       {
-        packages = lib.mapAttrs (name: cfg: mkBitcoinDerivation cfg) platforms // {
+        packages = lib.mapAttrs (_name: cfg: mkBitcoinDerivation cfg) platforms // {
           docker-x64 = mkDockerImage {
             targetPkgs = pkgs.pkgsCross.gnu64.pkgsStatic;
             arch = "x86_64";
@@ -212,13 +238,12 @@
         let
           system = "x86_64-linux";
           inherit (mkBitcoinForSystem system) mkBitcoinDerivation platforms;
-          lib = (pkgsFor system).lib;
+          inherit (pkgsFor system) lib;
           # Build all platforms except Darwin (which don't cross-compile well from Linux) and default
-          # TODO: Does this actually work on hydra though?
           nonDarwinPlatforms = lib.filterAttrs (
             name: _: !lib.hasSuffix "darwin" name && name != "default"
           ) platforms;
         in
-        lib.mapAttrs (_: platformConfig: mkBitcoinDerivation platformConfig) nonDarwinPlatforms;
+        lib.mapAttrs (_: mkBitcoinDerivation) nonDarwinPlatforms;
     };
 }
