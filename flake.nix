@@ -51,9 +51,42 @@
             }:
             let
               customStdEnv = mkPlatformStdenv targetPkgs;
+
+              # Map both build directory and nix store to /usr
+              baseCFlags = "-O2 -g -ffile-prefix-map=/build=/usr -fmacro-prefix-map=/build=/usr -ffile-prefix-map=${builtins.storeDir}=/usr -fmacro-prefix-map=${builtins.storeDir}=/usr";
+
+              commonCFlags =
+                if targetPkgs.stdenv.hostPlatform.isDarwin then
+                  ""
+                else if targetPkgs.stdenv.hostPlatform.isMinGW then
+                  "${baseCFlags} -fno-ident"
+                else
+                  baseCFlags;
+
+              commonCXXFlags =
+                if targetPkgs.stdenv.hostPlatform.isDarwin then
+                  ""
+                else if targetPkgs.stdenv.hostPlatform.isMinGW then
+                  "${baseCFlags} -fno-ident"
+                else if targetPkgs.stdenv.hostPlatform.system == "arm-linux" then
+                  "${baseCFlags} -Wno-psabi"
+                else
+                  baseCFlags;
+
+              commonCPPFlags = "-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3";
+
+              platformLdflags =
+                if targetPkgs.stdenv.hostPlatform.isLinux then
+                  "-Wl,--as-needed -static-libstdc++ -Wl,-O2"
+                else if targetPkgs.stdenv.hostPlatform.isMinGW then
+                  "-Wl,--no-insert-timestamp"
+                else
+                  "";
+
               dependsPackages = import ./depends {
                 hostPkgs = pkgs;
                 inherit targetPkgs customStdEnv version;
+                inherit commonCFlags commonCXXFlags commonCPPFlags;
                 inherit (targetPkgs) lib;
               };
             in
@@ -77,10 +110,20 @@
                 env = {
                   CMAKE_GENERATOR = "Ninja";
                   LC_ALL = "C";
+                  TZ = "UTC";
+                  CFLAGS = commonCFlags;
+                  CXXFLAGS = commonCXXFlags;
+                  LDFLAGS = platformLdflags;
+                  LIBRARY_PATH = "";
+                  CPATH = "";
+                  C_INCLUDE_PATH = "";
+                  CPLUS_INCLUDE_PATH = "";
+                  OBJC_INCLUDE_PATH = "";
+                  OBJCPLUS_INCLUDE_PATH = "";
                 }
                 // lib.optionalAttrs targetPkgs.stdenv.hostPlatform.isFreeBSD {
-                  CXXFLAGS = "-isystem${targetPkgs.llvmPackages.libcxx.dev}/include/c++/v1 -isystem${targetPkgs.stdenv.cc.libc_dev}/include";
-                  CFLAGS = "-isystem${targetPkgs.stdenv.cc.libc_dev}/include";
+                  CXXFLAGS = "${commonCXXFlags} -isystem${targetPkgs.llvmPackages.libcxx.dev}/include/c++/v1 -isystem${targetPkgs.stdenv.cc.libc_dev}/include";
+                  CFLAGS = "${commonCFlags} -isystem${targetPkgs.stdenv.cc.libc_dev}/include";
                 };
                 cmakeFlags = [
                   "-DBUILD_BITCOIN_BIN=ON"
@@ -96,6 +139,10 @@
                   "-DWITH_ZMQ=ON"
                   "-DENABLE_IPC=ON"
                   "-DMPGEN_EXECUTABLE=${dependsPackages.native.nativeLibmultiprocess}/bin/mpgen"
+                  "-DREDUCE_EXPORTS=ON"
+                  "-DBUILD_GUI_TESTS=OFF"
+                  "-DBUILD_FUZZ_BINARY=OFF"
+                  "-DCMAKE_SKIP_RPATH=TRUE"
                 ];
                 withStatic = true;
                 separateDebugInfo = !targetPkgs.stdenv.hostPlatform.isDarwin; # TODO: Symbols on Darwin are different

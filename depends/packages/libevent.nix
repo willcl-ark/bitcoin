@@ -4,6 +4,9 @@
   fetchurl,
   cmake,
   which,
+  commonCFlags ? "",
+  commonCXXFlags ? "",
+  commonCPPFlags ? "",
 }:
 stdenv.mkDerivation rec {
   pname = "libevent";
@@ -35,22 +38,18 @@ stdenv.mkDerivation rec {
     "-DEVENT__LIBRARY_TYPE=STATIC"
   ];
 
-  NIX_CFLAGS_COMPILE = [
-    "-fdebug-prefix-map=${placeholder "out"}=/usr"
-    "-fmacro-prefix-map=${placeholder "out"}=/usr"
-  ];
-
+  NIX_CFLAGS_COMPILE = commonCFlags;
+  NIX_CXXFLAGS_COMPILE = commonCXXFlags;
   NIX_CPPFLAGS = [
+    commonCPPFlags
     "-D_GNU_SOURCE"
-    "-U_FORTIFY_SOURCE"
-    "-D_FORTIFY_SOURCE=3"
   ]
   ++ lib.optionals stdenv.hostPlatform.isMinGW [
     "-D_WIN32_WINNT=0x0A00"
   ];
 
   env = lib.optionalAttrs stdenv.hostPlatform.isFreeBSD {
-    CFLAGS = "-isystem${stdenv.cc.libc_dev}/include";
+    CFLAGS = "${commonCFlags} -isystem${stdenv.cc.libc_dev}/include";
   };
 
   postInstall = ''

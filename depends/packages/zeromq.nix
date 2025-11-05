@@ -4,6 +4,9 @@
   fetchurl,
   cmake,
   which,
+  commonCFlags ? "",
+  commonCXXFlags ? "",
+  commonCPPFlags ? "",
 }:
 stdenv.mkDerivation rec {
   pname = "zeromq";
@@ -46,13 +49,12 @@ stdenv.mkDerivation rec {
     "-DZMQ_HAVE_IPC=OFF"
   ];
 
-  NIX_CXXFLAGS_COMPILE = [
-    "-fdebug-prefix-map=${placeholder "out"}=/usr"
-    "-fmacro-prefix-map=${placeholder "out"}=/usr"
-  ];
+  NIX_CFLAGS_COMPILE = commonCFlags;
+  NIX_CXXFLAGS_COMPILE = commonCXXFlags;
+  NIX_CPPFLAGS = commonCPPFlags;
 
   env = lib.optionalAttrs stdenv.hostPlatform.isFreeBSD {
-    CXXFLAGS = "-isystem${stdenv.cc.libcxx.dev}/include/c++/v1 -isystem${stdenv.cc.libc_dev}/include";
+    CXXFLAGS = "${commonCXXFlags} -isystem${stdenv.cc.libcxx.dev}/include/c++/v1 -isystem${stdenv.cc.libc_dev}/include";
   };
 
   postInstall = ''

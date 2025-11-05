@@ -4,6 +4,9 @@
   fetchurl,
   cmake,
   which,
+  commonCFlags ? "",
+  commonCXXFlags ? "",
+  commonCPPFlags ? "",
 }:
 stdenv.mkDerivation rec {
   pname = "boost";
@@ -33,8 +36,12 @@ stdenv.mkDerivation rec {
     "-DCMAKE_DISABLE_FIND_PACKAGE_ICU=ON"
   ];
 
+  NIX_CFLAGS_COMPILE = commonCFlags;
+  NIX_CXXFLAGS_COMPILE = commonCXXFlags;
+  NIX_CPPFLAGS = commonCPPFlags;
+
   env = lib.optionalAttrs stdenv.hostPlatform.isFreeBSD {
-    CXXFLAGS = "-isystem${stdenv.cc.libcxx.dev}/include/c++/v1 -isystem${stdenv.cc.libc_dev}/include";
+    CXXFLAGS = "${commonCXXFlags} -isystem${stdenv.cc.libcxx.dev}/include/c++/v1 -isystem${stdenv.cc.libc_dev}/include";
   };
 
   meta = with lib; {

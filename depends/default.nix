@@ -3,6 +3,9 @@
   targetPkgs, # Target platform
   customStdEnv,
   version,
+  commonCFlags,
+  commonCXXFlags,
+  commonCPPFlags,
   lib,
 }:
 let
@@ -17,11 +20,21 @@ let
 
   # Target packages built for the target platform
   targetPackagesRaw = {
-    boost = targetPkgs.callPackage ./packages/boost.nix { };
-    capnp = targetPkgs.callPackage ./packages/capnp.nix { };
-    libevent = targetPkgs.callPackage ./packages/libevent.nix { };
-    sqlite = targetPkgs.callPackage ./packages/sqlite.nix { };
-    zeromq = targetPkgs.callPackage ./packages/zeromq.nix { };
+    boost = targetPkgs.callPackage ./packages/boost.nix {
+      inherit commonCFlags commonCXXFlags commonCPPFlags;
+    };
+    capnp = targetPkgs.callPackage ./packages/capnp.nix {
+      inherit commonCFlags commonCXXFlags commonCPPFlags;
+    };
+    libevent = targetPkgs.callPackage ./packages/libevent.nix {
+      inherit commonCFlags commonCXXFlags commonCPPFlags;
+    };
+    sqlite = targetPkgs.callPackage ./packages/sqlite.nix {
+      inherit commonCFlags commonCXXFlags commonCPPFlags;
+    };
+    zeromq = targetPkgs.callPackage ./packages/zeromq.nix {
+      inherit commonCFlags commonCXXFlags commonCPPFlags;
+    };
   };
 
   # Override stdenv for all target packages
