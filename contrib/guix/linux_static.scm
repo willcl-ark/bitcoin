@@ -16,11 +16,13 @@ FILE-NAME found in ./patches relative to the current file."
       ((%patch-path (list (string-append (dirname (current-filename)) "/patches"))))
     (list (search-patch file-name) ...)))
 
-(define glibc-2.31
-  (let ((commit "28eb5caf895ced5d895cb02757e109004a2d33e5"))
+;; --enable-static-nss isn't used yet, because it has been broken
+;; since 2.33: https://sourceware.org/bugzilla/show_bug.cgi?id=27959.
+(define glibc-2.43
+  (let ((commit "4070d808bea1c077eb7e7d52b52b91cae98205d5"))
   (package
     (inherit glibc) ;; 2.39
-    (version "2.31")
+    (version "2.43")
     (source (origin
               (method git-fetch)
               (uri (git-reference
@@ -29,39 +31,29 @@ FILE-NAME found in ./patches relative to the current file."
               (file-name (git-file-name "glibc" commit))
               (sha256
                (base32
-                "07arjrc1smqy8wrhg38apr1s9ji7xv1rpzdapk4k2ps2n07irp58"))
-              (patches (search-our-patches "glibc-guix-prefix.patch"
-                                           "glibc-riscv-jumptarget.patch"))))
+                "14f6ayljaja5wjz1bm4fwabxrjqbwh39781gx00l9ksvxnvqjp8c"))
+              (patches (search-our-patches "glibc-guix-2.43-prefix.patch"
+                                           "glibc-nss-nodlopen.patch"))))
     (arguments
       (substitute-keyword-arguments (package-arguments glibc)
         ((#:configure-flags flags)
           `(append ,flags
             ;; https://www.gnu.org/software/libc/manual/html_node/Configuring-and-compiling.html
-            (list "--enable-stack-protector=all",
-                  "--enable-cet",
-                  "--enable-bind-now",
-                  "--disable-werror",
-                  "--disable-timezone-tools",
+            (list "--enable-bind-now",
+                  "--enable-cet=yes",
+                  "--enable-fortify-source",
+                  "--enable-stack-protector=all",
+                  "--disable-nscd",
                   "--disable-profile",
-                  building-on)))
-    ((#:phases phases)
-        `(modify-phases ,phases
-           (add-before 'configure 'set-etc-rpc-installation-directory
-             (lambda* (#:key outputs #:allow-other-keys)
-               ;; Install the rpc data base file under `$out/etc/rpc'.
-               ;; Otherwise build will fail with "Permission denied."
-               ;; Can be removed when we are building 2.32 or later.
-               (let ((out (assoc-ref outputs "out")))
-                 (substitute* "sunrpc/Makefile"
-                   (("^\\$\\(inst_sysconfdir\\)/rpc(.*)$" _ suffix)
-                    (string-append out "/etc/rpc" suffix "\n"))
-                   (("^install-others =.*$")
-                    (string-append "install-others = " out "/etc/rpc\n")))))))))))))
+                  "--disable-pt_chown",
+                  "--disable-timezone-tools",
+                  "--disable-werror",
+                  building-on))))))))
 
 (packages->manifest
  (append
   (let ((target (getenv "HOST")))
     (cond ((string-contains target "-linux-")
            (list (make-bitcoin-cross-toolchain target
-                                               #:base-libc glibc-2.31))) ;; will be 2.43 based
+                                               #:base-libc glibc-2.43)))
           (else '())))))
