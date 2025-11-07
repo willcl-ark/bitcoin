@@ -31,3 +31,14 @@ docker build -f "$DOCKERFILE" "$REPO_ROOT" \
     --tag "bitcoin-stagex:$GIT_REVISION" \
     --load \
     "$@"
+
+echo
+echo "Build completed successfully!"
+echo
+
+CONTAINER_ID=$(docker create bitcoin-stagex:"$GIT_REVISION" sh)
+docker cp "$CONTAINER_ID:/opt/bitcoin/bin/bitcoind" /tmp/bitcoind-stagex
+docker rm "$CONTAINER_ID" > /dev/null
+
+echo "sha256sum:"
+sha256sum /tmp/bitcoind-stagex
