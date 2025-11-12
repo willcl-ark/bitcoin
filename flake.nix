@@ -139,6 +139,8 @@
                   "-DWITH_ZMQ=ON"
                   "-DENABLE_IPC=ON"
                   "-DMPGEN_EXECUTABLE=${dependsPackages.native.nativeLibmultiprocess}/bin/mpgen"
+                  "-DCAPNP_EXECUTABLE=${dependsPackages.native.nativeCapnp}/bin/capnp"
+                  "-DCAPNPC_CXX_EXECUTABLE=${dependsPackages.native.nativeCapnp}/bin/capnpc-c++"
                   "-DREDUCE_EXPORTS=ON"
                   "-DBUILD_GUI_TESTS=OFF"
                   "-DBUILD_FUZZ_BINARY=OFF"
