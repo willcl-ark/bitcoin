@@ -12,6 +12,12 @@ default_host_OBJCOPY = $(host_toolchain)objcopy
 default_host_OBJDUMP = $(host_toolchain)objdump
 
 define add_host_tool_func
+ifeq ($(origin host_$1),command line)
+# If host_$1 was explicitly set via command line, always use that value
+$(host_os)_$1=$$(host_$1)
+$(host_arch)_$(host_os)_$1=$$(host_$1)
+$(host_arch)_$(host_os)_$(release_type)_$1=$$(host_$1)
+else
 ifneq ($(filter $(origin $1),undefined default),)
 # Do not consider the well-known var $1 if it is undefined or is taking a value
 # that is predefined by "make" (e.g. the make variable "CC" has a predefined
@@ -20,9 +26,11 @@ $(host_os)_$1?=$$(default_host_$1)
 $(host_arch)_$(host_os)_$1?=$$($(host_os)_$1)
 $(host_arch)_$(host_os)_$(release_type)_$1?=$$($(host_os)_$1)
 else
+# $1 is set, use it with fallbacks
 $(host_os)_$1=$(or $($1),$($(host_os)_$1),$(default_host_$1))
 $(host_arch)_$(host_os)_$1=$(or $($1),$($(host_arch)_$(host_os)_$1),$$($(host_os)_$1))
 $(host_arch)_$(host_os)_$(release_type)_$1=$(or $($1),$($(host_arch)_$(host_os)_$(release_type)_$1),$$($(host_os)_$1))
+endif
 endif
 host_$1=$$($(host_arch)_$(host_os)_$1)
 endef
