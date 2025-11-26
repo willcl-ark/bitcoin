@@ -150,4 +150,4 @@ fi
 DIR_UNIT_TEST_DATA="${DIR_UNIT_TEST_DATA}" \
 LD_LIBRARY_PATH="${DEPENDS_DIR}/${HOST}/lib" \
 CTEST_OUTPUT_ON_FAILURE=ON \
-ctest --preset "${CONTAINER_NAME}" --test-dir "${BASE_BUILD_DIR}" "${MAKEJOBS}" --timeout $(( TEST_RUNNER_TIMEOUT_FACTOR * 60 ))
+ctest --preset "${CONTAINER_NAME}" --test-dir "${BASE_BUILD_DIR}" "${MAKEJOBS}" --timeout $(( TEST_RUNNER_TIMEOUT_FACTOR * 60 )) --stop-on-failure
