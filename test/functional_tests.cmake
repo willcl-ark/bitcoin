@@ -3,6 +3,10 @@
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
+# Detect multi-config generators (MSVC, Xcode) vs single-config (Ninja, Makefiles)
+# Multi-config generators place binaries in bin/<CONFIG>/, single-config in bin/
+get_property(is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+
 if(NOT DEFINED ENABLE_WALLET)
     set(ENABLE_WALLET ON)
 endif()
@@ -67,6 +71,7 @@ function(add_functional_test test_name test_script)
         LABELS "functional"
         COST ${AFT_COST}
         FIXTURES_REQUIRED "functional_cache"
+        ENVIRONMENT "CMAKE_CONFIG=$<$<BOOL:${is_multi_config}>:$<CONFIG>>"
     )
 
     if(AFT_LABELS)
