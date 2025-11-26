@@ -314,12 +314,17 @@ def get_binary_paths(config):
     }
     # Set paths to bitcoin core binaries allowing overrides with environment
     # variables.
+    # Normalize the build directory path to handle mixed separators on Windows
+    build_dir = os.path.normpath(config["environment"]["BUILDDIR"])
+    # For multi-config generators (MSVC, Xcode), CMAKE_CONFIG contains the configuration subdirectory
+    # It can be set in config.ini or via CMAKE_CONFIG environment variable (set by CTest)
+    cmake_config = os.getenv("CMAKE_CONFIG") or config["environment"].get("CMAKE_CONFIG", "")
     for binary, env_variable_name in binaries.items():
-        default_filename = os.path.join(
-            config["environment"]["BUILDDIR"],
-            "bin",
-            binary + config["environment"]["EXEEXT"],
-        )
+        bin_path_components = [build_dir, "bin"]
+        if cmake_config:
+            bin_path_components.append(cmake_config)
+        bin_path_components.append(binary + config["environment"]["EXEEXT"])
+        default_filename = os.path.join(*bin_path_components)
         setattr(paths, env_variable_name.lower(), os.getenv(env_variable_name, default=default_filename))
     # BITCOIN_CMD environment variable can be specified to invoke bitcoin
     # wrapper binary instead of other executables.
