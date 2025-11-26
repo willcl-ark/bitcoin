@@ -100,4 +100,5 @@ target_link_libraries(leveldb PRIVATE
 
 set_target_properties(leveldb PROPERTIES
   EXPORT_COMPILE_COMMANDS OFF
+  CXX_CLANG_TIDY ""
 )

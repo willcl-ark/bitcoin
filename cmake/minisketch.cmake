@@ -69,6 +69,7 @@ target_link_libraries(minisketch
 
 set_target_properties(minisketch PROPERTIES
   EXPORT_COMPILE_COMMANDS OFF
+  CXX_CLANG_TIDY ""
 )
 
 if(HAVE_CLMUL)

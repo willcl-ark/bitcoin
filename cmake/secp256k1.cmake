@@ -48,5 +48,35 @@ function(add_secp256k1 subdir)
   add_subdirectory(${subdir})
   set_target_properties(secp256k1 PROPERTIES
     EXCLUDE_FROM_ALL TRUE
+    EXPORT_COMPILE_COMMANDS OFF
+    C_CLANG_TIDY ""
   )
+  set_target_properties(secp256k1_precomputed PROPERTIES
+    EXPORT_COMPILE_COMMANDS OFF
+    C_CLANG_TIDY ""
+  )
+  if(TARGET secp256k1_asm_arm)
+    set_target_properties(secp256k1_asm_arm PROPERTIES
+      EXPORT_COMPILE_COMMANDS OFF
+      C_CLANG_TIDY ""
+    )
+  endif()
+  if(BUILD_TESTS)
+    set_target_properties(noverify_tests exhaustive_tests PROPERTIES
+      EXPORT_COMPILE_COMMANDS OFF
+      C_CLANG_TIDY ""
+    )
+    if(TARGET tests)
+      set_target_properties(tests PROPERTIES
+        EXPORT_COMPILE_COMMANDS OFF
+        C_CLANG_TIDY ""
+      )
+    endif()
+    if(TARGET ctime_tests)
+      set_target_properties(ctime_tests PROPERTIES
+        EXPORT_COMPILE_COMMANDS OFF
+        C_CLANG_TIDY ""
+      )
+    endif()
+  endif()
 endfunction()
