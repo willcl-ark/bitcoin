@@ -499,6 +499,10 @@ jobs:
       - name: Get previous releases
         run: ./test/get_previous_releases.py --target-dir $PREVIOUS_RELEASES_DIR
 
+      - name: Debug - Create test cache manually
+        run: |
+          py -3 test/functional/create_cache.py --cachedir="${{ github.workspace }}\test\cache" --tmpdir="${{ runner.temp }}\cache_debug"
+
       - name: Run functional tests
         env:
           TEST_RUNNER_EXTRA: ${{ github.event_name != 'pull_request' && '--extended' || '' }}
