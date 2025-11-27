@@ -428,23 +428,29 @@
   ],
   "testPresets": [
     {
+      "name": "ci-test-base",
+      "hidden": true,
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "timeout": 2400
+      }
+    },
+    {
       "name": "ci-arm",
       "configurePreset": "ci-arm",
+      "inherits": "ci-test-base",
       "filter": {
         "exclude": {
           "label": "functional"
         }
-      },
-      "output": {
-        "outputOnFailure": true
       }
     },
     {
       "name": "ci-i686-no-ipc",
       "configurePreset": "ci-i686-no-ipc",
-      "output": {
-        "outputOnFailure": true
-      },
+      "inherits": "ci-test-base",
       "environment": {
         "TEST_RUNNER_EXTRA": "--v2transport --usecli"
       }
@@ -452,70 +458,57 @@
     {
       "name": "ci-mac-cross-arm64",
       "configurePreset": "ci-mac-cross-arm64",
+      "inherits": "ci-test-base",
       "filter": {
         "exclude": {
           "name": ".*"
         }
-      },
-      "output": {
-        "outputOnFailure": true
       }
     },
     {
       "name": "ci-mac-cross-x86_64",
       "configurePreset": "ci-mac-cross-x86_64",
+      "inherits": "ci-test-base",
       "filter": {
         "exclude": {
           "name": ".*"
         }
-      },
-      "output": {
-        "outputOnFailure": true
       }
     },
     {
       "name": "ci-native-asan",
       "configurePreset": "ci-native-asan",
-      "output": {
-        "outputOnFailure": true
-      }
+      "inherits": "ci-test-base"
     },
     {
       "name": "ci-native-tsan",
       "configurePreset": "ci-native-tsan",
-      "output": {
-        "outputOnFailure": true
-      }
+      "inherits": "ci-test-base"
     },
     {
       "name": "ci-native-nowallet",
       "configurePreset": "ci-native-nowallet",
-      "output": {
-        "outputOnFailure": true
-      }
+      "inherits": "ci-test-base"
     },
     {
       "name": "ci-win64",
       "configurePreset": "ci-win64",
+      "inherits": "ci-test-base",
       "filter": {
         "exclude": {
           "name": ".*"
         }
-      },
-      "output": {
-        "outputOnFailure": true
       }
     },
     {
       "name": "ci-native-msan",
       "configurePreset": "ci-native-msan",
-      "output": {
-        "outputOnFailure": true
-      }
+      "inherits": "ci-test-base"
     },
     {
       "name": "ci-native-fuzz",
       "configurePreset": "ci-native-fuzz",
+      "inherits": "ci-test-base",
       "filter": {
         "exclude": {
           "label": "unit"
@@ -523,14 +516,12 @@
         "include": {
           "label": "fuzz"
         }
-      },
-      "output": {
-        "outputOnFailure": true
       }
     },
     {
       "name": "ci-native-fuzz-msan",
       "configurePreset": "ci-native-fuzz-msan",
+      "inherits": "ci-test-base",
       "filter": {
         "exclude": {
           "label": "unit"
@@ -538,36 +529,27 @@
         "include": {
           "label": "fuzz"
         }
-      },
-      "output": {
-        "outputOnFailure": true
       }
     },
     {
       "name": "ci-s390x",
       "configurePreset": "ci-s390x",
-      "output": {
-        "outputOnFailure": true
-      }
+      "inherits": "ci-test-base"
     },
     {
       "name": "ci-native-tidy",
       "configurePreset": "ci-native-tidy",
+      "inherits": "ci-test-base",
       "filter": {
         "include": {
           "label": "tidy|deps"
         }
-      },
-      "output": {
-        "outputOnFailure": true
       }
     },
     {
       "name": "ci-native-valgrind",
       "configurePreset": "ci-native-valgrind",
-      "output": {
-        "outputOnFailure": true
-      },
+      "inherits": "ci-test-base",
       "environment": {
         "USE_VALGRIND": "1",
         "TEST_RUNNER_EXTRA": "--exclude rpc_bind,feature_bind_extra"
@@ -576,9 +558,7 @@
     {
       "name": "ci-mac-native",
       "configurePreset": "ci-mac-native",
-      "output": {
-        "outputOnFailure": true
-      },
+      "inherits": "ci-test-base",
       "environment": {
         "BITCOIN_CMD": "bitcoin -m"
       }
@@ -586,6 +566,7 @@
     {
       "name": "ci-mac-native-fuzz",
       "configurePreset": "ci-mac-native-fuzz",
+      "inherits": "ci-test-base",
       "filter": {
         "exclude": {
           "label": "unit"
@@ -593,17 +574,12 @@
         "include": {
           "label": "fuzz"
         }
-      },
-      "output": {
-        "outputOnFailure": true
       }
     },
     {
       "name": "ci-native-alpine-musl",
       "configurePreset": "ci-native-alpine-musl",
-      "output": {
-        "outputOnFailure": true
-      },
+      "inherits": "ci-test-base",
       "environment": {
         "BITCOIN_CMD": "bitcoin -m"
       }
@@ -611,6 +587,7 @@
     {
       "name": "ci-native-fuzz-valgrind",
       "configurePreset": "ci-native-fuzz-valgrind",
+      "inherits": "ci-test-base",
       "filter": {
         "exclude": {
           "label": "unit"
@@ -618,9 +595,6 @@
         "include": {
           "label": "fuzz"
         }
-      },
-      "output": {
-        "outputOnFailure": true
       },
       "environment": {
         "FUZZ_TESTS_CONFIG": "--valgrind"
@@ -629,9 +603,7 @@
     {
       "name": "ci-native-previous-releases",
       "configurePreset": "ci-native-previous-releases",
-      "output": {
-        "outputOnFailure": true
-      },
+      "inherits": "ci-test-base",
       "environment": {
         "CI_LIMIT_STACK_SIZE": "1",
         "DOWNLOAD_PREVIOUS_RELEASES": "true"
