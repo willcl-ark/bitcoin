@@ -56,6 +56,20 @@ if [ -n "$PIP_PACKAGES" ]; then
   ${CI_RETRY_EXE} pip3 install --user $PIP_PACKAGES
 fi
 
+if [ "${CI_CMAKE_INSTALL}" = "true" ]; then
+  echo "Installing CMake ${CMAKE_VERSION}"
+  CMAKE_ARCHIVE="cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz"
+  CMAKE_DIR="/opt/cmake"
+  cd /tmp
+  ${CI_RETRY_EXE} wget -q "${CMAKE_URL}" -O "${CMAKE_ARCHIVE}"
+  mkdir -p "${CMAKE_DIR}"
+  tar --strip-components=1 -xzf "${CMAKE_ARCHIVE}" -C "${CMAKE_DIR}"
+  ln -sf "${CMAKE_DIR}/bin/cmake" /usr/local/bin/cmake
+  ln -sf "${CMAKE_DIR}/bin/ctest" /usr/local/bin/ctest
+  echo "CMake version: $(cmake --version | head -1)"
+  rm -f "${CMAKE_ARCHIVE}"
+fi
+
 if [[ -n "${USE_INSTRUMENTED_LIBCPP}" ]]; then
   ${CI_RETRY_EXE} git clone --depth=1 https://github.com/llvm/llvm-project -b "llvmorg-21.1.5" /llvm-project
 
