@@ -34,6 +34,10 @@ endfunction()
 
 create_test_config()
 
+# Functional test configuration options
+set(FUNCTIONAL_TESTS_EXTENDED OFF CACHE BOOL "Include extended functional tests")
+set(FUNCTIONAL_TESTS_EXCLUDE "" CACHE STRING "Comma-separated list of functional tests to exclude")
+
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/functional)
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/fuzz)
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/util)
@@ -48,3 +52,6 @@ foreach(script ${functional_tests} fuzz/test_runner.py)
   file(CREATE_LINK ${CMAKE_CURRENT_SOURCE_DIR}/${script} ${CMAKE_CURRENT_BINARY_DIR}/${script} COPY_ON_ERROR ${symlink})
 endforeach()
 unset(functional_tests)
+
+# Functional test definitions
+include(functional_tests.cmake)
