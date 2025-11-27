@@ -438,6 +438,7 @@
         "outputOnFailure": true
       },
       "execution": {
+        "stopOnFailure": true,
         "timeout": 2400
       },
       "environment": {
