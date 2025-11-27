@@ -174,8 +174,8 @@ else
     usage >&2
     exit 1
 fi
-if [ ! -f "$BUILD_DIR/Makefile" ]; then
-    echo >&2 "Error: directory '$BUILD_DIR' does not contain a makefile, please specify path to build directory for library targets."
+if [ ! -f "$BUILD_DIR/Makefile" ] && [ ! -f "$BUILD_DIR/build.ninja" ]; then
+    echo >&2 "Error: directory '$BUILD_DIR' does not contain a makefile or build.ninja, please specify path to build directory for library targets."
     usage >&2
     exit 1
 fi
