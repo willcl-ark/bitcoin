@@ -310,6 +310,42 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         else:
             self.log.error("Test failed. Test logging available at %s/test_framework.log", self.options.tmpdir)
             self.log.error("")
+
+            combined_logs_len_str = os.getenv("BITCOIN_TEST_COMBINED_LOGS_LEN")
+            is_internal_test = any(arg.startswith('--internal_test=') for arg in sys.argv)
+            if combined_logs_len_str and not is_internal_test:
+                try:
+                    combined_logs_len = int(combined_logs_len_str)
+                    self.log.error("=" * 80)
+                    self.log.error("Combined logs (last %d lines):", combined_logs_len)
+                    self.log.error("=" * 80)
+
+                    combine_logs_path = os.path.normpath(
+                        os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "combine_logs.py")
+                    )
+
+                    result = subprocess.run(
+                        [sys.executable, combine_logs_path, self.options.tmpdir],
+                        capture_output=True,
+                        text=True,
+                        timeout=30  # Prevent hanging on very large logs
+                    )
+
+                    if result.returncode == 0:
+                        from collections import deque
+                        lines = result.stdout.splitlines()
+                        last_lines = deque(lines, maxlen=combined_logs_len)
+                        for line in last_lines:
+                            self.log.error(line)
+                    else:
+                        self.log.error("Failed to generate combined logs: %s", result.stderr)
+
+                    self.log.error("=" * 80)
+                    self.log.error("")
+                except (ValueError, subprocess.TimeoutExpired) as e:
+                    self.log.error("Error generating combined logs: %s", e)
+                    self.log.error("")
+
             self.log.error("Hint: Call {} '{}' to consolidate all logs".format(os.path.normpath(os.path.dirname(os.path.realpath(__file__)) + "/../combine_logs.py"), self.options.tmpdir))
             self.log.error("")
             self.log.error("If this failure happened unexpectedly or intermittently, please file a bug and provide a link or upload of the combined log.")
