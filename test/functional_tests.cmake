@@ -43,10 +43,11 @@ function(add_functional_test test_name test_script)
     list(GET test_parts 0 script_name)
     list(LENGTH test_parts num_parts)
 
-    # Build base command arguments
     set(base_args --cachedir=${CMAKE_CURRENT_BINARY_DIR}/test/cache)
+    if(DEFINED FUNCTIONAL_TESTS_TIMEOUT_FACTOR)
+        list(APPEND base_args --timeout-factor=${FUNCTIONAL_TESTS_TIMEOUT_FACTOR})
+    endif()
 
-    # Add coverage directory if coverage is enabled
     if(ENABLE_COVERAGE)
         list(APPEND base_args --coveragedir=${CMAKE_CURRENT_BINARY_DIR}/coverage)
     endif()
