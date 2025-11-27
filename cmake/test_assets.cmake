@@ -65,6 +65,7 @@ if(DEFINED ENV{DOWNLOAD_PREVIOUS_RELEASES} AND "$ENV{DOWNLOAD_PREVIOUS_RELEASES}
   add_custom_target(download-previous-releases
     COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/test/get_previous_releases.py"
             --target-dir "${PREVIOUS_RELEASES_DIR}"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     COMMENT "Downloading previous Bitcoin releases..."
     BYPRODUCTS "${PREVIOUS_RELEASES_DIR}"
   )
