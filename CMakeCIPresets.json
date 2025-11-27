@@ -43,6 +43,20 @@
       }
     },
     {
+      "name": "ci-fuzz-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "cacheVariables": {
+        "BUILD_BENCH": "ON",
+        "BUILD_FOR_FUZZING": "ON",
+        "BUILD_FUZZ_BINARY": "ON",
+        "BUILD_TESTS": "ON",
+        "CI_BUILD": "ON",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "WERROR": "ON"
+      }
+    },
+    {
       "name": "ci-arm",
       "displayName": "32 bit ARM, unit tests, no functional tests",
       "inherits": "ci-base",
@@ -160,34 +174,22 @@
     {
       "name": "ci-native-fuzz",
       "displayName": "fuzzer,address,undefined,integer, no depends",
-      "generator": "Ninja",
+      "inherits": "ci-fuzz-base",
       "cacheVariables": {
-        "BUILD_BENCH": "ON",
-        "BUILD_FOR_FUZZING": "ON",
-        "BUILD_FUZZ_BINARY": "ON",
-        "BUILD_TESTS": "ON",
-        "CI_BUILD": "ON",
         "CMAKE_CXX_COMPILER": "clang++",
         "CMAKE_CXX_FLAGS": "-ftrivial-auto-var-init=pattern",
         "CMAKE_C_COMPILER": "clang",
         "CMAKE_C_FLAGS": "-ftrivial-auto-var-init=pattern",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "SANITIZERS": "fuzzer,address,undefined,float-divide-by-zero,integer",
-        "WERROR": "ON"
+        "SANITIZERS": "fuzzer,address,undefined,float-divide-by-zero,integer"
       }
     },
     {
       "name": "ci-native-fuzz-msan",
       "displayName": "MSan, fuzz",
-      "generator": "Ninja",
+      "inherits": "ci-fuzz-base",
       "cacheVariables": {
         "APPEND_CPPFLAGS": "-DBOOST_MULTI_INDEX_ENABLE_SAFE_MODE -U_FORTIFY_SOURCE",
-        "BUILD_BENCH": "ON",
-        "BUILD_FOR_FUZZING": "ON",
-        "BUILD_FUZZ_BINARY": "ON",
         "BUILD_GUI": "OFF",
-        "BUILD_TESTS": "ON",
-        "CI_BUILD": "ON",
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_CXX_COMPILER": "clang++",
         "CMAKE_CXX_FLAGS": "-fsanitize=memory -fsanitize-memory-track-origins=2 -fno-omit-frame-pointer -g -O1 -fno-optimize-sibling-calls -nostdinc++ -nostdlib++ -isystem /cxx_build/include/c++/v1 -L/cxx_build/lib -Wl,-rpath,/cxx_build/lib -lc++ -lc++abi -lpthread -Wno-unused-command-line-argument -lstdc++",
@@ -196,8 +198,7 @@
         "CMAKE_C_FLAGS": "-fsanitize=memory -fsanitize-memory-track-origins=2 -fno-omit-frame-pointer -g -O1 -fno-optimize-sibling-calls",
         "CMAKE_C_FLAGS_DEBUG": "",
         "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/depends/x86_64-pc-linux-gnu/toolchain.cmake",
-        "SANITIZERS": "memory",
-        "WERROR": "ON"
+        "SANITIZERS": "memory"
       },
       "environment": {
         "USE_INSTRUMENTED_LIBCXX": "MemoryWithOrigins"
@@ -263,7 +264,7 @@
     {
       "name": "ci-mac-native-fuzz",
       "displayName": "macOS native fuzz",
-      "generator": "Ninja",
+      "inherits": "ci-fuzz-base",
       "condition": {
         "type": "equals",
         "lhs": "${hostSystemName}",
@@ -271,15 +272,8 @@
       },
       "cacheVariables": {
         "APPEND_CPPFLAGS": "-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_DEBUG",
-        "BUILD_BENCH": "ON",
-        "BUILD_FOR_FUZZING": "ON",
-        "BUILD_FUZZ_BINARY": "ON",
-        "BUILD_TESTS": "ON",
-        "CI_BUILD": "ON",
         "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_EXE_LINKER_FLAGS": "-Wl,-stack_size -Wl,0x80000",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "WERROR": "ON"
+        "CMAKE_EXE_LINKER_FLAGS": "-Wl,-stack_size -Wl,0x80000"
       }
     },
     {
@@ -296,17 +290,10 @@
     {
       "name": "ci-native-fuzz-valgrind",
       "displayName": "Fuzz with Valgrind",
-      "generator": "Ninja",
+      "inherits": "ci-fuzz-base",
       "cacheVariables": {
-        "BUILD_BENCH": "ON",
-        "BUILD_FOR_FUZZING": "ON",
-        "BUILD_FUZZ_BINARY": "ON",
-        "BUILD_TESTS": "ON",
-        "CI_BUILD": "ON",
         "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_CXX_FLAGS": "-Wno-error=array-bounds",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "WERROR": "ON"
+        "CMAKE_CXX_FLAGS": "-Wno-error=array-bounds"
       }
     },
     {

@@ -64,6 +64,9 @@ PRINT_CCACHE_STATISTICS="ccache --version | head -n 1 && ccache --show-stats"
 # Folder where the build is done.
 BASE_BUILD_DIR=${BASE_BUILD_DIR:-$BASE_SCRATCH_DIR/build-$HOST}
 
+# Set fuzz corpus directory for cmake configure
+export DIR_FUZZ_IN="${DIR_QA_ASSETS}/fuzz_corpora"
+
 cmake -S "$BASE_ROOT_DIR" -B "$BASE_BUILD_DIR" --preset "$CONTAINER_NAME" -DCMAKE_INSTALL_PREFIX="$BASE_OUTDIR" || (
   cd "${BASE_BUILD_DIR}"
   # shellcheck disable=SC2046

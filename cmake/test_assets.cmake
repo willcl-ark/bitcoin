@@ -14,7 +14,12 @@ endif()
 # 1. Fuzz test corpora from qa-assets repository
 # Create a custom target instead of downloading at configure time
 if(BUILD_FUZZ_BINARY)
-  set(QA_ASSETS_DIR "${CMAKE_BINARY_DIR}/_deps/qa-assets")
+  # Use DIR_QA_ASSETS env var if set (for CI caching), otherwise use build dir
+  if(DEFINED ENV{DIR_QA_ASSETS})
+    set(QA_ASSETS_DIR "$ENV{DIR_QA_ASSETS}")
+  else()
+    set(QA_ASSETS_DIR "${CMAKE_BINARY_DIR}/_deps/qa-assets")
+  endif()
   set(FUZZ_CORPUS_DIR "${QA_ASSETS_DIR}/fuzz_corpora" CACHE PATH "Fuzz test corpus directory" FORCE)
 
   add_custom_target(download-qa-assets
