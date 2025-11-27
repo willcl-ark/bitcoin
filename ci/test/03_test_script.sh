@@ -71,6 +71,10 @@ cmake -S "$BASE_ROOT_DIR" -B "$BASE_BUILD_DIR" --preset "$CONTAINER_NAME" -DCMAK
   false
 )
 
+# Download test assets if needed (for fuzz tests and unit tests)
+# shellcheck disable=SC2086
+cmake --build "${BASE_BUILD_DIR}" --target download-test-assets "$MAKEJOBS"
+
 # shellcheck disable=SC2086
 cmake --build "${BASE_BUILD_DIR}" "$MAKEJOBS" || (
   echo "Build failure. Verbose build follows."
