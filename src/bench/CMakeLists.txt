@@ -92,7 +92,6 @@ add_test(NAME bench_sanity_check
 )
 set_tests_properties(bench_sanity_check PROPERTIES
   LABELS bench
-  ENVIRONMENT "TSAN_OPTIONS=suppressions=${CMAKE_SOURCE_DIR}/test/sanitizer_suppressions/tsan:halt_on_error=1:second_deadlock_stack=1;LSAN_OPTIONS=suppressions=${CMAKE_SOURCE_DIR}/test/sanitizer_suppressions/lsan;UBSAN_OPTIONS=suppressions=${CMAKE_SOURCE_DIR}/test/sanitizer_suppressions/ubsan:print_stacktrace=1:halt_on_error=1:report_error_type=1;ASAN_OPTIONS=detect_leaks=1:detect_stack_use_after_return=1:check_initialization_order=1:strict_init_order=1"
 )
 
 # Optionally discover all individual benchmark tests
@@ -105,7 +104,6 @@ if(ENABLE_BENCH_TESTS)
     TEST_ARGS_REPLACEMENT [[-filter='^\0$']]
     PROPERTIES
       LABELS bench
-      ENVIRONMENT "TSAN_OPTIONS=suppressions=${CMAKE_SOURCE_DIR}/test/sanitizer_suppressions/tsan:halt_on_error=1:second_deadlock_stack=1;LSAN_OPTIONS=suppressions=${CMAKE_SOURCE_DIR}/test/sanitizer_suppressions/lsan;UBSAN_OPTIONS=suppressions=${CMAKE_SOURCE_DIR}/test/sanitizer_suppressions/ubsan:print_stacktrace=1:halt_on_error=1:report_error_type=1;ASAN_OPTIONS=detect_leaks=1:detect_stack_use_after_return=1:check_initialization_order=1:strict_init_order=1"
   )
 endif()
 
