@@ -292,7 +292,6 @@ if(BUILD_FOR_FUZZING)
   set_tests_properties(fuzz-tests PROPERTIES
     LABELS "fuzz"
     TIMEOUT ${FUZZ_TIMEOUT}
-    ENVIRONMENT "TSAN_OPTIONS=suppressions=${CMAKE_SOURCE_DIR}/test/sanitizer_suppressions/tsan:halt_on_error=1:second_deadlock_stack=1;LSAN_OPTIONS=suppressions=${CMAKE_SOURCE_DIR}/test/sanitizer_suppressions/lsan;UBSAN_OPTIONS=suppressions=${CMAKE_SOURCE_DIR}/test/sanitizer_suppressions/ubsan:print_stacktrace=1:halt_on_error=1:report_error_type=1;ASAN_OPTIONS=detect_leaks=1:detect_stack_use_after_return=1:check_initialization_order=1:strict_init_order=1"
   )
 
   target_compile_definitions(core_interface INTERFACE
