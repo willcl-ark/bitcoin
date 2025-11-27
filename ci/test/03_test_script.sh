@@ -40,49 +40,8 @@ echo "=== BEGIN env ==="
 env
 echo "=== END env ==="
 
-# Don't apply patches in the iwyu job, because it relies on the `git diff`
-# command to detect IWYU errors. It is safe to skip this patch in the iwyu job
-# because it doesn't run a UB detector.
-if [[ "${RUN_IWYU}" != true ]]; then
-  # compact->outputs[i].file_size is uninitialized memory, so reading it is UB.
-  # The statistic bytes_written is only used for logging, which is disabled in
-  # CI, so as a temporary minimal fix to work around UB and CI failures, leave
-  # bytes_written unmodified.
-  # See https://github.com/bitcoin/bitcoin/pull/28359#issuecomment-1698694748
-  # Tee patch to stdout to make it clear CI is testing modified code.
-  tee >(patch -p1) <<'EOF'
---- a/src/leveldb/db/db_impl.cc
-+++ b/src/leveldb/db/db_impl.cc
-@@ -1028,9 +1028,6 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
-       stats.bytes_read += compact->compaction->input(which, i)->file_size;
-     }
-   }
--  for (size_t i = 0; i < compact->outputs.size(); i++) {
--    stats.bytes_written += compact->outputs[i].file_size;
--  }
-
-   mutex_.Lock();
-   stats_[compact->compaction->level() + 1].Add(stats);
-EOF
-fi
-
-if [ "$RUN_FUZZ_TESTS" = "true" ]; then
-  export DIR_FUZZ_IN=${DIR_QA_ASSETS}/fuzz_corpora/
-  if [ ! -d "$DIR_FUZZ_IN" ]; then
-    ${CI_RETRY_EXE} git clone --depth=1 https://github.com/bitcoin-core/qa-assets "${DIR_QA_ASSETS}"
-  fi
-  (
-    cd "${DIR_QA_ASSETS}"
-    echo "Using qa-assets repo from commit ..."
-    git log -1
-  )
-elif [ "$RUN_UNIT_TESTS" = "true" ]; then
-  export DIR_UNIT_TEST_DATA=${DIR_QA_ASSETS}/unit_test_data/
-  if [ ! -d "$DIR_UNIT_TEST_DATA" ]; then
-    mkdir -p "$DIR_UNIT_TEST_DATA"
-    ${CI_RETRY_EXE} curl --location --fail https://github.com/bitcoin-core/qa-assets/raw/main/unit_test_data/script_assets_test.json -o "${DIR_UNIT_TEST_DATA}/script_assets_test.json"
-  fi
-fi
+# Leveldb UB patch is now applied by CMake (see cmake/leveldb.cmake)
+# Test assets (qa-assets, unit test data) are now downloaded by CMake (see cmake/test_assets.cmake)
 
 # Make sure default datadir does not exist and is never read by creating a dummy file
 if [ "$CI_OS_NAME" == "macos" ]; then
@@ -109,6 +68,9 @@ PRINT_CCACHE_STATISTICS="ccache --version | head -n 1 && ccache --show-stats"
 # Folder where the build is done.
 BASE_BUILD_DIR=${BASE_BUILD_DIR:-$BASE_SCRATCH_DIR/build-$HOST}
 
+# Set fuzz corpus directory for cmake configure
+export DIR_FUZZ_IN="${DIR_QA_ASSETS}/fuzz_corpora"
+
 cmake -S "$BASE_ROOT_DIR" -B "$BASE_BUILD_DIR" --preset "$CONTAINER_NAME" -DCMAKE_INSTALL_PREFIX="$BASE_OUTDIR" || (
   cd "${BASE_BUILD_DIR}"
   # shellcheck disable=SC2046
@@ -116,9 +78,9 @@ cmake -S "$BASE_ROOT_DIR" -B "$BASE_BUILD_DIR" --preset "$CONTAINER_NAME" -DCMAK
   false
 )
 
-if [[ "${GOAL}" != all && "${GOAL}" != codegen ]]; then
-  GOAL="all ${GOAL}"
-fi
+# Download test assets if needed (for fuzz tests and unit tests)
+# shellcheck disable=SC2086
+cmake --build "${BASE_BUILD_DIR}" --target download-test-assets "$MAKEJOBS"
 
 # shellcheck disable=SC2086
 cmake --build "${BASE_BUILD_DIR}" "$MAKEJOBS" || (

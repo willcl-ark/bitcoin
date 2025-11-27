@@ -1,0 +1,12 @@
+--- a/src/leveldb/db/db_impl.cc
++++ b/src/leveldb/db/db_impl.cc
+@@ -1028,9 +1028,6 @@ Status DBImpl::DoCompactionWork(CompactionState* compact) {
+       stats.bytes_read += compact->compaction->input(which, i)->file_size;
+     }
+   }
+-  for (size_t i = 0; i < compact->outputs.size(); i++) {
+-    stats.bytes_written += compact->outputs[i].file_size;
+-  }
+
+   mutex_.Lock();
+   stats_[compact->compaction->level() + 1].Add(stats);

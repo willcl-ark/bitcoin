@@ -6,6 +6,39 @@
 # support has been merged we should switch to using the upstream CMake
 # buildsystem.
 
+# Apply UB fix patch only in CI builds (not tidy jobs)
+# compact->outputs[i].file_size is uninitialized memory, so reading it is UB.
+# The statistic bytes_written is only used for logging, which is disabled in CI.
+# See https://github.com/bitcoin/bitcoin/pull/28359#issuecomment-1698694748
+if(CI_BUILD AND NOT ENABLE_CLANG_TIDY)
+  set(LEVELDB_PATCH_FILE "${CMAKE_CURRENT_LIST_DIR}/patches/leveldb-ub-fix.patch")
+
+  # Check if patch is already applied (reverse dry-run succeeds if applied)
+  execute_process(
+    COMMAND patch -p1 --dry-run --reverse --input=${LEVELDB_PATCH_FILE}
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    RESULT_VARIABLE PATCH_ALREADY_APPLIED
+    OUTPUT_QUIET
+    ERROR_QUIET
+  )
+
+  # Apply patch if not already applied (reverse dry-run failed)
+  if(NOT PATCH_ALREADY_APPLIED EQUAL 0)
+    message(STATUS "Applying leveldb UB fix patch for CI build...")
+    execute_process(
+      COMMAND patch -p1 --forward --input=${LEVELDB_PATCH_FILE}
+      WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+      RESULT_VARIABLE PATCH_RESULT
+      OUTPUT_VARIABLE PATCH_OUTPUT
+      ERROR_VARIABLE PATCH_ERROR
+    )
+
+    if(NOT PATCH_RESULT EQUAL 0)
+      message(FATAL_ERROR "Failed to apply leveldb patch:\n${PATCH_OUTPUT}\n${PATCH_ERROR}")
+    endif()
+  endif()
+endif()
+
 include(CheckCXXSymbolExists)
 check_cxx_symbol_exists(F_FULLFSYNC "fcntl.h" HAVE_FULLFSYNC)
 
