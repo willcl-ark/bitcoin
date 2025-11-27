@@ -11,5 +11,4 @@ export CONTAINER_NAME=ci-native-fuzz
 export APT_LLVM_V="21"
 export PACKAGES="clang-${APT_LLVM_V} llvm-${APT_LLVM_V} libclang-rt-${APT_LLVM_V}-dev libevent-dev libboost-dev libsqlite3-dev libcapnp-dev capnproto"
 export NO_DEPENDS=1
-export RUN_FUZZ_TESTS=true
 export CI_CONTAINER_CAP="--cap-add SYS_PTRACE"  # If run with (ASan + LSan), the container needs access to ptrace (https://github.com/google/sanitizers/issues/764)

@@ -20,4 +20,3 @@ export DEP_OPTS="DEBUG=1 NO_QT=1 CC=clang CXX=clang++ CFLAGS='${MSAN_FLAGS}' CXX
 # Setting CMAKE_{C,CXX}_FLAGS_DEBUG flags to an empty string ensures that the flags set in MSAN_FLAGS remain unaltered.
 # _FORTIFY_SOURCE is not compatible with MSAN.
 export USE_INSTRUMENTED_LIBCPP="MemoryWithOrigins"
-export RUN_FUZZ_TESTS=true
