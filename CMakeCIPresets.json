@@ -318,6 +318,51 @@
         "FUNCTIONAL_TESTS_EXCLUDE": "feature_dbcrash",
         "REDUCE_EXPORTS": "ON"
       }
+    },
+    {
+      "name": "ci-win-native",
+      "displayName": "Windows native VS 2022",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "BUILD_BENCH": "ON",
+        "BUILD_GUI": "ON",
+        "BUILD_KERNEL_LIB": "ON",
+        "BUILD_TESTS": "ON",
+        "BUILD_UTIL_CHAINSTATE": "ON",
+        "CI_BUILD": "ON",
+        "FUNCTIONAL_TESTS_TIMEOUT_FACTOR": "40",
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "WERROR": "ON",
+        "WITH_ZMQ": "ON"
+      }
+    },
+    {
+      "name": "ci-win-native-fuzz",
+      "displayName": "Windows native fuzz VS 2022",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "BUILD_FOR_FUZZING": "ON",
+        "BUILD_GUI": "OFF",
+        "CI_BUILD": "ON",
+        "VCPKG_MANIFEST_FEATURES": "wallet",
+        "VCPKG_MANIFEST_NO_DEFAULT_FEATURES": "ON",
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "WERROR": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -415,6 +460,16 @@
       "name": "ci-native-previous-releases",
       "configurePreset": "ci-native-previous-releases",
       "targets": ["install"]
+    },
+    {
+      "name": "ci-win-native",
+      "configurePreset": "ci-win-native",
+      "configuration": "Release"
+    },
+    {
+      "name": "ci-win-native-fuzz",
+      "configurePreset": "ci-win-native-fuzz",
+      "configuration": "Release"
     }
   ],
   "testPresets": [
@@ -606,6 +661,23 @@
       "environment": {
         "CI_LIMIT_STACK_SIZE": "1",
         "DOWNLOAD_PREVIOUS_RELEASES": "true"
+      }
+    },
+    {
+      "name": "ci-win-native",
+      "configurePreset": "ci-win-native",
+      "inherits": "ci-test-base",
+      "configuration": "Release"
+    },
+    {
+      "name": "ci-win-native-fuzz",
+      "configurePreset": "ci-win-native-fuzz",
+      "inherits": "ci-test-base",
+      "configuration": "Release",
+      "filter": {
+        "include": {
+          "label": "fuzz"
+        }
       }
     }
   ]
