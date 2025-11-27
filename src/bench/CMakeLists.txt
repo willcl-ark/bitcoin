@@ -86,12 +86,22 @@ if(ENABLE_WALLET)
   target_link_libraries(bench_bitcoin bitcoin_wallet)
 endif()
 
-discover_tests(bench_bitcoin
-  DISCOVERY_ARGS        [[-list]]
-  DISCOVERY_MATCH       [[.+]]
-  TEST_NAME_REPLACEMENT [[bitcoin.bench.\0]]
-  TEST_ARGS_REPLACEMENT [[-filter='^\0$']]
-  PROPERTIES LABELS bench
+# By default, only run bench sanity check
+add_test(NAME bench_sanity_check
+  COMMAND bench_bitcoin -sanity-check
 )
+set_tests_properties(bench_sanity_check PROPERTIES LABELS bench)
+
+# Optionally discover all individual benchmark tests
+option(ENABLE_BENCH_TESTS "Enable individual benchmark tests (slow)" OFF)
+if(ENABLE_BENCH_TESTS)
+  discover_tests(bench_bitcoin
+    DISCOVERY_ARGS        [[-list]]
+    DISCOVERY_MATCH       [[.+]]
+    TEST_NAME_REPLACEMENT [[bitcoin.bench.\0]]
+    TEST_ARGS_REPLACEMENT [[-filter='^\0$']]
+    PROPERTIES LABELS bench
+  )
+endif()
 
 install_binary_component(bench_bitcoin INTERNAL)
