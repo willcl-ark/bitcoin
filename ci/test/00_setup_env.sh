@@ -34,15 +34,6 @@ echo "Fallback to default values in env (if not yet set)"
 # The number of parallel jobs to pass down to make and test_runner.py
 export MAKEJOBS=${MAKEJOBS:--j$(if command -v nproc > /dev/null 2>&1; then nproc; else sysctl -n hw.logicalcpu; fi)}
 
-export RUN_UNIT_TESTS=${RUN_UNIT_TESTS:-true}
-export RUN_FUNCTIONAL_TESTS=${RUN_FUNCTIONAL_TESTS:-true}
-export RUN_TIDY=${RUN_TIDY:-false}
-# By how much to scale the test_runner timeouts (option --timeout-factor).
-# This is needed because some ci machines have slow CPU or disk, so sanitizers
-# might be slow or a reindex might be waiting on disk IO.
-export TEST_RUNNER_TIMEOUT_FACTOR=${TEST_RUNNER_TIMEOUT_FACTOR:-40}
-export RUN_FUZZ_TESTS=${RUN_FUZZ_TESTS:-false}
-
 # Randomize test order.
 # See https://www.boost.org/doc/libs/1_71_0/libs/test/doc/html/boost_test/utf_reference/rt_param_reference/random.html
 export BOOST_TEST_RANDOM=${BOOST_TEST_RANDOM:-1}

@@ -250,7 +250,11 @@ if(BUILD_FOR_FUZZING)
   enable_testing()
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
-  set(FUZZ_CORPUS_DIR "$ENV{DIR_FUZZ_IN}")
+  # FUZZ_CORPUS_DIR is set by cmake/test_assets.cmake for CI builds
+  # For local builds, fall back to environment variable
+  if(NOT DEFINED FUZZ_CORPUS_DIR)
+    set(FUZZ_CORPUS_DIR "$ENV{DIR_FUZZ_IN}")
+  endif()
   set(FUZZ_TEST_ARGS
     "${CMAKE_BINARY_DIR}/test/fuzz/test_runner.py"
   )
@@ -491,6 +495,11 @@ endif()
 include(cmake/introspection.cmake)
 
 include(cmake/ccache.cmake)
+
+# Download test assets for CI builds
+if(CI_BUILD)
+  include(cmake/test_assets.cmake)
+endif()
 
 add_library(warn_interface INTERFACE)
 target_link_libraries(core_interface INTERFACE warn_interface)

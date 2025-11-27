@@ -226,6 +226,7 @@
         "CMAKE_C_COMPILER": "clang-21",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "ENABLE_CHECK_DEPS": "ON",
+        "ENABLE_CLANG_TIDY": "ON",
         "WITH_QRENCODE": "ON",
         "WITH_USDT": "ON",
         "WITH_ZMQ": "ON"
