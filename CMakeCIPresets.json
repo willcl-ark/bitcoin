@@ -381,11 +381,13 @@
     },
     {
       "name": "ci-native-fuzz",
-      "configurePreset": "ci-native-fuzz"
+      "configurePreset": "ci-native-fuzz",
+      "targets": ["all"]
     },
     {
       "name": "ci-native-fuzz-msan",
-      "configurePreset": "ci-native-fuzz-msan"
+      "configurePreset": "ci-native-fuzz-msan",
+      "targets": ["all"]
     },
     {
       "name": "ci-s390x",
@@ -409,7 +411,8 @@
     },
     {
       "name": "ci-mac-native-fuzz",
-      "configurePreset": "ci-mac-native-fuzz"
+      "configurePreset": "ci-mac-native-fuzz",
+      "targets": ["all"]
     },
     {
       "name": "ci-native-alpine-musl",
@@ -418,7 +421,8 @@
     },
     {
       "name": "ci-native-fuzz-valgrind",
-      "configurePreset": "ci-native-fuzz-valgrind"
+      "configurePreset": "ci-native-fuzz-valgrind",
+      "targets": ["all"]
     },
     {
       "name": "ci-native-previous-releases",
