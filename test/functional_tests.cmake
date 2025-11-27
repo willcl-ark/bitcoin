@@ -87,7 +87,7 @@ function(add_functional_test test_name test_script)
         LABELS "functional"
         COST ${AFT_COST}
         FIXTURES_REQUIRED "functional_cache"
-        ENVIRONMENT "CMAKE_CONFIG=$<$<BOOL:${is_multi_config}>:$<CONFIG>>;TSAN_OPTIONS=suppressions=${CMAKE_SOURCE_DIR}/test/sanitizer_suppressions/tsan:halt_on_error=1:second_deadlock_stack=1;LSAN_OPTIONS=suppressions=${CMAKE_SOURCE_DIR}/test/sanitizer_suppressions/lsan;UBSAN_OPTIONS=suppressions=${CMAKE_SOURCE_DIR}/test/sanitizer_suppressions/ubsan:print_stacktrace=1:halt_on_error=1:report_error_type=1;ASAN_OPTIONS=detect_leaks=1:detect_stack_use_after_return=1:check_initialization_order=1:strict_init_order=1"
+        ENVIRONMENT "CMAKE_CONFIG=$<$<BOOL:${is_multi_config}>:$<CONFIG>>"
     )
 
     if(AFT_LABELS)
