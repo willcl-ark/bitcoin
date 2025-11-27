@@ -109,7 +109,10 @@ if [ -n "$USE_VALGRIND" ]; then
 fi
 
 # Run tests using CMake preset
+# Timeout and output-on-failure are configured in testPresets
 DIR_UNIT_TEST_DATA="${DIR_UNIT_TEST_DATA}" \
 LD_LIBRARY_PATH="${DEPENDS_DIR}/${HOST}/lib" \
-CTEST_OUTPUT_ON_FAILURE=ON \
-ctest --preset "${CONTAINER_NAME}" --test-dir "${BASE_BUILD_DIR}" "${MAKEJOBS}" --timeout $(( TEST_RUNNER_TIMEOUT_FACTOR * 60 )) --stop-on-failure
+ctest --preset "${CONTAINER_NAME}" --test-dir "${BASE_BUILD_DIR}" "${MAKEJOBS}"
+
+# Tidy checks are now handled by CMake test preset
+# Fuzz tests are now handled by CMake test preset
