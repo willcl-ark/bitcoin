@@ -7,17 +7,10 @@
 export LC_ALL=C.UTF-8
 
 export CI_IMAGE_NAME_TAG="mirror.gcr.io/debian:trixie"
-export CONTAINER_NAME=ci_native_valgrind
+export CONTAINER_NAME=ci-native-valgrind
 export PACKAGES="valgrind python3-zmq libevent-dev libboost-dev libzmq3-dev libsqlite3-dev libcapnp-dev capnproto python3-pip"
 export PIP_PACKAGES="--break-system-packages pycapnp"
-export USE_VALGRIND=1
 export NO_DEPENDS=1
+export USE_VALGRIND=1
 # bind tests excluded for now, see https://github.com/bitcoin/bitcoin/issues/17765#issuecomment-602068547
-export TEST_RUNNER_EXTRA="--exclude rpc_bind --exclude feature_bind_extra"
-export GOAL="install"
 # TODO enable GUI
-export BITCOIN_CONFIG="\
-  --preset=dev-mode \
- -DBUILD_GUI=OFF \
- -DWITH_USDT=OFF \
-"
