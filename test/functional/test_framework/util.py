@@ -309,9 +309,11 @@ def get_binary_paths(config):
     }
     # Set paths to bitcoin core binaries allowing overrides with environment
     # variables.
+    # Normalize the build directory path to handle mixed separators on Windows
+    build_dir = os.path.normpath(config["environment"]["BUILDDIR"])
     for binary, env_variable_name in binaries.items():
         default_filename = os.path.join(
-            config["environment"]["BUILDDIR"],
+            build_dir,
             "bin",
             binary + config["environment"]["EXEEXT"],
         )
