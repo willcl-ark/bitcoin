@@ -1,0 +1,744 @@
+{
+  "version": 4,
+  "configurePresets": [
+    {
+      "name": "all",
+      "hidden": true,
+      "errors": {"dev": true},
+      "cacheVariables": {
+        "BUILD_BENCH": "ON",
+        "BUILD_CLI": "ON",
+        "BUILD_DAEMON": "ON",
+        "BUILD_FUZZ_BINARY": "ON",
+        "BUILD_GUI": "ON",
+        "BUILD_GUI_TESTS": "ON",
+        "BUILD_KERNEL_LIB": "ON",
+        "BUILD_SHARED_LIBS": "ON",
+        "BUILD_TESTS": "ON",
+        "BUILD_TX": "ON",
+        "BUILD_UTIL": "ON",
+        "BUILD_UTIL_CHAINSTATE": "ON",
+        "BUILD_WALLET_TOOL": "ON",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "ENABLE_EXTERNAL_SIGNER": "ON",
+        "ENABLE_WALLET": "ON",
+        "ENABLE_IPC": "ON",
+        "WITH_QRENCODE": "ON",
+        "WITH_USDT": "ON",
+        "WITH_ZMQ": "ON"
+      }
+    },
+    {
+      "name": "ci-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "cacheVariables": {
+        "BUILD_BENCH": "ON",
+        "BUILD_FUZZ_BINARY": "ON",
+        "BUILD_TESTS": "ON",
+        "CI_BUILD": "ON",
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "FUNCTIONAL_TESTS_TIMEOUT_FACTOR": "40",
+        "WERROR": "ON"
+      }
+    },
+    {
+      "name": "ci-fuzz-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "cacheVariables": {
+        "BUILD_BENCH": "ON",
+        "BUILD_FOR_FUZZING": "ON",
+        "BUILD_FUZZ_BINARY": "ON",
+        "BUILD_TESTS": "ON",
+        "CI_BUILD": "ON",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "WERROR": "ON"
+      }
+    },
+    {
+      "name": "ci-arm",
+      "displayName": "32 bit ARM, unit tests, no functional tests",
+      "inherits": "ci-base",
+      "cacheVariables": {
+        "CMAKE_CXX_FLAGS": "-Wno-psabi -Wno-error=maybe-uninitialized",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/depends/arm-linux-gnueabihf/toolchain.cmake",
+        "REDUCE_EXPORTS": "ON"
+      }
+    },
+    {
+      "name": "ci-i686-no-ipc",
+      "displayName": "no IPC, i686, DEBUG",
+      "inherits": "ci-base",
+      "cacheVariables": {
+        "APPEND_CPPFLAGS": "-DBOOST_MULTI_INDEX_ENABLE_SAFE_MODE",
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_COMPILER": "clang++;-m32",
+        "CMAKE_C_COMPILER": "clang;-m32",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/depends/i686-pc-linux-gnu/toolchain.cmake",
+        "ENABLE_IPC": "OFF"
+      }
+    },
+    {
+      "name": "ci-mac-cross-arm64",
+      "displayName": "macOS-cross to arm64",
+      "inherits": ["ci-base", "all"],
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/depends/arm64-apple-darwin/toolchain.cmake",
+        "REDUCE_EXPORTS": "ON",
+        "WITH_USDT": "OFF"
+      }
+    },
+    {
+      "name": "ci-mac-cross-x86_64",
+      "displayName": "macOS-cross to x86_64",
+      "inherits": ["ci-base", "all"],
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/depends/x86_64-apple-darwin/toolchain.cmake",
+        "REDUCE_EXPORTS": "ON",
+        "WITH_USDT": "OFF"
+      }
+    },
+    {
+      "name": "ci-native-asan",
+      "displayName": "ASan + LSan + UBSan + integer",
+      "inherits": ["ci-base", "all"],
+      "cacheVariables": {
+        "APPEND_CPPFLAGS": "-DARENA_DEBUG -DDEBUG_LOCKORDER",
+        "APPEND_CXXFLAGS": "-std=c++23",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_CXX_FLAGS": "-ftrivial-auto-var-init=pattern",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_C_FLAGS": "-ftrivial-auto-var-init=pattern",
+        "CMAKE_EXE_LINKER_FLAGS": "-fuse-ld=mold",
+        "SANITIZERS": "address,float-divide-by-zero,integer,undefined"
+      }
+    },
+    {
+      "name": "ci-native-tsan",
+      "displayName": "TSan, depends, no gui",
+      "inherits": ["ci-base", "all"],
+      "cacheVariables": {
+        "APPEND_CPPFLAGS": "-DARENA_DEBUG -DDEBUG_LOCKCONTENTION -D_LIBCPP_REMOVE_TRANSITIVE_INCLUDES",
+        "BUILD_GUI": "OFF",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/depends/x86_64-pc-linux-gnu/toolchain.cmake",
+        "SANITIZERS": "thread"
+      }
+    },
+    {
+      "name": "ci-native-nowallet",
+      "displayName": "No wallet",
+      "inherits": ["ci-base", "all"],
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "clang++-17",
+        "CMAKE_CXX_FLAGS": "-stdlib=libc++",
+        "CMAKE_C_COMPILER": "clang-17",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/depends/x86_64-pc-linux-gnu/toolchain.cmake",
+        "ENABLE_WALLET": "OFF",
+        "REDUCE_EXPORTS": "ON"
+      }
+    },
+    {
+      "name": "ci-win64",
+      "displayName": "Linux->Windows cross (ucrt), no tests",
+      "inherits": ["ci-base", "all"],
+      "cacheVariables": {
+        "CMAKE_CXX_FLAGS": "-Wno-error=maybe-uninitialized",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/depends/x86_64-w64-mingw32ucrt/toolchain.cmake",
+        "ENABLE_IPC": "OFF",
+        "ENABLE_WALLET": "ON",
+        "REDUCE_EXPORTS": "ON",
+        "WITH_USDT": "OFF"
+      }
+    },
+    {
+      "name": "ci-win64-msvcrt",
+      "displayName": "Linux->Windows cross (msvcrt), no tests",
+      "inherits": ["ci-base", "all"],
+      "cacheVariables": {
+        "CMAKE_CXX_FLAGS": "-Wno-error=maybe-uninitialized",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/depends/x86_64-w64-mingw32/toolchain.cmake",
+        "ENABLE_IPC": "OFF",
+        "ENABLE_WALLET": "ON",
+        "REDUCE_EXPORTS": "ON",
+        "WITH_USDT": "OFF"
+      }
+    },
+    {
+      "name": "ci-native-msan",
+      "displayName": "MSan, depends",
+      "inherits": ["ci-base", "all"],
+      "cacheVariables": {
+        "APPEND_CPPFLAGS": "-U_FORTIFY_SOURCE",
+        "BUILD_GUI": "OFF",
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_CXX_FLAGS": "-fsanitize=memory -fsanitize-memory-track-origins=2 -fno-omit-frame-pointer -g -O1 -fno-optimize-sibling-calls -nostdinc++ -nostdlib++ -isystem /cxx_build/include/c++/v1 -L/cxx_build/lib -Wl,-rpath,/cxx_build/lib -lc++ -lc++abi -lpthread -Wno-unused-command-line-argument",
+        "CMAKE_CXX_FLAGS_DEBUG": "",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_C_FLAGS": "-fsanitize=memory -fsanitize-memory-track-origins=2 -fno-omit-frame-pointer -g -O1 -fno-optimize-sibling-calls",
+        "CMAKE_C_FLAGS_DEBUG": "",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/depends/x86_64-pc-linux-gnu/toolchain.cmake",
+        "FUNCTIONAL_TESTS_TIMEOUT_FACTOR": "40",
+        "SANITIZERS": "memory"
+      }
+    },
+    {
+      "name": "ci-native-fuzz",
+      "displayName": "fuzzer,address,undefined,integer, no depends",
+      "inherits": "ci-fuzz-base",
+      "cacheVariables": {
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_CXX_FLAGS": "-ftrivial-auto-var-init=pattern",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_C_FLAGS": "-ftrivial-auto-var-init=pattern",
+        "SANITIZERS": "fuzzer,address,undefined,float-divide-by-zero,integer"
+      }
+    },
+    {
+      "name": "ci-native-fuzz-msan",
+      "displayName": "MSan, fuzz",
+      "inherits": "ci-fuzz-base",
+      "cacheVariables": {
+        "APPEND_CPPFLAGS": "-DBOOST_MULTI_INDEX_ENABLE_SAFE_MODE -U_FORTIFY_SOURCE",
+        "BUILD_GUI": "OFF",
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_CXX_FLAGS": "-fsanitize=memory -fsanitize-memory-track-origins=2 -fno-omit-frame-pointer -g -O1 -fno-optimize-sibling-calls -nostdinc++ -nostdlib++ -isystem /cxx_build/include/c++/v1 -L/cxx_build/lib -Wl,-rpath,/cxx_build/lib -lc++ -lc++abi -lpthread -Wno-unused-command-line-argument -lstdc++",
+        "CMAKE_CXX_FLAGS_DEBUG": "",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_C_FLAGS": "-fsanitize=memory -fsanitize-memory-track-origins=2 -fno-omit-frame-pointer -g -O1 -fno-optimize-sibling-calls",
+        "CMAKE_C_FLAGS_DEBUG": "",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/depends/x86_64-pc-linux-gnu/toolchain.cmake",
+        "SANITIZERS": "memory"
+      },
+      "environment": {
+        "USE_INSTRUMENTED_LIBCXX": "MemoryWithOrigins"
+      }
+    },
+    {
+      "name": "ci-s390x",
+      "displayName": "s390x architecture",
+      "inherits": ["ci-base", "all"],
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/depends/s390x-linux-gnu/toolchain.cmake",
+        "FUNCTIONAL_TESTS_EXCLUDE": "rpc_bind,feature_bind_extra",
+        "REDUCE_EXPORTS": "ON"
+      }
+    },
+    {
+      "name": "ci-native-tidy",
+      "displayName": "tidy",
+      "generator": "Ninja",
+      "cacheVariables": {
+        "BUILD_GUI": "ON",
+        "CI_BUILD": "ON",
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CXX_CLANG_TIDY": "clang-tidy-21",
+        "CMAKE_CXX_COMPILER": "clang++-21",
+        "CMAKE_C_COMPILER": "clang-21",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "ENABLE_CHECK_DEPS": "ON",
+        "ENABLE_CLANG_TIDY": "ON",
+        "WITH_QRENCODE": "ON",
+        "WITH_USDT": "ON",
+        "WITH_ZMQ": "ON"
+      }
+    },
+    {
+      "name": "ci-native-iwyu",
+      "displayName": "Include What You Use",
+      "generator": "Ninja",
+      "cacheVariables": {
+        "BUILD_GUI": "OFF",
+        "CI_BUILD": "ON",
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CXX_COMPILER": "clang++-21",
+        "CMAKE_C_COMPILER": "clang-21",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "WITH_QRENCODE": "ON",
+        "WITH_USDT": "ON",
+        "WITH_ZMQ": "ON"
+      }
+    },
+    {
+      "name": "ci-native-valgrind",
+      "displayName": "Valgrind, no GUI",
+      "inherits": ["ci-base", "all"],
+      "cacheVariables": {
+        "BUILD_GUI": "OFF",
+        "CI_BUILD": "ON",
+        "WITH_USDT": "OFF",
+        "USE_VALGRIND": "ON",
+        "FUNCTIONAL_TESTS_EXCLUDE": "rpc_bind,feature_bind_extra"
+      }
+    },
+    {
+      "name": "ci-mac-native",
+      "displayName": "macOS native build",
+      "inherits": ["ci-base", "all"],
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "CI_BUILD": "ON",
+        "CMAKE_EXE_LINKER_FLAGS": "-Wl,-stack_size -Wl,0x80000",
+        "REDUCE_EXPORTS": "ON",
+        "WITH_USDT": "OFF"
+      }
+    },
+    {
+      "name": "ci-mac-native-fuzz",
+      "displayName": "macOS native fuzz",
+      "inherits": "ci-fuzz-base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "APPEND_CPPFLAGS": "-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_DEBUG",
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXE_LINKER_FLAGS": "-Wl,-stack_size -Wl,0x80000"
+      }
+    },
+    {
+      "name": "ci-native-alpine-musl",
+      "displayName": "Alpine Linux musl libc",
+      "inherits": ["ci-base", "all"],
+      "generator": "Unix Makefiles",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/depends/x86_64-pc-linux-musl/toolchain.cmake",
+        "REDUCE_EXPORTS": "ON"
+      }
+    },
+    {
+      "name": "ci-native-fuzz-valgrind",
+      "displayName": "Fuzz with Valgrind",
+      "inherits": "ci-fuzz-base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CXX_FLAGS": "-Wno-error=array-bounds"
+      }
+    },
+    {
+      "name": "ci-native-previous-releases",
+      "displayName": "Previous releases, Coverage, Extended",
+      "inherits": ["ci-base", "all"],
+      "cacheVariables": {
+        "APPEND_CPPFLAGS": "-DBOOST_MULTI_INDEX_ENABLE_SAFE_MODE",
+        "CI_BUILD": "ON",
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_COMPILER": "g++-12",
+        "CMAKE_CXX_FLAGS": "-funsigned-char",
+        "CMAKE_CXX_FLAGS_DEBUG": "-g2 -O2",
+        "CMAKE_C_COMPILER": "gcc-12",
+        "CMAKE_C_FLAGS": "-funsigned-char",
+        "CMAKE_C_FLAGS_DEBUG": "-g2 -O2",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/depends/x86_64-pc-linux-gnu/toolchain.cmake",
+        "ENABLE_EXTENDED_FUNCTIONAL_TESTS": "ON",
+        "ENABLE_PREVIOUS_RELEASES_TESTS": "ON",
+        "ENABLE_RPC_COVERAGE": "ON",
+        "FUNCTIONAL_TESTS_EXTENDED": "ON",
+        "FUNCTIONAL_TESTS_EXCLUDE": "feature_dbcrash",
+        "REDUCE_EXPORTS": "ON"
+      }
+    },
+    {
+      "name": "ci-win-native",
+      "displayName": "Windows native VS 2022",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "BUILD_BENCH": "ON",
+        "BUILD_GUI": "ON",
+        "BUILD_KERNEL_LIB": "ON",
+        "BUILD_TESTS": "ON",
+        "BUILD_UTIL_CHAINSTATE": "ON",
+        "CI_BUILD": "ON",
+        "FUNCTIONAL_TESTS_TIMEOUT_FACTOR": "40",
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "WERROR": "ON",
+        "WITH_ZMQ": "ON"
+      }
+    },
+    {
+      "name": "ci-win-native-fuzz",
+      "displayName": "Windows native fuzz VS 2022",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "BUILD_FOR_FUZZING": "ON",
+        "BUILD_GUI": "OFF",
+        "CI_BUILD": "ON",
+        "VCPKG_MANIFEST_FEATURES": "wallet",
+        "VCPKG_MANIFEST_NO_DEFAULT_FEATURES": "ON",
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "WERROR": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "ci-arm",
+      "configurePreset": "ci-arm",
+      "targets": ["install"]
+    },
+    {
+      "name": "ci-i686-no-ipc",
+      "configurePreset": "ci-i686-no-ipc",
+      "targets": ["install"]
+    },
+    {
+      "name": "ci-mac-cross-arm64",
+      "configurePreset": "ci-mac-cross-arm64",
+      "targets": ["deploy"]
+    },
+    {
+      "name": "ci-mac-cross-x86_64",
+      "configurePreset": "ci-mac-cross-x86_64",
+      "targets": ["deploy"]
+    },
+    {
+      "name": "ci-native-asan",
+      "configurePreset": "ci-native-asan",
+      "targets": ["install"]
+    },
+    {
+      "name": "ci-native-tsan",
+      "configurePreset": "ci-native-tsan",
+      "targets": ["install"]
+    },
+    {
+      "name": "ci-native-nowallet",
+      "configurePreset": "ci-native-nowallet",
+      "targets": ["install"]
+    },
+    {
+      "name": "ci-win64",
+      "configurePreset": "ci-win64",
+      "targets": ["deploy"]
+    },
+    {
+      "name": "ci-win64-msvcrt",
+      "configurePreset": "ci-win64-msvcrt",
+      "targets": ["deploy"]
+    },
+    {
+      "name": "ci-native-msan",
+      "configurePreset": "ci-native-msan",
+      "targets": ["install"]
+    },
+    {
+      "name": "ci-native-fuzz",
+      "configurePreset": "ci-native-fuzz",
+      "targets": ["all"]
+    },
+    {
+      "name": "ci-native-fuzz-msan",
+      "configurePreset": "ci-native-fuzz-msan",
+      "targets": ["all"]
+    },
+    {
+      "name": "ci-s390x",
+      "configurePreset": "ci-s390x",
+      "targets": ["install"]
+    },
+    {
+      "name": "ci-native-tidy",
+      "configurePreset": "ci-native-tidy",
+      "targets": ["install"]
+    },
+    {
+      "name": "ci-native-iwyu",
+      "configurePreset": "ci-native-iwyu",
+      "targets": ["all"]
+    },
+    {
+      "name": "ci-native-valgrind",
+      "configurePreset": "ci-native-valgrind",
+      "targets": ["install"]
+    },
+    {
+      "name": "ci-mac-native",
+      "configurePreset": "ci-mac-native",
+      "targets": ["install", "deploy"]
+    },
+    {
+      "name": "ci-mac-native-fuzz",
+      "configurePreset": "ci-mac-native-fuzz",
+      "targets": ["all"]
+    },
+    {
+      "name": "ci-native-alpine-musl",
+      "configurePreset": "ci-native-alpine-musl",
+      "targets": ["install"]
+    },
+    {
+      "name": "ci-native-fuzz-valgrind",
+      "configurePreset": "ci-native-fuzz-valgrind",
+      "targets": ["all"]
+    },
+    {
+      "name": "ci-native-previous-releases",
+      "configurePreset": "ci-native-previous-releases",
+      "targets": ["install"]
+    },
+    {
+      "name": "ci-win-native",
+      "configurePreset": "ci-win-native",
+      "configuration": "Release"
+    },
+    {
+      "name": "ci-win-native-fuzz",
+      "configurePreset": "ci-win-native-fuzz",
+      "configuration": "Release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "ci-test-base",
+      "hidden": true,
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "stopOnFailure": true,
+        "timeout": 2400
+      },
+      "environment": {
+        "ASAN_OPTIONS": "detect_leaks=1:detect_stack_use_after_return=1:check_initialization_order=1:strict_init_order=1",
+        "LSAN_OPTIONS": "suppressions=${sourceDir}/test/sanitizer_suppressions/lsan",
+        "TSAN_OPTIONS": "suppressions=${sourceDir}/test/sanitizer_suppressions/tsan:halt_on_error=1:second_deadlock_stack=1",
+        "UBSAN_OPTIONS": "suppressions=${sourceDir}/test/sanitizer_suppressions/ubsan:print_stacktrace=1:halt_on_error=1:report_error_type=1",
+        "BITCOIN_TEST_COMBINED_LOGS_LEN": "99999999"
+      }
+    },
+    {
+      "name": "ci-arm",
+      "configurePreset": "ci-arm",
+      "inherits": "ci-test-base",
+      "filter": {
+        "exclude": {
+          "label": "functional"
+        }
+      }
+    },
+    {
+      "name": "ci-i686-no-ipc",
+      "configurePreset": "ci-i686-no-ipc",
+      "inherits": "ci-test-base",
+      "environment": {
+        "TEST_RUNNER_EXTRA": "--v2transport --usecli"
+      }
+    },
+    {
+      "name": "ci-mac-cross-arm64",
+      "configurePreset": "ci-mac-cross-arm64",
+      "inherits": "ci-test-base",
+      "filter": {
+        "exclude": {
+          "name": ".*"
+        }
+      }
+    },
+    {
+      "name": "ci-mac-cross-x86_64",
+      "configurePreset": "ci-mac-cross-x86_64",
+      "inherits": "ci-test-base",
+      "filter": {
+        "exclude": {
+          "name": ".*"
+        }
+      }
+    },
+    {
+      "name": "ci-native-asan",
+      "configurePreset": "ci-native-asan",
+      "inherits": "ci-test-base"
+    },
+    {
+      "name": "ci-native-tsan",
+      "configurePreset": "ci-native-tsan",
+      "inherits": "ci-test-base"
+    },
+    {
+      "name": "ci-native-nowallet",
+      "configurePreset": "ci-native-nowallet",
+      "inherits": "ci-test-base"
+    },
+    {
+      "name": "ci-win64",
+      "configurePreset": "ci-win64",
+      "inherits": "ci-test-base",
+      "filter": {
+        "exclude": {
+          "name": ".*"
+        }
+      }
+    },
+    {
+      "name": "ci-win64-msvcrt",
+      "configurePreset": "ci-win64-msvcrt",
+      "inherits": "ci-test-base",
+      "filter": {
+        "exclude": {
+          "name": ".*"
+        }
+      }
+    },
+    {
+      "name": "ci-native-msan",
+      "configurePreset": "ci-native-msan",
+      "inherits": "ci-test-base"
+    },
+    {
+      "name": "ci-native-fuzz",
+      "configurePreset": "ci-native-fuzz",
+      "inherits": "ci-test-base",
+      "filter": {
+        "exclude": {
+          "label": "unit"
+        },
+        "include": {
+          "label": "fuzz"
+        }
+      }
+    },
+    {
+      "name": "ci-native-fuzz-msan",
+      "configurePreset": "ci-native-fuzz-msan",
+      "inherits": "ci-test-base",
+      "filter": {
+        "exclude": {
+          "label": "unit"
+        },
+        "include": {
+          "label": "fuzz"
+        }
+      }
+    },
+    {
+      "name": "ci-s390x",
+      "configurePreset": "ci-s390x",
+      "inherits": "ci-test-base"
+    },
+    {
+      "name": "ci-native-tidy",
+      "configurePreset": "ci-native-tidy",
+      "inherits": "ci-test-base",
+      "filter": {
+        "include": {
+          "label": "tidy|deps"
+        }
+      }
+    },
+    {
+      "name": "ci-native-iwyu",
+      "configurePreset": "ci-native-iwyu",
+      "inherits": "ci-test-base",
+      "filter": {
+        "exclude": {
+          "name": ".*"
+        }
+      }
+    },
+    {
+      "name": "ci-native-valgrind",
+      "configurePreset": "ci-native-valgrind",
+      "inherits": "ci-test-base",
+      "environment": {
+        "USE_VALGRIND": "1",
+        "TEST_RUNNER_EXTRA": "--exclude rpc_bind,feature_bind_extra"
+      }
+    },
+    {
+      "name": "ci-mac-native",
+      "configurePreset": "ci-mac-native",
+      "inherits": "ci-test-base",
+      "environment": {
+        "BITCOIN_CMD": "bitcoin -m"
+      }
+    },
+    {
+      "name": "ci-mac-native-fuzz",
+      "configurePreset": "ci-mac-native-fuzz",
+      "inherits": "ci-test-base",
+      "filter": {
+        "exclude": {
+          "label": "unit"
+        },
+        "include": {
+          "label": "fuzz"
+        }
+      }
+    },
+    {
+      "name": "ci-native-alpine-musl",
+      "configurePreset": "ci-native-alpine-musl",
+      "inherits": "ci-test-base",
+      "environment": {
+        "BITCOIN_CMD": "bitcoin -m"
+      }
+    },
+    {
+      "name": "ci-native-fuzz-valgrind",
+      "configurePreset": "ci-native-fuzz-valgrind",
+      "inherits": "ci-test-base",
+      "filter": {
+        "exclude": {
+          "label": "unit"
+        },
+        "include": {
+          "label": "fuzz"
+        }
+      },
+      "environment": {
+        "FUZZ_TESTS_CONFIG": "--valgrind"
+      }
+    },
+    {
+      "name": "ci-native-previous-releases",
+      "configurePreset": "ci-native-previous-releases",
+      "inherits": "ci-test-base",
+      "environment": {
+        "CI_LIMIT_STACK_SIZE": "1",
+        "DOWNLOAD_PREVIOUS_RELEASES": "true"
+      }
+    },
+    {
+      "name": "ci-win-native",
+      "configurePreset": "ci-win-native",
+      "inherits": "ci-test-base",
+      "configuration": "Release"
+    },
+    {
+      "name": "ci-win-native-fuzz",
+      "configurePreset": "ci-win-native-fuzz",
+      "inherits": "ci-test-base",
+      "configuration": "Release",
+      "filter": {
+        "include": {
+          "label": "fuzz"
+        }
+      }
+    }
+  ]
+}
