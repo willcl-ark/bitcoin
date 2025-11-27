@@ -36,6 +36,7 @@
         "BUILD_BENCH": "ON",
         "BUILD_FUZZ_BINARY": "ON",
         "BUILD_TESTS": "ON",
+        "CI_BUILD": "ON",
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
         "FUNCTIONAL_TESTS_TIMEOUT_FACTOR": "40",
         "WERROR": "ON"
@@ -165,6 +166,7 @@
         "BUILD_FOR_FUZZING": "ON",
         "BUILD_FUZZ_BINARY": "ON",
         "BUILD_TESTS": "ON",
+        "CI_BUILD": "ON",
         "CMAKE_CXX_COMPILER": "clang++",
         "CMAKE_CXX_FLAGS": "-ftrivial-auto-var-init=pattern",
         "CMAKE_C_COMPILER": "clang",
@@ -185,6 +187,7 @@
         "BUILD_FUZZ_BINARY": "ON",
         "BUILD_GUI": "OFF",
         "BUILD_TESTS": "ON",
+        "CI_BUILD": "ON",
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_CXX_COMPILER": "clang++",
         "CMAKE_CXX_FLAGS": "-fsanitize=memory -fsanitize-memory-track-origins=2 -fno-omit-frame-pointer -g -O1 -fno-optimize-sibling-calls -nostdinc++ -nostdlib++ -isystem /cxx_build/include/c++/v1 -L/cxx_build/lib -Wl,-rpath,/cxx_build/lib -lc++ -lc++abi -lpthread -Wno-unused-command-line-argument -lstdc++",
@@ -216,6 +219,7 @@
       "generator": "Ninja",
       "cacheVariables": {
         "BUILD_GUI": "ON",
+        "CI_BUILD": "ON",
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_CXX_CLANG_TIDY": "clang-tidy-21",
         "CMAKE_CXX_COMPILER": "clang++-21",
@@ -233,6 +237,7 @@
       "inherits": ["ci-base", "all"],
       "cacheVariables": {
         "BUILD_GUI": "OFF",
+        "CI_BUILD": "ON",
         "WITH_USDT": "OFF",
         "USE_VALGRIND": "ON",
         "FUNCTIONAL_TESTS_EXCLUDE": "rpc_bind,feature_bind_extra"
@@ -248,6 +253,7 @@
         "rhs": "Darwin"
       },
       "cacheVariables": {
+        "CI_BUILD": "ON",
         "CMAKE_EXE_LINKER_FLAGS": "-Wl,-stack_size -Wl,0x80000",
         "REDUCE_EXPORTS": "ON",
         "WITH_USDT": "OFF"
@@ -268,6 +274,7 @@
         "BUILD_FOR_FUZZING": "ON",
         "BUILD_FUZZ_BINARY": "ON",
         "BUILD_TESTS": "ON",
+        "CI_BUILD": "ON",
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_EXE_LINKER_FLAGS": "-Wl,-stack_size -Wl,0x80000",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
@@ -294,6 +301,7 @@
         "BUILD_FOR_FUZZING": "ON",
         "BUILD_FUZZ_BINARY": "ON",
         "BUILD_TESTS": "ON",
+        "CI_BUILD": "ON",
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_CXX_FLAGS": "-Wno-error=array-bounds",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
@@ -306,6 +314,7 @@
       "inherits": ["ci-base", "all"],
       "cacheVariables": {
         "APPEND_CPPFLAGS": "-DBOOST_MULTI_INDEX_ENABLE_SAFE_MODE",
+        "CI_BUILD": "ON",
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_CXX_COMPILER": "g++-12",
         "CMAKE_CXX_FLAGS": "-funsigned-char",
