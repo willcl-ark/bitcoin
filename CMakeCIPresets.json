@@ -37,6 +37,7 @@
         "BUILD_FUZZ_BINARY": "ON",
         "BUILD_TESTS": "ON",
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "FUNCTIONAL_TESTS_TIMEOUT_FACTOR": "40",
         "WERROR": "ON"
       }
     },
@@ -152,7 +153,6 @@
         "CMAKE_C_FLAGS": "-fsanitize=memory -fsanitize-memory-track-origins=2 -fno-omit-frame-pointer -g -O1 -fno-optimize-sibling-calls",
         "CMAKE_C_FLAGS_DEBUG": "",
         "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/depends/x86_64-pc-linux-gnu/toolchain.cmake",
-        "FUNCTIONAL_TESTS_TIMEOUT_FACTOR": "40",
         "SANITIZERS": "memory"
       }
     },
@@ -193,7 +193,6 @@
         "CMAKE_C_FLAGS": "-fsanitize=memory -fsanitize-memory-track-origins=2 -fno-omit-frame-pointer -g -O1 -fno-optimize-sibling-calls",
         "CMAKE_C_FLAGS_DEBUG": "",
         "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/depends/x86_64-pc-linux-gnu/toolchain.cmake",
-        "FUNCTIONAL_TESTS_TIMEOUT_FACTOR": "40",
         "SANITIZERS": "memory",
         "WERROR": "ON"
       },
