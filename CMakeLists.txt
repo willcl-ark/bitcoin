@@ -103,6 +103,31 @@ option(BUILD_TESTS "Build test_bitcoin and other unit test executables." ON)
 option(BUILD_TX "Build bitcoin-tx executable." ${BUILD_TESTS})
 option(BUILD_UTIL "Build bitcoin-util executable." ${BUILD_TESTS})
 
+# Previous releases support for functional tests
+option(ENABLE_PREVIOUS_RELEASES_TESTS "Download previous Bitcoin releases for compatibility testing." OFF)
+if(ENABLE_PREVIOUS_RELEASES_TESTS AND BUILD_TESTS)
+  find_package(Python3 COMPONENTS Interpreter REQUIRED)
+  set(PREVIOUS_RELEASES_DIR "${CMAKE_BINARY_DIR}/prev_releases" CACHE PATH "Directory to store previous Bitcoin releases")
+
+  add_custom_command(
+    OUTPUT "${PREVIOUS_RELEASES_DIR}/.marker"
+    COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/test/get_previous_releases.py" --target-dir "${PREVIOUS_RELEASES_DIR}"
+    COMMAND ${CMAKE_COMMAND} -E touch "${PREVIOUS_RELEASES_DIR}/.marker"
+    COMMENT "Downloading previous Bitcoin releases..."
+    VERBATIM
+  )
+
+  add_custom_target(previous_releases
+    DEPENDS "${PREVIOUS_RELEASES_DIR}/.marker"
+    COMMENT "Previous Bitcoin releases"
+  )
+
+  # Make tests depend on previous releases when enabled
+  if(TARGET functional_tests)
+    add_dependencies(functional_tests previous_releases)
+  endif()
+endif()
+
 option(BUILD_UTIL_CHAINSTATE "Build experimental bitcoin-chainstate executable." OFF)
 option(BUILD_KERNEL_LIB "Build experimental bitcoinkernel library." ${BUILD_UTIL_CHAINSTATE})
 cmake_dependent_option(BUILD_KERNEL_TEST "Build tests for the experimental bitcoinkernel library." ON "BUILD_KERNEL_LIB" OFF)
@@ -221,6 +246,49 @@ if(BUILD_FOR_FUZZING)
   set(BUILD_BENCH OFF)
   set(ENABLE_IPC OFF)
   set(BUILD_FUZZ_BINARY ON)
+
+  enable_testing()
+  find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
+  set(FUZZ_CORPUS_DIR "$ENV{DIR_FUZZ_IN}")
+  set(FUZZ_TEST_ARGS
+    "${CMAKE_BINARY_DIR}/test/fuzz/test_runner.py"
+  )
+
+  if("$ENV{FUZZ_TESTS_CONFIG}" STREQUAL "--valgrind")
+    list(APPEND FUZZ_TEST_ARGS "--valgrind")
+  endif()
+
+  if(CMAKE_BUILD_PARALLEL_LEVEL)
+    list(APPEND FUZZ_TEST_ARGS "-j${CMAKE_BUILD_PARALLEL_LEVEL}")
+  elseif(DEFINED ENV{MAKEJOBS})
+    list(APPEND FUZZ_TEST_ARGS "$ENV{MAKEJOBS}")
+  endif()
+
+  list(APPEND FUZZ_TEST_ARGS
+    "-l" "DEBUG"
+    "${FUZZ_CORPUS_DIR}"
+    "--empty_min_time=60"
+  )
+
+  add_test(
+    NAME fuzz-tests
+    COMMAND ${Python3_EXECUTABLE} ${FUZZ_TEST_ARGS}
+    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+  )
+
+  # Allow configuring fuzz test timeout via environment variable
+  # Default to 0 (no timeout)
+  if(DEFINED ENV{FUZZ_TEST_TIMEOUT})
+    set(FUZZ_TIMEOUT $ENV{FUZZ_TEST_TIMEOUT})
+  else()
+    set(FUZZ_TIMEOUT 0)
+  endif()
+
+  set_tests_properties(fuzz-tests PROPERTIES
+    LABELS "fuzz"
+    TIMEOUT ${FUZZ_TIMEOUT}
+  )
 
   target_compile_definitions(core_interface INTERFACE
     FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
@@ -616,6 +684,75 @@ endif()
 
 if(BUILD_TESTS)
   enable_testing()
+
+  option(USE_VALGRIND "Run tests under Valgrind memory checker." OFF)
+  if(USE_VALGRIND)
+    find_program(VALGRIND_EXECUTABLE valgrind)
+    if(VALGRIND_EXECUTABLE)
+      set(MEMORYCHECK_COMMAND ${VALGRIND_EXECUTABLE})
+      set(MEMORYCHECK_COMMAND_OPTIONS
+        "--gen-suppressions=all"
+        "--quiet"
+        "--error-exitcode=1"
+        "--suppressions=${CMAKE_SOURCE_DIR}/contrib/valgrind.supp"
+      )
+      set(MEMORYCHECK_SUPPRESSIONS_FILE "${CMAKE_SOURCE_DIR}/contrib/valgrind.supp")
+      include(CTest)
+      message(STATUS "Valgrind found: ${VALGRIND_EXECUTABLE}")
+      message(STATUS "Run 'ctest -T memcheck' to run tests under Valgrind")
+    else()
+      message(WARNING "USE_VALGRIND is ON but valgrind executable not found")
+      set(USE_VALGRIND OFF CACHE BOOL "Run tests under Valgrind memory checker." FORCE)
+    endif()
+  endif()
+
+  # CI-specific test targets
+  find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
+  # Functional test cache creation (only if bitcoind is built and not cross-compiling)
+  if(BUILD_DAEMON AND NOT CMAKE_CROSSCOMPILING)
+    add_test(
+      NAME create-functional-cache
+      COMMAND ${Python3_EXECUTABLE} "${CMAKE_BINARY_DIR}/test/functional/create_cache.py"
+        "--cachedir=${CMAKE_BINARY_DIR}/test/cache"
+        "--tmpdir=${CMAKE_BINARY_DIR}/cache_creation"
+      WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+    )
+    set_tests_properties(create-functional-cache PROPERTIES
+      LABELS "cache;functional_setup"
+      FIXTURES_SETUP "functional_cache"
+    )
+  endif()
+
+  # Check dependencies script (only when explicitly enabled)
+  option(ENABLE_CHECK_DEPS "Enable dependency checking test" OFF)
+  if(ENABLE_CHECK_DEPS)
+    add_test(
+      NAME check-deps
+      COMMAND "${CMAKE_SOURCE_DIR}/contrib/devtools/check-deps.sh" "${CMAKE_BINARY_DIR}"
+      WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    )
+    set_tests_properties(check-deps PROPERTIES
+      LABELS "deps;check"
+    )
+  endif()
+
+
+  # Tidy checks
+  option(RUN_TIDY "Enable clang-tidy checks" OFF)
+  if(RUN_TIDY)
+    find_program(CLANG_TIDY_EXECUTABLE clang-tidy)
+    if(CLANG_TIDY_EXECUTABLE)
+      add_test(
+        NAME tidy-check
+        COMMAND "${CMAKE_SOURCE_DIR}/ci/test/run-tidy.sh" "${CMAKE_BINARY_DIR}"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+      )
+      set_tests_properties(tidy-check PROPERTIES
+        LABELS "tidy;static_analysis"
+      )
+    endif()
+  endif()
 endif()
 
 if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.29)
