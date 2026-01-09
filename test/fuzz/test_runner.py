@@ -105,7 +105,15 @@ def main():
         logging.error("Must have fuzz executable built")
         sys.exit(1)
 
-    fuzz_bin=os.getenv("BITCOINFUZZ", default=os.path.join(config["environment"]["BUILDDIR"], 'bin', 'fuzz'))
+    # Build fuzz binary path, handling multi-config generators (MSVC, Xcode)
+    # CMAKE_CONFIG contains the configuration subdirectory (e.g., "Release")
+    cmake_config = os.getenv("CMAKE_CONFIG") or config["environment"].get("CMAKE_CONFIG", "")
+    exeext = config["environment"].get("EXEEXT", "")
+    bin_path_components = [config["environment"]["BUILDDIR"], "bin"]
+    if cmake_config:
+        bin_path_components.append(cmake_config)
+    bin_path_components.append("fuzz" + exeext)
+    fuzz_bin = os.getenv("BITCOINFUZZ", default=os.path.join(*bin_path_components))
 
     # Build list of tests
     test_list_all = parse_test_list(
