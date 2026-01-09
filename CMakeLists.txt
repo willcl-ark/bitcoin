@@ -289,9 +289,11 @@ if(BUILD_FOR_FUZZING)
     set(FUZZ_TIMEOUT 0)
   endif()
 
+  get_property(is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
   set_tests_properties(fuzz-tests PROPERTIES
     LABELS "fuzz"
     TIMEOUT ${FUZZ_TIMEOUT}
+    ENVIRONMENT "CMAKE_CONFIG=$<$<BOOL:${is_multi_config}>:$<CONFIG>>"
   )
 
   target_compile_definitions(core_interface INTERFACE
@@ -727,9 +729,11 @@ if(BUILD_TESTS)
         "--tmpdir=${CMAKE_BINARY_DIR}/cache_creation"
       WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
     )
+    get_property(is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
     set_tests_properties(create-functional-cache PROPERTIES
       LABELS "cache;functional_setup"
       FIXTURES_SETUP "functional_cache"
+      ENVIRONMENT "CMAKE_CONFIG=$<$<BOOL:${is_multi_config}>:$<CONFIG>>"
     )
   endif()
 
