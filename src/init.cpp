@@ -2060,6 +2060,7 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     connOptions.m_capture_messages = args.GetBoolArg("-capturemessages", false);
     connOptions.m_mapport = EnableMapPort;
     connOptions.m_mapport_enabled = args.GetBoolArg("-natpmp", DEFAULT_NATPMP);
+    connOptions.m_tor_control = EnableTorControl;
 
     // Port to bind to if `-bind=addr` is provided without a `:port` suffix.
     const uint16_t default_bind_port =

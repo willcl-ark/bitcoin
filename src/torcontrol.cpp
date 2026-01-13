@@ -25,6 +25,7 @@
 #include <util/time.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <cstdint>
 #include <cstdlib>
@@ -331,11 +332,6 @@ TorController::TorController(struct event_base* _base, const std::string& tor_co
     reconnect_ev = event_new(base, -1, 0, reconnect_cb, this);
     if (!reconnect_ev)
         LogWarning("tor: Failed to create event for reconnection: out of memory?");
-    // Start connection attempts immediately
-    if (!conn.Connect(m_tor_control_center, std::bind_front(&TorController::connected_cb, this),
-         std::bind_front(&TorController::disconnected_cb, this) )) {
-        LogWarning("tor: Initiating connection to Tor control port %s failed", m_tor_control_center);
-    }
     // Read service private key if cached
     std::pair<bool,std::string> pkf = ReadBinaryFile(GetPrivateKeyFile());
     if (pkf.first) {
@@ -640,6 +636,11 @@ void TorController::disconnected_cb(TorControlConnection& _conn)
     if (!reconnect)
         return;
 
+    if (!m_network_active) {
+        LogDebug(BCLog::TOR, "Network inactive, not reconnecting to Tor control port\n");
+        return;
+    }
+
     LogDebug(BCLog::TOR, "Not connected to Tor control port %s, retrying in %.2f s\n",
              m_tor_control_center, reconnect_timeout);
 
@@ -651,14 +652,35 @@ void TorController::disconnected_cb(TorControlConnection& _conn)
     reconnect_timeout = std::min(reconnect_timeout * RECONNECT_TIMEOUT_EXP, RECONNECT_TIMEOUT_MAX);
 }
 
-void TorController::Reconnect()
+void TorController::Connect()
 {
+    if (!m_network_active) {
+        return;
+    }
     /* Try to reconnect and reestablish if we get booted - for example, Tor
      * may be restarting.
      */
     if (!conn.Connect(m_tor_control_center, std::bind_front(&TorController::connected_cb, this),
          std::bind_front(&TorController::disconnected_cb, this) )) {
-        LogWarning("tor: Re-initiating connection to Tor control port %s failed", m_tor_control_center);
+        LogWarning("tor: Initiating connection to Tor control port %s failed", m_tor_control_center);
+    }
+}
+
+void TorController::SetNetworkActive(bool set_active)
+{
+    m_network_active = set_active;
+    // Cancel any pending reconnect timer
+    if (reconnect_ev) {
+        event_del(reconnect_ev);
+    }
+    if (set_active) {
+        // Reset backoff when re-enabling network
+        reconnect_timeout = RECONNECT_TIMEOUT_START;
+        // Connect handles both cases: connects if active, reschedules if inactive
+        Connect();
+    } else {
+        // Disconnect if currently connected
+        conn.Disconnect();
     }
 }
 
@@ -670,18 +692,23 @@ fs::path TorController::GetPrivateKeyFile()
 void TorController::reconnect_cb(evutil_socket_t fd, short what, void *arg)
 {
     TorController *self = static_cast<TorController*>(arg);
-    self->Reconnect();
+    self->Connect();
 }
 
 /****** Thread ********/
 static struct event_base *gBase;
 static std::thread torControlThread;
+static std::atomic<TorController*> gTorController{nullptr};
+static std::atomic<bool> gTorNetworkActive{false};
 
 static void TorControlThread(CService onion_service_target)
 {
     TorController ctrl(gBase, gArgs.GetArg("-torcontrol", DEFAULT_TOR_CONTROL), onion_service_target);
+    gTorController.store(&ctrl);
 
-    event_base_dispatch(gBase);
+    event_base_loop(gBase, EVLOOP_NO_EXIT_ON_EMPTY);
+
+    gTorController.store(nullptr);
 }
 
 void StartTorControl(CService onion_service_target)
@@ -720,6 +747,20 @@ void StopTorControl()
         event_base_free(gBase);
         gBase = nullptr;
     }
+}
+
+static void SetTorNetworkActive(evutil_socket_t, short, void*)
+{
+    if (TorController* ctrl = gTorController.load()) {
+        ctrl->SetNetworkActive(gTorNetworkActive.load());
+    }
+}
+
+void EnableTorControl(bool enable)
+{
+    if (!gBase) return;
+    gTorNetworkActive.store(enable);
+    event_base_once(gBase, -1, EV_TIMEOUT, SetTorNetworkActive, nullptr, nullptr);
 }
 
 CService DefaultOnionServiceTarget(uint16_t port)

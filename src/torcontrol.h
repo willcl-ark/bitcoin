@@ -27,6 +27,7 @@ static const bool DEFAULT_LISTEN_ONION = true;
 void StartTorControl(CService onion_service_target);
 void InterruptTorControl();
 void StopTorControl();
+void EnableTorControl(bool enable);
 
 CService DefaultOnionServiceTarget(uint16_t port);
 
@@ -116,8 +117,12 @@ public:
     /** Get name of file to store private key in */
     fs::path GetPrivateKeyFile();
 
-    /** Reconnect, after getting disconnected */
-    void Reconnect();
+    /** Connect, or try to reconnect after getting disconnected */
+    void Connect();
+
+    /** Set network active state - controls whether to attempt connections */
+    void SetNetworkActive(bool set_active);
+
 private:
     struct event_base* base;
     const std::string m_tor_control_center;
@@ -125,6 +130,7 @@ private:
     std::string private_key;
     std::string service_id;
     bool reconnect;
+    bool m_network_active{false};
     struct event *reconnect_ev = nullptr;
     float reconnect_timeout;
     CService service;
