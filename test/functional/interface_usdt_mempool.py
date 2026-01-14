@@ -168,7 +168,7 @@ class MempoolTracepointTest(BitcoinTestFramework):
 
         self.log.info("Hooking into mempool:added tracepoint...")
         node = self.nodes[0]
-        ctx = USDT(pid=node.process.pid)
+        ctx = USDT(pid=node.proc.pid)
         ctx.enable_probe(probe="mempool:added", fn_name="trace_added")
         bpf = BPF(text=MEMPOOL_TRACEPOINTS_PROGRAM, usdt_contexts=[ctx], debug=0, cflags=bpf_cflags())
 
@@ -205,7 +205,7 @@ class MempoolTracepointTest(BitcoinTestFramework):
 
         self.log.info("Hooking into mempool:removed tracepoint...")
         node = self.nodes[0]
-        ctx = USDT(pid=node.process.pid)
+        ctx = USDT(pid=node.proc.pid)
         ctx.enable_probe(probe="mempool:removed", fn_name="trace_removed")
         bpf = BPF(text=MEMPOOL_TRACEPOINTS_PROGRAM, usdt_contexts=[ctx], debug=0, cflags=bpf_cflags())
 
@@ -251,7 +251,7 @@ class MempoolTracepointTest(BitcoinTestFramework):
 
         self.log.info("Hooking into mempool:replaced tracepoint...")
         node = self.nodes[0]
-        ctx = USDT(pid=node.process.pid)
+        ctx = USDT(pid=node.proc.pid)
         ctx.enable_probe(probe="mempool:replaced", fn_name="trace_replaced")
         bpf = BPF(text=MEMPOOL_TRACEPOINTS_PROGRAM, usdt_contexts=[ctx], debug=0, cflags=bpf_cflags())
 
@@ -304,7 +304,7 @@ class MempoolTracepointTest(BitcoinTestFramework):
         node.add_p2p_connection(P2PDataStore())
 
         self.log.info("Hooking into mempool:rejected tracepoint...")
-        ctx = USDT(pid=node.process.pid)
+        ctx = USDT(pid=node.proc.pid)
         ctx.enable_probe(probe="mempool:rejected", fn_name="trace_rejected")
         bpf = BPF(text=MEMPOOL_TRACEPOINTS_PROGRAM, usdt_contexts=[ctx], debug=0, cflags=bpf_cflags())
 

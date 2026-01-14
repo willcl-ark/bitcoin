@@ -9,6 +9,7 @@ import importlib
 import os
 import re
 import sys
+from typing import Any
 
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import assert_equal
@@ -23,7 +24,7 @@ class RpcAuthTest(BitcoinTestFramework):
 
     def setUp(self):
         sys.path.insert(0, os.path.dirname(self.config["environment"]["RPCAUTH"]))
-        self.rpcauth = importlib.import_module('rpcauth')
+        self.rpcauth: Any = importlib.import_module('rpcauth')
 
     def run_test(self):
         self.setUp()

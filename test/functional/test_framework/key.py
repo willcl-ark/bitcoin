@@ -50,7 +50,7 @@ class ECPubKey:
         return self.p is not None
 
     def get_bytes(self):
-        assert self.is_valid
+        assert self.p is not None
         if self.compressed:
             return self.p.to_bytes_compressed()
         else:

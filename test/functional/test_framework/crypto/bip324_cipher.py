@@ -175,6 +175,7 @@ class TestFrameworkAEAD(unittest.TestCase):
             plain = bytes.fromhex(hex_plain)
             aad = bytes.fromhex(hex_aad)
             key = bytes.fromhex(hex_key)
+            assert isinstance(hex_nonce[0], int) and isinstance(hex_nonce[1], int)
             nonce = hex_nonce[0].to_bytes(4, 'little') + hex_nonce[1].to_bytes(8, 'little')
 
             ciphertext = aead_chacha20_poly1305_encrypt(key, nonce, aad, plain)

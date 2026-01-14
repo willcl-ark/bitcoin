@@ -169,7 +169,7 @@ class CoinSelectionTracepointTest(BitcoinTestFramework):
 
     def run_test(self):
         self.log.info("hook into the coin_selection tracepoints")
-        ctx = USDT(pid=self.nodes[0].process.pid)
+        ctx = USDT(pid=self.nodes[0].proc.pid)
         ctx.enable_probe(probe="coin_selection:selected_coins", fn_name="trace_selected_coins")
         ctx.enable_probe(probe="coin_selection:normal_create_tx_internal", fn_name="trace_normal_create_tx")
         ctx.enable_probe(probe="coin_selection:attempting_aps_create_tx", fn_name="trace_attempt_aps")

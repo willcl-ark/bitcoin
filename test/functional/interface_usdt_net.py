@@ -283,7 +283,7 @@ class NetTracepointTest(BitcoinTestFramework):
 
         self.log.info(
             "hook into the net:inbound_message and net:outbound_message tracepoints")
-        ctx = USDT(pid=self.nodes[0].process.pid)
+        ctx = USDT(pid=self.nodes[0].proc.pid)
         ctx.enable_probe(probe="net:inbound_message",
                          fn_name="trace_inbound_message")
         ctx.enable_probe(probe="net:outbound_message",
@@ -343,7 +343,7 @@ class NetTracepointTest(BitcoinTestFramework):
 
     def inbound_conn_tracepoint_test(self):
         self.log.info("hook into the net:inbound_connection tracepoint")
-        ctx = USDT(pid=self.nodes[0].process.pid)
+        ctx = USDT(pid=self.nodes[0].proc.pid)
         ctx.enable_probe(probe="net:inbound_connection",
                          fn_name="trace_inbound_connection")
         bpf = BPF(text=net_tracepoints_program, usdt_contexts=[ctx], debug=0, cflags=bpf_cflags())
@@ -380,7 +380,7 @@ class NetTracepointTest(BitcoinTestFramework):
 
     def outbound_conn_tracepoint_test(self):
         self.log.info("hook into the net:outbound_connection tracepoint")
-        ctx = USDT(pid=self.nodes[0].process.pid)
+        ctx = USDT(pid=self.nodes[0].proc.pid)
         ctx.enable_probe(probe="net:outbound_connection",
                          fn_name="trace_outbound_connection")
         bpf = BPF(text=net_tracepoints_program, usdt_contexts=[ctx], debug=0, cflags=bpf_cflags())
@@ -421,7 +421,7 @@ class NetTracepointTest(BitcoinTestFramework):
 
     def evicted_inbound_conn_tracepoint_test(self):
         self.log.info("hook into the net:evicted_inbound_connection tracepoint")
-        ctx = USDT(pid=self.nodes[0].process.pid)
+        ctx = USDT(pid=self.nodes[0].proc.pid)
         ctx.enable_probe(probe="net:evicted_inbound_connection",
                          fn_name="trace_evicted_inbound_connection")
         bpf = BPF(text=net_tracepoints_program, usdt_contexts=[ctx], debug=0, cflags=bpf_cflags())
@@ -458,7 +458,7 @@ class NetTracepointTest(BitcoinTestFramework):
 
     def misbehaving_conn_tracepoint_test(self):
         self.log.info("hook into the net:misbehaving_connection tracepoint")
-        ctx = USDT(pid=self.nodes[0].process.pid)
+        ctx = USDT(pid=self.nodes[0].proc.pid)
         ctx.enable_probe(probe="net:misbehaving_connection",
                          fn_name="trace_misbehaving_connection")
         bpf = BPF(text=net_tracepoints_program, usdt_contexts=[ctx], debug=0, cflags=bpf_cflags())
@@ -492,7 +492,7 @@ class NetTracepointTest(BitcoinTestFramework):
 
     def closed_conn_tracepoint_test(self):
         self.log.info("hook into the net:closed_connection tracepoint")
-        ctx = USDT(pid=self.nodes[0].process.pid)
+        ctx = USDT(pid=self.nodes[0].proc.pid)
         ctx.enable_probe(probe="net:closed_connection",
                          fn_name="trace_closed_connection")
         bpf = BPF(text=net_tracepoints_program, usdt_contexts=[ctx], debug=0, cflags=bpf_cflags())
