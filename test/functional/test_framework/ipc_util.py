@@ -84,10 +84,10 @@ def load_capnp_modules(config):
     # "failed: Duplicate ID @0xcc316e3f71a040fb" errors.
     imports = [str(mp_dir), str(capnp_dir), str(src_dir)]
     return {
-        "proxy": capnp.load(str(mp_dir / "mp" / "proxy.capnp"), imports=imports),
-        "init": capnp.load(str(src_dir / "ipc" / "capnp" / "init.capnp"), imports=imports),
-        "echo": capnp.load(str(src_dir / "ipc" / "capnp" / "echo.capnp"), imports=imports),
-        "mining": capnp.load(str(src_dir / "ipc" / "capnp" / "mining.capnp"), imports=imports),
+        "proxy": capnp.load(str(mp_dir / "mp" / "proxy.capnp"), imports=imports),  # ty: ignore[unresolved-attribute]
+        "init": capnp.load(str(src_dir / "ipc" / "capnp" / "init.capnp"), imports=imports),  # ty: ignore[unresolved-attribute]
+        "echo": capnp.load(str(src_dir / "ipc" / "capnp" / "echo.capnp"), imports=imports),  # ty: ignore[unresolved-attribute]
+        "mining": capnp.load(str(src_dir / "ipc" / "capnp" / "mining.capnp"), imports=imports),  # ty: ignore[unresolved-attribute]
     }
 
 
@@ -95,7 +95,7 @@ async def make_capnp_init_ctx(self):
     node = self.nodes[0]
     # Establish a connection, and create Init proxy object.
     connection = await capnp.AsyncIoStream.create_unix_connection(node.ipc_socket_path)
-    client = capnp.TwoPartyClient(connection)
+    client = capnp.TwoPartyClient(connection)  # ty: ignore[unresolved-attribute]
     init = client.bootstrap().cast_as(self.capnp_modules['init'].Init)
     # Create a remote thread on the server for the IPC calls to be executed in.
     threadmap = init.construct().threadMap

@@ -145,7 +145,7 @@ class IPCMiningTest(BitcoinTestFramework):
                 assert_equal(len(result.hash), 0)
             await wait_and_do(wait_for_tip(), mining.interrupt())
 
-        asyncio.run(capnp.run(async_routine()))
+        asyncio.run(capnp.run(async_routine()))  # ty: ignore[unresolved-attribute]
 
     def run_early_startup_test(self):
         """Make sure mining.createNewBlock safely returns on early startup as
@@ -169,7 +169,7 @@ class IPCMiningTest(BitcoinTestFramework):
             opts = self.capnp_modules['mining'].BlockCreateOptions()
             await mining.createNewBlock(ctx, opts)
 
-        asyncio.run(capnp.run(async_routine()))
+        asyncio.run(capnp.run(async_routine()))  # ty: ignore[unresolved-attribute]
 
         # Reconnect nodes so next tests are happy
         node.wait_for_rpc_connection()
@@ -279,7 +279,7 @@ class IPCMiningTest(BitcoinTestFramework):
                     assert template7 is None
                 await wait_and_do(wait_for_block(), template6.interruptWait())
 
-        asyncio.run(capnp.run(async_routine()))
+        asyncio.run(capnp.run(async_routine()))  # ty: ignore[unresolved-attribute]
 
     def run_ipc_option_override_test(self):
         self.log.info("Running IPC option override test")
@@ -312,7 +312,7 @@ class IPCMiningTest(BitcoinTestFramework):
             try:
                 await mining.createNewBlock(ctx, opts)
                 raise AssertionError("createNewBlock unexpectedly succeeded")
-            except capnp.lib.capnp.KjException as e:
+            except capnp.lib.capnp.KjException as e:  # ty: ignore[unresolved-attribute]
                 if e.description == "remote exception: unknown non-KJ exception of type: kj::Exception":
                     # macOS + REDUCE_EXPORTS bug: Cap'n Proto fails to recognize
                     # its own exception type and returns a generic error instead.
@@ -323,7 +323,7 @@ class IPCMiningTest(BitcoinTestFramework):
                     assert_equal(e.description, "remote exception: std::exception: block_reserved_weight (0) must be at least 2000 weight units")
                 assert_equal(e.type, "FAILED")
 
-        asyncio.run(capnp.run(async_routine()))
+        asyncio.run(capnp.run(async_routine()))  # ty: ignore[unresolved-attribute]
 
     def run_coinbase_and_submission_test(self):
         """Test coinbase construction (getCoinbaseTx) and block submission (submitSolution)."""
@@ -394,7 +394,7 @@ class IPCMiningTest(BitcoinTestFramework):
             assert_equal(check.result, False)
             assert_equal(check.reason, "inconclusive-not-best-prevblk")
 
-        asyncio.run(capnp.run(async_routine()))
+        asyncio.run(capnp.run(async_routine()))  # ty: ignore[unresolved-attribute]
 
     def run_test(self):
         self.miniwallet = MiniWallet(self.nodes[0])

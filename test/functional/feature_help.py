@@ -30,7 +30,7 @@ class HelpTest(BitcoinTestFramework):
         self.nodes[0].running = False
         self.nodes[0].process = None
         self.nodes[0].rpc_connected = False
-        self.nodes[0].rpc = None
+        self.nodes[0]._rpc = None
 
         return out, err
 

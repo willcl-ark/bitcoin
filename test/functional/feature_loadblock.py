@@ -14,7 +14,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
-import urllib
+import urllib.parse
 
 from test_framework.blocktools import COINBASE_MATURITY
 from test_framework.test_framework import BitcoinTestFramework

@@ -48,7 +48,7 @@ class IPCInterfaceTest(BitcoinTestFramework):
                 assert_equal(s, result_eval)
             self.log.debug("Destroy the Echo object")
             echo.destroy(ctx)
-        asyncio.run(capnp.run(async_routine()))
+        asyncio.run(capnp.run(async_routine()))  # type: ignore[unresolved-attribute]
 
     def run_mining_test(self):
         self.log.info("Running mining test")
@@ -67,22 +67,22 @@ class IPCInterfaceTest(BitcoinTestFramework):
             current_block_height = self.nodes[0].getchaintips()[0]["height"]
             assert_equal(blockref.result.height, current_block_height)
 
-        asyncio.run(capnp.run(async_routine()))
+        asyncio.run(capnp.run(async_routine()))  # ty: ignore[unresolved-attribute]
 
     def run_deprecated_mining_test(self):
         self.log.info("Running deprecated mining interface test")
         async def async_routine():
             node = self.nodes[0]
             connection = await capnp.AsyncIoStream.create_unix_connection(node.ipc_socket_path)
-            init = capnp.TwoPartyClient(connection).bootstrap().cast_as(self.capnp_modules['init'].Init)
+            init = capnp.TwoPartyClient(connection).bootstrap().cast_as(self.capnp_modules['init'].Init)  # ty: ignore[unresolved-attribute]
             self.log.debug("Calling deprecated makeMiningOld2 should raise an error")
             try:
                 await init.makeMiningOld2()
                 raise AssertionError("makeMiningOld2 unexpectedly succeeded")
-            except capnp.KjException as e:
+            except capnp.KjException as e:  # ty: ignore[unresolved-attribute]
                 assert_equal(e.description, "remote exception: std::exception: Old mining interface (@2) not supported. Please update your client!")
                 assert_equal(e.type, "FAILED")
-        asyncio.run(capnp.run(async_routine()))
+        asyncio.run(capnp.run(async_routine()))  # ty: ignore[unresolved-attribute]
 
     def run_unclean_disconnect_test(self):
         """Test behavior when disconnecting during an IPC call that later
@@ -113,7 +113,7 @@ class IPCInterfaceTest(BitcoinTestFramework):
             disconnected_log_check.enter_context(node.assert_debug_log(expected_msgs=["IPC server: socket disconnected", "canceled while executing"], timeout=2))
             del promise
 
-        asyncio.run(capnp.run(async_routine()))
+        asyncio.run(capnp.run(async_routine()))  # ty: ignore[unresolved-attribute]
 
         # Wait for socket disconnected log message, then generate a block to
         # cause the waitNext() call to return a new template. Look for a
@@ -167,7 +167,7 @@ class IPCInterfaceTest(BitcoinTestFramework):
             await ((await promise3).result).destroy(ctx)
             await template.destroy(ctx)
 
-        asyncio.run(capnp.run(async_routine()))
+        asyncio.run(capnp.run(async_routine()))  # type: ignore[unresolved-attribute]
 
     def run_test(self):
         self.run_echo_test()

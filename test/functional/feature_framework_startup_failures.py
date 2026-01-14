@@ -126,6 +126,7 @@ class InternalDurationTestMixin(InternalTestMixin):
         InternalTestMixin.add_options(self, parser)
 
     def get_reasonable_rpc_timeout(self):
+        assert isinstance(self, BitcoinTestFramework)
         # 2 * the measured test startup duration should be enough.
         # Divide by timeout_factor to counter multiplication in BitcoinTestFramework.
         return max(3, 2 * self.options.node_start_duration) / self.options.timeout_factor

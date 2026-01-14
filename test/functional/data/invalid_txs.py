@@ -81,6 +81,7 @@ class BadTxTemplate:
 
     def __init__(self, *, spend_tx=None, spend_block=None):
         self.spend_tx = spend_block.vtx[0] if spend_block else spend_tx
+        assert self.spend_tx is not None
         self.spend_avail = sum(o.nValue for o in self.spend_tx.vout)
         self.valid_txin = CTxIn(COutPoint(self.spend_tx.txid_int, 0), b"", SEQUENCE_FINAL)
 
@@ -149,6 +150,7 @@ class BadInputOutpointIndex(BadTxTemplate):
     block_reject_reason = "bad-txns-inputs-missingorspent"
 
     def get_tx(self):
+        assert self.spend_tx is not None
         num_indices = len(self.spend_tx.vin)
         bad_idx = num_indices + 100
 
@@ -186,6 +188,7 @@ class NonexistentInput(BadTxTemplate):
     block_reject_reason = "bad-txns-inputs-missingorspent"
 
     def get_tx(self):
+        assert self.spend_tx is not None
         tx = CTransaction()
         tx.vin.append(CTxIn(COutPoint(self.spend_tx.txid_int + 1, 0), b"", SEQUENCE_FINAL))
         tx.vin.append(self.valid_txin)

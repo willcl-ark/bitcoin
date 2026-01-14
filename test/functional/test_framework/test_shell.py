@@ -57,7 +57,7 @@ class TestShell:
             if self.running:
                 print("Shutdown TestShell before resetting!")
             else:
-                self.num_nodes = None
+                self.num_nodes = None  # type: ignore[assignment]
                 dummy_testshell_file = pathlib.Path(__file__).absolute().parent.parent / "testshell_dummy.py"
                 super().__init__(dummy_testshell_file)
 

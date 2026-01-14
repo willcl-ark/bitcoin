@@ -39,11 +39,11 @@ class BindExtraTest(BitcoinTestFramework):
         loopback_ipv4 = addr_to_hex("127.0.0.1")
 
         # Start custom ports by reusing unused p2p ports
+        port_index = [self.num_nodes]
         def extra_port():
-            port = p2p_port(extra_port.index)
-            extra_port.index += 1
+            port = p2p_port(port_index[0])
+            port_index[0] += 1
             return port
-        extra_port.index = self.num_nodes
 
         # Array of tuples [command line arguments, expected bind addresses].
         self.expected = []

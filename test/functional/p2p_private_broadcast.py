@@ -423,6 +423,8 @@ class P2PPrivateBroadcast(BitcoinTestFramework):
             return False
 
         self.wait_until(set_tx_returner_and_other)
+        assert tx_returner is not None
+        assert other_peer is not None
 
         tx_returner.wait_for_connect()
         other_peer.wait_for_connect()
