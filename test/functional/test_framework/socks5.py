@@ -234,4 +234,5 @@ class Socks5Server():
         s = socket.socket(self.conf.af)
         s.connect(self.conf.addr)
         s.close()
+        assert self.thread is not None
         self.thread.join()

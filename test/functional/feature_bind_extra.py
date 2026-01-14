@@ -81,7 +81,7 @@ class BindExtraTest(BitcoinTestFramework):
     def run_test(self):
         for i, (args, expected_services) in enumerate(self.expected):
             self.log.info(f"Checking listening ports of node {i} with {args}")
-            pid = self.nodes[i].process.pid
+            pid = self.nodes[i].proc.pid
             binds = set(get_bind_addrs(pid))
             # Remove IPv6 addresses because on some CI environments "::1" is not configured
             # on the system (so our test_ipv6_local() would return False), but it is

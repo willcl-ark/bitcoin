@@ -85,7 +85,9 @@ def read_logs(tmp_dir):
         case 0:
             chain = 'regtest'  # fallback to regtest
         case 1:
-            chain = re.search(r'node0/(.+?)/debug\.log$', debug_logs[0].as_posix()).group(1)
+            match = re.search(r'node0/(.+?)/debug\.log$', debug_logs[0].as_posix())
+            assert match is not None
+            chain = match.group(1)
         case _:
             raise RuntimeError('Max one debug.log is supported, found several:\n\t' +
                                '\n\t'.join(map(str, debug_logs)))

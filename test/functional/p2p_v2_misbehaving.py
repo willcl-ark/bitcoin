@@ -119,7 +119,7 @@ class MisbehavingV2Peer(P2PInterface):
     def data_received(self, t):
         if self.test_type == TestType.EARLY_KEY_RESPONSE:
             # check that data can be received on recvbuf only when mismatch from V1_PREFIX happens
-            assert self.v2_state.can_data_be_received
+            assert isinstance(self.v2_state, EarlyKeyResponseState) and self.v2_state.can_data_be_received
         else:
             super().data_received(t)
 

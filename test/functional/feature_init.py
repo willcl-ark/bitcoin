@@ -43,10 +43,10 @@ class InitTest(BitcoinTestFramework):
                 # Don't call Python's terminate() since it calls
                 # TerminateProcess(), which unlike SIGTERM doesn't allow
                 # bitcoind to perform any shutdown logic.
-                os.kill(node.process.pid, signal.CTRL_BREAK_EVENT)  # type: ignore[unresolved-attribute]
+                os.kill(node.proc.pid, signal.CTRL_BREAK_EVENT)  # type: ignore[unresolved-attribute]
             else:
-                node.process.terminate()
-            node.process.wait()
+                node.proc.terminate()
+            node.proc.wait()
 
         def start_expecting_error(err_fragment, args):
             node.assert_start_raises_init_error(
@@ -276,16 +276,16 @@ class InitTest(BitcoinTestFramework):
 
             self.wait_until(lambda: any(c["method"] == "waitforblockheight" for c in node.cli.getrpcinfo()["active_commands"]))
 
-            self.log.debug(f"Sending break signal to pid {node.process.pid}")
+            self.log.debug(f"Sending break signal to pid {node.proc.pid}")
             if platform.system() == 'Windows':
                 # Note: CTRL_C_EVENT should not be sent here because unlike
                 # CTRL_BREAK_EVENT it can not be targeted at a specific process
                 # group and may behave unpredictably.
-                node.process.send_signal(signal.CTRL_BREAK_EVENT)  # type: ignore[unresolved-attribute]
+                node.proc.send_signal(signal.CTRL_BREAK_EVENT)  # type: ignore[unresolved-attribute]
             else:
                 # Note: signal.SIGINT would work here as well
-                node.process.send_signal(signal.SIGTERM)
-            node.process.wait()
+                node.proc.send_signal(signal.SIGTERM)
+            node.proc.wait()
 
             result = fut.result()
             self.log.debug(f"waitforblockheight returned {result!r}")

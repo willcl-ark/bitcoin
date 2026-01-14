@@ -1763,7 +1763,7 @@ class TaprootTest(BitcoinTestFramework):
         self.block_submit(self.nodes[0], txn, "Crediting txn", None, sigops_weight=10, accept=True)
 
         # scriptPubKey computation
-        tests = {"version": 1}
+        tests: dict = {"version": 1}
         spk_tests = tests.setdefault("scriptPubKey", [])
         for i, tap in enumerate(taps):
             test_case = {}

@@ -214,6 +214,7 @@ class P2PPrivateBroadcast(BitcoinTestFramework):
                     # Use port=0 to let the OS assign an available port. This
                     # avoids "address already in use" errors when tests run
                     # concurrently or ports are still in TIME_WAIT state.
+                    assert self.network_thread is not None
                     self.network_thread.listen(
                         addr="127.0.0.1",
                         port=0,

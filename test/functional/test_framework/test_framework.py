@@ -107,7 +107,7 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         self.nodes: list[TestNode] = []
         self.extra_args: list[list[str]] = []
         self.extra_init = None
-        self.network_thread = None
+        self.network_thread: NetworkThread | None = None
         self.rpc_timeout = 60  # Wait for up to 60 seconds for the RPC server to respond
         self.supports_cli = True
         self.bind_to_localhost_only = True
@@ -260,7 +260,9 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         self.log.debug('Setting up network thread')
         self.network_thread = NetworkThread()
         self.network_thread.start()
-        self.wait_until(lambda: self.network_thread.network_event_loop.is_running())
+        assert self.network_thread.network_event_loop is not None
+        loop = self.network_thread.network_event_loop
+        self.wait_until(lambda: loop.is_running())
 
         if self.options.usecli:
             if not self.supports_cli:
@@ -280,6 +282,7 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
             pdb.set_trace()
 
         self.log.debug('Closing down network thread')
+        assert self.network_thread is not None
         self.network_thread.close(timeout=self.options.timeout_factor * 10)
         if self.success == TestStatus.FAILED:
             self.log.info("Not stopping nodes as test failed. The dangling processes will be cleaned up later.")

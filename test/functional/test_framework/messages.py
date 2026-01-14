@@ -879,6 +879,7 @@ class PrefilledTransaction:
         self.tx.deserialize(f)
 
     def serialize(self, with_witness=True):
+        assert self.tx is not None
         r = b""
         r += ser_compact_size(self.index)
         if with_witness:
@@ -1701,6 +1702,7 @@ class msg_cmpctblock:
         self.header_and_shortids.deserialize(f)
 
     def serialize(self):
+        assert self.header_and_shortids is not None
         r = b""
         r += self.header_and_shortids.serialize()
         return r
@@ -1721,6 +1723,7 @@ class msg_getblocktxn:
         self.block_txn_request.deserialize(f)
 
     def serialize(self):
+        assert self.block_txn_request is not None
         r = b""
         r += self.block_txn_request.serialize()
         return r
@@ -1759,7 +1762,7 @@ class msg_getcfilters:
     __slots__ = ("filter_type", "start_height", "stop_hash")
     msgtype =  b"getcfilters"
 
-    def __init__(self, filter_type=None, start_height=None, stop_hash=None):
+    def __init__(self, filter_type=0, start_height=0, stop_hash=0):
         self.filter_type = filter_type
         self.start_height = start_height
         self.stop_hash = stop_hash
@@ -1784,7 +1787,7 @@ class msg_cfilter:
     __slots__ = ("filter_type", "block_hash", "filter_data")
     msgtype =  b"cfilter"
 
-    def __init__(self, filter_type=None, block_hash=None, filter_data=None):
+    def __init__(self, filter_type=0, block_hash=0, filter_data=b""):
         self.filter_type = filter_type
         self.block_hash = block_hash
         self.filter_data = filter_data
@@ -1809,7 +1812,7 @@ class msg_getcfheaders:
     __slots__ = ("filter_type", "start_height", "stop_hash")
     msgtype =  b"getcfheaders"
 
-    def __init__(self, filter_type=None, start_height=None, stop_hash=None):
+    def __init__(self, filter_type=0, start_height=0, stop_hash=0):
         self.filter_type = filter_type
         self.start_height = start_height
         self.stop_hash = stop_hash
@@ -1834,11 +1837,11 @@ class msg_cfheaders:
     __slots__ = ("filter_type", "stop_hash", "prev_header", "hashes")
     msgtype =  b"cfheaders"
 
-    def __init__(self, filter_type=None, stop_hash=None, prev_header=None, hashes=None):
+    def __init__(self, filter_type=0, stop_hash=0, prev_header=0, hashes=None):
         self.filter_type = filter_type
         self.stop_hash = stop_hash
         self.prev_header = prev_header
-        self.hashes = hashes
+        self.hashes = hashes if hashes is not None else []
 
     def deserialize(self, f):
         self.filter_type = int.from_bytes(f.read(1), "little")
@@ -1862,7 +1865,7 @@ class msg_getcfcheckpt:
     __slots__ = ("filter_type", "stop_hash")
     msgtype =  b"getcfcheckpt"
 
-    def __init__(self, filter_type=None, stop_hash=None):
+    def __init__(self, filter_type=0, stop_hash=0):
         self.filter_type = filter_type
         self.stop_hash = stop_hash
 
@@ -1884,10 +1887,10 @@ class msg_cfcheckpt:
     __slots__ = ("filter_type", "stop_hash", "headers")
     msgtype =  b"cfcheckpt"
 
-    def __init__(self, filter_type=None, stop_hash=None, headers=None):
+    def __init__(self, filter_type=0, stop_hash=0, headers=None):
         self.filter_type = filter_type
         self.stop_hash = stop_hash
-        self.headers = headers
+        self.headers = headers if headers is not None else []
 
     def deserialize(self, f):
         self.filter_type = int.from_bytes(f.read(1), "little")

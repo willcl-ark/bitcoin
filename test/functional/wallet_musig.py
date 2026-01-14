@@ -49,16 +49,22 @@ class WalletMuSigTest(BitcoinTestFramework):
                     desc = priv_desc["desc"]
                     if not desc.startswith("tr("):
                         continue
-                    privkey = PRIVKEY_RE.search(desc).group(1)
+                    match = PRIVKEY_RE.search(desc)
+                    assert match is not None
+                    privkey = match.group(1)
                     break
                 for pub_desc in wallet.listdescriptors()["descriptors"]:
                     desc = pub_desc["desc"]
                     if not desc.startswith("tr("):
                         continue
-                    pubkey = PUBKEY_RE.search(desc).group(1)
+                    match = PUBKEY_RE.search(desc)
+                    assert match is not None
+                    pubkey = match.group(1)
                     # Since the pubkey is derived from the private key that we have, we need
                     # to extract and insert the origin path from the pubkey as well.
-                    privkey += ORIGIN_PATH_RE.search(pubkey).group(1)
+                    match = ORIGIN_PATH_RE.search(pubkey)
+                    assert match is not None
+                    privkey += match.group(1)
                     break
                 keys.append((privkey, pubkey))
 

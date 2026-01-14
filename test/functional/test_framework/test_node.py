@@ -249,6 +249,12 @@ class TestNode():
             assert self.rpc_connected and self._rpc is not None, self._node_msg("Error: no RPC connection")
             return getattr(self._rpc, name)
 
+    @property
+    def proc(self) -> subprocess.Popen[str]:
+        """Return the process, asserting it is running."""
+        assert self.process is not None, self._node_msg("Process is not running")
+        return self.process
+
     def start(self, extra_args=None, *, cwd=None, stdout=None, stderr=None, env=None, **kwargs):
         """Start the node."""
         if extra_args is None:
@@ -307,14 +313,14 @@ class TestNode():
             return (category, repr(e))
 
         for _ in range(poll_per_s * self.rpc_timeout):
-            if self.process.poll() is not None:
+            if self.proc.poll() is not None:
                 # Attach abrupt shutdown error/s to the exception message
                 self.stderr.seek(0)
                 str_error = ''.join(line.decode('utf-8') for line in self.stderr)
                 str_error += "************************\n" if str_error else ''
 
                 raise FailedToStartError(self._node_msg(
-                    f'bitcoind exited with status {self.process.returncode} during initialization. {str_error}'))
+                    f'bitcoind exited with status {self.proc.returncode} during initialization. {str_error}'))
             try:
                 rpc = get_rpc_proxy(
                     rpc_url(self.datadir_path, self.index, self.chain, self.rpchost),
@@ -447,7 +453,7 @@ class TestNode():
             return
         assert self.rpc_connected, self._node_msg(
             "Should only call stop_node() on a running node after wait_for_rpc_connection() succeeded. "
-            f"Did you forget to call the latter after start()? Not connected to process: {self.process.pid}")
+            f"Did you forget to call the latter after start()? Not connected to process: {self.proc.pid}")
         self.log.debug("Stopping node")
         # Do not use wait argument when testing older nodes, e.g. in wallet_backwards_compatibility.py
         if self.version_is_at_least(180000):
@@ -472,7 +478,7 @@ class TestNode():
         This method is responsible for freeing resources (self.process)."""
         if not self.running:
             return True
-        return_code = self.process.poll()
+        return_code = self.proc.poll()
         if return_code is None:
             return False
 
@@ -501,7 +507,7 @@ class TestNode():
         self.wait_until(lambda: self.is_node_stopped(**kwargs), timeout=timeout)
 
     def kill_process(self):
-        self.process.kill()
+        self.proc.kill()
         self.wait_until_stopped(expected_ret_code=1 if platform.system() == "Windows" else -9)
         assert self.is_node_stopped()
 
@@ -686,7 +692,7 @@ class TestNode():
             '-g',                     # Record the callgraph.
             '--call-graph', 'dwarf',  # Compatibility for gcc's --fomit-frame-pointer.
             '-F', '101',              # Sampling frequency in Hz.
-            '-p', str(self.process.pid),
+            '-p', str(self.proc.pid),
             '-o', output_path,
         ]
         subp = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -725,7 +731,7 @@ class TestNode():
             assert_msg = None
             try:
                 self.start(extra_args, stdout=log_stdout, stderr=log_stderr, *args, **kwargs)
-                ret = self.process.wait(timeout=self.rpc_timeout)
+                ret = self.proc.wait(timeout=self.rpc_timeout)
                 self.log.debug(self._node_msg(f'bitcoind exited with status {ret} during initialization'))
                 assert_not_equal(ret, 0) # Exit code must indicate failure
                 self.running = False
@@ -747,7 +753,7 @@ class TestNode():
                             self._raise_assertion_error(
                                 'Expected message "{}" does not fully match stderr:\n"{}"'.format(expected_msg, stderr))
             except subprocess.TimeoutExpired as e:
-                self.process.kill()
+                self.proc.kill()
                 self.running = False
                 self.process = None
                 assert_msg = f'bitcoind should have exited within {self.rpc_timeout}s '

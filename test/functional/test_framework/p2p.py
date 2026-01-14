@@ -206,6 +206,7 @@ class P2PConnection(asyncio.Protocol):
             self.v2_state = EncryptedP2PState(initiating=True, net=net)
 
         loop = NetworkThread.network_event_loop
+        assert loop is not None
         logger.debug('Connecting to Bitcoin Node: %s:%d' % (self.dstaddr, self.dstport))
         coroutine = loop.create_connection(lambda: self, host=self.dstaddr, port=self.dstport)
         return lambda: loop.call_soon_threadsafe(loop.create_task, coroutine)
@@ -221,6 +222,7 @@ class P2PConnection(asyncio.Protocol):
 
     def peer_disconnect(self):
         # Connection could have already been closed by other end.
+        assert NetworkThread.network_event_loop is not None
         NetworkThread.network_event_loop.call_soon_threadsafe(lambda: self._transport and self._transport.abort())
 
     # Connection and disconnection methods
@@ -237,10 +239,12 @@ class P2PConnection(asyncio.Protocol):
         self._transport = transport
         # in an inbound connection to the TestNode with P2PConnection as the initiator, [TestNode <---- P2PConnection]
         # send the initial handshake immediately
-        if self.supports_v2_p2p and self.v2_state.initiating and not self.v2_state.tried_v2_handshake:
-            send_handshake_bytes = self.v2_state.initiate_v2_handshake()
-            logger.debug(f"sending {len(self.v2_state.sent_garbage)} bytes of garbage data")
-            self.send_raw_message(send_handshake_bytes)
+        if self.supports_v2_p2p:
+            assert self.v2_state is not None
+            if self.v2_state.initiating and not self.v2_state.tried_v2_handshake:
+                send_handshake_bytes = self.v2_state.initiate_v2_handshake()
+                logger.debug(f"sending {len(self.v2_state.sent_garbage)} bytes of garbage data")
+                self.send_raw_message(send_handshake_bytes)
         # for v1 outbound connections, send version message immediately after opening
         # (for v2 outbound connections, send it after the initial v2 handshake)
         if self.p2p_connected_to_node and not self.supports_v2_p2p:
@@ -269,6 +273,7 @@ class P2PConnection(asyncio.Protocol):
         `initiate_v2_handshake()` is immediately done by the initiator when the connection is established in
         `connection_made()`. The rest of the initial v2 handshake functions are handled here.
         """
+        assert self.v2_state is not None
         if not self.v2_state.peer:
             if not self.v2_state.initiating and not self.v2_state.sent_garbage:
                 # if the responder hasn't sent garbage yet, the responder is still reading ellswift bytes
@@ -315,8 +320,12 @@ class P2PConnection(asyncio.Protocol):
         """asyncio callback when data is read from the socket."""
         if len(t) > 0:
             self.recvbuf += t
-            if self.supports_v2_p2p and not self.v2_state.tried_v2_handshake:
-                self._on_data_v2_handshake()
+            if self.supports_v2_p2p:
+                assert self.v2_state is not None
+                if not self.v2_state.tried_v2_handshake:
+                    self._on_data_v2_handshake()
+                else:
+                    self._on_data()
             else:
                 self._on_data()
 
@@ -329,6 +338,7 @@ class P2PConnection(asyncio.Protocol):
         try:
             while True:
                 if self.supports_v2_p2p:
+                    assert self.v2_state is not None
                     # v2 P2P messages are read
                     msglen, msg = self.v2_state.v2_receive_packet(self.recvbuf)
                     if msglen == -1:
@@ -414,6 +424,7 @@ class P2PConnection(asyncio.Protocol):
             if self._transport.is_closing():
                 return
             self._transport.write(raw_message_bytes)
+        assert NetworkThread.network_event_loop is not None
         NetworkThread.network_event_loop.call_soon_threadsafe(maybe_write)
 
     # Class utility methods
@@ -423,8 +434,11 @@ class P2PConnection(asyncio.Protocol):
         msgtype = message.msgtype
         data = message.serialize()
         if self.supports_v2_p2p:
+            assert self.v2_state is not None
             if msgtype in SHORTID.values():
-                tmsg = MSGTYPE_TO_SHORTID.get(msgtype).to_bytes(1, 'big')
+                shortid = MSGTYPE_TO_SHORTID.get(msgtype)
+                assert shortid is not None
+                tmsg = shortid.to_bytes(1, 'big')
             else:
                 tmsg = b"\x00"
                 tmsg += msgtype
@@ -735,7 +749,7 @@ p2p_lock = threading.Lock()
 
 
 class NetworkThread(threading.Thread):
-    network_event_loop = None
+    network_event_loop: asyncio.AbstractEventLoop | None = None
     listeners: dict = {}
     protos: dict = {}
 
@@ -752,13 +766,16 @@ class NetworkThread(threading.Thread):
 
     def run(self):
         """Start the network thread."""
+        assert self.network_event_loop is not None
         self.network_event_loop.run_forever()
 
     def close(self, *, timeout):
         """Close the connections and network event loop."""
-        self.network_event_loop.call_soon_threadsafe(self.network_event_loop.stop)
-        wait_until_helper_internal(lambda: not self.network_event_loop.is_running(), timeout=timeout)
-        self.network_event_loop.close()
+        assert self.network_event_loop is not None
+        loop = self.network_event_loop
+        loop.call_soon_threadsafe(loop.stop)
+        wait_until_helper_internal(lambda: not loop.is_running(), timeout=timeout)
+        loop.close()
         self.join(timeout)
         # Safe to remove event loop.
         NetworkThread.network_event_loop = None

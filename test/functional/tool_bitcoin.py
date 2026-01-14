@@ -104,7 +104,9 @@ def get_node_output(node):
 
 def get_exe_name(version_str):
     """Get exe name from last word of first line of version string."""
-    return re.match(rb".*?(\S+)\s*?(?:\n|$)", version_str.strip()).group(1)
+    match = re.match(rb".*?(\S+)\s*?(?:\n|$)", version_str.strip())
+    assert match is not None
+    return match.group(1)
 
 
 if __name__ == '__main__':

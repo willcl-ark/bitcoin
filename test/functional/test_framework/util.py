@@ -677,10 +677,13 @@ def gen_return_txouts():
 # transaction to make it large.  See gen_return_txouts() above.
 def create_lots_of_big_transactions(mini_wallet, node, fee, tx_batch_size, txouts, utxos=None):
     txids = []
-    use_internal_utxos = utxos is None
     for _ in range(tx_batch_size):
+        if utxos is None:
+            utxo_to_spend = None
+        else:
+            utxo_to_spend = utxos.pop()
         tx = mini_wallet.create_self_transfer(
-            utxo_to_spend=None if use_internal_utxos else utxos.pop(),
+            utxo_to_spend=utxo_to_spend,
             fee=fee,
         )["tx"]
         tx.vout.extend(txouts)

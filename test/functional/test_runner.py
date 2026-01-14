@@ -809,7 +809,9 @@ class TestHandler:
                     status = "Passed"
                 elif proc.returncode == TEST_EXIT_SKIPPED:
                     status = "Skipped"
-                    skip_reason = re.search(r"Test Skipped: (.*)", stdout).group(1).strip()
+                    match = re.search(r"Test Skipped: (.*)", stdout)
+                    assert match is not None
+                    skip_reason = match.group(1)
                 else:
                     status = "Failed"
 

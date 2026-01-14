@@ -51,12 +51,14 @@ class HTTPBasicsTest(BitcoinTestFramework):
         # Generate RPCAUTH with specified password
         self.rt2password = "8/F3uMDw4KSEbw96U3CA1C4X05dkHDN2BPFjTgZW4KI="
         p = subprocess.Popen([sys.executable, gen_rpcauth, 'rt2', self.rt2password], stdout=subprocess.PIPE, text=True)
+        assert p.stdout is not None
         lines = p.stdout.read().splitlines()
         rpcauth2 = lines[1]
 
         # Generate RPCAUTH without specifying password
         self.user = ''.join(SystemRandom().choice(string.ascii_letters + string.digits) for _ in range(10))
         p = subprocess.Popen([sys.executable, gen_rpcauth, self.user], stdout=subprocess.PIPE, text=True)
+        assert p.stdout is not None
         lines = p.stdout.read().splitlines()
         rpcauth3 = lines[1]
         self.password = lines[3]
