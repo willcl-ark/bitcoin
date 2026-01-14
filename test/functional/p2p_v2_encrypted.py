@@ -46,11 +46,6 @@ class P2PEncrypted(BitcoinTestFramework):
             last_block_time += 1
         return test_blocks
 
-    def create_test_block(self, txs):
-        block = create_block(self.tip, create_coinbase(self.tipheight + 1), self.last_block_time + 600, txlist=txs)
-        block.solve()
-        return block
-
     def run_test(self):
         node0, node1 = self.nodes[0], self.nodes[1]
         self.log.info("Check inbound connection to v2 TestNode from v2 P2PConnection is v2")
