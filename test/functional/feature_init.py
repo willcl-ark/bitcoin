@@ -43,7 +43,7 @@ class InitTest(BitcoinTestFramework):
                 # Don't call Python's terminate() since it calls
                 # TerminateProcess(), which unlike SIGTERM doesn't allow
                 # bitcoind to perform any shutdown logic.
-                os.kill(node.process.pid, signal.CTRL_BREAK_EVENT)
+                os.kill(node.process.pid, signal.CTRL_BREAK_EVENT)  # type: ignore[unresolved-attribute]
             else:
                 node.process.terminate()
             node.process.wait()
@@ -94,7 +94,7 @@ class InitTest(BitcoinTestFramework):
                 if platform.system() == 'Windows':
                     # CREATE_NEW_PROCESS_GROUP is required in order to be able
                     # to terminate the child without terminating the test.
-                    node.start(extra_args=args, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+                    node.start(extra_args=args, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)  # type: ignore[unresolved-attribute]
                 else:
                     node.start(extra_args=args)
             self.log.debug("Terminating node after terminate line was found")
@@ -258,7 +258,7 @@ class InitTest(BitcoinTestFramework):
         if platform.system() == 'Windows':
             # CREATE_NEW_PROCESS_GROUP prevents python test from exiting
             # with STATUS_CONTROL_C_EXIT (-1073741510) when break is sent.
-            self.start_node(node.index, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+            self.start_node(node.index, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)  # type: ignore[unresolved-attribute]
         else:
             self.start_node(node.index)
 
@@ -279,7 +279,7 @@ class InitTest(BitcoinTestFramework):
                 # Note: CTRL_C_EVENT should not be sent here because unlike
                 # CTRL_BREAK_EVENT it can not be targeted at a specific process
                 # group and may behave unpredictably.
-                node.process.send_signal(signal.CTRL_BREAK_EVENT)
+                node.process.send_signal(signal.CTRL_BREAK_EVENT)  # type: ignore[unresolved-attribute]
             else:
                 # Note: signal.SIGINT would work here as well
                 node.process.send_signal(signal.SIGTERM)

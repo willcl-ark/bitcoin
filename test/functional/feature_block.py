@@ -611,6 +611,7 @@ class FullBlockTest(BitcoinTestFramework):
         # The next few blocks are going to be created "by hand" since they'll do funky things, such as having
         # the first transaction be non-coinbase, etc.  The purpose of b44 is to make sure this works.
         self.log.info("Build block 44 manually")
+        assert self.tip is not None
         height = self.block_heights[self.tip.hash_int] + 1
         coinbase = create_coinbase(height, self.coinbase_pubkey)
         b44 = CBlock()

@@ -108,10 +108,10 @@ class IPCInterfaceTest(BitcoinTestFramework):
         # "failed: Duplicate ID @0xcc316e3f71a040fb" errors.
         imports = [str(mp_dir), str(capnp_dir), str(src_dir)]
         return {
-            "proxy": capnp.load(str(mp_dir / "mp" / "proxy.capnp"), imports=imports),
-            "init": capnp.load(str(src_dir / "ipc" / "capnp" / "init.capnp"), imports=imports),
-            "echo": capnp.load(str(src_dir / "ipc" / "capnp" / "echo.capnp"), imports=imports),
-            "mining": capnp.load(str(src_dir / "ipc" / "capnp" / "mining.capnp"), imports=imports),
+            "proxy": capnp.load(str(mp_dir / "mp" / "proxy.capnp"), imports=imports),  # ty: ignore[unresolved-attribute]
+            "init": capnp.load(str(src_dir / "ipc" / "capnp" / "init.capnp"), imports=imports),  # ty: ignore[unresolved-attribute]
+            "echo": capnp.load(str(src_dir / "ipc" / "capnp" / "echo.capnp"), imports=imports),  # ty: ignore[unresolved-attribute]
+            "mining": capnp.load(str(src_dir / "ipc" / "capnp" / "mining.capnp"), imports=imports),  # ty: ignore[unresolved-attribute]
         }
 
     def set_test_params(self):
@@ -128,7 +128,7 @@ class IPCInterfaceTest(BitcoinTestFramework):
         node = self.nodes[0]
         # Establish a connection, and create Init proxy object.
         connection = await capnp.AsyncIoStream.create_unix_connection(node.ipc_socket_path)
-        client = capnp.TwoPartyClient(connection)
+        client = capnp.TwoPartyClient(connection)  # type: ignore[unresolved-attribute]
         init = client.bootstrap().cast_as(self.capnp_modules['init'].Init)
         # Create a remote thread on the server for the IPC calls to be executed in.
         threadmap = init.construct().threadMap
@@ -183,7 +183,7 @@ class IPCInterfaceTest(BitcoinTestFramework):
                 assert_equal(s, result_eval)
             self.log.debug("Destroy the Echo object")
             echo.destroy(ctx)
-        asyncio.run(capnp.run(async_routine()))
+        asyncio.run(capnp.run(async_routine()))  # type: ignore[unresolved-attribute]
 
     async def build_coinbase_test(self, template, ctx, miniwallet):
         self.log.debug("Build coinbase transaction using getCoinbaseTx()")
@@ -395,7 +395,7 @@ class IPCInterfaceTest(BitcoinTestFramework):
             assert_equal(check.result, False)
             assert_equal(check.reason, "inconclusive-not-best-prevblk")
 
-        asyncio.run(capnp.run(async_routine()))
+        asyncio.run(capnp.run(async_routine()))  # type: ignore[unresolved-attribute]
 
     def run_test(self):
         self.run_echo_test()

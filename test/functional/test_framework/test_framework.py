@@ -97,6 +97,8 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
 
     This class also contains various public and private helper methods."""
 
+    num_nodes: int
+
     def __init__(self, test_file) -> None:
         """Sets test framework defaults. Do not override this method. Instead, override the set_test_params() method"""
         self.chain: str = 'regtest'
@@ -470,7 +472,7 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
 
             bin_dirs.append(bin_dir)
 
-        extra_init = [{}] * num_nodes if self.extra_init is None else self.extra_init # type: ignore[var-annotated]
+        extra_init = [{}] * num_nodes if self.extra_init is None else self.extra_init
         assert_equal(len(extra_init), num_nodes)
         assert_equal(len(extra_confs), num_nodes)
         assert_equal(len(extra_args), num_nodes)
@@ -762,7 +764,7 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
 
         # Format logs the same as bitcoind's debug.log with microprecision (so log files can be concatenated and sorted)
         class MicrosecondFormatter(logging.Formatter):
-            def formatTime(self, record, _=None):
+            def formatTime(self, record, datefmt=None):  # noqa: vulture
                 dt = datetime.fromtimestamp(record.created, timezone.utc)
                 return dt.strftime('%Y-%m-%dT%H:%M:%S.%f')
 

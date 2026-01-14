@@ -15,7 +15,7 @@ from test_framework.util import (
 
 from test_framework.authproxy import JSONRPCException
 
-import http
+import http.client
 import subprocess
 
 

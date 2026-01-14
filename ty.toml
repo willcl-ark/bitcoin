@@ -10,7 +10,6 @@ root = ["test/functional"]
 
 [rules]
 invalid-argument-type = "ignore"
-unresolved-attribute = "ignore"
 possibly-missing-attribute = "ignore"
 deprecated = "ignore"
 invalid-method-override = "ignore"

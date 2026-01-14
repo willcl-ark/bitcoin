@@ -172,6 +172,15 @@ class P2PConnection(asyncio.Protocol):
         self.v2_state = None  # EncryptedP2PState object needed for v2 p2p connections
         self.reconnect = False  # set if reconnection needs to happen
 
+    def send_version(self):
+        raise NotImplementedError
+
+    def on_open(self):
+        raise NotImplementedError
+
+    def on_close(self):
+        raise NotImplementedError
+
     @property
     def is_connected(self):
         return self._transport is not None
@@ -727,6 +736,8 @@ p2p_lock = threading.Lock()
 
 class NetworkThread(threading.Thread):
     network_event_loop = None
+    listeners: dict = {}
+    protos: dict = {}
 
     def __init__(self):
         super().__init__(name="NetworkThread")
@@ -736,7 +747,7 @@ class NetworkThread(threading.Thread):
         NetworkThread.listeners = {}
         NetworkThread.protos = {}
         if platform.system() == 'Windows':
-            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+            asyncio.set_event_loop_policy(getattr(asyncio, 'WindowsSelectorEventLoopPolicy')())
         NetworkThread.network_event_loop = asyncio.new_event_loop()
 
     def run(self):
