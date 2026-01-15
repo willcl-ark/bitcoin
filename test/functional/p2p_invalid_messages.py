@@ -193,7 +193,7 @@ class InvalidMessagesTest(BitcoinTestFramework):
         msg.msgtype = b'addrv2'
         with node.assert_debug_log(required_log_messages):
             # override serialize() which would include the length of the data
-            msg.serialize = lambda: raw_addrv2
+            setattr(msg, 'serialize', lambda: raw_addrv2)
             conn.send_raw_message(conn.build_message(msg))
             conn.sync_with_ping()
 

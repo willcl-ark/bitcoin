@@ -97,7 +97,7 @@ class CreateTxWalletTest(BitcoinTestFramework):
         vout = 1
 
         self.nodes[0].syncwithvalidationinterfacequeue()
-        options = {"change_position": 0, "add_inputs": False}
+        options: dict = {"change_position": 0, "add_inputs": False}
         for i in range(1, 25):
             options['inputs'] = [{'txid': txid, 'vout': vout}]
             tx_data = test_wallet.send(outputs=[{test_wallet.getnewaddress(): 25 - i}], options=options)

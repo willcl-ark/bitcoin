@@ -1151,7 +1151,7 @@ class RawTransactionsTest(BitcoinTestFramework):
         self.generate(self.nodes[0], 1)
 
         # Select only one input.
-        options = {
+        options: dict = {
             "inputs": [
                 {
                     "txid": source_tx["txid"],
