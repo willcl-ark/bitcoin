@@ -12,7 +12,6 @@ root = ["test/functional"]
 not-subscriptable = "ignore"
 invalid-argument-type = "ignore"
 unresolved-attribute = "ignore"
-unsupported-operator = "ignore"
 possibly-missing-attribute = "ignore"
 deprecated = "ignore"
 invalid-method-override = "ignore"

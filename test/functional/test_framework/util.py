@@ -34,16 +34,21 @@ logger = logging.getLogger("TestFramework.utils")
 ##################
 
 
-def assert_approx(v, vexp, vspan=0.00001):
+def assert_approx(v: Union[float, Decimal], vexp: Union[float, Decimal], vspan: Union[float, Decimal] = 0.00001) -> None:
     """Assert that `v` is within `vspan` of `vexp`"""
-    if isinstance(v, Decimal) or isinstance(vexp, Decimal):
-        v=Decimal(v)
-        vexp=Decimal(vexp)
-        vspan=Decimal(vspan)
-    if v < vexp - vspan:
-        raise AssertionError("%s < [%s..%s]" % (str(v), str(vexp - vspan), str(vexp + vspan)))
-    if v > vexp + vspan:
-        raise AssertionError("%s > [%s..%s]" % (str(v), str(vexp - vspan), str(vexp + vspan)))
+    if isinstance(v, Decimal) or isinstance(vexp, Decimal) or isinstance(vspan, Decimal):
+        v_dec = Decimal(v)
+        vexp_dec = Decimal(vexp)
+        vspan_dec = Decimal(vspan)
+        if v_dec < vexp_dec - vspan_dec:
+            raise AssertionError("%s < [%s..%s]" % (str(v_dec), str(vexp_dec - vspan_dec), str(vexp_dec + vspan_dec)))
+        if v_dec > vexp_dec + vspan_dec:
+            raise AssertionError("%s > [%s..%s]" % (str(v_dec), str(vexp_dec - vspan_dec), str(vexp_dec + vspan_dec)))
+    else:
+        if v < vexp - vspan:
+            raise AssertionError("%s < [%s..%s]" % (str(v), str(vexp - vspan), str(vexp + vspan)))
+        if v > vexp + vspan:
+            raise AssertionError("%s > [%s..%s]" % (str(v), str(vexp - vspan), str(vexp + vspan)))
 
 
 def assert_fee_amount(fee, tx_size, feerate_BTC_kvB):
@@ -487,6 +492,7 @@ def get_rpc_proxy(url: str, node_number: int, *, timeout: Optional[int]=None, co
 
 def p2p_port(n):
     assert n <= MAX_NODES
+    assert PortSeed.n is not None
     return PORT_MIN + n + (MAX_NODES * PortSeed.n) % (PORT_RANGE - 1 - MAX_NODES)
 
 

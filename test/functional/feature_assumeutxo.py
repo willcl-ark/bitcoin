@@ -102,15 +102,15 @@ class AssumeutxoTest(BitcoinTestFramework):
             assert_raises_rpc_error(parsing_error_code, f"Unable to parse metadata: Version of snapshot {version} does not match any of the supported versions.", node.loadtxoutset, bad_snapshot_path)
 
         self.log.info("  - snapshot file with mismatching network magic")
-        invalid_magics = [
+        invalid_magics: list[tuple[bytes, str, bool]] = [
             # magic, name, real
-            [MAGIC_BYTES["mainnet"], "main", True],
-            [MAGIC_BYTES["testnet4"], "testnet4", True],
-            [MAGIC_BYTES["signet"], "signet", True],
-            [0x00000000.to_bytes(4, 'big'), "", False],
-            [0xffffffff.to_bytes(4, 'big'), "", False],
+            (MAGIC_BYTES["mainnet"], "main", True),
+            (MAGIC_BYTES["testnet4"], "testnet4", True),
+            (MAGIC_BYTES["signet"], "signet", True),
+            (0x00000000.to_bytes(4, 'big'), "", False),
+            (0xffffffff.to_bytes(4, 'big'), "", False),
         ]
-        for [magic, name, real] in invalid_magics:
+        for magic, name, real in invalid_magics:
             with open(bad_snapshot_path, 'wb') as f:
                 f.write(valid_snapshot_contents[:7] + magic + valid_snapshot_contents[11:])
             if real:
@@ -158,6 +158,7 @@ class AssumeutxoTest(BitcoinTestFramework):
         ]
 
         for content, offset, wrong_hash, custom_message in cases:
+            assert isinstance(offset, int)
             with open(bad_snapshot_path, "wb") as f:
                 # Prior to offset: Snapshot magic, snapshot version, network magic, hash, coins count
                 f.write(valid_snapshot_contents[:(5 + 2 + 4 + 32 + 8 + offset)])

@@ -68,6 +68,7 @@ class RPCWhitelistTest(BitcoinTestFramework):
                 f.write("rpcwhitelist=" + user[0] + ":" + user[2] + "\n")
             # Special cases
             for strangedude in self.strange_users:
+                assert isinstance(strangedude[0], str) and isinstance(strangedude[1], str)
                 f.write("rpcauth=" + strangedude[0] + ":" + strangedude[1] + "\n")
                 if strangedude[2] is not None:
                     f.write("rpcwhitelist=" + strangedude[0] + strangedude[2] + "\n")
