@@ -5,7 +5,6 @@ include = ["test/functional/**", "contrib/devtools/**"]
 root = ["test/functional"]
 
 [rules]
-deprecated = "ignore"
 missing-argument = "ignore"
 no-matching-overload = "ignore"
 invalid-method-override = "ignore"
