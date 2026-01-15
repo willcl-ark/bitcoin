@@ -316,10 +316,10 @@ class P2PConnection(asyncio.Protocol):
 
     # Socket read methods
 
-    def data_received(self, t):
+    def data_received(self, data):
         """asyncio callback when data is read from the socket."""
-        if len(t) > 0:
-            self.recvbuf += t
+        if len(data) > 0:
+            self.recvbuf += data
             if self.supports_v2_p2p:
                 assert self.v2_state is not None
                 if not self.v2_state.tried_v2_handshake:
@@ -513,8 +513,8 @@ class P2PInterface(P2PConnection):
         vt.addrFrom.port = 0
         self.on_connection_send_msg = vt  # Will be sent in connection_made callback
 
-    def peer_connect(self, *, services=P2P_SERVICES, send_version, **kwargs):
-        create_conn = super().peer_connect(**kwargs)
+    def peer_connect(self, dstaddr, dstport, *, net, timeout_factor, supports_v2_p2p, services=P2P_SERVICES, send_version=True):
+        create_conn = super().peer_connect(dstaddr, dstport, net=net, timeout_factor=timeout_factor, supports_v2_p2p=supports_v2_p2p)
 
         if send_version:
             self.peer_connect_send_version(services)

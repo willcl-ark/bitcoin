@@ -945,7 +945,7 @@ class P2PHeaderAndShortIDs:
 # block version 2)
 class P2PHeaderAndShortWitnessIDs(P2PHeaderAndShortIDs):
     __slots__ = ()
-    def serialize(self):
+    def serialize(self, with_witness=False):
         return super().serialize(with_witness=True)
 
 # Calculate the BIP 152-compact blocks shortid for a given transaction hash

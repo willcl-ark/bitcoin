@@ -73,7 +73,7 @@ class ChainstateWriteCrashTest(BitcoinTestFramework):
         self.start_nodes()
         # Leave them unconnected, we'll use submitblock directly in this test
 
-    def restart_node(self, node_index, expected_tip):
+    def start_node_and_wait_for_tip(self, node_index, expected_tip):
         """Start up a given node id, wait for the tip to reach the given block hash, and calculate the utxo hash.
 
         Exceptions on startup should indicate node crash (due to -dbcrashratio), in which case we try again. Give up
@@ -149,7 +149,7 @@ class ChainstateWriteCrashTest(BitcoinTestFramework):
                     # (change the exit code perhaps, and check that here?)
                     self.wait_for_node_exit(i, timeout=30)
                     self.log.debug(f"Restarting node {i} after block hash {block_hash}")
-                    nodei_utxo_hash = self.restart_node(i, block_hash)
+                    nodei_utxo_hash = self.start_node_and_wait_for_tip(i, block_hash)
                     assert nodei_utxo_hash is not None
                     self.restart_counts[i] += 1
                 else:
@@ -180,7 +180,7 @@ class ChainstateWriteCrashTest(BitcoinTestFramework):
                 nodei_utxo_hash = self.nodes[i].gettxoutsetinfo()['hash_serialized_3']
             except OSError:
                 # probably a crash on db flushing
-                nodei_utxo_hash = self.restart_node(i, self.nodes[3].getbestblockhash())
+                nodei_utxo_hash = self.start_node_and_wait_for_tip(i, self.nodes[3].getbestblockhash())
             assert_equal(nodei_utxo_hash, node3_utxo_hash)
 
     def generate_small_transactions(self, node, count, utxo_list):

@@ -50,14 +50,14 @@ class EarlyKeyResponseState(EncryptedP2PState):
 
 class ExcessGarbageState(EncryptedP2PState):
     """Generate > MAX_GARBAGE_LEN garbage bytes"""
-    def generate_keypair_and_garbage(self):
+    def generate_keypair_and_garbage(self, garbage_len=None):
         garbage_len = MAX_GARBAGE_LEN + random.randrange(1, MAX_GARBAGE_LEN + 1)
         return super().generate_keypair_and_garbage(garbage_len)
 
 
 class WrongGarbageTerminatorState(EncryptedP2PState):
     """Add option for sending wrong garbage terminator"""
-    def generate_keypair_and_garbage(self):
+    def generate_keypair_and_garbage(self, garbage_len=None):
         garbage_len = random.randrange(MAX_GARBAGE_LEN//2)
         return super().generate_keypair_and_garbage(garbage_len)
 
@@ -70,7 +70,7 @@ class WrongGarbageTerminatorState(EncryptedP2PState):
 
 class WrongGarbageState(EncryptedP2PState):
     """Generate tampered garbage bytes"""
-    def generate_keypair_and_garbage(self):
+    def generate_keypair_and_garbage(self, garbage_len=None):
         garbage_len = random.randrange(1, MAX_GARBAGE_LEN)
         ellswift_garbage_bytes = super().generate_keypair_and_garbage(garbage_len)
         # assume that garbage bytes sent to TestNode were tampered with
@@ -79,7 +79,7 @@ class WrongGarbageState(EncryptedP2PState):
 
 class NoAADState(EncryptedP2PState):
     """Add option for not filling first encrypted packet after garbage terminator with AAD"""
-    def generate_keypair_and_garbage(self):
+    def generate_keypair_and_garbage(self, garbage_len=None):
         garbage_len = random.randrange(1, MAX_GARBAGE_LEN)
         return super().generate_keypair_and_garbage(garbage_len)
 
@@ -116,12 +116,12 @@ class MisbehavingV2Peer(P2PInterface):
             self.v2_state = NonEmptyVersionPacketState(initiating=True, net='regtest')
         super().connection_made(transport)
 
-    def data_received(self, t):
+    def data_received(self, data):
         if self.test_type == TestType.EARLY_KEY_RESPONSE:
             # check that data can be received on recvbuf only when mismatch from V1_PREFIX happens
             assert isinstance(self.v2_state, EarlyKeyResponseState) and self.v2_state.can_data_be_received
         else:
-            super().data_received(t)
+            super().data_received(data)
 
 
 class EncryptedP2PMisbehaving(BitcoinTestFramework):

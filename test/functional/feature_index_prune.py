@@ -36,8 +36,8 @@ class FeatureIndexPruneTest(BitcoinTestFramework):
                 b = node_from.getblock(blockhash=node_from.getblockhash(i), verbosity=0)
                 list(rpc_threads.map(lambda n: n.submitblock(b), self.nodes))
 
-    def generate(self, node, num_blocks, sync_fun=None):
-        return super().generate(node, num_blocks, sync_fun=sync_fun or (lambda: self.linear_sync(node)))
+    def generate(self, generator, *args, sync_fun=None, **kwargs):
+        return super().generate(generator, *args, sync_fun=sync_fun or (lambda: self.linear_sync(generator)), **kwargs)
 
     def sync_index(self, height):
         expected_filter = {

@@ -9,7 +9,6 @@ exclude = [
 root = ["test/functional"]
 
 [rules]
-invalid-method-override = "ignore"
 unused-ignore-comment = "ignore"
 too-many-positional-arguments = "ignore"
 invalid-return-type = "ignore"
