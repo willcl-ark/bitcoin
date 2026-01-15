@@ -518,7 +518,7 @@ jobs:
     name: ${{ matrix.name }}
     needs: runners
     runs-on: ${{ needs.runners.outputs.provider == 'cirrus' && matrix.cirrus-runner || matrix.fallback-runner }}
-    if: ${{ vars.SKIP_BRANCH_PUSH != 'true' || github.event_name == 'pull_request' }}
+    if: ${{ (vars.SKIP_BRANCH_PUSH != 'true' || github.event_name == 'pull_request') && (!matrix.cirrus-only || needs.runners.outputs.provider == 'cirrus') }}
     timeout-minutes: ${{ matrix.timeout-minutes }}
 
     env:
@@ -580,7 +580,7 @@ jobs:
 
           - name: 'Valgrind, fuzz'
             cirrus-runner: 'ghcr.io/cirruslabs/ubuntu-runner-amd64:24.04-md'
-            fallback-runner: 'ubuntu-24.04'
+            cirrus-only: true
             timeout-minutes: 240
             file-env: './ci/test/00_setup_env_native_fuzz_with_valgrind.sh'
 
