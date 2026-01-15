@@ -345,6 +345,7 @@ class ProxyTest(BitcoinTestFramework):
         assert_equal(n4['cjdns']['reachable'], True)
 
         if self.have_unix_sockets:
+            assert self.conf4.addr is not None
             n5 = networks_dict(nodes_network_info[5])
             assert_equal(NETWORKS, n5.keys())
             for net in NETWORKS:

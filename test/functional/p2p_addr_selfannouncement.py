@@ -138,6 +138,7 @@ class AddrSelfAnnouncementTest(BitcoinTestFramework):
                 # self-announcements are sent on an exponential distribution with mean interval of 24h.
                 # Setting the mocktime 20d forward gives a probability of (1 - e^-(480/24)) that
                 # the event will occur (i.e. this fails once in ~500 million repeats).
+                assert self.nodes[0].mocktime is not None
                 addr_receiver.expected.time = self.nodes[0].mocktime + 20 * ONE_DAY
                 self.nodes[0].bumpmocktime(20 * ONE_DAY)
                 addr_receiver.sync_with_ping()

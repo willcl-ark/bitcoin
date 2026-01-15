@@ -1614,6 +1614,7 @@ class WalletMigrationTest(BitcoinTestFramework):
         self.old_node.chain = "signet"
         self.old_node.replace_in_config([("regtest=", "signet="), ("[regtest]", "[signet]")])
         # Disable network sync and prevent disk space warning on small (tmp)fs
+        assert self.old_node.extra_args is not None
         self.start_node(self.old_node.index, extra_args=self.old_node.extra_args + ["-maxconnections=0", "-prune=550"])
 
         wallet_name = "failed_load_after_migrate"
