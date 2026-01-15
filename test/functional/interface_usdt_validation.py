@@ -12,7 +12,7 @@ import time
 
 # Test will be skipped if we don't have bcc installed
 try:
-    from bcc import BPF, USDT # type: ignore[import]
+    from bcc import BPF, USDT  # ty: ignore[unresolved-import]
 except ImportError:
     pass
 

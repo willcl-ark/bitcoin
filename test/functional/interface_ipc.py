@@ -41,7 +41,7 @@ class CoinbaseTxData:
 
 # Test may be skipped and not have capnp installed
 try:
-    import capnp  # type: ignore[import] # noqa: F401
+    import capnp  # noqa: F401  # ty: ignore[unresolved-import]
 except ImportError:
     pass
 

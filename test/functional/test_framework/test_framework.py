@@ -886,14 +886,14 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
     def skip_if_no_py_capnp(self):
         """Attempt to import the capnp package and skip the test if the import fails."""
         try:
-            import capnp  # type: ignore[import] # noqa: F401
+            import capnp  # noqa: F401  # ty: ignore[unresolved-import]
         except ImportError:
             raise SkipTest("capnp module not available.")
 
     def skip_if_no_python_bcc(self):
         """Attempt to import the bcc package and skip the tests if the import fails."""
         try:
-            import bcc  # type: ignore[import] # noqa: F401
+            import bcc  # noqa: F401  # ty: ignore[unresolved-import]
         except ImportError:
             raise SkipTest("bcc python module not available")
 
@@ -1036,7 +1036,7 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
 
     def inspect_sqlite_db(self, path, fn, *args, **kwargs):
         try:
-            import sqlite3 # type: ignore[import]
+            import sqlite3
             conn = sqlite3.connect(path)
             with conn:
                 result = fn(conn, *args, **kwargs)
