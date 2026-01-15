@@ -7,7 +7,6 @@ root = ["test/functional"]
 [rules]
 missing-argument = "ignore"
 no-matching-overload = "ignore"
-invalid-method-override = "ignore"
 invalid-return-type = "ignore"
 possibly-missing-attribute = "ignore"
 too-many-positional-arguments = "ignore"

@@ -91,10 +91,10 @@ class NoVerackIdlePeer(LazyPeer):
 class P2PVersionStore(P2PInterface):
     version_received = None
 
-    def on_version(self, msg):
+    def on_version(self, message):
         # Responds with an appropriate verack
-        super().on_version(msg)
-        self.version_received = msg
+        super().on_version(message)
+        self.version_received = message
 
 
 class P2PLeakTest(BitcoinTestFramework):
