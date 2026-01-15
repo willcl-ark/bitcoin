@@ -69,7 +69,7 @@ def rol(x, i):
     return ((x << i) | ((x & 0xffffffff) >> (32 - i))) & 0xffffffff
 
 
-def compress(h0, h1, h2, h3, h4, block):
+def compress(h0: int, h1: int, h2: int, h3: int, h4: int, block: bytes) -> tuple[int, int, int, int, int]:
     """Compress state (h0, h1, h2, h3, h4) with block."""
     # Left path variables.
     al, bl, cl, dl, el = h0, h1, h2, h3, h4

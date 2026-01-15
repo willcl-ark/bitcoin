@@ -252,7 +252,7 @@ class TestNode():
     def start(self, extra_args=None, *, cwd=None, stdout=None, stderr=None, env=None, **kwargs):
         """Start the node."""
         if extra_args is None:
-            extra_args = self.extra_args
+            extra_args = self.extra_args if self.extra_args is not None else []
 
         # If listening and no -bind is given, then bitcoind would bind P2P ports on
         # 0.0.0.0:P and 127.0.0.1:P+1 (for incoming Tor connections), where P is
