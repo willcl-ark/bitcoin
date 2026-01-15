@@ -15,7 +15,7 @@ from test_framework.ipc_util import (
 
 # Test may be skipped and not have capnp installed
 try:
-    import capnp  # type: ignore[import] # noqa: F401
+    import capnp  # noqa: F401  # ty: ignore[unresolved-import]
 except ModuleNotFoundError:
     pass
 
