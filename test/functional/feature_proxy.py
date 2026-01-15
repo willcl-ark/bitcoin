@@ -131,6 +131,7 @@ class ProxyTest(BitcoinTestFramework):
             []
         ]
         if self.have_ipv6:
+            assert isinstance(self.conf3.addr, tuple)
             args[3] = ['-listen', f'-proxy=[{self.conf3.addr[0]}]:{self.conf3.addr[1]}','-proxyrandomize=0', '-noonion']
         if self.have_unix_sockets:
             args[5] = ['-listen', f'-proxy=unix:{socket_path}']
@@ -224,6 +225,11 @@ class ProxyTest(BitcoinTestFramework):
         return rv
 
     def run_test(self):
+        assert isinstance(self.conf1.addr, tuple)
+        assert isinstance(self.conf2.addr, tuple)
+        assert isinstance(self.conf3.addr, tuple)
+        assert isinstance(self.conf4.addr, str)
+
         # basic -proxy
         self.node_test(self.nodes[0],
             proxies=[self.serv1, self.serv1, self.serv1, self.serv1],
@@ -345,7 +351,6 @@ class ProxyTest(BitcoinTestFramework):
         assert_equal(n4['cjdns']['reachable'], True)
 
         if self.have_unix_sockets:
-            assert self.conf4.addr is not None
             n5 = networks_dict(nodes_network_info[5])
             assert_equal(NETWORKS, n5.keys())
             for net in NETWORKS:

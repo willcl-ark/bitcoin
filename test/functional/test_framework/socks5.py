@@ -77,7 +77,7 @@ def forward_sockets(a, b):
 class Socks5Configuration():
     """Proxy configuration."""
     def __init__(self):
-        self.addr = None # Bind address (must be set)
+        self.addr: tuple[str, int] | str | None = None # Bind address (must be set)
         self.af = socket.AF_INET # Bind address family
         self.unauth = False  # Support unauthenticated
         self.auth = False  # Support authentication

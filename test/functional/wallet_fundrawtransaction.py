@@ -95,7 +95,7 @@ class RawTransactionsTest(BitcoinTestFramework):
         wallet.lockunspent(False, to_keep)
 
     def run_test(self):
-        self.watchonly_utxo = None
+        self.watchonly_utxo = {}
         self.log.info("Connect nodes, set fees, generate blocks, and sync")
         self.min_relay_tx_fee = self.nodes[0].getnetworkinfo()['relayfee']
         # This test is not meant to test fee estimation and we'd like

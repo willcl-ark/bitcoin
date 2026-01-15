@@ -103,7 +103,7 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         self.setup_clean_chain: bool = False
         self.noban_tx_relay: bool = False
         self.nodes: list[TestNode] = []
-        self.extra_args = None
+        self.extra_args: list[list[str]] = []
         self.extra_init = None
         self.network_thread = None
         self.rpc_timeout = 60  # Wait for up to 60 seconds for the RPC server to respond
@@ -445,7 +445,7 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
             extra_confs = [["bind=127.0.0.1"]] * num_nodes
         else:
             extra_confs = [[]] * num_nodes
-        if extra_args is None:
+        if not extra_args:
             extra_args = [[]] * num_nodes
         # Whitelist peers to speed up tx relay / mempool sync. Don't use it if testing tx relay or timing.
         if self.noban_tx_relay:
