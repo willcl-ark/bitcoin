@@ -312,6 +312,11 @@ jobs:
             & mt.exe -nologo -inputresource:$_.FullName -validate_manifest
           }
 
+      - name: Install Python test dependencies
+        if: matrix.preset == 'ci-win-native'
+        run: |
+          py -3 -m pip install pyzmq
+
       - name: Run test suite
         run: |
           ctest --preset ${{ matrix.preset }} --test-dir build
