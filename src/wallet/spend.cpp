@@ -1404,7 +1404,24 @@ static util::Result<CreatedTransactionResult> CreateTransactionInternal(
               feeCalc.est.fail.start, feeCalc.est.fail.end,
               (feeCalc.est.fail.totalConfirmed + feeCalc.est.fail.inMempool + feeCalc.est.fail.leftMempool) > 0.0 ? 100 * feeCalc.est.fail.withinTarget / (feeCalc.est.fail.totalConfirmed + feeCalc.est.fail.inMempool + feeCalc.est.fail.leftMempool) : 0.0,
               feeCalc.est.fail.withinTarget, feeCalc.est.fail.totalConfirmed, feeCalc.est.fail.inMempool, feeCalc.est.fail.leftMempool);
-    return CreatedTransactionResult(tx, current_fee, change_pos, feeCalc);
+
+    // Check if selection has partial spends (selected some but not all coins from same scriptPubKey)
+    bool has_partial_spends = false;
+    std::set<COutPoint> selected_outpoints;
+    std::set<CScript> selected_scripts;
+    for (const auto& coin : selected_coins) {
+        selected_outpoints.insert(coin->outpoint);
+        selected_scripts.insert(coin->txout.scriptPubKey);
+    }
+    for (const COutput& coin : available_coins.All()) {
+        if (selected_outpoints.count(coin.outpoint) == 0 &&
+            selected_scripts.count(coin.txout.scriptPubKey) > 0) {
+            has_partial_spends = true;
+            break;
+        }
+    }
+
+    return CreatedTransactionResult(tx, current_fee, change_pos, feeCalc, has_partial_spends);
 }
 
 util::Result<CreatedTransactionResult> CreateTransaction(
@@ -1432,8 +1449,9 @@ util::Result<CreatedTransactionResult> CreateTransaction(
            res && res->change_pos.has_value() ? int32_t(*res->change_pos) : -1);
     if (!res) return res;
     const auto& txr_ungrouped = *res;
-    // try with avoidpartialspends unless it's enabled already
-    if (txr_ungrouped.fee > 0 /* 0 means non-functional fee rate estimation */ && wallet.m_max_aps_fee > -1 && !coin_control.m_avoid_partial_spends) {
+    // try with avoidpartialspends unless it's enabled already, and only if there are partial spends to avoid
+    if (txr_ungrouped.fee > 0 /* 0 means non-functional fee rate estimation */ && wallet.m_max_aps_fee > -1 && !coin_control.m_avoid_partial_spends
+        && txr_ungrouped.has_partial_spends) {
         TRACEPOINT(coin_selection, attempting_aps_create_tx, wallet.GetName().c_str());
         CCoinControl tmp_cc = coin_control;
         tmp_cc.m_avoid_partial_spends = true;

@@ -208,9 +208,10 @@ struct CreatedTransactionResult
     CAmount fee;
     FeeCalculation fee_calc;
     std::optional<unsigned int> change_pos;
+    bool has_partial_spends{false};
 
-    CreatedTransactionResult(CTransactionRef _tx, CAmount _fee, std::optional<unsigned int> _change_pos, const FeeCalculation& _fee_calc)
-        : tx(_tx), fee(_fee), fee_calc(_fee_calc), change_pos(_change_pos) {}
+    CreatedTransactionResult(CTransactionRef _tx, CAmount _fee, std::optional<unsigned int> _change_pos, const FeeCalculation& _fee_calc, bool _has_partial_spends = false)
+        : tx(_tx), fee(_fee), fee_calc(_fee_calc), change_pos(_change_pos), has_partial_spends(_has_partial_spends) {}
 };
 
 /**
