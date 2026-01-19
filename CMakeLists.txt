@@ -720,8 +720,8 @@ if(BUILD_TESTS)
   # CI-specific test targets
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
-  # Functional test cache creation (only if bitcoind is built and not cross-compiling)
-  if(BUILD_DAEMON AND NOT CMAKE_CROSSCOMPILING)
+  # Functional test cache creation (only if bitcoind is built)
+  if(BUILD_DAEMON)
     add_test(
       NAME create-functional-cache
       COMMAND ${Python3_EXECUTABLE} "${CMAKE_BINARY_DIR}/test/functional/create_cache.py"
