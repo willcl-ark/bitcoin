@@ -1,6 +1,7 @@
 (use-modules (gnu packages)
              ((gnu packages bash) #:select (bash-minimal))
              (gnu packages bison)
+             ((gnu packages ccache) #:select (ccache))
              ((gnu packages certs) #:select (nss-certs))
              ((gnu packages check) #:select (libfaketime))
              ((gnu packages cmake) #:select (cmake-minimal))
@@ -580,7 +581,9 @@ inspecting signatures in Mach-O binaries.")
         ;; Git
         git-minimal
         ;; Tests
-        python-lief)
+        python-lief
+        ;; Caching (optional, enabled via GUIX_CCACHE env var)
+        ccache)
   (let ((target (getenv "HOST")))
     (cond ((string-suffix? "-mingw32" target)
            (list zip
