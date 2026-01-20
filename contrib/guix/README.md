@@ -254,6 +254,24 @@ details.
   The path that this environment variable points to **must be a directory**, and
   **NOT a symlink to a directory**.
 
+* _**GUIX_CCACHE**_
+
+  Set the path to a ccache directory for caching compilation results. When set,
+  ccache will be enabled inside the build container to speed up re-builds. The
+  directory is mounted to `/ccache` inside the container.
+
+  This is useful for development workflows with frequent rebuilds. For
+  official release builds, leave this unset to ensure maximum reproducibility.
+
+  The path that this environment variable points to **must be a directory**, and
+  **NOT a symlink to a directory**.
+
+  Example:
+  ```sh
+  mkdir -p ~/guix-ccache
+  GUIX_CCACHE="$HOME/guix-ccache" ./contrib/guix/guix-build
+  ```
+
 * _**JOBS**_
 
   Override the number of jobs to run simultaneously, you might want to do so on
