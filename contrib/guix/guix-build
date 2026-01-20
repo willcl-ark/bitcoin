@@ -367,6 +367,7 @@ INFO: Building ${VERSION:?not set} for platform triple ${HOST:?not set}:
           ...bind-mounted in container to: '$(DISTSRC_BASE=/distsrc-base && distsrc_for_host "$HOST")'
       ...outputting in: '$(outdir_for_host "$HOST")'
           ...bind-mounted in container to: '$(OUTDIR_BASE=/outdir-base && outdir_for_host "$HOST")'
+      ...ccache directory: '${GUIX_CCACHE:-not set}'
       ADDITIONAL FLAGS (if set)
           ADDITIONAL_GUIX_COMMON_FLAGS: ${ADDITIONAL_GUIX_COMMON_FLAGS}
           ADDITIONAL_GUIX_ENVIRONMENT_FLAGS: ${ADDITIONAL_GUIX_ENVIRONMENT_FLAGS}
@@ -450,6 +451,7 @@ EOF
                                  ${SOURCES_PATH:+--share="$SOURCES_PATH"} \
                                  ${BASE_CACHE:+--share="$BASE_CACHE"} \
                                  ${SDK_PATH:+--share="$SDK_PATH"} \
+                                 ${GUIX_CCACHE:+--share="$GUIX_CCACHE"=/ccache} \
                                  --cores="$JOBS" \
                                  --keep-failed \
                                  --fallback \
@@ -465,6 +467,7 @@ EOF
                                         ${SOURCES_PATH:+SOURCES_PATH="$SOURCES_PATH"} \
                                         ${BASE_CACHE:+BASE_CACHE="$BASE_CACHE"} \
                                         ${SDK_PATH:+SDK_PATH="$SDK_PATH"} \
+                                        ${GUIX_CCACHE:+CCACHE_DIR=/ccache} \
                                         DISTSRC="$(DISTSRC_BASE=/distsrc-base && distsrc_for_host "$HOST")" \
                                         OUTDIR="$(OUTDIR_BASE=/outdir-base && outdir_for_host "$HOST")" \
                                         DIST_ARCHIVE_BASE=/outdir-base/dist-archive \
