@@ -161,6 +161,51 @@ esac
 export TAR_OPTIONS="--owner=0 --group=0 --numeric-owner --mtime='@${SOURCE_DATE_EPOCH}' --sort=name"
 export TZ="UTC"
 
+# Optionally configure ccache
+if [ -n "$CCACHE_DIR" ]; then
+    export CCACHE_DIR
+    # DISTSRC contains a random hash (e.g., distsrc-a1b2c3-x86_64-linux-gnu).
+    # BASEDIR rewrites absolute paths under it to relative, so the hash doesn't
+    # affect cache keys.
+    export CCACHE_BASEDIR="${DISTSRC}"
+    # Don't include CWD in the hash
+    export CCACHE_NOHASHDIR=1
+    # Hash compiler binary content rather than path/mtime, since guix store
+    # paths may change even when compiler content is identical.
+    export CCACHE_COMPILERCHECK=content
+    # The -ffile-prefix-map flags contain guix store paths and DISTSRC paths which
+    # vary between builds. Ignore them in the hash since they only affect debug info.
+    export CCACHE_IGNOREOPTIONS="-ffile-prefix-map=*"
+    WITH_CCACHE=ON
+
+    # Prepend `ccache` to native compiler commands because these use absolute paths.
+    build_CC="ccache ${build_CC}"
+    build_CXX="ccache ${build_CXX}"
+
+    # Create ccache symlinks for all compiler binaries in the guix environment.
+    # These are used for depends builds where we need ccache but can't use cmake's launcher.
+    CCACHE_BIN=$(command -v ccache)
+    CCACHE_WRAPPER_DIR="/tmp/ccache-wrappers"
+    mkdir -p "$CCACHE_WRAPPER_DIR"
+
+    # Find all gcc/g++/clang/clang++ binaries and create symlinks
+    for bin in "$GUIX_ENVIRONMENT"/bin/*; do
+        if [ -x "$bin" ]; then
+            name=$(basename "$bin")
+            case "$name" in
+                *clang++|*clang|*g++|*gcc|cc|c++)
+                    ln -sf "$CCACHE_BIN" "$CCACHE_WRAPPER_DIR/$name"
+                    ;;
+            esac
+        fi
+    done
+
+    # Save original PATH for the main cmake build (which uses CMAKE_CXX_COMPILER_LAUNCHER)
+    # The symlink wrappers are only needed for depends, we will restore PATH for main build.
+    ORIG_PATH="$PATH"
+    export PATH="$CCACHE_WRAPPER_DIR:$PATH"
+fi
+
 ####################
 # Depends Building #
 ####################
@@ -242,12 +287,21 @@ mkdir -p "$DISTSRC"
     # Extract the source tarball
     tar --strip-components=1 -xf "${GIT_ARCHIVE}"
 
+    # If using ccache restore original PATH so cmake finds the real compiler
+    # (not ccache symlinks) and uses CMAKE_CXX_COMPILER_LAUNCHER for ccache instead.
+    if [ -n "$ORIG_PATH" ]; then
+        export PATH="$ORIG_PATH"
+        # Unset CCACHE_BASEDIR so ccache doesn't rewrite __FILE__ paths to relative.
+        # This allows -fmacro-prefix-map to work correctly for reproducible builds.
+        unset CCACHE_BASEDIR
+    fi
+
     # Configure this DISTSRC for $HOST
     # shellcheck disable=SC2086
     env CFLAGS="${HOST_CFLAGS}" CXXFLAGS="${HOST_CXXFLAGS}" LDFLAGS="${HOST_LDFLAGS}" \
     cmake -S . -B build \
           --toolchain "${BASEPREFIX}/${HOST}/toolchain.cmake" \
-          -DWITH_CCACHE=OFF \
+          -DWITH_CCACHE="${WITH_CCACHE:-OFF}" \
           -Werror=dev \
           ${CONFIGFLAGS} \
           "${CMAKE_EXE_LINKER_FLAGS}"
