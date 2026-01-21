@@ -177,6 +177,7 @@ if [ -n "$CCACHE_DIR" ]; then
     # vary between builds. Ignore them in the hash since they only affect debug info.
     export CCACHE_IGNOREOPTIONS="-ffile-prefix-map=*"
     WITH_CCACHE=ON
+    ccache --zero-stats
 
     # Prepend `ccache` to native compiler commands because these use absolute paths.
     build_CC="ccache ${build_CC}"
@@ -308,6 +309,10 @@ mkdir -p "$DISTSRC"
 
     # Build Bitcoin Core
     cmake --build build -j "$JOBS" ${V:+--verbose}
+
+    if [ -n "$CCACHE_DIR" ]; then
+        ccache --show-stats
+    fi
 
     mkdir -p "$OUTDIR"
 
