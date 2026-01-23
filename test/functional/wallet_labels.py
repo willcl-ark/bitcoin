@@ -48,7 +48,8 @@ class WalletLabelsTest(BitcoinTestFramework):
         assert_equal(response[0]['error']['message'], "Invalid label name")
 
         for rpc_call in rpc_calls:
-            assert_raises_rpc_error(-11, "Invalid label name", *rpc_call, label="*")
+            assert callable(rpc_call[0])
+            assert_raises_rpc_error(-11, "Invalid label name", rpc_call[0], *rpc_call[1:], label="*")
 
     def test_label_named_parameter_handling(self):
         """Test that getnewaddress with labels containing '=' characters is handled correctly in -named mode"""

@@ -158,7 +158,7 @@ class AssumeutxoTest(BitcoinTestFramework):
         ]
 
         for content, offset, wrong_hash, custom_message in cases:
-            assert isinstance(offset, int)
+            assert isinstance(offset, int) and isinstance(content, bytes)
             with open(bad_snapshot_path, "wb") as f:
                 # Prior to offset: Snapshot magic, snapshot version, network magic, hash, coins count
                 f.write(valid_snapshot_contents[:(5 + 2 + 4 + 32 + 8 + offset)])

@@ -20,6 +20,7 @@ class ShutdownTest(BitcoinTestFramework):
         self.supports_cli = False
 
     def run_test(self):
+        assert self.nodes[0].url is not None
         node = get_rpc_proxy(self.nodes[0].url, 1, timeout=600, coveragedir=self.nodes[0].coverage_dir)
         # Force connection establishment by executing a dummy command.
         node.getblockcount()

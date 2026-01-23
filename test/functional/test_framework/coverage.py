@@ -11,7 +11,7 @@ testing.
 import os
 
 from .authproxy import AuthServiceProxy
-from typing import Optional
+from typing import Optional, Union
 
 REFERENCE_FILENAME = 'rpc_interface.txt'
 
@@ -78,7 +78,7 @@ def get_filename(dirname, n_node):
         dirname, "coverage.pid%s.node%s.txt" % (pid, str(n_node)))
 
 
-def write_all_rpc_commands(dirname: str, node: AuthServiceProxy) -> bool:
+def write_all_rpc_commands(dirname: str, node: Union[AuthServiceProxy, "AuthServiceProxyWrapper"]) -> bool:
     """
     Write out a list of all RPC functions available in `bitcoin-cli` for
     coverage comparison. This will only happen once per coverage

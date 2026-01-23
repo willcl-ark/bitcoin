@@ -309,6 +309,7 @@ class MiniWallet:
         """
         utxos_to_spend = utxos_to_spend or [self.get_utxo(confirmed_only=confirmed_only)]
         sequence = [sequence] * len(utxos_to_spend) if type(sequence) is int else sequence
+        assert isinstance(sequence, list)
         assert_equal(len(utxos_to_spend), len(sequence))
 
         # calculate output amount

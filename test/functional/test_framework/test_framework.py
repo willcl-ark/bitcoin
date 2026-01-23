@@ -531,7 +531,8 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
 
         if self.options.coveragedir is not None:
             for node in self.nodes:
-                coverage.write_all_rpc_commands(self.options.coveragedir, node._rpc)
+                if node._rpc is not None:
+                    coverage.write_all_rpc_commands(self.options.coveragedir, node._rpc)
 
     def stop_node(self, i, expected_stderr='', wait=0):
         """Stop a bitcoind test node"""

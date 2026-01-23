@@ -18,6 +18,8 @@ from test_framework.util import (
 
 
 class WalletMiniscriptDecayingMultisigDescriptorPSBTTest(BitcoinTestFramework):
+    locktimes: list[int]
+
     def set_test_params(self):
         self.num_nodes = 1
         self.setup_clean_chain = True

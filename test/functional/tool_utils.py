@@ -71,6 +71,7 @@ class ToolUtils(BitcoinTestFramework):
         res = subprocess.run(execrun, capture_output=True, text=True, input=inputData)
 
         if outputData:
+            assert outputFn is not None
             data_mismatch, formatting_mismatch = False, False
             # Parse command output and expected output
             try:

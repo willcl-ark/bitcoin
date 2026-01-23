@@ -175,6 +175,7 @@ class InitTest(BitcoinTestFramework):
 
         for round_info in deletion_rounds:
             file_patt = round_info['filepath_glob']
+            assert isinstance(file_patt, str)
             err_fragment = round_info['error_message']
             startup_args = round_info['startup_args']
             target_files = list(node.chain_path.glob(file_patt))
@@ -198,6 +199,7 @@ class InitTest(BitcoinTestFramework):
         dirs = ["blocks", "chainstate", "indexes"]
         for round_info in perturbation_rounds:
             file_patt = round_info['filepath_glob']
+            assert isinstance(file_patt, str)
             err_fragment = round_info['error_message']
             startup_args = round_info['startup_args']
 
