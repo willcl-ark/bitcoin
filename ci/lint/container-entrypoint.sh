@@ -11,6 +11,7 @@ export LC_ALL=C
 git config --global --add safe.directory /bitcoin
 
 export PATH="/python_env/bin:${PATH}"
+export VIRTUAL_ENV="/python_env"
 
 if [ -z "$1" ]; then
   bash -ic "./ci/lint/06_script.sh"
