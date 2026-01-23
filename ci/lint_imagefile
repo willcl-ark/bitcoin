@@ -11,6 +11,7 @@ ENV LC_ALL=C.UTF-8
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 COPY --from=ghcr.io/astral-sh/ruff:0.14.4 /ruff /bin/
+COPY --from=ghcr.io/astral-sh/ty:0.0.12 /ty /bin/
 
 COPY ./ci/retry/retry /ci_retry
 COPY ./.python-version /.python-version
