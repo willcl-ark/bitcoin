@@ -25,6 +25,7 @@ class HTTPBasicsTest (BitcoinTestFramework):
         # lowlevel check for http persistent connection #
         #################################################
         url = urllib.parse.urlparse(self.nodes[0].url)
+        assert isinstance(url.hostname, str)
         authpair = f'{url.username}:{url.password}'
         headers = {"Authorization": f"Basic {str_to_b64str(authpair)}"}
 
@@ -71,6 +72,7 @@ class HTTPBasicsTest (BitcoinTestFramework):
 
         #node1 (2nd node) is running with disabled keep-alive option
         urlNode1 = urllib.parse.urlparse(self.nodes[1].url)
+        assert isinstance(urlNode1.hostname, str)
         authpair = f'{urlNode1.username}:{urlNode1.password}'
         headers = {"Authorization": f"Basic {str_to_b64str(authpair)}"}
 
@@ -82,6 +84,7 @@ class HTTPBasicsTest (BitcoinTestFramework):
 
         #node2 (third node) is running with standard keep-alive parameters which means keep-alive is on
         urlNode2 = urllib.parse.urlparse(self.nodes[2].url)
+        assert isinstance(urlNode2.hostname, str)
         authpair = f'{urlNode2.username}:{urlNode2.password}'
         headers = {"Authorization": f"Basic {str_to_b64str(authpair)}"}
 

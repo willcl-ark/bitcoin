@@ -81,6 +81,7 @@ class NotificationsTest(BitcoinTestFramework):
             }]
             # Make the wallets and import the descriptors
             # Ensures that node 0 and node 1 share the same wallet for the conflicting transaction tests below.
+            assert self.wallet_names is not None
             for i, name in enumerate(self.wallet_names):
                 self.nodes[i].createwallet(wallet_name=name, blank=True, load_on_startup=True)
                 self.nodes[i].importdescriptors(desc_imports)

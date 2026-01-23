@@ -1027,7 +1027,7 @@ def spenders_taproot_active():
     ]
     # Add many dummies to test huge trees
     for j in range(100000):
-        scripts.append((None, CScript([OP_RETURN, random.randrange(100000)])))
+        scripts.append((None, CScript([OP_RETURN, random.randrange(100000)])))  # ty: ignore[invalid-argument-type]
     random.shuffle(scripts)
     tap = taproot_construct(pubs[0], scripts)
     common = {
@@ -1726,7 +1726,7 @@ class TaprootTest(BitcoinTestFramework):
             prv = ECKey()
             prv.set(i.to_bytes(32, 'big'), True)
             pub = prv.get_pubkey().get_bytes()
-            d = {"key": prv}
+            d: dict = {"key": prv}
             d["scriptcode"] = key_to_p2pkh_script(pub)
             d["inputs"] = [getter("sign"), pub]
             if i < 3:

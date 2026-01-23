@@ -171,6 +171,7 @@ class TestFrameworkAEAD(unittest.TestCase):
         """ChaCha20Poly1305 AEAD test vectors."""
         for test_vector in AEAD_TESTS:
             hex_plain, hex_aad, hex_key, hex_nonce, hex_cipher = test_vector
+            assert isinstance(hex_plain, str) and isinstance(hex_aad, str) and isinstance(hex_key, str) and isinstance(hex_cipher, str)
             plain = bytes.fromhex(hex_plain)
             aad = bytes.fromhex(hex_aad)
             key = bytes.fromhex(hex_key)
@@ -185,6 +186,7 @@ class TestFrameworkAEAD(unittest.TestCase):
         "FSChaCha20Poly1305 AEAD test vectors."
         for test_vector in FSAEAD_TESTS:
             hex_plain, hex_aad, hex_key, msg_idx, hex_cipher = test_vector
+            assert isinstance(hex_plain, str) and isinstance(hex_aad, str) and isinstance(hex_key, str) and isinstance(msg_idx, int)
             plain = bytes.fromhex(hex_plain)
             aad = bytes.fromhex(hex_aad)
             key = bytes.fromhex(hex_key)

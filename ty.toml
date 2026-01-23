@@ -6,7 +6,6 @@ root = ["test/functional"]
 
 [rules]
 deprecated = "ignore"
-invalid-argument-type = "ignore"
 missing-argument = "ignore"
 no-matching-overload = "ignore"
 invalid-method-override = "ignore"

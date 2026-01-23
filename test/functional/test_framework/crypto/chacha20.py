@@ -143,8 +143,8 @@ class TestFrameworkChacha(unittest.TestCase):
         """ChaCha20 test vectors."""
         for test_vector in CHACHA20_TESTS:
             hex_key, nonce, counter, hex_output = test_vector
+            assert isinstance(hex_key, str) and isinstance(nonce, list)
             key = bytes.fromhex(hex_key)
-            assert isinstance(nonce, list)
             nonce_bytes = nonce[0].to_bytes(4, 'little') + nonce[1].to_bytes(8, 'little')
             keystream = chacha20_block(key, nonce_bytes, counter)
             self.assertEqual(hex_output, keystream.hex())
@@ -153,6 +153,7 @@ class TestFrameworkChacha(unittest.TestCase):
         """FSChaCha20 test vectors."""
         for test_vector in FSCHACHA20_TESTS:
             hex_plaintext, hex_key, rekey_interval, hex_ciphertext_after_rotation = test_vector
+            assert isinstance(hex_plaintext, str) and isinstance(hex_key, str) and isinstance(rekey_interval, int)
             plaintext = bytes.fromhex(hex_plaintext)
             key = bytes.fromhex(hex_key)
             fsc20 = FSChaCha20(key, rekey_interval)

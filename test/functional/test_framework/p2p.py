@@ -378,7 +378,7 @@ class P2PConnection(asyncio.Protocol):
                 if msgtype not in MESSAGEMAP:
                     raise ValueError("Received unknown msgtype from %s:%d: '%s' %s" % (self.dstaddr, self.dstport, msgtype, repr(msg)))
                 f = BytesIO(msg)
-                t = MESSAGEMAP[msgtype]()
+                t = MESSAGEMAP[msgtype]()  # ty: ignore[invalid-argument-type]
                 t.deserialize(f)
                 self._log_message("receive", t)
                 self.on_message(t)
@@ -773,6 +773,7 @@ class NetworkThread(threading.Thread):
         """ Ensure a listening server is running on the given port, and run the
         protocol specified by `p2p` on the next connection to it. Once ready
         for connections, call `callback`."""
+        assert cls.network_event_loop is not None
 
         if port is None:
             assert 0 < idx <= MAX_NODES
@@ -790,6 +791,8 @@ class NetworkThread(threading.Thread):
 
     @classmethod
     async def create_listen_server(cls, addr, port, callback, proto):
+        assert cls.network_event_loop is not None
+
         def peer_protocol():
             """Returns a function that does the protocol handling for a new
             connection. To allow different connections to have different
