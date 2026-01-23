@@ -681,4 +681,4 @@ jobs:
           cache-provider: ${{ needs.runners.outputs.provider }}
 
       - name: CI script
-        run: python .github/ci-lint-exec.py
+        run: ./ci/lint.py

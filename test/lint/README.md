@@ -3,11 +3,17 @@ This folder contains lint scripts.
 Running locally
 ===============
 
-To run linters locally with the same versions as the CI environment, use the included
-Dockerfile:
+To run linters locally with the same versions as the CI environment use
+the _lint.py_ helper script which runs checks inside the CI container:
 
 ```sh
-DOCKER_BUILDKIT=1 docker build --platform=linux --tag=bitcoin-linter --file="./ci/lint_imagefile" ./ && docker run --rm -v $(pwd):/bitcoin -it bitcoin-linter
+./ci/lint.py
+```
+
+Or to run a single stage using the container:
+
+```sh
+./ci/lint.py ./test/lint/lint-python.py
 ```
 
 Building the container can be done every time, because it is fast when the
