@@ -10,8 +10,6 @@ import sys
 import time
 from pathlib import Path
 
-CONTAINER_NAME = "bitcoin-linter"
-
 
 def run(cmd, **kwargs):
     print("+ " + shlex.join(cmd), flush=True)
@@ -40,7 +38,7 @@ def get_worktree_mounts(repo_root):
 def main():
     repo_root = Path(__file__).resolve().parent.parent
     is_ci = os.environ.get("GITHUB_ACTIONS") == "true"
-    container = os.environ.get("CONTAINER_NAME", CONTAINER_NAME)
+    container = "bitcoin-linter"
 
     build_cmd = [
         "docker",

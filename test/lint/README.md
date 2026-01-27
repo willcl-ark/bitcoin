@@ -16,9 +16,6 @@ Or to run a single stage using the container:
 ./ci/lint.py ./test/lint/lint-python.py
 ```
 
-Building the container can be done every time, because it is fast when the
-result is cached and it prevents issues when the image changes.
-
 test runner
 ===========
 
