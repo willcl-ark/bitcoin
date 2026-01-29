@@ -542,6 +542,17 @@ jobs:
           key: ccache-${{ github.job }}-${{ github.run_id }}
           restore-keys: ccache-${{ github.job }}-
 
+      - name: Setup VM cache directory
+        shell: bash
+        run: mkdir -p ${{ github.workspace }}/.vmcache
+
+      - name: Restore VM cache
+        uses: cirruslabs/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/.vmcache
+          key: freebsd-vm-v1.3.8
+          restore-keys: freebsd-vm-
+
       - name: Speed up VM install
         shell: bash
         run: |
@@ -551,6 +562,7 @@ jobs:
       - name: Start FreeBSD VM
         uses: vmactions/freebsd-vm@v1.3.8
         with:
+          cache-dir: ${{ github.workspace }}/.vmcache
           envs: 'CCACHE_DIR'
           prepare: pkg install -y cmake-core ninja git pkgconf boost-libs libevent sqlite3 capnproto libzmq4 python3 net/py-pyzmq databases/py-sqlite3 ccache
           run: git config --global --add safe.directory ${{ github.workspace }}
@@ -596,6 +608,13 @@ jobs:
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-${{ github.job }}-${{ github.run_id }}
+
+      - name: Save VM cache
+        uses: cirruslabs/cache/save@v4
+        if: ${{ (github.event_name == 'push') && (github.ref_name == github.event.repository.default_branch) }}
+        with:
+          path: ${{ github.workspace }}/.vmcache
+          key: freebsd-vm-v1.3.8
 
   ci-matrix:
     name: ${{ matrix.name }}
