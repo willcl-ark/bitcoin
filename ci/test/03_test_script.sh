@@ -152,6 +152,15 @@ hit_rate=$(ccache --show-stats | grep "Hits:" | head -1 | sed 's/.*(\(.*\)%).*/\
 if [ "${hit_rate%.*}" -lt 75 ]; then
   echo "::notice title=low ccache hitrate::Ccache hit-rate in $CONTAINER_NAME was $hit_rate%"
 fi
+
+if [ -n "$CCACHE_DEBUGDIR" ] && [ -d "$CCACHE_DEBUGDIR" ]; then
+  first=$(find "$CCACHE_DEBUGDIR" -name '*.ccache-input-text' -not -path '*/TryCompile*' | head -1)
+  if [ -n "$first" ]; then
+    echo "=== ccache hash inputs sample: $first ==="
+    sed '/^=== PREPROCESSOR MODE ===/,$d' "$first"
+  fi
+fi
+
 du -sh "${DEPENDS_DIR}"/*/
 du -sh "${PREVIOUS_RELEASES_DIR}"
 

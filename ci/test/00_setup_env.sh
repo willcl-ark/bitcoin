@@ -51,6 +51,8 @@ export DEBIAN_FRONTEND=noninteractive
 export CCACHE_MAXSIZE=${CCACHE_MAXSIZE:-500M}
 export CCACHE_TEMPDIR=${CCACHE_TEMPDIR:-/tmp/.ccache-temp}
 export CCACHE_COMPRESS=${CCACHE_COMPRESS:-1}
+export CCACHE_DEBUG=${CCACHE_DEBUG:-1}
+export CCACHE_DEBUGDIR=${CCACHE_DEBUGDIR:-/tmp/ccache-debug}
 # The cache dir.
 # This folder exists only on the ci guest, and on the ci host as a volume.
 export CCACHE_DIR="${CCACHE_DIR:-$BASE_SCRATCH_DIR/ccache}"
