@@ -566,7 +566,7 @@ jobs:
           envs: 'CCACHE_DIR'
           prepare: pkg install -y cmake-core ninja git pkgconf boost-libs libevent sqlite3 capnproto libzmq4 python3 net/py-pyzmq databases/py-sqlite3 ccache
           run: git config --global --add safe.directory ${{ github.workspace }}
-          sync: 'nfs' # nfs is auto-synced and allows ccache save at the end of the run
+          sync: 'rsync' # needed as nsf doesn't support flock() well
 
       - name: Generate buildsystem
         env:
@@ -600,7 +600,12 @@ jobs:
       - name: Run functional tests
         run: |
           cd ${{ github.workspace }}
-          ./build/test/functional/test_runner.py --extended -j 8 --combinedlogslen=99999999 --timeout-factor=8 --exclude feature_reindex_init
+          ./build/test/functional/test_runner.py \
+            --extended \
+            --jobs 8 \
+            --combinedlogslen=99999999 \
+            --timeout-factor=8 \
+            --exclude feature_reindex_init
 
       - name: Save ccache
         uses: cirruslabs/cache/save@v4
