@@ -16,11 +16,11 @@ pushd "/"
 ${CI_RETRY_EXE} apt-get update
 # Lint dependencies:
 # - cargo (used to run the lint tests)
-# - curl/xz-utils (to install shellcheck)
+# - curl (to install mlc)
 # - git (used in many lint scripts)
 # - gpg (used by verify-commits)
 # - moreutils (used by scripted-diff)
-${CI_RETRY_EXE} apt-get install -y cargo curl xz-utils git gpg moreutils
+${CI_RETRY_EXE} apt-get install -y cargo curl git gpg moreutils
 
 # Install Python and create venv using uv (reads version from .python-version)
 uv python install
@@ -35,11 +35,6 @@ uv pip install --python /python_env \
   mypy==1.18.2 \
   pyzmq==27.1.0 \
   vulture==2.14
-
-SHELLCHECK_VERSION=v0.11.0
-curl -sL "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" | \
-    tar --xz -xf - --directory /tmp/
-mv "/tmp/shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/bin/
 
 MLC_VERSION=v1
 MLC_BIN=mlc-x86_64-linux
