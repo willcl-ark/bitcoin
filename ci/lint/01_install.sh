@@ -34,7 +34,6 @@ uv pip install --python /python_env \
   lief==0.16.6 \
   mypy==1.18.2 \
   pyzmq==27.1.0 \
-  ruff==0.13.2 \
   vulture==2.14
 
 SHELLCHECK_VERSION=v0.11.0
