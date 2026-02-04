@@ -6,6 +6,11 @@
 
 FROM mirror.gcr.io/ubuntu:24.04
 
+ENV LC_ALL=C
+ENV PATH="/python_env/bin:${PATH}"
+ENV VIRTUAL_ENV="/python_env"
+ENV MLC_VERSION=v1
+
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 COPY --from=ghcr.io/astral-sh/ruff:0.14.4 /ruff /bin/
 COPY --from=docker.io/koalaman/shellcheck:v0.11.0 /bin/shellcheck /usr/bin/
@@ -13,9 +18,17 @@ COPY --from=ghcr.io/astral-sh/ty:0.0.12 /ty /bin/
 
 COPY ./ci/retry/retry /ci_retry
 COPY ./.python-version /.python-version
-COPY ./ci/lint/01_install.sh /install.sh
 
-RUN /install.sh && \
+RUN /ci_retry apt-get update && \
+  /ci_retry apt-get install -y cargo curl git gpg moreutils && \
+  /ci_retry curl -sL "https://github.com/becheran/mlc/releases/download/$MLC_VERSION/mlc-x86_64-linux" -o /usr/bin/mlc && \
+  chmod +x /usr/bin/mlc && \
+  uv python install && \
+  uv venv /python_env && \
+  uv pip install --python /python_env \
+    lief==0.16.6 \
+    pyzmq==27.1.0 \
+    vulture==2.14 && \
   rm -rf /var/lib/apt/lists/*
 
 WORKDIR /bitcoin
