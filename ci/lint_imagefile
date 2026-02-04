@@ -19,7 +19,6 @@ COPY --from=ghcr.io/astral-sh/ty:0.0.12 /ty /bin/
 
 COPY ./ci/retry/retry /ci_retry
 COPY ./.python-version /.python-version
-COPY ./ci/lint/container-entrypoint.sh /entrypoint.sh
 
 RUN /ci_retry apt-get update && \
   /ci_retry apt-get install -y cargo curl git gpg moreutils && \
@@ -32,9 +31,10 @@ RUN /ci_retry apt-get update && \
     pyzmq==27.1.0 \
     vulture==2.14 && \
   echo 'alias lint="./ci/lint/06_script.sh"' >> ~/.bashrc && \
-  chmod 755 /entrypoint.sh && \
   rm -rf /var/lib/apt/lists/*
 
+COPY ./ci/lint/container-entrypoint.sh /entrypoint.sh
+RUN chmod 755 /entrypoint.sh
 
 WORKDIR /bitcoin
 ENTRYPOINT ["/entrypoint.sh"]
