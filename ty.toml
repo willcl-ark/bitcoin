@@ -1,0 +1,17 @@
+[src]
+include = ["test/functional/*.py", "contrib/devtools/*.py"]
+
+[environment]
+root = ["test/functional"]
+
+[rules]
+invalid-argument-type = "ignore"
+invalid-assignment = "ignore"
+invalid-method-override = "ignore"
+no-matching-overload = "ignore"
+not-iterable = "ignore"
+not-subscriptable = "ignore"
+possibly-missing-submodule = "ignore"
+unresolved-attribute = "ignore"
+unsupported-operator = "ignore"
+unused-type-ignore-comment = "ignore"
