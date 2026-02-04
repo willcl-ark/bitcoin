@@ -6,6 +6,8 @@
 
 FROM mirror.gcr.io/ubuntu:24.04
 
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
 COPY ./ci/retry/retry /ci_retry
 COPY ./.python-version /.python-version
 COPY ./ci/lint/01_install.sh /install.sh
