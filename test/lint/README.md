@@ -57,7 +57,7 @@ or `--help`:
 | `py_lint` | [ruff](https://github.com/astral-sh/ruff)
 | markdown link check | [mlc](https://github.com/becheran/mlc)
 
-In use versions and install instructions are available in the [CI setup](../../ci/lint/01_install.sh).
+In use versions are shown in the [lint_imagefile](../../ci/lint_imagefile).
 
 Please be aware that on Linux distributions all dependencies are usually available as packages, but could be outdated.
 
