@@ -5,11 +5,12 @@
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 """
-Check for specified mypy warnings in python files.
+Check for type errors in python files.
 """
 
 import os
 from pathlib import Path
+import shutil
 import subprocess
 
 from importlib.metadata import metadata, PackageNotFoundError
@@ -33,6 +34,10 @@ def check_dependencies():
             print(f"Skipping Python linting since {dep} is not installed.")
             exit(0)
 
+    if not shutil.which('ty'):
+        print("Skipping Python linting since ty is not installed.")
+        exit(0)
+
 
 def main():
     check_dependencies()
@@ -42,6 +47,7 @@ def main():
 
     try:
         subprocess.check_call(mypy_args)
+        subprocess.check_call(['ty', 'check'])
     except subprocess.CalledProcessError:
         exit(1)
 
