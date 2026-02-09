@@ -6070,15 +6070,22 @@ bool PeerManagerImpl::SendMessages(CNode& node)
             // Stalling only triggers when the block download window cannot move. During normal steady state,
             // the download window should be much larger than the to-be-downloaded set of blocks, so disconnection
             // should only happen during initial block download.
-            LogInfo("Peer is stalling block download, %s\n", node.DisconnectMsg(fLogIPs));
-            node.fDisconnect = true;
-            // Increase timeout for the next peer so that we don't disconnect multiple peers if our own
-            // bandwidth is insufficient.
-            const auto new_timeout = std::min(2 * stalling_timeout, BLOCK_STALLING_TIMEOUT_MAX);
-            if (stalling_timeout != new_timeout && m_block_stalling_timeout.compare_exchange_strong(stalling_timeout, new_timeout)) {
-                LogDebug(BCLog::NET, "Increased stalling timeout temporarily to %d seconds\n", count_seconds(new_timeout));
+            if (node.IsManualConn()) {
+                // Don't disconnect manual peers for stalling; just reset the stall
+                // flag so blocks can be re-requested from other peers.
+                LogDebug(BCLog::NET, "Not disconnecting manual peer for stalling block download, %s\n", node.DisconnectMsg(fLogIPs));
+                state.m_stalling_since = 0us;
+            } else {
+                LogInfo("Peer is stalling block download, %s\n", node.DisconnectMsg(fLogIPs));
+                node.fDisconnect = true;
+                // Increase timeout for the next peer so that we don't disconnect multiple peers if our own
+                // bandwidth is insufficient.
+                const auto new_timeout = std::min(2 * stalling_timeout, BLOCK_STALLING_TIMEOUT_MAX);
+                if (stalling_timeout != new_timeout && m_block_stalling_timeout.compare_exchange_strong(stalling_timeout, new_timeout)) {
+                    LogDebug(BCLog::NET, "Increased stalling timeout temporarily to %d seconds\n", count_seconds(new_timeout));
+                }
+                return true;
             }
-            return true;
         }
         // In case there is a block that has been in flight from this peer for block_interval * (1 + 0.5 * N)
         // (with N the number of peers from which we're downloading validated blocks), disconnect due to timeout.
