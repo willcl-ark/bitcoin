@@ -163,4 +163,89 @@ BOOST_FIXTURE_TEST_CASE(test_addnode_getaddednodeinfo_and_connection_detection, 
     connman->ClearTestNodes();
 }
 
+BOOST_FIXTURE_TEST_CASE(test_duplicate_connection_detection, PeerTest)
+{
+    auto connman = std::make_unique<ConnmanTestMsg>(0x1337, 0x1337, *m_node.addrman, *m_node.netgroupman, Params());
+    auto peerman = PeerManager::make(*connman, *m_node.addrman, nullptr, *m_node.chainman, *m_node.mempool, *m_node.warnings, {});
+    connman->SetMsgProc(peerman.get());
+    NodeId id{0};
+    std::vector<CNode*> nodes;
+
+    // Connect an outbound peer
+    AddPeer(id, nodes, *peerman, *connman, ConnectionType::OUTBOUND_FULL_RELAY, /*onion_peer=*/false, /*address=*/"1.2.3.4");
+    BOOST_CHECK_EQUAL(connman->GetNodeCount(ConnectionDirection::Both), 1U);
+
+    // Test inbound peer with duplicate addr rejected by CreateNodeFromAcceptedSocket
+    {
+        ASSERT_DEBUG_LOG("already connected");
+        const CAddress duplicate_addr{LookupNumeric("1.2.3.4", Params().GetDefaultPort()), NODE_NONE};
+        const CAddress bind_addr{LookupNumeric("0.0.0.0", 8333), NODE_NONE};
+        connman->CreateNodeFromAcceptedSocketPublic(std::make_unique<ZeroSock>(),
+                                                    NetPermissionFlags::None,
+                                                    bind_addr,
+                                                    duplicate_addr);
+    }
+    // Node count should not have increased.
+    BOOST_CHECK_EQUAL(connman->GetNodeCount(ConnectionDirection::Both), 1U);
+
+    // Test duplicate detection at VERACK (post-handshake).
+    // Simulate a cross-direction race: an inbound connection from 1.2.3.4
+    // that wasn't caught at accept time (e.g. the outbound hadn't completed
+    // yet). We manually create it, process VERSION + VERACK, and verify
+    // the duplicate is disconnected at VERACK.
+    {
+        LOCK(NetEventsInterface::g_msgproc_mutex);
+        const CAddress race_addr{LookupNumeric("1.2.3.4", 9999), NODE_NONE};
+        CNode* race_node = new CNode{++id,
+                                     /*sock=*/nullptr,
+                                     /*addrIn=*/race_addr,
+                                     /*nKeyedNetGroupIn=*/0,
+                                     /*nLocalHostNonceIn=*/0,
+                                     CAddress{},
+                                     /*addrNameIn=*/"",
+                                     ConnectionType::INBOUND,
+                                     /*inbound_onion=*/false,
+                                     /*network_key=*/0};
+        connman->AddTestNode(*race_node);
+        BOOST_CHECK_EQUAL(connman->GetNodeCount(ConnectionDirection::Both), 2U);
+
+        // Process VERSION message.
+        peerman->InitializeNode(*race_node, ServiceFlags(NODE_NETWORK | NODE_WITNESS));
+        connman->ReceiveMsgFrom(*race_node, NetMsg::Make(NetMsgType::VERSION,
+            int32_t{PROTOCOL_VERSION},
+            Using<CustomUintFormatter<8>>(ServiceFlags(NODE_NETWORK | NODE_WITNESS)),
+            int64_t{},                   // dummy time
+            int64_t{},                   // ignored service bits
+            CNetAddr::V1(CService{}),    // dummy
+            int64_t{},                   // ignored service bits
+            CNetAddr::V1(CService{}),    // ignored
+            uint64_t{1},                 // dummy nonce
+            std::string{},               // dummy subver
+            int32_t{},                   // dummy starting_height
+            true));                      // relay_txs
+        race_node->fPauseSend = false;
+        connman->ProcessMessagesOnce(*race_node);
+        peerman->SendMessages(*race_node);
+        connman->FlushSendBuffer(*race_node);
+
+        BOOST_CHECK(!race_node->fDisconnect);
+
+        // Process VERACK — should detect the duplicate and disconnect.
+        {
+            ASSERT_DEBUG_LOG("duplicate connection");
+            connman->ReceiveMsgFrom(*race_node, NetMsg::Make(NetMsgType::VERACK));
+            race_node->fPauseSend = false;
+            connman->ProcessMessagesOnce(*race_node);
+        }
+        BOOST_CHECK(race_node->fDisconnect);
+        BOOST_CHECK(!race_node->fSuccessfullyConnected);
+    }
+
+    // Clean up all nodes (from AddPeer and the race_node).
+    for (auto node : connman->TestNodes()) {
+        peerman->FinalizeNode(*node);
+    }
+    connman->ClearTestNodes();
+}
+
 BOOST_AUTO_TEST_SUITE_END()
