@@ -16,11 +16,13 @@ from test_framework.test_framework import BitcoinTestFramework
 from test_framework.messages import (
     CInv,
     MSG_BLOCK,
+    NODE_P2P_V2,
     msg_headers,
     msg_inv,
 )
 from test_framework.p2p import (
     p2p_lock,
+    P2P_SERVICES,
     P2PInterface,
 )
 from test_framework.util import (
@@ -176,10 +178,65 @@ class HeadersSyncTest(BitcoinTestFramework):
         self.log.info("Check that exactly 1 of {peer1, peer2} receives a getheaders")
         self.assert_single_getheaders_recipient([peer1, peer2])
 
+    def test_manual_peer_timeout(self):
+        self.log.info("Test manual peer on header timeout")
+        self.restart_node(0)
+        node = self.nodes[0]
+        node.setmocktime(int(time.time()))
+
+        self.log.info("Add manual peer1 via addnode and check it receives an initial getheaders request")
+
+        def add_manual_p2p(p2p_conn, p2p_idx):
+            v2 = node.use_v2transport
+
+            def addnode_callback(address, port):
+                if v2:
+                    node.addnode('%s:%d' % (address, port), "onetry", v2transport=True)
+                else:
+                    node.addnode('%s:%d' % (address, port), "onetry")
+
+            kwargs = {}
+            if v2:
+                kwargs['services'] = P2P_SERVICES | NODE_P2P_V2
+
+            p2p_conn.peer_accept_connection(
+                connect_cb=addnode_callback, connect_id=p2p_idx + 1,
+                net=node.chain, timeout_factor=node.timeout_factor,
+                supports_v2_p2p=v2, reconnect=False, **kwargs)()
+            p2p_conn.wait_for_connect()
+            node.p2ps.append(p2p_conn)
+            if v2:
+                p2p_conn.wait_until(lambda: p2p_conn.v2_state.tried_v2_handshake)
+            p2p_conn.wait_until(lambda: not p2p_conn.on_connection_send_msg)
+            p2p_conn.wait_for_verack()
+            p2p_conn.sync_with_ping()
+            return p2p_conn
+
+        with node.assert_debug_log(expected_msgs=["initial getheaders (0) to peer=0"]):
+            peer1 = add_manual_p2p(P2PInterface(), p2p_idx=0)
+            peer1.wait_for_getheaders(block_hash=int(node.getbestblockhash(), 16))
+
+        assert_equal(node.getpeerinfo()[0]['connection_type'], 'manual')
+
+        self.log.info("Add outbound peer2")
+        peer2 = node.add_outbound_p2p_connection(P2PInterface(), p2p_idx=1, connection_type="outbound-full-relay")
+        assert_equal(node.num_test_p2p_connections(), 2)
+
+        with node.assert_debug_log(["Timeout downloading headers from manual peer, not disconnecting peer=0"]):
+            self.trigger_headers_timeout()
+
+        self.log.info("Check that manual peer1 is not disconnected")
+        peer1.sync_with_ping()
+        assert_equal(node.num_test_p2p_connections(), 2)
+
+        self.log.info("Check that exactly 1 of {peer1, peer2} receives a getheaders")
+        self.assert_single_getheaders_recipient([peer1, peer2])
+
     def run_test(self):
         self.test_initial_headers_sync()
         self.test_normal_peer_timeout()
         self.test_noban_peer_timeout()
+        self.test_manual_peer_timeout()
 
 
 if __name__ == '__main__':
