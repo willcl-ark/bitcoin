@@ -25,15 +25,13 @@ RUN /ci_retry apt-get update && \
   /ci_retry curl -sL "https://github.com/becheran/mlc/releases/download/$MLC_VERSION/mlc-x86_64-linux" -o /usr/bin/mlc && \
   chmod +x /usr/bin/mlc && \
   uv python install && \
-  uv venv /python_env && \
-  uv pip install --python /python_env \
-    lief==0.16.6 \
-    pyzmq==27.1.0 \
-    vulture==2.14 && \
   echo 'alias lint="./ci/lint/06_script.sh"' >> ~/.bashrc && \
   rm -rf /var/lib/apt/lists/*
 
 COPY ./ci/lint/container-entrypoint.sh /entrypoint.sh
+COPY ./ci/lint/requirements.txt /requirements.txt
+RUN uv venv /python_env && \
+    uv pip install --python /python_env -r /requirements.txt
 
 WORKDIR /bitcoin
 ENTRYPOINT ["/entrypoint.sh"]
