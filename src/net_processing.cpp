@@ -6110,17 +6110,20 @@ bool PeerManagerImpl::SendMessages(CNode& node)
             // Detect whether this is a stalling initial-headers-sync peer
             if (m_chainman.m_best_header->Time() <= NodeClock::now() - 24h) {
                 if (current_time > peer.m_headers_sync_timeout && nSyncStarted == 1 && (m_num_preferred_download_peers - state.fPreferredDownload >= 1)) {
-                    // Disconnect a peer (without NetPermissionFlags::NoBan permission) if it is our only sync peer,
-                    // and we have others we could be using instead.
+                    // Disconnect a peer if it is our only sync peer and we have
+                    // others we could be using instead. Don't disconnect noban
+                    // or manual peers; just reset their sync state.
                     // Note: If all our peers are inbound, then we won't
                     // disconnect our sync peer for stalling; we have bigger
                     // problems if we can't get any outbound peers.
-                    if (!node.HasPermission(NetPermissionFlags::NoBan)) {
+                    if (!node.HasPermission(NetPermissionFlags::NoBan) && !node.IsManualConn()) {
                         LogInfo("Timeout downloading headers, %s\n", node.DisconnectMsg(fLogIPs));
                         node.fDisconnect = true;
                         return true;
                     } else {
-                        LogInfo("Timeout downloading headers from noban peer, not %s\n", node.DisconnectMsg(fLogIPs));
+                        LogInfo("Timeout downloading headers from %s peer, not %s\n",
+                                node.IsManualConn() ? "manual" : "noban",
+                                node.DisconnectMsg(fLogIPs));
                         // Reset the headers sync state so that we have a
                         // chance to try downloading from a different peer.
                         // Note: this will also result in at least one more
