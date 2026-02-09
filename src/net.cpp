@@ -3039,12 +3039,25 @@ bool CConnman::OpenNetworkConnection(const CAddress& addrConnect,
     pnode->grantOutbound = std::move(grant_outbound);
 
     m_msgproc->InitializeNode(*pnode, m_local_services);
+    bool duplicate;
     {
         LOCK(m_nodes_mutex);
-        m_nodes.push_back(pnode);
-
-        // update connection count by network
-        if (pnode->IsManualOrFullOutboundConn()) ++m_network_conn_counts[pnode->addr.GetNetwork()];
+        // Re-check for duplicate connection under the lock. ConnectNode() may have
+        // taken seconds (especially over I2P), during which another thread could
+        // have connected to the same peer.
+        duplicate = pszDest ? AlreadyConnectedToHost(pszDest)
+                            : AlreadyConnectedToAddress(pnode->addr);
+        if (!duplicate) {
+            m_nodes.push_back(pnode);
+            // update connection count by network
+            if (pnode->IsManualOrFullOutboundConn()) ++m_network_conn_counts[pnode->addr.GetNetwork()];
+        }
+    }
+    if (duplicate) {
+        LogDebug(BCLog::NET, "connection to %s dropped (already connected)\n", pnode->DisconnectMsg(fLogIPs));
+        pnode->CloseSocketDisconnect();
+        DeleteNode(pnode);
+        return false;
     }
 
     TRACEPOINT(net, outbound_connection,
