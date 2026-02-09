@@ -15,11 +15,13 @@ from test_framework.blocktools import (
 from test_framework.messages import (
         MSG_BLOCK,
         MSG_TYPE_MASK,
+        NODE_P2P_V2,
 )
 from test_framework.p2p import (
         CBlockHeader,
         msg_block,
         msg_headers,
+        P2P_SERVICES,
         P2PDataStore,
 )
 from test_framework.test_framework import BitcoinTestFramework
@@ -49,7 +51,39 @@ class P2PIBDStallingTest(BitcoinTestFramework):
         self.setup_clean_chain = True
         self.num_nodes = 1
 
+    def add_manual_p2p_connection(self, p2p_conn, *, p2p_idx):
+        """Add a manual (addnode onetry) p2p connection to self.nodes[0]."""
+        node = self.nodes[0]
+        v2 = node.use_v2transport
+
+        def addnode_callback(address, port):
+            if v2:
+                node.addnode('%s:%d' % (address, port), "onetry", v2transport=True)
+            else:
+                node.addnode('%s:%d' % (address, port), "onetry")
+
+        kwargs = {}
+        if v2:
+            kwargs['services'] = P2P_SERVICES | NODE_P2P_V2
+
+        p2p_conn.peer_accept_connection(
+            connect_cb=addnode_callback, connect_id=p2p_idx + 1,
+            net=node.chain, timeout_factor=node.timeout_factor,
+            supports_v2_p2p=v2, reconnect=False, **kwargs)()
+        p2p_conn.wait_for_connect()
+        node.p2ps.append(p2p_conn)
+        if v2:
+            p2p_conn.wait_until(lambda: p2p_conn.v2_state.tried_v2_handshake)
+        p2p_conn.wait_until(lambda: not p2p_conn.on_connection_send_msg)
+        p2p_conn.wait_for_verack()
+        p2p_conn.sync_with_ping()
+        return p2p_conn
+
     def run_test(self):
+        self.test_stalling()
+        self.test_manual_peer_stalling()
+
+    def test_stalling(self):
         NUM_BLOCKS = 1025
         NUM_PEERS = 5
         node = self.nodes[0]
@@ -145,6 +179,63 @@ class P2PIBDStallingTest(BitcoinTestFramework):
         self.log.info("Check that all outstanding blocks up to the second stall block get connected")
         self.wait_until(lambda: node.getblockcount() == second_stall_index)
 
+    def test_manual_peer_stalling(self):
+        self.log.info("Test that a manual peer is not disconnected for stalling block download")
+        NUM_BLOCKS = 1025
+        node = self.nodes[0]
+        self.restart_node(0)
+        tip = int(node.getbestblockhash(), 16)
+        blocks = []
+        height = node.getblockcount() + 1
+        # Use a large time offset to avoid hash collision with blocks from the previous test
+        block_time = node.getblock(node.getbestblockhash())['time'] + 10000
+        block_dict = {}
+        for _ in range(NUM_BLOCKS):
+            blocks.append(create_block(tip, create_coinbase(height), block_time))
+            blocks[-1].solve()
+            tip = blocks[-1].hash_int
+            block_time += 1
+            height += 1
+            block_dict[blocks[-1].hash_int] = blocks[-1]
+        stall_block = blocks[0].hash_int
+
+        headers_message = msg_headers()
+        headers_message.headers = [CBlockHeader(b) for b in blocks]
+
+        self.mocktime = int(time.time()) + 1
+        node.setmocktime(self.mocktime)
+
+        self.log.info("Add a manual peer that stalls on block 0")
+        manual_peer = self.add_manual_p2p_connection(P2PStaller([stall_block]), p2p_idx=0)
+        manual_peer.block_store = block_dict
+        assert_equal(node.getpeerinfo()[0]['connection_type'], 'manual')
+
+        # Send headers to manual peer first so it gets block 0 assigned
+        manual_peer.send_and_ping(headers_message)
+
+        self.log.info("Add outbound peers that serve all blocks")
+        outbound_peers = []
+        for i in range(4):
+            p = node.add_outbound_p2p_connection(
+                P2PStaller([]), p2p_idx=i + 1, connection_type="outbound-full-relay")
+            p.block_store = block_dict
+            p.send_and_ping(headers_message)
+            outbound_peers.append(p)
+
+        all_peers = [manual_peer] + outbound_peers
+
+        # Wait until only the stall block remains in flight (from the manual peer)
+        self.wait_until(lambda: sum(len(peer['inflight']) for peer in node.getpeerinfo()) == 1)
+        self.all_sync_send_with_ping(all_peers)
+
+        self.log.info("Advance time past stalling timeout and verify manual peer is not disconnected")
+        with node.assert_debug_log(["Not disconnecting manual peer for stalling block download"]):
+            self.mocktime += 3
+            node.setmocktime(self.mocktime)
+            self.all_sync_send_with_ping(all_peers)
+
+        assert manual_peer.is_connected
+        assert_equal(node.num_test_p2p_connections(), len(all_peers))
 
     def all_sync_send_with_ping(self, peers):
         for p in peers:
