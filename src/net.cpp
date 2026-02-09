@@ -1775,6 +1775,13 @@ void CConnman::CreateNodeFromAcceptedSocket(std::unique_ptr<Sock>&& sock,
         for (const CNode* pnode : m_nodes) {
             if (pnode->IsInboundConn()) nInbound++;
         }
+        // Reject inbound connections from addresses we're already connected to.
+        // Skip for Tor inbound where addr is the local bind, not the real peer.
+        const CNetAddr& net_addr{addr};
+        if (!inbound_onion && std::ranges::any_of(m_nodes, [&net_addr](CNode* node) { return node->addr == net_addr; })) {
+            LogDebug(BCLog::NET, "connection from %s dropped (already connected)\n", addr.ToStringAddrPort());
+            return;
+        }
     }
 
     if (!fNetworkActive) {
