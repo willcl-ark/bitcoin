@@ -176,10 +176,53 @@ class HeadersSyncTest(BitcoinTestFramework):
         self.log.info("Check that exactly 1 of {peer1, peer2} receives a getheaders")
         self.assert_single_getheaders_recipient([peer1, peer2])
 
+    def test_manual_peer_timeout(self):
+        self.log.info("Test manual peer on header timeout")
+        self.restart_node(0)
+        node = self.nodes[0]
+        node.setmocktime(int(time.time()))
+
+        self.log.info("Add manual peer1 via addnode and check it receives an initial getheaders request")
+
+        with node.assert_debug_log(expected_msgs=["initial getheaders (0) to peer=0"]):
+            peer1 = node.add_manual_p2p_connection(P2PInterface(), p2p_idx=0)
+            peer1.wait_for_getheaders(block_hash=int(node.getbestblockhash(), 16))
+
+        assert_equal(node.getpeerinfo()[0]['connection_type'], 'manual')
+
+        self.log.info("Add outbound peer2")
+        peer2 = node.add_outbound_p2p_connection(P2PInterface(), p2p_idx=1, connection_type="outbound-full-relay")
+        assert_equal(node.num_test_p2p_connections(), 2)
+
+        # peer1 already received the initial getheaders above, so checking
+        # last_message here can be stale and yield a false positive.
+        with p2p_lock:
+            getheaders_before = {
+                peer1: peer1.message_count.get("getheaders", 0),
+                peer2: peer2.message_count.get("getheaders", 0),
+            }
+
+        with node.assert_debug_log(["Timeout downloading headers from manual peer, not disconnecting peer=0"]):
+            self.trigger_headers_timeout()
+
+            self.log.info("Check that manual peer1 is not disconnected")
+            peer1.sync_with_ping()
+            assert_equal(node.num_test_p2p_connections(), 2)
+
+        self.log.info("Check that exactly 1 of {peer1, peer2} receives a new getheaders")
+        with p2p_lock:
+            getheaders_after = {
+                peer1: peer1.message_count.get("getheaders", 0),
+                peer2: peer2.message_count.get("getheaders", 0),
+            }
+        num_recipients = sum(getheaders_after[p] > getheaders_before[p] for p in [peer1, peer2])
+        assert_equal(num_recipients, 1)
+
     def run_test(self):
         self.test_initial_headers_sync()
         self.test_normal_peer_timeout()
         self.test_noban_peer_timeout()
+        self.test_manual_peer_timeout()
 
 
 if __name__ == '__main__':
