@@ -6096,9 +6096,13 @@ bool PeerManagerImpl::SendMessages(CNode& node)
             QueuedBlock &queuedBlock = state.vBlocksInFlight.front();
             int nOtherPeersWithValidatedDownloads = m_peers_downloading_from - 1;
             if (current_time > state.m_downloading_since + std::chrono::seconds{consensusParams.nPowTargetSpacing} * (BLOCK_DOWNLOAD_TIMEOUT_BASE + BLOCK_DOWNLOAD_TIMEOUT_PER_PEER * nOtherPeersWithValidatedDownloads)) {
-                LogInfo("Timeout downloading block %s, %s\n", queuedBlock.pindex->GetBlockHash().ToString(), node.DisconnectMsg(fLogIPs));
-                node.fDisconnect = true;
-                return true;
+                if (node.IsManualConn()) {
+                    LogDebug(BCLog::NET, "Not disconnecting manual peer for block download timeout, %s\n", node.DisconnectMsg(fLogIPs));
+                } else {
+                    LogInfo("Timeout downloading block %s, %s\n", queuedBlock.pindex->GetBlockHash().ToString(), node.DisconnectMsg(fLogIPs));
+                    node.fDisconnect = true;
+                    return true;
+                }
             }
         }
         // Check for headers sync timeouts
