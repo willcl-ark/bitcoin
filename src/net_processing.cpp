@@ -3868,6 +3868,30 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
             });
         }
 
+        // Disconnect if we already have a fully-connected peer at this address.
+        // This catches cross-direction races (A connects to B while B connects to A)
+        // that the pre-connection checks in net.cpp cannot prevent.
+        // Skip for Tor inbound where addr is a local bind, not the real peer.
+        if (!pfrom.m_inbound_onion) {
+            const CNetAddr& peer_addr{pfrom.addr};
+            bool already_connected{false};
+            m_connman.ForEachNode([&](const CNode* pnode) {
+                if (pnode->GetId() != pfrom.GetId() &&
+                    !pnode->m_inbound_onion &&
+                    pnode->fSuccessfullyConnected &&
+                    !pnode->fDisconnect &&
+                    pnode->addr == peer_addr) {
+                    already_connected = true;
+                }
+            });
+            if (already_connected) {
+                LogDebug(BCLog::NET, "duplicate connection to %s detected at handshake, disconnecting peer=%d\n",
+                         pfrom.addr.ToStringAddrPort(), pfrom.GetId());
+                pfrom.fDisconnect = true;
+                return;
+            }
+        }
+
         pfrom.fSuccessfullyConnected = true;
         return;
     }
