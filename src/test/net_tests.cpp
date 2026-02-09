@@ -1555,4 +1555,39 @@ BOOST_AUTO_TEST_CASE(v2transport_test)
     }
 }
 
+BOOST_AUTO_TEST_CASE(addlocal_onlynet_externalip)
+{
+    // Test that AddLocal with LOCAL_MANUAL score (i.e. -externalip) succeeds
+    // even when the address's network is not in g_reachable_nets (i.e. excluded
+    // by -onlynet).
+
+    CAddress addr_onion;
+    BOOST_REQUIRE(addr_onion.SetSpecial("pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion"));
+    BOOST_REQUIRE(addr_onion.IsValid());
+    BOOST_REQUIRE(addr_onion.IsTor());
+
+    const auto reachable_nets_at_start{g_reachable_nets.All()};
+    const bool discover_orig{fDiscover};
+
+    // Simulate using -onlynet=ipv4 -externalip=<onion>
+    g_reachable_nets.RemoveAll();
+    g_reachable_nets.Add(NET_IPV4);
+    fDiscover = false;
+
+    // Now AddLocal with a non-manual score should fail for an unreachable network.
+    BOOST_CHECK(!AddLocal(addr_onion, LOCAL_BIND));
+    BOOST_CHECK(!IsLocal(addr_onion));
+
+    // Whereas AddLocal with LOCAL_MANUAL (i.e. -externalip) should succeed.
+    BOOST_CHECK(AddLocal(addr_onion, LOCAL_MANUAL));
+    BOOST_CHECK(IsLocal(addr_onion));
+
+    RemoveLocal(addr_onion);
+    g_reachable_nets.RemoveAll();
+    for (const auto& net : reachable_nets_at_start) {
+        g_reachable_nets.Add(net);
+    }
+    fDiscover = discover_orig;
+}
+
 BOOST_AUTO_TEST_SUITE_END()
