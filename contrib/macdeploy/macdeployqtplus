@@ -509,6 +509,13 @@ if config.zip is not None:
         print("+ Removing existing .zip +")
         os.unlink(name + ".zip")
 
+    # Fix Nix store epoch timestamps that are incompatible with ZIP format (requires >= 1980).
+    for root, dirs, files in os.walk("dist"):
+        for entry in dirs + files:
+            filepath = os.path.join(root, entry)
+            if not os.path.islink(filepath) and os.stat(filepath).st_mtime < 315532800:
+                os.utime(filepath, (315532800, 315532800))
+
     shutil.make_archive('{}'.format(name), format='zip', root_dir='dist', base_dir='Bitcoin-Qt.app')
 
 # ------------------------------------------------
