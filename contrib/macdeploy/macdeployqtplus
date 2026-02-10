@@ -72,7 +72,7 @@ class FrameworkInfo(object):
         else:
             return self.frameworkName.startswith("Qt")
     
-    reOLine = re.compile(r'^(.+) \(compatibility version [0-9.]+, current version [0-9.]+\)$')
+    reOLine = re.compile(r'^(.+) \(compatibility version [0-9.]+, current version [0-9.]+(?:, \w+)?\)$')
     bundleFrameworkDirectory = "Contents/Frameworks"
     bundleBinaryDirectory = "Contents/MacOS"
     
