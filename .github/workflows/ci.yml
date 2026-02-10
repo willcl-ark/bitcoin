@@ -162,13 +162,13 @@ jobs:
           sudo xcode-select --switch /Applications/Xcode_16.2.app
           clang --version
 
-      - name: Install Homebrew packages
-        env:
-          HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: 1
-        run: |
-          # A workaround for "The `brew link` step did not complete successfully" error.
-          brew install --quiet python@3 || brew link --overwrite python@3
-          brew install --quiet coreutils ninja pkgconf ccache boost libevent zeromq qt@6 qrencode capnp
+      - uses: cachix/install-nix-action@v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: cachix/cachix-action@v16
+        with:
+          name: bitcoin-core
+          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
 
       - name: Set Ccache directory
         run: echo "CCACHE_DIR=${RUNNER_TEMP}/ccache_dir" >> "$GITHUB_ENV"
@@ -188,9 +188,7 @@ jobs:
           tar -xf repo.tar
 
       - name: CI script
-        run: |
-          cd repo_archive
-          ./ci/test_run_all.sh
+        run: nix develop ./.github/macos --command repo_archive/ci/test_run_all.sh
         env:
           FILE_ENV: ${{ matrix.file-env }}
 
