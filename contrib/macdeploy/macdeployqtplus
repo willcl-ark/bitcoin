@@ -268,6 +268,9 @@ def copyFramework(framework: FrameworkInfo, path: str, verbose: int) -> Optional
             raise RuntimeError(f"No directory at {from_dir}")
 
         shutil.copytree(from_dir, to_dir, symlinks=True)
+        # Ensure copied directories are writable (source may be read-only, e.g. Nix store).
+        for root, dirs, _files in os.walk(to_dir):
+            os.chmod(root, os.stat(root).st_mode | stat.S_IWUSR)
         if verbose:
             print("Copied:", from_dir)
             print(" to:", to_dir)
@@ -366,6 +369,10 @@ def deployPlugins(appBundleInfo: ApplicationBundleInfo, deploymentInfo: Deployme
         
         destinationPath = os.path.join(destinationDirectory, pluginName)
         shutil.copy2(sourcePath, destinationPath)
+        # Ensure copied file is writable (source may be read-only, e.g. Nix store).
+        permissions = os.stat(destinationPath)
+        if not permissions.st_mode & stat.S_IWRITE:
+            os.chmod(destinationPath, permissions.st_mode | stat.S_IWRITE)
         if verbose:
             print("Copied:", sourcePath)
             print(" to:", destinationPath)
@@ -412,6 +419,9 @@ if not os.path.exists(app_bundle):
 
 if os.path.exists("dist"):
     print("+ Removing existing dist folder +")
+    # Ensure tree is writable before removal (contents may be read-only, e.g. from Nix store).
+    for root, dirs, _files in os.walk("dist"):
+        os.chmod(root, os.stat(root).st_mode | stat.S_IWUSR)
     shutil.rmtree("dist")
 
 # ------------------------------------------------
