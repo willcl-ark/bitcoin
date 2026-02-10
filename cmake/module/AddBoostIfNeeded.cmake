@@ -22,10 +22,14 @@ function(add_boost_if_needed)
     if(HOMEBREW_EXECUTABLE)
       execute_process(
         COMMAND ${HOMEBREW_EXECUTABLE} --prefix boost
-        OUTPUT_VARIABLE Boost_ROOT
+        OUTPUT_VARIABLE _homebrew_boost_prefix
+        RESULT_VARIABLE _homebrew_boost_result
         ERROR_QUIET
         OUTPUT_STRIP_TRAILING_WHITESPACE
       )
+      if(_homebrew_boost_result EQUAL 0)
+        set(Boost_ROOT "${_homebrew_boost_prefix}")
+      endif()
     endif()
   endif()
 
