@@ -1,0 +1,20 @@
+on:
+  pull_request_target:
+    types: [opened, reopened]
+
+name: "Vouch - Check PR"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  check:
+    runs-on: ubuntu-slim
+    steps:
+      - uses: mitchellh/vouch/action/check-pr@0e11a71bba23218a284d3ecca162e75a110fd7e3 # v1.3.0
+        with:
+          pr-number: ${{ github.event.pull_request.number }}
+          auto-close: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
