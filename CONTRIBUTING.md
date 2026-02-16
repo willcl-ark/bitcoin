@@ -17,6 +17,14 @@ moderation.
 Getting Started
 ---------------
 
+> [!IMPORTANT]
+> New contributors must be **vouched for** before opening issues or pull requests.
+> If you are new, open a [GitHub Discussion](https://github.com/bitcoin/bitcoin/discussions)
+> to introduce yourself and request to be vouched. A collaborator can then
+> vouch for you by commenting `vouch` in the discussion. Once vouched, you can
+> open issues and pull requests as normal. Bots and collaborators with write
+> access bypass this requirement.
+
 New contributors are very welcome and needed.
 
 Reviewing and testing is highly valued and the most effective way you can contribute

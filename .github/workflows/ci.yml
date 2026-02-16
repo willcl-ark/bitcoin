@@ -29,7 +29,20 @@ defaults:
     shell: bash
 
 jobs:
+  # Prevents unvouched users wasting CI cpu
+  vouch-check:
+    name: 'vouch check'
+    runs-on: ubuntu-slim
+    steps:
+      - uses: mitchellh/vouch/action/check-user@0e11a71bba23218a284d3ecca162e75a110fd7e3 # v1.3.0
+        if: github.event_name == 'pull_request'
+        with:
+          user: ${{ github.event.pull_request.user.login }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   runners:
+    needs: vouch-check
     name: '[meta] determine runners'
     runs-on: ubuntu-slim
     outputs:
@@ -56,6 +69,7 @@ jobs:
           fi
 
   test-each-commit:
+    needs: vouch-check
     name: 'test max 6 ancestor commits'
     runs-on: ubuntu-24.04
     if: github.event_name == 'pull_request' && github.event.pull_request.commits != 1
@@ -113,6 +127,7 @@ jobs:
           git rebase --exec "git merge --no-commit origin/${GITHUB_BASE_REF} && python3 ./.github/ci-test-each-commit-exec.py && git reset --hard" ${{ env.TEST_BASE }}
 
   macos-native-arm64:
+    needs: vouch-check
     name: ${{ matrix.job-name }}
     # Use any image to support the xcode-select below, but hardcode version to avoid silent upgrades (and breaks).
     # See: https://github.com/actions/runner-images#available-images.
@@ -203,6 +218,7 @@ jobs:
           key: ${{ github.job }}-${{ matrix.job-type }}-ccache-${{ github.run_id }}
 
   windows-native-dll:
+    needs: vouch-check
     name: ${{ matrix.job-name }}
     runs-on: windows-2025-vs2026
 
@@ -311,6 +327,7 @@ jobs:
           py -3 .github/ci-windows.py ${{ matrix.job-type }} run_tests
 
   record-frozen-commit:
+    needs: vouch-check
     # Record frozen commit, so that the native tests on cross-builds can run on
     # the exact same commit id of the build.
     name: '[meta] record frozen commit'
