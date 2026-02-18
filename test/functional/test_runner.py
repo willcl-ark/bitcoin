@@ -90,6 +90,7 @@ EXTENDED_SCRIPTS = [
     'feature_pruning.py',
     'feature_dbcrash.py',
     'feature_index_prune.py',
+    'rpc_openrpc.py',
 ]
 
 # Special script to run each bench sanity check
