@@ -136,6 +136,10 @@ static RPCHelpMan help()
         // Used for testing only, undocumented
         return tableRPC.dumpArgMap(jsonRequest);
     }
+    if (command == "dump_all_command_descriptions") {
+        // Used for tooling only, undocumented
+        return tableRPC.dumpDescriptions();
+    }
 
     return tableRPC.help(command.value_or(""), jsonRequest);
 },
@@ -522,6 +526,24 @@ std::vector<std::string> CRPCTable::listCommands() const
     commandList.reserve(mapCommands.size());
     for (const auto& i : mapCommands) commandList.emplace_back(i.first);
     return commandList;
+}
+
+UniValue CRPCTable::dumpDescriptions() const
+{
+    UniValue commands{UniValue::VOBJ};
+    for (const auto& [name, cmds] : mapCommands) {
+        const CRPCCommand* cmd{cmds.front()};
+        if (cmd->category == "hidden" || !cmd->description) continue;
+        commands.pushKV(name, cmd->description(name));
+    }
+
+    std::string version = "v" CLIENT_VERSION_STRING;
+    if (!CLIENT_VERSION_IS_RELEASE) version += "-dev";
+
+    UniValue ret{UniValue::VOBJ};
+    ret.pushKV("version", version);
+    ret.pushKV("commands", commands);
+    return ret;
 }
 
 UniValue CRPCTable::dumpArgMap(const JSONRPCRequest& args_request) const

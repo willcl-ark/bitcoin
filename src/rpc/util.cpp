@@ -627,9 +627,24 @@ std::string RPCResults::ToDescriptionString() const
     return result;
 }
 
+UniValue RPCResults::ToDescriptionValue() const
+{
+    UniValue value{UniValue::VARR};
+    for (const auto& result : m_results) {
+        if (result.m_type == RPCResult::Type::ANY) continue; // for testing only
+        value.push_back(result.ToDescriptionValue());
+    }
+    return value;
+}
+
 std::string RPCExamples::ToDescriptionString() const
 {
     return m_examples.empty() ? m_examples : "\nExamples:\n" + m_examples;
+}
+
+UniValue RPCExamples::ToDescriptionValue() const
+{
+    return UniValue{m_examples};
 }
 
 UniValue RPCHelpMan::HandleRequest(const JSONRPCRequest& request) const
@@ -830,6 +845,23 @@ std::string RPCHelpMan::ToString() const
     return ret;
 }
 
+UniValue RPCHelpMan::ToDescriptionValue(const std::string& rpc_name, const std::string& category) const
+{
+    UniValue value{UniValue::VOBJ};
+    value.pushKV("name", rpc_name);
+    value.pushKV("category", category);
+    value.pushKV("description", TrimString(m_description));
+    value.pushKV("examples", m_examples.ToDescriptionValue());
+
+    UniValue arguments{UniValue::VARR};
+    for (const auto& arg : m_args) {
+        arguments.push_back(arg.ToDescriptionValue());
+    }
+    value.pushKV("arguments", arguments);
+    value.pushKV("results", m_results.ToDescriptionValue());
+    return value;
+}
+
 UniValue RPCHelpMan::GetArgMap() const
 {
     UniValue arr{UniValue::VARR};
@@ -860,6 +892,23 @@ UniValue RPCHelpMan::GetArgMap() const
         }
     }
     return arr;
+}
+
+static std::string RPCArgTypeToString(RPCArg::Type type)
+{
+    switch (type) {
+    case RPCArg::Type::OBJ: return "object";
+    case RPCArg::Type::ARR: return "array";
+    case RPCArg::Type::STR: return "string";
+    case RPCArg::Type::NUM: return "number";
+    case RPCArg::Type::BOOL: return "boolean";
+    case RPCArg::Type::OBJ_NAMED_PARAMS: return "object_named_params";
+    case RPCArg::Type::OBJ_USER_KEYS: return "object_user_keys";
+    case RPCArg::Type::AMOUNT: return "amount";
+    case RPCArg::Type::STR_HEX: return "hex";
+    case RPCArg::Type::RANGE: return "range";
+    }
+    NONFATAL_UNREACHABLE();
 }
 
 static std::optional<UniValue::VType> ExpectedType(RPCArg::Type type)
@@ -991,6 +1040,42 @@ std::string RPCArg::ToDescriptionString(bool is_named_arg) const
     if (m_type == Type::OBJ_NAMED_PARAMS) ret += " Options object that can be used to pass named arguments, listed below.";
     ret += m_description.empty() ? "" : " " + m_description;
     return ret;
+}
+
+UniValue RPCArg::ToDescriptionValue() const
+{
+    UniValue value{UniValue::VOBJ};
+    value.pushKV("description", m_description);
+    value.pushKV("type", RPCArgTypeToString(m_type));
+    value.pushKV("optional", IsOptional());
+    value.pushKV("hidden", m_opts.hidden);
+    value.pushKV("also_positional", m_opts.also_positional);
+
+    UniValue type_str{UniValue::VARR};
+    for (const auto& entry : m_opts.type_str) {
+        type_str.push_back(entry);
+    }
+    value.pushKV("type_str", type_str);
+
+    UniValue names{UniValue::VARR};
+    if (!m_names.empty()) {
+        for (const auto& name : SplitString(m_names, '|')) names.push_back(name);
+    }
+    value.pushKV("names", names);
+
+    UniValue inner{UniValue::VARR};
+    for (const auto& arg : m_inner) {
+        inner.push_back(arg.ToDescriptionValue());
+    }
+    value.pushKV("inner", inner);
+
+    if (std::holds_alternative<RPCArg::DefaultHint>(m_fallback)) {
+        value.pushKV("default_hint", std::get<RPCArg::DefaultHint>(m_fallback));
+    } else if (std::holds_alternative<RPCArg::Default>(m_fallback)) {
+        value.pushKV("default", std::get<RPCArg::Default>(m_fallback));
+    }
+
+    return value;
 }
 
 // NOLINTNEXTLINE(misc-no-recursion)
@@ -1127,6 +1212,26 @@ static std::optional<UniValue::VType> ExpectedType(RPCResult::Type type)
     NONFATAL_UNREACHABLE();
 }
 
+static std::string RPCResultTypeToString(RPCResult::Type type)
+{
+    switch (type) {
+    case RPCResult::Type::OBJ: return "object";
+    case RPCResult::Type::ARR: return "array";
+    case RPCResult::Type::STR: return "string";
+    case RPCResult::Type::NUM: return "number";
+    case RPCResult::Type::BOOL: return "boolean";
+    case RPCResult::Type::NONE: return "none";
+    case RPCResult::Type::ANY: return "any";
+    case RPCResult::Type::STR_AMOUNT: return "string_amount";
+    case RPCResult::Type::STR_HEX: return "hex";
+    case RPCResult::Type::OBJ_DYN: return "object_dynamic";
+    case RPCResult::Type::ARR_FIXED: return "array_fixed";
+    case RPCResult::Type::NUM_TIME: return "number_time";
+    case RPCResult::Type::ELISION: return "elision";
+    }
+    NONFATAL_UNREACHABLE();
+}
+
 // NOLINTNEXTLINE(misc-no-recursion)
 UniValue RPCResult::MatchesType(const UniValue& result) const
 {
@@ -1193,6 +1298,24 @@ UniValue RPCResult::MatchesType(const UniValue& result) const
     }
 
     return true;
+}
+
+UniValue RPCResult::ToDescriptionValue() const
+{
+    UniValue value{UniValue::VOBJ};
+    value.pushKV("type", RPCResultTypeToString(m_type));
+    value.pushKV("key_name", m_key_name);
+    value.pushKV("optional", m_optional);
+    value.pushKV("skip_type_check", m_skip_type_check);
+    value.pushKV("description", m_description);
+    if (!m_cond.empty()) value.pushKV("condition", m_cond);
+
+    UniValue inner{UniValue::VARR};
+    for (const auto& result : m_inner) {
+        inner.push_back(result.ToDescriptionValue());
+    }
+    value.pushKV("inner", inner);
+    return value;
 }
 
 void RPCResult::CheckInnerDoc() const

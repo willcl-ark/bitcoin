@@ -13,6 +13,7 @@
 #include <functional>
 #include <map>
 #include <string>
+#include <string_view>
 
 #include <univalue.h>
 
@@ -45,6 +46,7 @@ public:
     //! true if request is fully handled, false if it should be passed on to
     //! subsequent handlers.
     using Actor = std::function<bool(const JSONRPCRequest& request, UniValue& result, bool last_handler)>;
+    using Description = std::function<UniValue(std::string_view rpc_name)>;
 
     //! Constructor taking Actor callback supporting multiple handlers.
     CRPCCommand(std::string category, std::string name, Actor actor, std::vector<std::pair<std::string, bool>> args, intptr_t unique_id)
@@ -62,6 +64,9 @@ public:
               fn().GetArgNames(),
               intptr_t(fn))
     {
+        description = [fn, cat = this->category](std::string_view rpc_name) {
+            return fn().ToDescriptionValue(std::string{rpc_name}, cat);
+        };
     }
 
     std::string category;
@@ -78,6 +83,7 @@ public:
     //! appended after other arguments, see transformNamedArguments for details.
     std::vector<std::pair<std::string, bool>> argNames;
     intptr_t unique_id;
+    Description description;
 };
 
 /**
@@ -104,6 +110,8 @@ public:
     * @returns List of registered commands.
     */
     std::vector<std::string> listCommands() const;
+    /** Return structured RPC descriptions keyed by command name. */
+    UniValue dumpDescriptions() const;
 
     /**
      * Return all named arguments that need to be converted by the client from string to another JSON type

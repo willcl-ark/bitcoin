@@ -290,6 +290,8 @@ struct RPCArg {
      * the argument is required.
      */
     std::string ToDescriptionString(bool is_named_arg) const;
+    /** Return a structured description value. */
+    UniValue ToDescriptionValue() const;
 };
 
 // NOLINTNEXTLINE(misc-no-recursion)
@@ -381,6 +383,8 @@ struct RPCResult {
      * Returns true if type matches, or object describing error(s) if not.
      */
     UniValue MatchesType(const UniValue& result) const;
+    /** Return a structured description value. */
+    UniValue ToDescriptionValue() const;
 
 private:
     void CheckInnerDoc() const;
@@ -403,6 +407,8 @@ struct RPCResults {
      * Return the description string.
      */
     std::string ToDescriptionString() const;
+    /** Return a structured description value. */
+    UniValue ToDescriptionValue() const;
 };
 
 struct RPCExamples {
@@ -413,6 +419,8 @@ struct RPCExamples {
     {
     }
     std::string ToDescriptionString() const;
+    /** Return a structured description value. */
+    UniValue ToDescriptionValue() const;
 };
 
 class RPCHelpMan
@@ -486,6 +494,8 @@ public:
         }
     }
     std::string ToString() const;
+    /** Return a structured description value. */
+    UniValue ToDescriptionValue(const std::string& rpc_name, const std::string& category) const;
     /** Return the named args that need to be converted from string to another JSON type */
     UniValue GetArgMap() const;
     /** If the supplied number of args is neither too small nor too high */
