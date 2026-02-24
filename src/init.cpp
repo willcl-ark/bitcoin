@@ -28,6 +28,8 @@
 #include <index/coinstatsindex.h>
 #include <index/txindex.h>
 #include <index/txospenderindex.h>
+#include <index/scripthashindex.h>
+#include <electrum/server.h>
 #include <init/common.h>
 #include <interfaces/chain.h>
 #include <interfaces/init.h>
@@ -278,6 +280,9 @@ void Interrupt(NodeContext& node)
     InterruptREST();
     InterruptTorControl();
     InterruptMapPort();
+    if (node.electrum_server) {
+        node.electrum_server->Interrupt();
+    }
     if (node.connman)
         node.connman->Interrupt();
     for (auto* index : node.indexes) {
@@ -322,8 +327,17 @@ void Shutdown(NodeContext& node)
     StopTorControl();
 
     if (node.background_init_thread.joinable()) node.background_init_thread.join();
+
+    // Stop Electrum server before stopping the scheduler, because electrum shutdown
+    // unregisters a validation interface and may wait for the callback queue to drain.
+    if (node.electrum_server) {
+        node.electrum_server->Interrupt();
+        node.electrum_server->Stop();
+        node.electrum_server.reset();
+    }
+
     // After everything has been shut down, but before things get flushed, stop the
-    // the scheduler. After this point, SyncWithValidationInterfaceQueue() should not be called anymore
+    // scheduler. After this point, SyncWithValidationInterfaceQueue() should not be called anymore
     // as this would prevent the shutdown from completing.
     if (node.scheduler) node.scheduler->stop();
 
@@ -366,6 +380,7 @@ void Shutdown(NodeContext& node)
     for (auto* index : node.indexes) index->Stop();
     if (g_txindex) g_txindex.reset();
     if (g_txospenderindex) g_txospenderindex.reset();
+    if (g_scripthashindex) g_scripthashindex.reset();
     if (g_coin_stats_index) g_coin_stats_index.reset();
     DestroyAllBlockFilterIndexes();
     node.indexes.clear(); // all instances are nullptr now
@@ -531,6 +546,11 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
 #endif
     argsman.AddArg("-txindex", strprintf("Maintain a full transaction index, used by the getrawtransaction rpc call (default: %u)", DEFAULT_TXINDEX), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-txospenderindex", strprintf("Maintain a transaction output spender index, used by the gettxspendingprevout rpc call (default: %u)", DEFAULT_TXOSPENDERINDEX), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-electrumindex", strprintf("Maintain a script hash index for Electrum protocol support (default: %u)", DEFAULT_SCRIPTHASHINDEX), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-electrum", "Enable Electrum protocol JSON-RPC server (default: false, implies -electrumindex, requires -txindex)", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-electrumport=<port>", strprintf("Port for Electrum server (default: %u)", DEFAULT_ELECTRUM_PORT), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-electrumbind=<addr>", strprintf("Bind address for Electrum server (default: %s)", DEFAULT_ELECTRUM_BIND), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-electrummaxconnections=<n>", strprintf("Maintain at most <n> Electrum client connections (default: %u)", DEFAULT_ELECTRUM_MAX_CONNECTIONS), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-blockfilterindex=<type>",
                  strprintf("Maintain an index of compact filters by block (default: %s, values: %s).", DEFAULT_BLOCKFILTERINDEX, ListBlockFilterTypes()) +
                  " If <type> is not supplied or if <type> = 1, indexes for all known types are enabled.",
@@ -764,6 +784,11 @@ static bool AppInitServers(NodeContext& node)
 void InitParameterInteraction(ArgsManager& args)
 {
     // when specifying an explicit binding address, you want to listen on it
+    if (args.GetBoolArg("-electrum", false)) {
+        if (args.SoftSetBoolArg("-electrumindex", true))
+            LogInfo("parameter interaction: -electrum set -> setting -electrumindex=1\n");
+    }
+
     // even when -connect or -proxy is specified
     if (!args.GetArgs("-bind").empty()) {
         if (args.SoftSetBoolArg("-listen", true))
@@ -1003,9 +1028,15 @@ bool AppInitParameterInteraction(const ArgsManager& args)
             return InitError(_("Prune mode is incompatible with -txindex."));
         if (args.GetBoolArg("-txospenderindex", DEFAULT_TXOSPENDERINDEX))
             return InitError(_("Prune mode is incompatible with -txospenderindex."));
+        if (args.GetBoolArg("-electrumindex", DEFAULT_SCRIPTHASHINDEX))
+            return InitError(_("Prune mode is incompatible with -electrumindex."));
         if (args.GetBoolArg("-reindex-chainstate", false)) {
             return InitError(_("Prune mode is incompatible with -reindex-chainstate. Use full -reindex instead."));
         }
+    }
+
+    if (args.GetBoolArg("-electrum", false) && !args.GetBoolArg("-txindex", DEFAULT_TXINDEX)) {
+        return InitError(_("-electrum requires -txindex."));
     }
 
     // If -forcednsseed is set to true, ensure -dnsseed has not been set to false
@@ -1832,6 +1863,9 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     if (args.GetBoolArg("-txospenderindex", DEFAULT_TXOSPENDERINDEX)) {
         LogInfo("* Using %.1f MiB for transaction output spender index database", index_cache_sizes.txospender_index * (1.0 / 1024 / 1024));
     }
+    if (args.GetBoolArg("-electrumindex", DEFAULT_SCRIPTHASHINDEX)) {
+        LogInfo("* Using %.1f MiB for script hash index database", index_cache_sizes.scripthash_index * (1.0 / 1024 / 1024));
+    }
     for (BlockFilterType filter_type : g_enabled_filter_types) {
         LogInfo("* Using %.1f MiB for %s block filter index database",
                   index_cache_sizes.filter_index * (1.0 / 1024 / 1024), BlockFilterTypeName(filter_type));
@@ -1903,6 +1937,11 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     if (args.GetBoolArg("-txospenderindex", DEFAULT_TXOSPENDERINDEX)) {
         g_txospenderindex = std::make_unique<TxoSpenderIndex>(interfaces::MakeChain(node), index_cache_sizes.txospender_index, false, do_reindex);
         node.indexes.emplace_back(g_txospenderindex.get());
+    }
+
+    if (args.GetBoolArg("-electrumindex", DEFAULT_SCRIPTHASHINDEX)) {
+        g_scripthashindex = std::make_unique<ScriptHashIndex>(interfaces::MakeChain(node), index_cache_sizes.scripthash_index, false, do_reindex);
+        node.indexes.emplace_back(g_scripthashindex.get());
     }
 
     for (const auto& filter_type : g_enabled_filter_types) {
@@ -2063,6 +2102,23 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
 
     if (ShutdownRequested(node)) {
         return true;
+    }
+
+    // ********************************************************* Step 11b: start Electrum server
+    if (args.GetBoolArg("-electrum", false)) {
+        if (!g_scripthashindex || !g_scripthashindex->BlockUntilSyncedToCurrentChain()) {
+            return InitError(_("Electrum server requires a fully synced -electrumindex. Wait for initial index sync and restart."));
+        }
+        std::string electrum_bind = args.GetArg("-electrumbind", DEFAULT_ELECTRUM_BIND);
+        uint16_t electrum_port = static_cast<uint16_t>(args.GetIntArg("-electrumport", DEFAULT_ELECTRUM_PORT));
+        int64_t electrum_max_connections = args.GetIntArg("-electrummaxconnections", DEFAULT_ELECTRUM_MAX_CONNECTIONS);
+        if (electrum_max_connections < 0) {
+            return InitError(Untranslated("-electrummaxconnections must be greater or equal than zero"));
+        }
+        node.electrum_server = std::make_unique<ElectrumServer>(node, electrum_bind, electrum_port, static_cast<size_t>(electrum_max_connections));
+        if (!node.electrum_server->Start()) {
+            return InitError(_("Failed to start Electrum server."));
+        }
     }
 
     // ********************************************************* Step 12: start node

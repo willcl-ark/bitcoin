@@ -158,6 +158,9 @@ public:
     /// not block and immediately returns false.
     bool BlockUntilSyncedToCurrentChain() const LOCKS_EXCLUDED(::cs_main);
 
+    /// Returns whether the index is at the current chain tip without blocking.
+    bool IsSyncedToCurrentChain() const LOCKS_EXCLUDED(::cs_main);
+
     void Interrupt();
 
     /// Initializes the sync state and registers the instance to the

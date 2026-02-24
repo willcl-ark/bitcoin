@@ -8,6 +8,7 @@
 #include <common/system.h>
 #include <index/txindex.h>
 #include <index/txospenderindex.h>
+#include <index/scripthashindex.h>
 #include <kernel/caches.h>
 #include <logging.h>
 #include <node/interface_ui.h>
@@ -25,6 +26,8 @@ static constexpr size_t MAX_TX_INDEX_CACHE{1024_MiB};
 static constexpr size_t MAX_FILTER_INDEX_CACHE{1024_MiB};
 //! Max memory allocated to tx spenderindex DB specific cache in bytes.
 static constexpr size_t MAX_TXOSPENDER_INDEX_CACHE{1024_MiB};
+//! Max memory allocated to script hash index DB specific cache in bytes.
+static constexpr size_t MAX_SCRIPTHASH_INDEX_CACHE{1024_MiB};
 //! Maximum dbcache size on 32-bit systems.
 static constexpr size_t MAX_32BIT_DBCACHE{1024_MiB};
 
@@ -49,6 +52,8 @@ CacheSizes CalculateCacheSizes(const ArgsManager& args, size_t n_indexes)
     total_cache -= index_sizes.tx_index;
     index_sizes.txospender_index = std::min(total_cache / 8, args.GetBoolArg("-txospenderindex", DEFAULT_TXOSPENDERINDEX) ? MAX_TXOSPENDER_INDEX_CACHE : 0);
     total_cache -= index_sizes.txospender_index;
+    index_sizes.scripthash_index = std::min(total_cache / 8, args.GetBoolArg("-electrumindex", DEFAULT_SCRIPTHASHINDEX) ? MAX_SCRIPTHASH_INDEX_CACHE : 0);
+    total_cache -= index_sizes.scripthash_index;
     if (n_indexes > 0) {
         size_t max_cache = std::min(total_cache / 8, MAX_FILTER_INDEX_CACHE);
         index_sizes.filter_index = max_cache / n_indexes;

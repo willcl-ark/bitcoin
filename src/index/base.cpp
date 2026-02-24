@@ -425,24 +425,24 @@ bool BaseIndex::BlockUntilSyncedToCurrentChain() const
 {
     AssertLockNotHeld(cs_main);
 
-    if (!m_synced) {
-        return false;
-    }
-
-    {
-        // Skip the queue-draining stuff if we know we're caught up with
-        // m_chain.Tip().
-        LOCK(cs_main);
-        const CBlockIndex* chain_tip = m_chainstate->m_chain.Tip();
-        const CBlockIndex* best_block_index = m_best_block_index.load();
-        if (best_block_index->GetAncestor(chain_tip->nHeight) == chain_tip) {
-            return true;
-        }
-    }
+    if (IsSyncedToCurrentChain()) return true;
+    if (!m_synced) return false;
 
     LogInfo("%s is catching up on block notifications", GetName());
     m_chain->context()->validation_signals->SyncWithValidationInterfaceQueue();
     return true;
+}
+
+bool BaseIndex::IsSyncedToCurrentChain() const
+{
+    AssertLockNotHeld(cs_main);
+
+    if (!m_synced) return false;
+
+    LOCK(cs_main);
+    const CBlockIndex* chain_tip = m_chainstate->m_chain.Tip();
+    const CBlockIndex* best_block_index = m_best_block_index.load();
+    return best_block_index && chain_tip && best_block_index->GetAncestor(chain_tip->nHeight) == chain_tip;
 }
 
 void BaseIndex::Interrupt()

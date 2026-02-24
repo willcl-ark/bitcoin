@@ -16,6 +16,7 @@ class ArgsManager;
 class AddrMan;
 class BanMan;
 class BaseIndex;
+class ElectrumServer;
 class CBlockPolicyEstimator;
 class CConnman;
 class ValidationSignals;
@@ -89,6 +90,7 @@ struct NodeContext {
     std::atomic<int> exit_status{EXIT_SUCCESS};
     //! Manages all the node warnings
     std::unique_ptr<node::Warnings> warnings;
+    std::unique_ptr<ElectrumServer> electrum_server;
     std::thread background_init_thread;
 
     //! Declare default constructor and destructor that are not inline, so code

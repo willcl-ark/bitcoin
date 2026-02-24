@@ -5,6 +5,7 @@
 #include <node/context.h>
 
 #include <addrman.h>
+#include <electrum/server.h>
 #include <banman.h>
 #include <interfaces/chain.h>
 #include <interfaces/mining.h>

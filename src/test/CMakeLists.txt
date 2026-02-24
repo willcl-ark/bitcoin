@@ -91,6 +91,7 @@ add_executable(test_bitcoin
   script_assets_tests.cpp
   script_p2sh_tests.cpp
   script_parse_tests.cpp
+  scripthashindex_tests.cpp
   script_segwit_tests.cpp
   script_standard_tests.cpp
   script_tests.cpp
