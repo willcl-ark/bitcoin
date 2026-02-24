@@ -5,27 +5,35 @@
 #include <index/scripthashindex.h>
 
 #include <common/args.h>
+#include <crypto/common.h>
 #include <crypto/sha256.h>
 #include <dbwrapper.h>
 #include <index/base.h>
 #include <interfaces/chain.h>
+#include <kernel/cs_main.h>
 #include <logging.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <script/script.h>
 #include <serialize.h>
 #include <uint256.h>
-#include <undo.h>
 #include <util/check.h>
 #include <util/fs.h>
+#include <validation.h>
 
+#include <algorithm>
+#include <array>
+#include <cassert>
 #include <cstdint>
+#include <map>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
-constexpr uint8_t DB_HISTORY{'H'};
-constexpr uint8_t DB_UTXO{'U'};
+constexpr uint8_t DB_FUNDING{'F'};
+constexpr uint8_t DB_SPENDING{'S'};
+constexpr size_t DB_PREFIX_SIZE{8};
 
 std::unique_ptr<ScriptHashIndex> g_scripthashindex;
 
@@ -40,16 +48,30 @@ uint256 ComputeElectrumScriptHash(const CScript& script)
 
 namespace {
 
-struct HistoryKey {
-    uint256 scripthash;
+using DBPrefix = std::array<unsigned char, DB_PREFIX_SIZE>;
+
+static DBPrefix ScriptHashPrefix(const uint256& scripthash)
+{
+    DBPrefix result{};
+    std::copy_n(scripthash.begin(), DB_PREFIX_SIZE, result.begin());
+    return result;
+}
+
+static uint64_t OutpointPrefix(const COutPoint& outpoint)
+{
+    return ReadBE64(outpoint.hash.begin()) + outpoint.n;
+}
+
+struct FundingKey {
+    DBPrefix scripthash_prefix;
     uint32_t height;
     uint32_t tx_pos;
 
     template <typename Stream>
     void Serialize(Stream& s) const
     {
-        ser_writedata8(s, DB_HISTORY);
-        s.write(std::as_bytes(std::span{scripthash.begin(), 32}));
+        ser_writedata8(s, DB_FUNDING);
+        s.write(std::as_bytes(std::span{scripthash_prefix}));
         ser_writedata32be(s, height);
         ser_writedata32be(s, tx_pos);
     }
@@ -58,73 +80,161 @@ struct HistoryKey {
     void Unserialize(Stream& s)
     {
         const uint8_t prefix{ser_readdata8(s)};
-        if (prefix != DB_HISTORY) {
-            throw std::ios_base::failure("Invalid format for scripthash index history key");
+        if (prefix != DB_FUNDING) {
+            throw std::ios_base::failure("Invalid format for scripthash index funding key");
         }
-        s.read(std::as_writable_bytes(std::span{scripthash.begin(), 32}));
+        s.read(std::as_writable_bytes(std::span{scripthash_prefix}));
         height = ser_readdata32be(s);
         tx_pos = ser_readdata32be(s);
     }
 };
 
-struct HistoryKeyPrefix {
-    uint256 scripthash;
+struct FundingKeyPrefix {
+    DBPrefix scripthash_prefix;
 
     template <typename Stream>
     void Serialize(Stream& s) const
     {
-        ser_writedata8(s, DB_HISTORY);
-        s.write(std::as_bytes(std::span{scripthash.begin(), 32}));
+        ser_writedata8(s, DB_FUNDING);
+        s.write(std::as_bytes(std::span{scripthash_prefix}));
     }
 };
 
-struct UtxoKey {
-    uint256 scripthash;
-    Txid txid;
-    uint32_t vout;
+struct SpendingKey {
+    uint64_t outpoint_prefix;
+    uint32_t height;
+    uint32_t tx_pos;
 
     template <typename Stream>
     void Serialize(Stream& s) const
     {
-        ser_writedata8(s, DB_UTXO);
-        s.write(std::as_bytes(std::span{scripthash.begin(), 32}));
-        s << txid;
-        ser_writedata32be(s, vout);
+        ser_writedata8(s, DB_SPENDING);
+        ser_writedata64(s, outpoint_prefix);
+        ser_writedata32be(s, height);
+        ser_writedata32be(s, tx_pos);
     }
 
     template <typename Stream>
     void Unserialize(Stream& s)
     {
         const uint8_t prefix{ser_readdata8(s)};
-        if (prefix != DB_UTXO) {
-            throw std::ios_base::failure("Invalid format for scripthash index UTXO key");
+        if (prefix != DB_SPENDING) {
+            throw std::ios_base::failure("Invalid format for scripthash index spending key");
         }
-        s.read(std::as_writable_bytes(std::span{scripthash.begin(), 32}));
-        s >> txid;
-        vout = ser_readdata32be(s);
+        outpoint_prefix = ser_readdata64(s);
+        height = ser_readdata32be(s);
+        tx_pos = ser_readdata32be(s);
     }
 };
 
-struct UtxoKeyPrefix {
-    uint256 scripthash;
+struct SpendingKeyPrefix {
+    uint64_t outpoint_prefix;
 
     template <typename Stream>
     void Serialize(Stream& s) const
     {
-        ser_writedata8(s, DB_UTXO);
-        s.write(std::as_bytes(std::span{scripthash.begin(), 32}));
+        ser_writedata8(s, DB_SPENDING);
+        ser_writedata64(s, outpoint_prefix);
     }
 };
 
-struct UtxoValue {
+struct TxPosition {
     uint32_t height;
-    CAmount value;
+    uint32_t tx_pos;
 
-    SERIALIZE_METHODS(UtxoValue, obj)
+    friend bool operator<(const TxPosition& a, const TxPosition& b)
     {
-        READWRITE(obj.height, obj.value);
+        return a.height < b.height || (a.height == b.height && a.tx_pos < b.tx_pos);
     }
 };
+
+static const CBlock* GetBlockAtHeight(const Chainstate& chainstate, uint32_t height, std::map<uint32_t, CBlock>& block_cache)
+{
+    const auto found{block_cache.find(height)};
+    if (found != block_cache.end()) return &found->second;
+
+    const CBlockIndex* pindex = WITH_LOCK(::cs_main, return (chainstate.m_chain.Height() >= 0 && height <= static_cast<uint32_t>(chainstate.m_chain.Height())) ? chainstate.m_chain[height] : nullptr);
+    if (!pindex) return nullptr;
+
+    CBlock block;
+    if (!chainstate.m_blockman.ReadBlock(block, *pindex)) return nullptr;
+    return &block_cache.emplace(height, std::move(block)).first->second;
+}
+
+static bool ReadTxByPosition(const Chainstate& chainstate, const TxPosition& position, std::map<uint32_t, CBlock>& block_cache, CTransactionRef& tx)
+{
+    const CBlock* block{GetBlockAtHeight(chainstate, position.height, block_cache)};
+    if (!block) return false;
+    if (position.tx_pos >= block->vtx.size()) return false;
+    tx = block->vtx[position.tx_pos];
+    return true;
+}
+
+struct ScriptHashScanResult {
+    std::map<TxPosition, Txid> history_entries;
+    std::vector<ScriptHashUtxo> utxos;
+    CAmount balance{0};
+};
+
+static ScriptHashScanResult ScanScriptHash(const Chainstate& chainstate, CDBWrapper& db, const uint256& scripthash)
+{
+    std::map<uint32_t, CBlock> block_cache;
+    std::map<COutPoint, ScriptHashUtxo> funded_outpoints;
+    std::set<COutPoint> spent_outpoints;
+    std::map<TxPosition, Txid> history_entries;
+
+    std::unique_ptr<CDBIterator> funding_it(db.NewIterator());
+    FundingKey funding_key{};
+    const DBPrefix scripthash_prefix{ScriptHashPrefix(scripthash)};
+    funding_it->Seek(FundingKeyPrefix{scripthash_prefix});
+
+    while (funding_it->Valid() && funding_it->GetKey(funding_key) && funding_key.scripthash_prefix == scripthash_prefix) {
+        const TxPosition tx_pos{funding_key.height, funding_key.tx_pos};
+        CTransactionRef tx;
+        if (ReadTxByPosition(chainstate, tx_pos, block_cache, tx)) {
+            const Txid txid{tx->GetHash()};
+            bool matched{false};
+            for (uint32_t i = 0; i < tx->vout.size(); ++i) {
+                const CTxOut& tx_out{tx->vout[i]};
+                if (tx_out.scriptPubKey.IsUnspendable()) continue;
+                if (ComputeElectrumScriptHash(tx_out.scriptPubKey) != scripthash) continue;
+                funded_outpoints[COutPoint{txid, i}] = {COutPoint{txid, i}, static_cast<int>(funding_key.height), tx_out.nValue};
+                matched = true;
+            }
+            if (matched) history_entries.try_emplace(tx_pos, txid);
+        }
+        funding_it->Next();
+    }
+
+    std::unique_ptr<CDBIterator> spending_it(db.NewIterator());
+    for (const auto& [outpoint, _] : funded_outpoints) {
+        const uint64_t outpoint_prefix{OutpointPrefix(outpoint)};
+        SpendingKey spending_key{};
+        spending_it->Seek(SpendingKeyPrefix{outpoint_prefix});
+        while (spending_it->Valid() && spending_it->GetKey(spending_key) && spending_key.outpoint_prefix == outpoint_prefix) {
+            const TxPosition tx_pos{spending_key.height, spending_key.tx_pos};
+            CTransactionRef tx;
+            if (ReadTxByPosition(chainstate, tx_pos, block_cache, tx)) {
+                for (const auto& txin : tx->vin) {
+                    if (txin.prevout != outpoint) continue;
+                    spent_outpoints.insert(outpoint);
+                    history_entries.try_emplace(tx_pos, tx->GetHash());
+                    break;
+                }
+            }
+            spending_it->Next();
+        }
+    }
+
+    ScriptHashScanResult result;
+    result.history_entries = std::move(history_entries);
+    for (const auto& [outpoint, utxo] : funded_outpoints) {
+        if (spent_outpoints.contains(outpoint)) continue;
+        result.balance += utxo.value;
+        result.utxos.push_back(utxo);
+    }
+    return result;
+}
 
 } // namespace
 
@@ -137,9 +247,7 @@ ScriptHashIndex::ScriptHashIndex(std::unique_ptr<interfaces::Chain> chain, size_
 interfaces::Chain::NotifyOptions ScriptHashIndex::CustomOptions()
 {
     interfaces::Chain::NotifyOptions options;
-    options.connect_undo_data = true;
     options.disconnect_data = true;
-    options.disconnect_undo_data = true;
     return options;
 }
 
@@ -150,36 +258,18 @@ bool ScriptHashIndex::CustomAppend(const interfaces::BlockInfo& block)
 
     for (size_t i = 0; i < txs.size(); ++i) {
         const auto& tx = txs[i];
-        const bool is_coinbase = tx->IsCoinBase();
-        const Txid txid = tx->GetHash();
+        const uint32_t height{static_cast<uint32_t>(block.height)};
+        const uint32_t tx_pos{static_cast<uint32_t>(i)};
 
-        for (uint32_t j = 0; j < tx->vout.size(); ++j) {
-            const CTxOut& tx_out = tx->vout[j];
+        for (const CTxOut& tx_out : tx->vout) {
             if (tx_out.scriptPubKey.IsUnspendable()) continue;
-            const uint256 sh = ComputeElectrumScriptHash(tx_out.scriptPubKey);
-
-            HistoryKey hkey{sh, static_cast<uint32_t>(block.height), static_cast<uint32_t>(i)};
-            batch.Write(hkey, txid);
-
-            UtxoKey ukey{sh, txid, j};
-            UtxoValue uval{static_cast<uint32_t>(block.height), tx_out.nValue};
-            batch.Write(ukey, uval);
+            const auto sh_prefix{ScriptHashPrefix(ComputeElectrumScriptHash(tx_out.scriptPubKey))};
+            batch.Write(FundingKey{sh_prefix, height, tx_pos}, "");
         }
 
-        if (!is_coinbase) {
-            const auto& tx_undo = Assert(block.undo_data)->vtxundo.at(i - 1);
-
-            for (size_t j = 0; j < tx_undo.vprevout.size(); ++j) {
-                const Coin& coin = tx_undo.vprevout[j];
-                const COutPoint& prevout = tx->vin[j].prevout;
-                const uint256 sh = ComputeElectrumScriptHash(coin.out.scriptPubKey);
-
-                HistoryKey hkey{sh, static_cast<uint32_t>(block.height), static_cast<uint32_t>(i)};
-                batch.Write(hkey, txid);
-
-                UtxoKey ukey{sh, prevout.hash, prevout.n};
-                batch.Erase(ukey);
-            }
+        if (tx->IsCoinBase()) continue;
+        for (const CTxIn& txin : tx->vin) {
+            batch.Write(SpendingKey{OutpointPrefix(txin.prevout), height, tx_pos}, "");
         }
     }
 
@@ -191,41 +281,22 @@ bool ScriptHashIndex::CustomRemove(const interfaces::BlockInfo& block)
 {
     CDBBatch batch(*m_db);
     assert(block.data);
-    assert(block.undo_data);
     const auto& txs = block.data->vtx;
 
     for (size_t i = 0; i < txs.size(); ++i) {
         const auto& tx = txs[i];
-        const bool is_coinbase = tx->IsCoinBase();
-        const Txid txid = tx->GetHash();
+        const uint32_t height{static_cast<uint32_t>(block.height)};
+        const uint32_t tx_pos{static_cast<uint32_t>(i)};
 
-        for (uint32_t j = 0; j < tx->vout.size(); ++j) {
-            const CTxOut& tx_out = tx->vout[j];
+        for (const CTxOut& tx_out : tx->vout) {
             if (tx_out.scriptPubKey.IsUnspendable()) continue;
-            const uint256 sh = ComputeElectrumScriptHash(tx_out.scriptPubKey);
-
-            HistoryKey hkey{sh, static_cast<uint32_t>(block.height), static_cast<uint32_t>(i)};
-            batch.Erase(hkey);
-
-            UtxoKey ukey{sh, txid, j};
-            batch.Erase(ukey);
+            const auto sh_prefix{ScriptHashPrefix(ComputeElectrumScriptHash(tx_out.scriptPubKey))};
+            batch.Erase(FundingKey{sh_prefix, height, tx_pos});
         }
 
-        if (!is_coinbase) {
-            const auto& tx_undo = block.undo_data->vtxundo.at(i - 1);
-
-            for (size_t j = 0; j < tx_undo.vprevout.size(); ++j) {
-                const Coin& coin = tx_undo.vprevout[j];
-                const COutPoint& prevout = tx->vin[j].prevout;
-                const uint256 sh = ComputeElectrumScriptHash(coin.out.scriptPubKey);
-
-                HistoryKey hkey{sh, static_cast<uint32_t>(block.height), static_cast<uint32_t>(i)};
-                batch.Erase(hkey);
-
-                UtxoKey ukey{sh, prevout.hash, prevout.n};
-                UtxoValue uval{static_cast<uint32_t>(coin.nHeight), coin.out.nValue};
-                batch.Write(ukey, uval);
-            }
+        if (tx->IsCoinBase()) continue;
+        for (const CTxIn& txin : tx->vin) {
+            batch.Erase(SpendingKey{OutpointPrefix(txin.prevout), height, tx_pos});
         }
     }
 
@@ -238,56 +309,20 @@ BaseIndex::DB& ScriptHashIndex::GetDB() const { return *m_db; }
 std::vector<ScriptHashHistory> ScriptHashIndex::GetHistory(const uint256& scripthash) const
 {
     std::vector<ScriptHashHistory> result;
-    std::unique_ptr<CDBIterator> it(m_db->NewIterator());
-
-    HistoryKey key{};
-    it->Seek(HistoryKeyPrefix{scripthash});
-
-    while (it->Valid() && it->GetKey(key) && key.scripthash == scripthash) {
-        Txid txid;
-        if (it->GetValue(txid)) {
-            result.push_back({txid, static_cast<int>(key.height)});
-        }
-        it->Next();
+    const auto scan_result{ScanScriptHash(*m_chainstate, *m_db, scripthash)};
+    result.reserve(scan_result.history_entries.size());
+    for (const auto& [pos, txid] : scan_result.history_entries) {
+        result.push_back({txid, static_cast<int>(pos.height)});
     }
-
     return result;
 }
 
 std::vector<ScriptHashUtxo> ScriptHashIndex::GetUtxos(const uint256& scripthash) const
 {
-    std::vector<ScriptHashUtxo> result;
-    std::unique_ptr<CDBIterator> it(m_db->NewIterator());
-
-    UtxoKey key{};
-    it->Seek(UtxoKeyPrefix{scripthash});
-
-    while (it->Valid() && it->GetKey(key) && key.scripthash == scripthash) {
-        UtxoValue val;
-        if (it->GetValue(val)) {
-            result.push_back({COutPoint{key.txid, key.vout}, static_cast<int>(val.height), val.value});
-        }
-        it->Next();
-    }
-
-    return result;
+    return ScanScriptHash(*m_chainstate, *m_db, scripthash).utxos;
 }
 
 CAmount ScriptHashIndex::GetBalance(const uint256& scripthash) const
 {
-    CAmount balance = 0;
-    std::unique_ptr<CDBIterator> it(m_db->NewIterator());
-
-    UtxoKey key{};
-    it->Seek(UtxoKeyPrefix{scripthash});
-
-    while (it->Valid() && it->GetKey(key) && key.scripthash == scripthash) {
-        UtxoValue val;
-        if (it->GetValue(val)) {
-            balance += val.value;
-        }
-        it->Next();
-    }
-
-    return balance;
+    return ScanScriptHash(*m_chainstate, *m_db, scripthash).balance;
 }
