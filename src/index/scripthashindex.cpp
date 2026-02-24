@@ -34,6 +34,7 @@
 constexpr uint8_t DB_FUNDING{'F'};
 constexpr uint8_t DB_SPENDING{'S'};
 constexpr size_t DB_PREFIX_SIZE{8};
+constexpr char DB_COMPACTED_KEY[]{"post_sync_compacted"};
 
 std::unique_ptr<ScriptHashIndex> g_scripthashindex;
 
@@ -372,4 +373,15 @@ void ScriptHashIndex::UncacheScriptHash(const uint256& scripthash)
     }
     m_pinned_refs.erase(ref_it);
     m_cache.erase(scripthash);
+}
+
+void ScriptHashIndex::CompactOnceAfterSync()
+{
+    bool compacted{false};
+    if (m_db->Read(DB_COMPACTED_KEY, compacted) && compacted) return;
+
+    LogInfo("Starting one-time scripthashindex compaction");
+    m_db->Compact();
+    m_db->Write(DB_COMPACTED_KEY, true, /*fSync=*/true);
+    LogInfo("Finished one-time scripthashindex compaction");
 }

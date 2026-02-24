@@ -253,6 +253,8 @@ public:
     // Get an estimate of LevelDB memory usage (in bytes).
     size_t DynamicMemoryUsage() const;
 
+    void Compact();
+
     CDBIterator* NewIterator();
 
     /**

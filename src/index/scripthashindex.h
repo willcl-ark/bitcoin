@@ -65,6 +65,7 @@ public:
     CAmount GetBalance(const uint256& scripthash) const LOCKS_EXCLUDED(m_cache_mutex);
     void CacheScriptHash(const uint256& scripthash) LOCKS_EXCLUDED(m_cache_mutex);
     void UncacheScriptHash(const uint256& scripthash) LOCKS_EXCLUDED(m_cache_mutex);
+    void CompactOnceAfterSync();
 };
 
 extern std::unique_ptr<ScriptHashIndex> g_scripthashindex;

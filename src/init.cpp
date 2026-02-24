@@ -2109,6 +2109,7 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         if (!g_scripthashindex || !g_scripthashindex->BlockUntilSyncedToCurrentChain()) {
             return InitError(_("Electrum server requires a fully synced -electrumindex. Wait for initial index sync and restart."));
         }
+        g_scripthashindex->CompactOnceAfterSync();
         std::string electrum_bind = args.GetArg("-electrumbind", DEFAULT_ELECTRUM_BIND);
         uint16_t electrum_port = static_cast<uint16_t>(args.GetIntArg("-electrumport", DEFAULT_ELECTRUM_PORT));
         int64_t electrum_max_connections = args.GetIntArg("-electrummaxconnections", DEFAULT_ELECTRUM_MAX_CONNECTIONS);

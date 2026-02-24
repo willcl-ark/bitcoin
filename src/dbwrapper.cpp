@@ -302,6 +302,11 @@ size_t CDBWrapper::DynamicMemoryUsage() const
     return parsed.value();
 }
 
+void CDBWrapper::Compact()
+{
+    DBContext().pdb->CompactRange(nullptr, nullptr);
+}
+
 std::optional<std::string> CDBWrapper::ReadImpl(std::span<const std::byte> key) const
 {
     leveldb::Slice slKey(CharCast(key.data()), key.size());
