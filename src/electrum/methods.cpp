@@ -420,6 +420,35 @@ void RegisterElectrumMethods(ElectrumServer& server)
         return *status;
     });
 
+    // blockchain.scripthashes.subscribe
+    server.RegisterMethod("blockchain.scripthashes.subscribe", [&server](struct bufferevent* bev, const UniValue& params) -> UniValue {
+        if (params.size() < 1) throw std::runtime_error("missing scripthashes");
+        if (!g_scripthashindex) throw std::runtime_error("electrum index not enabled");
+
+        const bool wrapped_list{params.size() == 1 && params[0].isArray()};
+        const std::vector<UniValue> items{wrapped_list ? params[0].getValues() : params.getValues()};
+        if (items.empty()) throw std::runtime_error("missing scripthashes");
+
+        std::vector<std::pair<uint256, std::optional<std::string>>> subscriptions;
+        subscriptions.reserve(items.size());
+        UniValue result(UniValue::VARR);
+
+        for (const UniValue& item : items) {
+            if (!item.isStr()) throw std::runtime_error("scripthash must be string");
+            const uint256 sh{uint256::FromHex(item.get_str()).value()};
+            const auto status{GetScripthashStatus(server.GetMempoolIndex(), sh)};
+            subscriptions.emplace_back(sh, status);
+            if (status.has_value()) {
+                result.push_back(*status);
+            } else {
+                result.push_back(UniValue());
+            }
+        }
+
+        server.SubscribeScripthashes(bev, subscriptions);
+        return result;
+    });
+
     // blockchain.scripthash.unsubscribe
     server.RegisterMethod("blockchain.scripthash.unsubscribe", [&server](struct bufferevent* bev, const UniValue& params) -> UniValue {
         if (params.size() < 1) throw std::runtime_error("missing scripthash");

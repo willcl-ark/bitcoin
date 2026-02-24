@@ -18,6 +18,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 struct event;
 struct event_base;
@@ -57,6 +58,7 @@ public:
     void SubscribeHeaders(struct bufferevent* bev);
     void SubscribeScripthash(struct bufferevent* bev, const uint256& scripthash,
                              const std::optional<std::string>& initial_status);
+    void SubscribeScripthashes(struct bufferevent* bev, const std::vector<std::pair<uint256, std::optional<std::string>>>& subscriptions);
     bool UnsubscribeScripthash(struct bufferevent* bev, const uint256& scripthash);
 
 private:

@@ -330,16 +330,28 @@ void ElectrumServer::SubscribeHeaders(struct bufferevent* bev)
 void ElectrumServer::SubscribeScripthash(struct bufferevent* bev, const uint256& scripthash,
                                           const std::optional<std::string>& initial_status)
 {
-    bool inserted{false};
+    SubscribeScripthashes(bev, {{scripthash, initial_status}});
+}
+
+void ElectrumServer::SubscribeScripthashes(struct bufferevent* bev, const std::vector<std::pair<uint256, std::optional<std::string>>>& subscriptions)
+{
+    std::vector<uint256> inserted;
     {
         LOCK(m_connections_mutex);
         auto it = m_connection_state.find(bev);
-        if (it != m_connection_state.end()) {
-            inserted = !it->second.scripthash_subs.contains(scripthash);
+        if (it == m_connection_state.end()) return;
+
+        inserted.reserve(subscriptions.size());
+        for (const auto& [scripthash, initial_status] : subscriptions) {
+            if (!it->second.scripthash_subs.contains(scripthash)) {
+                inserted.push_back(scripthash);
+            }
             it->second.scripthash_subs[scripthash] = initial_status;
         }
     }
-    if (inserted && g_scripthashindex) {
+
+    if (!g_scripthashindex) return;
+    for (const auto& scripthash : inserted) {
         g_scripthashindex->CacheScriptHash(scripthash);
     }
 }
