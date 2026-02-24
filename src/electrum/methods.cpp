@@ -215,6 +215,13 @@ void ElectrumServer::ProcessNotifications()
 void RegisterElectrumMethods(ElectrumServer& server)
 {
     auto& node = server.GetNode();
+    server.SetScripthashSubscriptionCallbacks(
+        [](const uint256& scripthash) {
+            if (g_scripthashindex) g_scripthashindex->CacheScriptHash(scripthash);
+        },
+        [](const uint256& scripthash) {
+            if (g_scripthashindex) g_scripthashindex->UncacheScriptHash(scripthash);
+        });
 
     // server.ping
     server.RegisterMethod("server.ping", [](struct bufferevent*, const UniValue&) -> UniValue {

@@ -60,6 +60,8 @@ public:
                              const std::optional<std::string>& initial_status);
     void SubscribeScripthashes(struct bufferevent* bev, const std::vector<std::pair<uint256, std::optional<std::string>>>& subscriptions);
     bool UnsubscribeScripthash(struct bufferevent* bev, const uint256& scripthash);
+    void SetScripthashSubscriptionCallbacks(std::function<void(const uint256&)> on_subscribe,
+                                            std::function<void(const uint256&)> on_unsubscribe);
 
 private:
     node::NodeContext& m_node;
@@ -86,6 +88,8 @@ private:
     uint256 m_last_tip_hash;
 
     std::unordered_map<std::string, MethodHandler> m_methods;
+    std::function<void(const uint256&)> m_on_scripthash_subscribe;
+    std::function<void(const uint256&)> m_on_scripthash_unsubscribe;
 
     void RegisterMethods();
     void EventLoop();
