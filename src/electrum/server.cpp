@@ -4,6 +4,7 @@
 
 #include <electrum/server.h>
 
+#include <index/scripthashindex.h>
 #include <logging.h>
 #include <netbase.h>
 #include <sync.h>
@@ -24,6 +25,14 @@
 
 class ElectrumServer;
 void RegisterElectrumMethods(ElectrumServer& server);
+
+void ElectrumServer::UncacheConnectionScripthashes(const ConnectionState& state)
+{
+    if (!g_scripthashindex) return;
+    for (const auto& [scripthash, _] : state.scripthash_subs) {
+        g_scripthashindex->UncacheScriptHash(scripthash);
+    }
+}
 
 ElectrumServer::ElectrumServer(node::NodeContext& node, std::string bind_addr, uint16_t port, size_t max_connections)
     : m_node(node), m_bind_addr(std::move(bind_addr)), m_port(port), m_max_connections(max_connections)
@@ -124,6 +133,10 @@ void ElectrumServer::Stop()
 
     {
         LOCK(m_connections_mutex);
+        for (const auto& [bev, state] : m_connection_state) {
+            UncacheConnectionScripthashes(state);
+            (void)bev;
+        }
         for (auto* bev : m_connections) {
             bufferevent_free(bev);
         }
@@ -207,7 +220,11 @@ void ElectrumServer::ReadCb(struct bufferevent* bev, void* ctx)
             LOCK(server->m_connections_mutex);
             if (!server->ConsumeRequestToken(bev)) {
                 LogWarning("Electrum: request rate limit exceeded, disconnecting client");
-                server->m_connection_state.erase(bev);
+                auto it = server->m_connection_state.find(bev);
+                if (it != server->m_connection_state.end()) {
+                    server->UncacheConnectionScripthashes(it->second);
+                    server->m_connection_state.erase(it);
+                }
                 server->m_connections.erase(bev);
                 bufferevent_free(bev);
                 return;
@@ -224,7 +241,11 @@ void ElectrumServer::EventCb(struct bufferevent* bev, short events, void* ctx)
 
     if (events & (BEV_EVENT_EOF | BEV_EVENT_ERROR)) {
         LOCK(server->m_connections_mutex);
-        server->m_connection_state.erase(bev);
+        auto it = server->m_connection_state.find(bev);
+        if (it != server->m_connection_state.end()) {
+            server->UncacheConnectionScripthashes(it->second);
+            server->m_connection_state.erase(it);
+        }
         server->m_connections.erase(bev);
         bufferevent_free(bev);
     }
@@ -309,10 +330,17 @@ void ElectrumServer::SubscribeHeaders(struct bufferevent* bev)
 void ElectrumServer::SubscribeScripthash(struct bufferevent* bev, const uint256& scripthash,
                                           const std::optional<std::string>& initial_status)
 {
-    LOCK(m_connections_mutex);
-    auto it = m_connection_state.find(bev);
-    if (it != m_connection_state.end()) {
-        it->second.scripthash_subs[scripthash] = initial_status;
+    bool inserted{false};
+    {
+        LOCK(m_connections_mutex);
+        auto it = m_connection_state.find(bev);
+        if (it != m_connection_state.end()) {
+            inserted = !it->second.scripthash_subs.contains(scripthash);
+            it->second.scripthash_subs[scripthash] = initial_status;
+        }
+    }
+    if (inserted && g_scripthashindex) {
+        g_scripthashindex->CacheScriptHash(scripthash);
     }
 }
 
@@ -321,5 +349,9 @@ bool ElectrumServer::UnsubscribeScripthash(struct bufferevent* bev, const uint25
     LOCK(m_connections_mutex);
     auto it = m_connection_state.find(bev);
     if (it == m_connection_state.end()) return false;
-    return it->second.scripthash_subs.erase(scripthash) > 0;
+    const bool erased{it->second.scripthash_subs.erase(scripthash) > 0};
+    if (erased && g_scripthashindex) {
+        g_scripthashindex->UncacheScriptHash(scripthash);
+    }
+    return erased;
 }

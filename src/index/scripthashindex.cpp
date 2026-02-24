@@ -238,6 +238,27 @@ static ScriptHashScanResult ScanScriptHash(const Chainstate& chainstate, CDBWrap
 
 } // namespace
 
+ScriptHashIndex::CacheEntry ScriptHashIndex::GetOrCreateCacheEntry(const uint256& scripthash) const
+{
+    {
+        LOCK(m_cache_mutex);
+        const auto it{m_cache.find(scripthash)};
+        if (it != m_cache.end()) return it->second;
+    }
+
+    const auto scan_result{ScanScriptHash(*m_chainstate, *m_db, scripthash)};
+    CacheEntry entry;
+    entry.history.reserve(scan_result.history_entries.size());
+    for (const auto& [pos, txid] : scan_result.history_entries) {
+        entry.history.push_back({txid, static_cast<int>(pos.height)});
+    }
+    entry.utxos = scan_result.utxos;
+    entry.balance = scan_result.balance;
+
+    LOCK(m_cache_mutex);
+    return m_cache.try_emplace(scripthash, entry).first->second;
+}
+
 ScriptHashIndex::ScriptHashIndex(std::unique_ptr<interfaces::Chain> chain, size_t n_cache_size, bool f_memory, bool f_wipe)
     : BaseIndex(std::move(chain), "scripthashindex"),
       m_db{std::make_unique<DB>(gArgs.GetDataDirNet() / "indexes" / "scripthashindex" / "db", n_cache_size, f_memory, f_wipe)}
@@ -253,6 +274,11 @@ interfaces::Chain::NotifyOptions ScriptHashIndex::CustomOptions()
 
 bool ScriptHashIndex::CustomAppend(const interfaces::BlockInfo& block)
 {
+    {
+        LOCK(m_cache_mutex);
+        m_cache.clear();
+    }
+
     CDBBatch batch(*m_db);
     const auto& txs = block.data->vtx;
 
@@ -279,6 +305,11 @@ bool ScriptHashIndex::CustomAppend(const interfaces::BlockInfo& block)
 
 bool ScriptHashIndex::CustomRemove(const interfaces::BlockInfo& block)
 {
+    {
+        LOCK(m_cache_mutex);
+        m_cache.clear();
+    }
+
     CDBBatch batch(*m_db);
     assert(block.data);
     const auto& txs = block.data->vtx;
@@ -308,21 +339,37 @@ BaseIndex::DB& ScriptHashIndex::GetDB() const { return *m_db; }
 
 std::vector<ScriptHashHistory> ScriptHashIndex::GetHistory(const uint256& scripthash) const
 {
-    std::vector<ScriptHashHistory> result;
-    const auto scan_result{ScanScriptHash(*m_chainstate, *m_db, scripthash)};
-    result.reserve(scan_result.history_entries.size());
-    for (const auto& [pos, txid] : scan_result.history_entries) {
-        result.push_back({txid, static_cast<int>(pos.height)});
-    }
-    return result;
+    return GetOrCreateCacheEntry(scripthash).history;
 }
 
 std::vector<ScriptHashUtxo> ScriptHashIndex::GetUtxos(const uint256& scripthash) const
 {
-    return ScanScriptHash(*m_chainstate, *m_db, scripthash).utxos;
+    return GetOrCreateCacheEntry(scripthash).utxos;
 }
 
 CAmount ScriptHashIndex::GetBalance(const uint256& scripthash) const
 {
-    return ScanScriptHash(*m_chainstate, *m_db, scripthash).balance;
+    return GetOrCreateCacheEntry(scripthash).balance;
+}
+
+void ScriptHashIndex::CacheScriptHash(const uint256& scripthash)
+{
+    {
+        LOCK(m_cache_mutex);
+        ++m_pinned_refs[scripthash];
+    }
+    (void)GetOrCreateCacheEntry(scripthash);
+}
+
+void ScriptHashIndex::UncacheScriptHash(const uint256& scripthash)
+{
+    LOCK(m_cache_mutex);
+    const auto ref_it{m_pinned_refs.find(scripthash)};
+    if (ref_it == m_pinned_refs.end()) return;
+    if (ref_it->second > 1) {
+        --ref_it->second;
+        return;
+    }
+    m_pinned_refs.erase(ref_it);
+    m_cache.erase(scripthash);
 }

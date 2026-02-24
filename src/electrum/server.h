@@ -94,6 +94,7 @@ private:
     void StartMempoolIndex();
     void StopMempoolIndex();
     void ProcessNotifications();
+    void UncacheConnectionScripthashes(const ConnectionState& state);
 
     static void AcceptCb(struct evconnlistener* listener, int fd,
                          struct sockaddr* addr, int socklen, void* ctx);
