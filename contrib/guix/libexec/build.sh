@@ -318,6 +318,8 @@ mkdir -p "$DISTSRC"
 
         cp -r "${DISTSRC}/share/rpcauth" "${DISTNAME}/share/"
 
+        cp -r "${DISTSRC}/doc/openrpc.json" "${DISTNAME}/share/"
+
         # Deterministically produce {non-,}debug binary tarballs ready
         # for release
         case "$HOST" in
