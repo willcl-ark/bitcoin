@@ -1,0 +1,9 @@
+{
+  "openrpc": "1.3.2",
+  "info": {
+    "title": "Bitcoin Core JSON-RPC",
+    "version": "v30.99.0-dev",
+    "description": "Placeholder OpenRPC skeleton. Regenerate this file for release candidates using `bitcoin-cli getopenrpcinfo`."
+  },
+  "methods": []
+}
