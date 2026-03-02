@@ -495,6 +495,10 @@ public:
 
     const std::string m_name;
 
+    const std::string& GetDescription() const { return m_description; }
+    const std::vector<RPCArg>& GetArgs() const { return m_args; }
+    const RPCResults& GetResults() const { return m_results; }
+
 private:
     const RPCMethodImpl m_fun;
     const std::string m_description;
