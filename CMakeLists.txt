@@ -637,6 +637,7 @@ include(Maintenance)
 setup_split_debug_script()
 add_windows_deploy_target()
 add_macos_deploy_target()
+setup_cpack()
 
 message("\n")
 message("Configure summary")

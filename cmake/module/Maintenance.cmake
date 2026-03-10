@@ -118,3 +118,79 @@ function(add_macos_deploy_target)
     add_dependencies(deploy deploydir)
   endif()
 endfunction()
+
+function(setup_cpack)
+  set(CPACK_PACKAGE_NAME "Bitcoin Core")
+  set(CPACK_PACKAGE_VENDOR "Bitcoin Core")
+  set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Bitcoin Core full node and wallet")
+  set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
+  set(CPACK_RESOURCE_FILE_LICENSE "${PROJECT_SOURCE_DIR}/COPYING")
+  set(CPACK_STRIP_FILES ON)
+  if(NOT DEFINED CPACK_PACKAGE_FILE_NAME)
+    set(CPACK_PACKAGE_FILE_NAME "${PROJECT_NAME}-${PROJECT_VERSION}")
+  endif()
+  set(CPACK_PROJECT_CONFIG_FILE "${PROJECT_SOURCE_DIR}/cmake/CPackConfig.cmake")
+
+  if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+    set(CPACK_GENERATOR "NSIS64")
+  endif()
+
+  set(cpack_components_all auxiliary)
+  if(BUILD_BITCOIN_BIN)
+    list(APPEND cpack_components_all bitcoin)
+  endif()
+  if(BUILD_DAEMON)
+    list(APPEND cpack_components_all bitcoind)
+  endif()
+  if(BUILD_CLI)
+    list(APPEND cpack_components_all bitcoin_cli)
+  endif()
+  if(BUILD_TX)
+    list(APPEND cpack_components_all bitcoin_tx)
+  endif()
+  if(BUILD_UTIL)
+    list(APPEND cpack_components_all bitcoin_util)
+  endif()
+  if(ENABLE_WALLET AND BUILD_WALLET_TOOL)
+    list(APPEND cpack_components_all bitcoin_wallet)
+  endif()
+  if(BUILD_GUI)
+    list(APPEND cpack_components_all bitcoin_qt)
+  endif()
+  set(CPACK_COMPONENTS_ALL ${cpack_components_all})
+
+  include(CPackComponent)
+  cpack_add_component(bitcoin
+    DISPLAY_NAME "Bitcoin command dispatcher"
+    DESCRIPTION "Wrapper executable for Bitcoin Core tools"
+  )
+  cpack_add_component(bitcoind
+    DISPLAY_NAME "Bitcoin daemon"
+    DESCRIPTION "Background process for running a Bitcoin node"
+  )
+  cpack_add_component(bitcoin_cli
+    DISPLAY_NAME "Bitcoin CLI"
+    DESCRIPTION "Command line interface for RPC interaction"
+  )
+  cpack_add_component(bitcoin_tx
+    DISPLAY_NAME "Bitcoin transaction tool"
+    DESCRIPTION "Transaction utility for creating and mutating transactions"
+  )
+  cpack_add_component(bitcoin_util
+    DISPLAY_NAME "Bitcoin utility"
+    DESCRIPTION "Additional Bitcoin Core command line utilities"
+  )
+  cpack_add_component(bitcoin_wallet
+    DISPLAY_NAME "Bitcoin wallet tool"
+    DESCRIPTION "Wallet management command line utility"
+  )
+  cpack_add_component(bitcoin_qt
+    DISPLAY_NAME "Bitcoin Qt"
+    DESCRIPTION "Graphical Bitcoin Core application"
+  )
+  cpack_add_component(auxiliary
+    DISPLAY_NAME "Auxiliary files"
+    DESCRIPTION "Example configuration and helper files"
+  )
+  include(CPack)
+endfunction()
