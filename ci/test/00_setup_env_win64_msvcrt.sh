@@ -12,10 +12,11 @@ export HOST=x86_64-w64-mingw32
 export PACKAGES="g++-mingw-w64-x86-64-posix nsis"
 export RUN_UNIT_TESTS=false
 export RUN_FUNCTIONAL_TESTS=false
-export GOAL="deploy"
+export GOAL="package"
 export BITCOIN_CONFIG="\
   --preset=dev-mode \
   -DENABLE_IPC=OFF \
+  -DCPACK_GENERATOR=NSIS64 \
   -DWITH_USDT=OFF \
   -DREDUCE_EXPORTS=ON \
   -DCMAKE_CXX_FLAGS='-Wno-error=maybe-uninitialized' \
