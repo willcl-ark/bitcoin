@@ -65,6 +65,10 @@ endif()
 set(COPYRIGHT_HOLDERS "The %s developers")
 set(COPYRIGHT_HOLDERS_FINAL "The ${CLIENT_NAME} developers")
 set(CLIENT_BUGREPORT "https://github.com/bitcoin/bitcoin/issues")
+set(auxiliary_readme ${PROJECT_SOURCE_DIR}/README.md)
+if(WIN32)
+  set(auxiliary_readme ${PROJECT_SOURCE_DIR}/doc/README_windows.txt)
+endif()
 
 #=============================
 # Language setup
@@ -84,8 +88,22 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+include(GNUInstallDirs)
 list(APPEND CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake/module)
 include(ProcessConfigurations)
+
+install(FILES ${PROJECT_SOURCE_DIR}/share/examples/bitcoin.conf
+  DESTINATION ${CMAKE_INSTALL_DATADIR}/bitcoin
+  COMPONENT auxiliary
+)
+install(DIRECTORY ${PROJECT_SOURCE_DIR}/share/rpcauth
+  DESTINATION ${CMAKE_INSTALL_DATADIR}/bitcoin
+  COMPONENT auxiliary
+)
+install(FILES ${auxiliary_readme}
+  DESTINATION ${CMAKE_INSTALL_DATADIR}/bitcoin
+  COMPONENT auxiliary
+)
 
 # Flatten static lib dependencies.
 # Without this, if libfoo.a depends on libbar.a, libfoo's objects can't begin
