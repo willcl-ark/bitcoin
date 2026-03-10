@@ -1,12 +1,13 @@
 # MacOS Deployment
 
-The `macdeployqtplus` script should not be run manually. Instead, after building as usual:
+The `macdeployqtplus` script should not be run manually. Instead, build Bitcoin Core as usual:
 
 ```bash
-make deploy
+cmake --build build
 ```
 
-When complete, it will have produced `Bitcoin-Core.zip`.
+This produces `build/Bitcoin-Qt.app` as a build artifact. Guix packaging consumes that
+app bundle directly when producing the unsigned `.zip` and codesigning tarball.
 
 ## SDK Extraction
 
