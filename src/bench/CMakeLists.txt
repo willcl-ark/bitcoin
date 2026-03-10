@@ -84,4 +84,7 @@ if(ENABLE_WALLET)
   target_link_libraries(bench_bitcoin bitcoin_wallet)
 endif()
 
-install_binary_component(bench_bitcoin INTERNAL)
+install(TARGETS bench_bitcoin
+  RUNTIME DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}
+  COMPONENT bench_bitcoin
+)

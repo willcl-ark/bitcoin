@@ -148,8 +148,6 @@ target_link_libraries(bitcoin_common
     $<$<PLATFORM_ID:Windows>:ws2_32>
 )
 
-include(InstallBinaryComponent)
-
 if(ENABLE_WALLET)
   add_subdirectory(wallet)
 
@@ -168,7 +166,14 @@ if(ENABLE_WALLET)
       bitcoin_util
       Boost::headers
     )
-    install_binary_component(bitcoin-wallet HAS_MANPAGE)
+    install(TARGETS bitcoin-wallet
+      RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+      COMPONENT bitcoin_wallet
+    )
+    install(FILES ${PROJECT_SOURCE_DIR}/doc/man/bitcoin-wallet.1
+      DESTINATION ${CMAKE_INSTALL_MANDIR}/man1
+      COMPONENT bitcoin_wallet
+    )
   endif()
 endif()
 
@@ -301,7 +306,14 @@ if(BUILD_BITCOIN_BIN)
   add_windows_resources(bitcoin bitcoin-res.rc)
   add_windows_application_manifest(bitcoin)
   target_link_libraries(bitcoin core_interface bitcoin_common bitcoin_util)
-  install_binary_component(bitcoin HAS_MANPAGE)
+  install(TARGETS bitcoin
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    COMPONENT bitcoin
+  )
+  install(FILES ${PROJECT_SOURCE_DIR}/doc/man/bitcoin.1
+    DESTINATION ${CMAKE_INSTALL_MANDIR}/man1
+    COMPONENT bitcoin
+  )
 endif()
 
 # Bitcoin Core bitcoind.
@@ -317,7 +329,14 @@ if(BUILD_DAEMON)
     bitcoin_node
     $<TARGET_NAME_IF_EXISTS:bitcoin_wallet>
   )
-  install_binary_component(bitcoind HAS_MANPAGE)
+  install(TARGETS bitcoind
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    COMPONENT bitcoind
+  )
+  install(FILES ${PROJECT_SOURCE_DIR}/doc/man/bitcoind.1
+    DESTINATION ${CMAKE_INSTALL_MANDIR}/man1
+    COMPONENT bitcoind
+  )
 endif()
 if(ENABLE_IPC AND BUILD_DAEMON)
   add_executable(bitcoin-node
@@ -330,7 +349,10 @@ if(ENABLE_IPC AND BUILD_DAEMON)
     bitcoin_ipc
     $<TARGET_NAME_IF_EXISTS:bitcoin_wallet>
   )
-  install_binary_component(bitcoin-node INTERNAL)
+  install(TARGETS bitcoin-node
+    RUNTIME DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}
+    COMPONENT bitcoin_node
+  )
 endif()
 
 
@@ -358,7 +380,14 @@ if(BUILD_CLI)
     libevent::core
     libevent::extra
   )
-  install_binary_component(bitcoin-cli HAS_MANPAGE)
+  install(TARGETS bitcoin-cli
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    COMPONENT bitcoin_cli
+  )
+  install(FILES ${PROJECT_SOURCE_DIR}/doc/man/bitcoin-cli.1
+    DESTINATION ${CMAKE_INSTALL_MANDIR}/man1
+    COMPONENT bitcoin_cli
+  )
 endif()
 
 
@@ -372,7 +401,14 @@ if(BUILD_TX)
     bitcoin_util
     univalue
   )
-  install_binary_component(bitcoin-tx HAS_MANPAGE)
+  install(TARGETS bitcoin-tx
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    COMPONENT bitcoin_tx
+  )
+  install(FILES ${PROJECT_SOURCE_DIR}/doc/man/bitcoin-tx.1
+    DESTINATION ${CMAKE_INSTALL_MANDIR}/man1
+    COMPONENT bitcoin_tx
+  )
 endif()
 
 
@@ -385,7 +421,14 @@ if(BUILD_UTIL)
     bitcoin_common
     bitcoin_util
   )
-  install_binary_component(bitcoin-util HAS_MANPAGE)
+  install(TARGETS bitcoin-util
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    COMPONENT bitcoin_util
+  )
+  install(FILES ${PROJECT_SOURCE_DIR}/doc/man/bitcoin-util.1
+    DESTINATION ${CMAKE_INSTALL_MANDIR}/man1
+    COMPONENT bitcoin_util
+  )
 endif()
 
 
@@ -409,7 +452,10 @@ if(BUILD_KERNEL_LIB)
         core_interface
         bitcoinkernel
     )
-    install_binary_component(bitcoin-chainstate INTERNAL)
+    install(TARGETS bitcoin-chainstate
+      RUNTIME DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}
+      COMPONENT bitcoin_chainstate
+    )
   endif()
 endif()
 
