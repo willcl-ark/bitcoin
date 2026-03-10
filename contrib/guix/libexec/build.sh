@@ -234,6 +234,10 @@ case "$HOST" in
     *linux*)  CMAKE_EXE_LINKER_FLAGS="-DCMAKE_EXE_LINKER_FLAGS=${HOST_LDFLAGS} -static-libstdc++ -static-libgcc" ;;
 esac
 
+case "$HOST" in
+    *mingw*)  CMAKE_PACKAGE_FILE_NAME="-DCPACK_PACKAGE_FILE_NAME=${DISTNAME}-win64-setup" ;;
+esac
+
 mkdir -p "$DISTSRC"
 (
     cd "$DISTSRC"
@@ -249,6 +253,7 @@ mkdir -p "$DISTSRC"
           -DWITH_CCACHE=OFF \
           -Werror=dev \
           ${CONFIGFLAGS} \
+          ${CMAKE_PACKAGE_FILE_NAME} \
           "${CMAKE_EXE_LINKER_FLAGS}"
 
     # Build Bitcoin Core
@@ -259,8 +264,11 @@ mkdir -p "$DISTSRC"
     # Make the os-specific installers
     case "$HOST" in
         *mingw*)
-            cmake --build build -j "$JOBS" -t deploy ${V:+--verbose}
-            mv build/bitcoin-win64-setup.exe "${OUTDIR}/${DISTNAME}-win64-setup-unsigned.exe"
+            (
+                cd build
+                cpack -G NSIS64 ${V:+--verbose}
+            )
+            mv "build/${DISTNAME}-win64-setup.exe" "${OUTDIR}/${DISTNAME}-win64-setup-unsigned.exe"
             ;;
     esac
 
