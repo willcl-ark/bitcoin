@@ -13,6 +13,7 @@ function(install_binary_component component)
     ""                          # multi_value_keywords
   )
   set(target_name ${component})
+  string(MAKE_C_IDENTIFIER "${component}" component)
   if(IC_INTERNAL)
     set(runtime_dest ${CMAKE_INSTALL_LIBEXECDIR})
   else()
