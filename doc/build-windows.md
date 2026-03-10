@@ -32,7 +32,7 @@ installing the toolchain will be different.
 See [README.md](../depends/README.md) in the depends directory for which
 dependencies to install and [dependencies.md](dependencies.md) for a complete overview.
 
-If you want to build the Windows installer using the `deploy` build target, you will need [NSIS](https://nsis.sourceforge.io/Main_Page):
+If you want to build the Windows installer using CPack, you will need [NSIS](https://nsis.sourceforge.io/Main_Page):
 
     apt install nsis
 
@@ -78,5 +78,10 @@ cmake --install build --prefix /mnt/c/workspace/bitcoin --strip
 
 You can also create an installer using:
 ```shell
-cmake --build build --target deploy
+cpack --config build/CPackConfig.cmake -G NSIS64
+```
+
+Or equivalently:
+```shell
+cmake --build build --target package
 ```
