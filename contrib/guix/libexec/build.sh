@@ -369,12 +369,18 @@ mkdir -p "$DISTSRC"
             )
             ;;
         *darwin*)
-            cmake --build build --target deploy ${V:+--verbose}
-            mv build/dist/bitcoin-macos-app.zip "${OUTDIR}/${DISTNAME}-${HOST}-unsigned.zip"
+            (
+                cd build
+                find Bitcoin-Qt.app -print0 \
+                    | xargs -0r touch --no-dereference --date="@${SOURCE_DATE_EPOCH}"
+                find Bitcoin-Qt.app | sort \
+                    | zip -X@ "${OUTDIR}/${DISTNAME}-${HOST}-unsigned.zip" \
+                    || ( rm -f "${OUTDIR}/${DISTNAME}-${HOST}-unsigned.zip" && exit 1 )
+            )
             mkdir -p "unsigned-app-${HOST}"
             cp  --target-directory="unsigned-app-${HOST}" \
                 contrib/macdeploy/detached-sig-create.sh
-            mv --target-directory="unsigned-app-${HOST}" build/dist
+            cp -r --target-directory="unsigned-app-${HOST}" build/Bitcoin-Qt.app
             cp -r --target-directory="unsigned-app-${HOST}" "${INSTALLPATH}"
             (
                 cd "unsigned-app-${HOST}"

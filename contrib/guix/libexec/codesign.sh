@@ -109,19 +109,17 @@ mkdir -p "$DISTSRC"
             esac
 
             # Apply detached codesignatures (in-place)
-            signapple apply dist/Bitcoin-Qt.app codesignatures/osx/"${HOST}"/dist/Bitcoin-Qt.app
+            signapple apply Bitcoin-Qt.app codesignatures/osx/"${HOST}"/Bitcoin-Qt.app
             find "${DISTNAME}" \( -wholename "*/bin/*" -o -wholename "*/libexec/*" \) -type f | while read -r bin
             do
                 signapple apply "${bin}" "codesignatures/osx/${HOST}/${bin}.${ARCH}sign"
             done
 
-            # Make a .zip from dist/
-            cd dist/
-            find . -print0 \
+            # Make a .zip from the app bundle.
+            find Bitcoin-Qt.app -print0 \
                 | xargs -0r touch --no-dereference --date="@${SOURCE_DATE_EPOCH}"
-            find . | sort \
+            find Bitcoin-Qt.app | sort \
                 | zip -X@ "${OUTDIR}/${DISTNAME}-${HOST}.zip"
-            cd ..
 
             # Make a .tar.gz from bins
             find "${DISTNAME}" -print0 \
