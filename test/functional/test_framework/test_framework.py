@@ -331,7 +331,12 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
             h.flush()
             rpc_logger.removeHandler(h)
         if cleanup_tree_on_exit:
-            shutil.rmtree(self.options.tmpdir)
+            for _ in range(3):
+                try:
+                    shutil.rmtree(self.options.tmpdir)
+                    break
+                except PermissionError:
+                    time.sleep(0.5)
 
         self.nodes.clear()
         return exit_code
