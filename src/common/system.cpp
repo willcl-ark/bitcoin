@@ -34,6 +34,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <vector>
 
 using util::ReplaceAll;
 
@@ -53,7 +54,53 @@ void runCommand(const std::string& strCommand)
 #ifndef WIN32
     int nErr = ::system(strCommand.c_str());
 #else
-    int nErr = ::_wsystem(std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>,wchar_t>().from_bytes(strCommand).c_str());
+    const std::wstring command{std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>, wchar_t>().from_bytes(strCommand)};
+    std::wstring shell{L"cmd.exe"};
+    if (const DWORD comspec_len{::GetEnvironmentVariableW(L"COMSPEC", nullptr, 0)}) {
+        std::wstring comspec(comspec_len, L'\0');
+        if (const DWORD copied{::GetEnvironmentVariableW(L"COMSPEC", comspec.data(), comspec_len)};
+            copied > 0 && copied < comspec_len) {
+            comspec.resize(copied);
+            shell = std::move(comspec);
+        }
+    }
+
+    // _wsystem() launches via cmd.exe with inheritable handles. On Windows, notify
+    // subprocesses can then keep bitcoind's debug.log handle alive long enough for
+    // functional-test cleanup to race with temporary directory removal. Launch the
+    // same shell command with handle inheritance disabled instead; shell redirection
+    // still works because cmd.exe opens its redirected files itself.
+    std::wstring command_line{L"\"" + shell + L"\" /c " + command};
+    std::vector<wchar_t> mutable_command_line(command_line.begin(), command_line.end());
+    mutable_command_line.push_back(L'\0');
+
+    STARTUPINFOW startup_info{};
+    startup_info.cb = sizeof(startup_info);
+    PROCESS_INFORMATION process_info{};
+    int nErr = 0;
+    if (!::CreateProcessW(
+            nullptr,
+            mutable_command_line.data(),
+            nullptr,
+            nullptr,
+            /*bInheritHandles=*/FALSE,
+            0,
+            nullptr,
+            nullptr,
+            &startup_info,
+            &process_info)) {
+        nErr = 1;
+    } else {
+        ::WaitForSingleObject(process_info.hProcess, INFINITE);
+        DWORD exit_code = 0;
+        if (!::GetExitCodeProcess(process_info.hProcess, &exit_code)) {
+            nErr = 1;
+        } else {
+            nErr = static_cast<int>(exit_code);
+        }
+        ::CloseHandle(process_info.hThread);
+        ::CloseHandle(process_info.hProcess);
+    }
 #endif
     if (nErr) {
         LogWarning("runCommand error: system(%s) returned %d", strCommand, nErr);
