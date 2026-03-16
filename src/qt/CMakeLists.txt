@@ -8,7 +8,6 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
   set(CMAKE_OBJCXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
   set(CMAKE_OBJCXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
   set(CMAKE_OBJCXX_FLAGS_MINSIZEREL "${CMAKE_CXX_FLAGS_MINSIZEREL}")
-  string(APPEND CMAKE_OBJCXX_COMPILE_OBJECT " ${APPEND_CPPFLAGS} ${APPEND_CXXFLAGS}")
 endif()
 
 get_target_property(qt_lib_type Qt6::Core TYPE)
@@ -57,12 +56,6 @@ set(CMAKE_AUTORCC OFF)
 configure_file(bitcoin_locale.qrc bitcoin_locale.qrc USE_SOURCE_PERMISSIONS COPYONLY)
 qt6_add_resources(BITCOIN_QRC bitcoin.qrc)
 qt6_add_resources(BITCOIN_LOCALE_QRC ${CMAKE_CURRENT_BINARY_DIR}/bitcoin_locale.qrc)
-# See: https://bugreports.qt.io/browse/QTBUG-141858.
-get_target_property(warn_flags warn_interface INTERFACE_COMPILE_OPTIONS)
-if("-Wtrailing-whitespace=any" IN_LIST warn_flags)
-  set_source_files_properties(${BITCOIN_QRC} ${BITCOIN_LOCALE_QRC} PROPERTIES COMPILE_OPTIONS -Wno-trailing-whitespace)
-endif()
-unset(warn_flags)
 
 # The bitcoinqt sources have to include headers in
 # order to parse them to collect translatable strings.

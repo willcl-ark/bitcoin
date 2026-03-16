@@ -75,23 +75,8 @@ target_include_directories(leveldb
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src/leveldb/include>
 )
 
-add_library(nowarn_leveldb_interface INTERFACE)
-if(MSVC)
-  target_compile_options(nowarn_leveldb_interface INTERFACE
-    /wd4722
-  )
-  target_compile_definitions(nowarn_leveldb_interface INTERFACE
-    _CRT_NONSTDC_NO_WARNINGS
-  )
-else()
-  try_append_cxx_flags("-Wconditional-uninitialized" TARGET nowarn_leveldb_interface SKIP_LINK
-    IF_CHECK_PASSED "-Wno-conditional-uninitialized"
-  )
-endif()
-
 target_link_libraries(leveldb PRIVATE
   core_interface
-  nowarn_leveldb_interface
   crc32c
 )
 
