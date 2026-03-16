@@ -111,7 +111,7 @@ if(BUILD_GUI)
   if(BUILD_GUI_TESTS)
     list(APPEND qt_components Test)
   endif()
-  find_package(Qt 6.2 MODULE REQUIRED
+  find_package(Qt6 6.2 REQUIRED
     COMPONENTS ${qt_components}
   )
   unset(qt_components)
@@ -119,7 +119,6 @@ endif()
 
 option(BUILD_BENCH "Build bench_bitcoin executable." OFF)
 option(BUILD_FUZZ_BINARY "Build fuzz binary." OFF)
-option(INSTALL_MAN "Install man pages." ON)
 
 add_library(core_interface INTERFACE)
 
@@ -139,8 +138,10 @@ target_link_libraries(core_interface INTERFACE sanitize_interface)
 add_library(fuzzer_interface INTERFACE)
 set(FUZZ_BINARY_LINKS_WITHOUT_MAIN_FUNCTION OFF)
 
-include(AddBoostIfNeeded)
-add_boost_if_needed()
+find_package(Boost 1.74.0 REQUIRED CONFIG)
+if(BUILD_TESTS AND DEFINED VCPKG_TARGET_TRIPLET)
+  find_package(boost_included_unit_test_framework ${Boost_VERSION} EXACT REQUIRED CONFIG)
+endif()
 
 if(BUILD_DAEMON OR BUILD_GUI OR BUILD_CLI OR BUILD_TESTS OR BUILD_BENCH OR BUILD_FUZZ_BINARY)
   find_package(Libevent 2.1.8 MODULE REQUIRED)

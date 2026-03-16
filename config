@@ -50,6 +50,7 @@ Dropped from ./CMakeLists.txt and related helpers:
 - `CMAKE_COMPILE_WARNING_AS_ERROR`
 - `WITH_CCACHE`
 - `BUILD_FOR_FUZZING`
+- `INSTALL_MAN`
 
 6. Tooling and configure-time extras
 - `cmake/ccache.cmake`.
@@ -79,3 +80,58 @@ Dropped from subordinate CMake files to match the top-level cutover:
 4. `cmake/secp256k1.cmake`
 - Propagating sanitizer and appended flag state into the secp256k1 subtree.
 - CFLAGS deduplication borrowed from `ProcessConfigurations.cmake`.
+
+Removed from `cmake/**` and `cmake/module/**` in the second minimal-CMake pass:
+
+1. Deleted as policy/tooling/diagnostic modules to re-home outside project CMake
+- `cmake/ccache.cmake`
+- `cmake/module/CheckLinkerSupportsPIE.cmake`
+- `cmake/module/FlagsSummary.cmake`
+- `cmake/module/GenerateSetupNsi.cmake`
+- `cmake/module/GetTargetInterface.cmake`
+- `cmake/module/Maintenance.cmake`
+- `cmake/module/ProcessConfigurations.cmake`
+- `cmake/module/TryAppendCXXFlags.cmake`
+- `cmake/module/TryAppendLinkerFlag.cmake`
+- `cmake/module/WarnAboutGlobalProperties.cmake`
+- `cmake/script/Coverage.cmake`
+- `cmake/script/CoverageFuzz.cmake`
+- `cmake/script/CoverageInclude.cmake.in`
+- `cmake/script/cov_tool_wrapper.sh.in`
+- `cmake/script/macos_zip.sh`
+
+2. Simplified but kept because the build still needs them
+- `cmake/libmultiprocess.cmake`
+  - removed `mark_as_advanced(...)` UI cleanup
+  - removed test/example compilation-database and `EXCLUDE_FROM_ALL` behavior tweaks
+- `cmake/module/InstallBinaryComponent.cmake`
+  - removed manpage-install logic
+
+3. Removed wrappers in favor of standard package discovery
+- `cmake/module/AddBoostIfNeeded.cmake`
+  - replaced with direct `find_package(Boost ...)` in the top-level `CMakeLists.txt`
+- `cmake/module/FindQt.cmake`
+  - replaced with direct `find_package(Qt6 ...)` in the top-level `CMakeLists.txt`
+- top-level `INSTALL_MAN` option
+  - removed along with manpage-install handling from `InstallBinaryComponent.cmake`
+
+4. Kept because they still describe target wiring, package discovery, code generation, or required source probes
+- `cmake/crc32c.cmake`
+- `cmake/introspection.cmake`
+- `cmake/leveldb.cmake`
+- `cmake/libmultiprocess.cmake`
+- `cmake/minisketch.cmake`
+- `cmake/secp256k1.cmake`
+- `cmake/module/AddWindowsResources.cmake`
+- `cmake/module/CheckSourceCompilesWithFlags.cmake`
+- `cmake/module/FindLibevent.cmake`
+- `cmake/module/FindQRencode.cmake`
+- `cmake/module/FindUSDT.cmake`
+- `cmake/module/FindZeroMQ.cmake`
+- `cmake/module/InstallBinaryComponent.cmake`
+- `cmake/module/TargetDataSources.cmake`
+- `cmake/module/TestAppendRequiredLibraries.cmake`
+- `cmake/script/GenerateBuildInfo.cmake`
+- `cmake/script/GenerateHeaderFromJson.cmake`
+- `cmake/script/GenerateHeaderFromRaw.cmake`
+- `cmake/windows-app.manifest.in`
