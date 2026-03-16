@@ -154,5 +154,4 @@ if(BUILD_TESTS)
 endif()
 
 add_subdirectory(test)
-add_subdirectory(doc)
 add_subdirectory(src)
