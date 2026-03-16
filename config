@@ -104,8 +104,6 @@ Removed from `cmake/**` and `cmake/module/**` in the second minimal-CMake pass:
 - `cmake/libmultiprocess.cmake`
   - removed `mark_as_advanced(...)` UI cleanup
   - removed test/example compilation-database and `EXCLUDE_FROM_ALL` behavior tweaks
-- `cmake/module/InstallBinaryComponent.cmake`
-  - removed manpage-install logic
 
 3. Removed wrappers in favor of standard package discovery
 - `cmake/module/AddBoostIfNeeded.cmake`
@@ -115,7 +113,30 @@ Removed from `cmake/**` and `cmake/module/**` in the second minimal-CMake pass:
 - top-level `INSTALL_MAN` option
   - removed along with manpage-install handling from `InstallBinaryComponent.cmake`
 
-4. Kept because they still describe target wiring, package discovery, code generation, or required source probes
+4. Further removed or reduced in a stricter compile/link-only pass
+- `cmake/module/InstallBinaryComponent.cmake`
+  - deleted, along with its caller-side `install_binary_component(...)` invocations
+- `cmake/script/GenerateBuildInfo.cmake`
+  - removed Git/tag/dirty-worktree probing policy
+  - now only writes externally supplied `BUILD_GIT_TAG` / `BUILD_GIT_COMMIT` values, or no build info
+- `cmake/module/FindLibevent.cmake`
+  - removed `mark_as_advanced(...)` cache UI cleanup
+- `cmake/module/FindQRencode.cmake`
+  - removed `mark_as_advanced(...)` cache UI cleanup
+- `cmake/module/FindUSDT.cmake`
+  - removed `mark_as_advanced(...)` cache UI cleanup
+- `cmake/module/FindZeroMQ.cmake`
+  - removed `mark_as_advanced(...)` cache UI cleanup
+- `cmake/crc32c.cmake`
+  - removed `EXPORT_COMPILE_COMMANDS OFF`
+- `cmake/leveldb.cmake`
+  - removed `EXPORT_COMPILE_COMMANDS OFF`
+- `cmake/minisketch.cmake`
+  - removed `EXPORT_COMPILE_COMMANDS OFF`
+- `cmake/secp256k1.cmake`
+  - removed `CMAKE_EXPORT_COMPILE_COMMANDS OFF`
+
+5. Kept because they still describe target wiring, package discovery, code generation, or required source probes
 - `cmake/crc32c.cmake`
 - `cmake/introspection.cmake`
 - `cmake/leveldb.cmake`
@@ -128,7 +149,6 @@ Removed from `cmake/**` and `cmake/module/**` in the second minimal-CMake pass:
 - `cmake/module/FindQRencode.cmake`
 - `cmake/module/FindUSDT.cmake`
 - `cmake/module/FindZeroMQ.cmake`
-- `cmake/module/InstallBinaryComponent.cmake`
 - `cmake/module/TargetDataSources.cmake`
 - `cmake/module/TestAppendRequiredLibraries.cmake`
 - `cmake/script/GenerateBuildInfo.cmake`

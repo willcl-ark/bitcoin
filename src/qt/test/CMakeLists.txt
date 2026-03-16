@@ -50,5 +50,3 @@ if(WIN32 AND VCPKG_TARGET_TRIPLET)
   )
   unset(plugin_path)
 endif()
-
-install_binary_component(test_bitcoin-qt INTERNAL)

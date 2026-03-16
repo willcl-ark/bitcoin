@@ -80,7 +80,3 @@ else()
 endif()
 
 unset(_libevent_components)
-
-mark_as_advanced(Libevent_DIR)
-mark_as_advanced(_event_h)
-mark_as_advanced(_event_lib)

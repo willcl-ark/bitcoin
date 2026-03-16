@@ -67,10 +67,6 @@ target_link_libraries(minisketch
     minisketch_common
 )
 
-set_target_properties(minisketch PROPERTIES
-  EXPORT_COMPILE_COMMANDS OFF
-)
-
 if(HAVE_CLMUL)
   set(_minisketch_clmul_src
       ${PROJECT_SOURCE_DIR}/src/minisketch/src/fields/clmul_1byte.cpp

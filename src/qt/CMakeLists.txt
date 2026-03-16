@@ -263,7 +263,6 @@ target_link_libraries(bitcoin-qt
 )
 
 import_plugins(bitcoin-qt)
-install_binary_component(bitcoin-qt HAS_MANPAGE)
 if(WIN32)
   set_target_properties(bitcoin-qt PROPERTIES WIN32_EXECUTABLE TRUE)
 endif()
@@ -280,7 +279,6 @@ if(ENABLE_IPC)
     bitcoin_ipc
   )
   import_plugins(bitcoin-gui)
-  install_binary_component(bitcoin-gui INTERNAL)
   if(WIN32)
     set_target_properties(bitcoin-gui PROPERTIES WIN32_EXECUTABLE TRUE)
   endif()

@@ -98,7 +98,6 @@ target_include_directories(crc32c
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src/crc32c/include>
 )
 target_link_libraries(crc32c PRIVATE core_interface)
-set_target_properties(crc32c PROPERTIES EXPORT_COMPILE_COMMANDS OFF)
 
 if(HAVE_SSE42)
   set(_crc32_src ${PROJECT_SOURCE_DIR}/src/crc32c/src/crc32c_sse42.cc)

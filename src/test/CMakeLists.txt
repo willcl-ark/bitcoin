@@ -219,5 +219,3 @@ function(add_all_test_targets)
 endfunction()
 
 add_all_test_targets()
-
-install_binary_component(test_bitcoin INTERNAL)

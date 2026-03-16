@@ -26,7 +26,6 @@ if(ZeroMQ_FOUND)
   elseif(TARGET libzmq-static)
     add_library(zeromq ALIAS libzmq-static)
   endif()
-  mark_as_advanced(ZeroMQ_DIR)
 else()
   find_package(PkgConfig REQUIRED)
   pkg_check_modules(libzmq QUIET

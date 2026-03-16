@@ -79,7 +79,3 @@ target_link_libraries(leveldb PRIVATE
   core_interface
   crc32c
 )
-
-set_target_properties(leveldb PROPERTIES
-  EXPORT_COMPILE_COMMANDS OFF
-)

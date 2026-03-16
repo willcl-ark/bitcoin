@@ -8,7 +8,6 @@ function(add_secp256k1 subdir)
   message("")
   message("Configuring secp256k1 subtree...")
   set(BUILD_SHARED_LIBS OFF)
-  set(CMAKE_EXPORT_COMPILE_COMMANDS OFF)
 
   # Unconditionally prevent secp's symbols from being exported by our libs
   set(CMAKE_C_VISIBILITY_PRESET hidden)

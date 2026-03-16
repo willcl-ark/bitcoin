@@ -27,7 +27,6 @@ This module defines the following variables:
 find_path(USDT_INCLUDE_DIR
   NAMES sys/sdt.h
 )
-mark_as_advanced(USDT_INCLUDE_DIR)
 
 if(USDT_INCLUDE_DIR)
   include(CMakePushCheckState)

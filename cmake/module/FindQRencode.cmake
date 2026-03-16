@@ -65,7 +65,3 @@ if(QRencode_FOUND)
     INTERFACE_INCLUDE_DIRECTORIES "${QRencode_INCLUDE_DIR}"
   )
 endif()
-
-mark_as_advanced(
-  QRencode_INCLUDE_DIR
-)
