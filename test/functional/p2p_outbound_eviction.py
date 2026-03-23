@@ -36,6 +36,7 @@ class P2POutEvict(BitcoinTestFramework):
         # This tests the eviction logic for **unprotected** outbound peers (that is, PeerManagerImpl::ConsiderEviction)
         node = self.nodes[0]
         cur_mock_time = node.mocktime
+        assert cur_mock_time is not None
 
         # Get our tip header and its parent
         tip_header = from_hex(CBlockHeader(), node.getblockheader(node.getbestblockhash(), False))
@@ -129,6 +130,7 @@ class P2POutEvict(BitcoinTestFramework):
         # This test ensures that such protected outbound peers are not disconnected even after chain sync and headers timeouts.
         node = self.nodes[0]
         cur_mock_time = node.mocktime
+        assert cur_mock_time is not None
         tip_header = from_hex(CBlockHeader(), node.getblockheader(node.getbestblockhash(), False))
 
         self.log.info("Create an outbound connection to a peer that shares our tip so it gets granted protection")
@@ -156,6 +158,7 @@ class P2POutEvict(BitcoinTestFramework):
         # This tests the outbound eviction logic for a mix of protected and unprotected peers.
         node = self.nodes[0]
         cur_mock_time = node.mocktime
+        assert cur_mock_time is not None
 
         self.log.info("Create a mix of protected and unprotected outbound connections to check against eviction")
 
@@ -220,6 +223,7 @@ class P2POutEvict(BitcoinTestFramework):
         # This tests that other types of peers (blocks-relay-only for instance) are not granted protection
         node = self.nodes[0]
         cur_mock_time = node.mocktime
+        assert cur_mock_time is not None
         tip_header = from_hex(CBlockHeader(), node.getblockheader(node.getbestblockhash(), False))
 
         self.log.info("Create an blocks-only outbound connection to a peer that shares our tip. This would usually grant protection")

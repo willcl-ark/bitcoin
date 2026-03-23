@@ -352,6 +352,8 @@ class ProxyTest(BitcoinTestFramework):
         assert_equal(n4['cjdns']['reachable'], True)
 
         if self.have_unix_sockets:
+            assert isinstance(self.conf4.addr, str)
+            unix_proxy = f'unix:{self.conf4.addr}'
             n5 = networks_dict(nodes_network_info[5])
             assert_equal(NETWORKS, n5.keys())
             for net in NETWORKS:
@@ -359,7 +361,7 @@ class ProxyTest(BitcoinTestFramework):
                     expected_proxy = ''
                     expected_randomize = False
                 else:
-                    expected_proxy = 'unix:' + self.conf4.addr # no port number
+                    expected_proxy = unix_proxy # no port number
                     expected_randomize = True
                 assert_equal(n5[net]['proxy'], expected_proxy)
                 assert_equal(n5[net]['proxy_randomize_credentials'], expected_randomize)
@@ -374,7 +376,7 @@ class ProxyTest(BitcoinTestFramework):
                     expected_proxy = ''
                     expected_randomize = False
                 else:
-                    expected_proxy = 'unix:' + self.conf4.addr # no port number
+                    expected_proxy = unix_proxy # no port number
                     expected_randomize = True
                 assert_equal(n6[net]['proxy'], expected_proxy)
                 assert_equal(n6[net]['proxy_randomize_credentials'], expected_randomize)

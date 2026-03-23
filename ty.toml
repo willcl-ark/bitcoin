@@ -6,4 +6,3 @@ root = ["test/functional"]
 
 [rules]
 unresolved-attribute = "ignore"
-unsupported-operator = "ignore"
