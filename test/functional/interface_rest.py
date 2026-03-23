@@ -438,6 +438,7 @@ class RESTTest (BitcoinTestFramework):
             spent_bin = self.test_rest_request(f"/spenttxouts/{blockhash}", req_type=ReqType.BIN, ret_type=RetType.BYTES)
             spent_hex = self.test_rest_request(f"/spenttxouts/{blockhash}", req_type=ReqType.HEX, ret_type=RetType.BYTES)
             spent_json = self.test_rest_request(f"/spenttxouts/{blockhash}", req_type=ReqType.JSON, ret_type=RetType.JSON)
+            assert isinstance(spent_json, list)
 
             assert_equal(bytes.fromhex(spent_hex.decode()), spent_bin)
 
@@ -453,7 +454,9 @@ class RESTTest (BitcoinTestFramework):
                 expected = [(p["scriptPubKey"]["hex"], p["value"]) for p in prevouts]
                 assert_equal(expected, actual)
                 # also compare JSON format
-                actual = [(prevout["scriptPubKey"], prevout["value"]) for prevout in spent_json[i]]
+                spent_json_prevouts = spent_json[i]
+                assert isinstance(spent_json_prevouts, list)
+                actual = [(prevout["scriptPubKey"], prevout["value"]) for prevout in spent_json_prevouts]
                 expected = [(p["scriptPubKey"], p["value"]) for p in prevouts]
                 assert_equal(expected, actual)
 

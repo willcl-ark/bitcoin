@@ -8,7 +8,6 @@ root = ["test/functional"]
 invalid-argument-type = "ignore"
 invalid-assignment = "ignore"
 invalid-method-override = "ignore"
-not-iterable = "ignore"
 not-subscriptable = "ignore"
 possibly-missing-submodule = "ignore"
 unresolved-attribute = "ignore"
