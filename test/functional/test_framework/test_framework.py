@@ -103,7 +103,7 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         self.setup_clean_chain: bool = False
         self.noban_tx_relay: bool = False
         self.nodes: list[TestNode] = []
-        self.extra_args = None
+        self.extra_args: list[list[str]] = []
         self.extra_init = None
         self.network_thread = None
         self.rpc_timeout = 60  # Wait for up to 60 seconds for the RPC server to respond
@@ -126,6 +126,8 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         # addrman will not result in automatic connections to them.
         self.disable_autoconnect = True
         self.set_test_params()
+        if isinstance(getattr(self, "num_nodes", None), int) and not self.extra_args:
+            self.extra_args = [[] for _ in range(self.num_nodes)]
         assert self.wallet_names is None or len(self.wallet_names) <= self.num_nodes
         self.rpc_timeout = int(self.rpc_timeout * self.options.timeout_factor) # optionally, increase timeout by a factor
 
@@ -447,7 +449,7 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
             extra_confs = [["bind=127.0.0.1"]] * num_nodes
         else:
             extra_confs = [[]] * num_nodes
-        if extra_args is None:
+        if not extra_args:
             extra_args = [[]] * num_nodes
         # Whitelist peers to speed up tx relay / mempool sync. Don't use it if testing tx relay or timing.
         if self.noban_tx_relay:

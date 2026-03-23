@@ -116,22 +116,25 @@ class ProxyTest(BitcoinTestFramework):
 
         # We will not try to connect to this.
         self.i2p_sam = ('127.0.0.1', 7656)
+        proxy1 = self.conf1.tcp_addr()
+        proxy2 = self.conf2.tcp_addr()
 
         # Note: proxies are not used to connect to local nodes. This is because the proxy to
         # use is based on CService.GetNetwork(), which returns NET_UNROUTABLE for localhost.
         args = [
-            ['-listen', f'-proxy={self.conf1.addr[0]}:{self.conf1.addr[1]}','-proxyrandomize=1'],
-            ['-listen', f'-proxy={self.conf1.addr[0]}:{self.conf1.addr[1]}',f'-onion={self.conf2.addr[0]}:{self.conf2.addr[1]}',
+            ['-listen', f'-proxy={proxy1[0]}:{proxy1[1]}','-proxyrandomize=1'],
+            ['-listen', f'-proxy={proxy1[0]}:{proxy1[1]}',f'-onion={proxy2[0]}:{proxy2[1]}',
                 f'-i2psam={self.i2p_sam[0]}:{self.i2p_sam[1]}', '-i2pacceptincoming=0', '-proxyrandomize=0'],
-            ['-listen', f'-proxy={self.conf2.addr[0]}:{self.conf2.addr[1]}','-proxyrandomize=1'],
+            ['-listen', f'-proxy={proxy2[0]}:{proxy2[1]}','-proxyrandomize=1'],
             [],
-            ['-listen', f'-proxy={self.conf1.addr[0]}:{self.conf1.addr[1]}','-proxyrandomize=1',
+            ['-listen', f'-proxy={proxy1[0]}:{proxy1[1]}','-proxyrandomize=1',
                 '-cjdnsreachable'],
             [],
             []
         ]
         if self.have_ipv6:
-            args[3] = ['-listen', f'-proxy=[{self.conf3.addr[0]}]:{self.conf3.addr[1]}','-proxyrandomize=0', '-noonion']
+            proxy3 = self.conf3.tcp_addr()
+            args[3] = ['-listen', f'-proxy=[{proxy3[0]}]:{proxy3[1]}','-proxyrandomize=0', '-noonion']
         if self.have_unix_sockets:
             args[5] = ['-listen', f'-proxy=unix:{socket_path}']
             args[6] = ['-listen', f'-onion=unix:{socket_path}']
@@ -291,10 +294,12 @@ class ProxyTest(BitcoinTestFramework):
 
         n1 = networks_dict(nodes_network_info[1])
         assert_equal(NETWORKS, n1.keys())
+        proxy1 = self.conf1.tcp_addr()
+        proxy2 = self.conf2.tcp_addr()
         for net in ['ipv4', 'ipv6']:
-            assert_equal(n1[net]['proxy'], f'{self.conf1.addr[0]}:{self.conf1.addr[1]}')
+            assert_equal(n1[net]['proxy'], f'{proxy1[0]}:{proxy1[1]}')
             assert_equal(n1[net]['proxy_randomize_credentials'], False)
-        assert_equal(n1['onion']['proxy'], f'{self.conf2.addr[0]}:{self.conf2.addr[1]}')
+        assert_equal(n1['onion']['proxy'], f'{proxy2[0]}:{proxy2[1]}')
         assert_equal(n1['onion']['proxy_randomize_credentials'], False)
         assert_equal(n1['onion']['reachable'], True)
         assert_equal(n1['i2p']['proxy'], f'{self.i2p_sam[0]}:{self.i2p_sam[1]}')
@@ -303,7 +308,8 @@ class ProxyTest(BitcoinTestFramework):
 
         n2 = networks_dict(nodes_network_info[2])
         assert_equal(NETWORKS, n2.keys())
-        proxy = f'{self.conf2.addr[0]}:{self.conf2.addr[1]}'
+        proxy2 = self.conf2.tcp_addr()
+        proxy = f'{proxy2[0]}:{proxy2[1]}'
         for net in NETWORKS:
             if net == NET_I2P:
                 expected_proxy = ''
@@ -320,7 +326,8 @@ class ProxyTest(BitcoinTestFramework):
         if self.have_ipv6:
             n3 = networks_dict(nodes_network_info[3])
             assert_equal(NETWORKS, n3.keys())
-            proxy = f'[{self.conf3.addr[0]}]:{self.conf3.addr[1]}'
+            proxy3 = self.conf3.tcp_addr()
+            proxy = f'[{proxy3[0]}]:{proxy3[1]}'
             for net in NETWORKS:
                 expected_proxy = '' if net == NET_I2P or net == NET_ONION else proxy
                 assert_equal(n3[net]['proxy'], expected_proxy)

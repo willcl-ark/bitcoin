@@ -766,6 +766,7 @@ class RawTransactionsTest(BitcoinTestFramework):
         result = wwatch.fundrawtransaction(rawtx, True)
         res_dec = self.nodes[0].decoderawtransaction(result["hex"])
         assert_equal(len(res_dec["vin"]), 1)
+        assert self.watchonly_utxo is not None
         assert_equal(res_dec["vin"][0]["txid"], self.watchonly_utxo['txid'])
 
         assert "fee" in result.keys()
@@ -786,6 +787,7 @@ class RawTransactionsTest(BitcoinTestFramework):
         result = wwatch.fundrawtransaction(rawtx, changeAddress=w3.getrawchangeaddress(), subtractFeeFromOutputs=[0])
         res_dec = self.nodes[0].decoderawtransaction(result["hex"])
         assert_equal(len(res_dec["vin"]), 1)
+        assert self.watchonly_utxo is not None
         assert res_dec["vin"][0]["txid"] == self.watchonly_utxo['txid']
 
         assert_greater_than(result["fee"], 0)

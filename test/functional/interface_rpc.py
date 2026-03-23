@@ -6,6 +6,7 @@
 
 import json
 import os
+from typing import Any
 from dataclasses import dataclass
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import assert_equal, assert_greater_than_or_equal
@@ -60,11 +61,11 @@ def format_response(options, idx, fields):
     return response
 
 
-def send_raw_rpc(node, raw_body: bytes) -> tuple[object, int]:
+def send_raw_rpc(node, raw_body: bytes) -> tuple[Any, int]:
     return node._request("POST", "/", raw_body)
 
 
-def send_json_rpc(node, body: object) -> tuple[object, int]:
+def send_json_rpc(node, body: object) -> tuple[Any, int]:
     raw = json.dumps(body).encode("utf-8")
     return send_raw_rpc(node, raw)
 

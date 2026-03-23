@@ -66,7 +66,7 @@ class RESTTest (BitcoinTestFramework):
             status: int = 200,
             ret_type: RetType = RetType.JSON,
             query_params: typing.Union[dict[str, typing.Any], str, None] = None,
-            ) -> typing.Union[http.client.HTTPResponse, bytes, str, None]:
+            ) -> typing.Any:
         rest_uri = '/rest' + uri
         if req_type in ReqType:
             rest_uri += f'.{req_type.name.lower()}'
@@ -93,7 +93,7 @@ class RESTTest (BitcoinTestFramework):
         elif ret_type == RetType.JSON:
             return json.loads(resp.read().decode('utf-8'), parse_float=Decimal)
 
-        return None
+        raise AssertionError(f"Unhandled return type: {ret_type}")
 
     def run_test(self):
         self.url = urllib.parse.urlparse(self.nodes[0].url)

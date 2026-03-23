@@ -97,6 +97,10 @@ class Socks5Configuration():
         # If it returns None, or destinations_factory itself is None then the connection is closed.
         self.destinations_factory = None
 
+    def tcp_addr(self) -> tuple[str, int]:
+        assert isinstance(self.addr, tuple)
+        return self.addr
+
 class Socks5Command():
     """Information about an incoming socks5 command."""
     def __init__(self, cmd, atyp, addr, port, username, password):
