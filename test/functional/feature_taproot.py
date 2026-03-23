@@ -113,7 +113,7 @@ from test_framework.address import (
     program_to_witness,
 )
 from collections import OrderedDict, namedtuple
-from typing import Any
+from typing import Any, Callable, TypeAlias
 import json
 import hashlib
 import os
@@ -121,6 +121,10 @@ import random
 
 # Whether or not to output generated test vectors, in JSON format.
 GEN_TEST_VECTORS = False
+
+TaprootMerklePartner: TypeAlias = Callable[[bytes], bytes]
+TaprootLeaf: TypeAlias = tuple[str | None, CScript] | tuple[str | None, CScript, int]
+TaprootScriptTree: TypeAlias = "list[TaprootLeaf | TaprootScriptTree | TaprootMerklePartner]"
 
 # === Framework for building spending transactions. ===
 #
@@ -890,11 +894,11 @@ def spenders_taproot_active():
         lambda h: (int.from_bytes(h, 'little') ^ (1 << random.randrange(256))).to_bytes(32, 'little')
     ]
     # Start with a tree of that has depth 1 for "128deep" and depth 2 for "129deep".
-    scripts = [("128deep", CScript([pubs[0], OP_CHECKSIG])), [("129deep", CScript([pubs[0], OP_CHECKSIG])), random.choice(PARTNER_MERKLE_FN)]]
+    script_tree: TaprootScriptTree = [("128deep", CScript([pubs[0], OP_CHECKSIG])), [("129deep", CScript([pubs[0], OP_CHECKSIG])), random.choice(PARTNER_MERKLE_FN)]]
     # Add 127 nodes on top of that tree, so that "128deep" and "129deep" end up at their designated depths.
     for _ in range(127):
-        scripts = [scripts, random.choice(PARTNER_MERKLE_FN)]
-    tap = taproot_construct(pubs[0], scripts)
+        script_tree = [script_tree, random.choice(PARTNER_MERKLE_FN)]
+    tap = taproot_construct(pubs[0], script_tree)
     # Test that spends with a depth of 128 work, but 129 doesn't (even with a tree with weird Merkle branches in it).
     add_spender(spenders, "spendpath/merklelimit", tap=tap, leaf="128deep", **SINGLE_SIG, key=secs[0], failure={"leaf": "129deep"}, **ERR_TAPROOT_WRONG_CONTROL_SIZE)
     # Test that flipping the negation bit invalidates spends.
@@ -950,7 +954,7 @@ def spenders_taproot_active():
         return [sigs[(big_choices[i], random.choice(VALID_SIGHASHES_TAPROOT))] for i in range(num - 1, -1, -1)]
 
     # Various BIP342 features
-    scripts = [
+    scripts: list[TaprootLeaf] = [
         # 0) drop stack element and OP_CHECKSIG
         ("t0", CScript([OP_DROP, pubs[1], OP_CHECKSIG])),
         # 1) normal OP_CHECKSIG
@@ -1136,10 +1140,10 @@ def spenders_taproot_active():
                     dummylen = 0
                     while not predict_sigops_ratio(n, dummylen):
                         dummylen += 1
-                    scripts = [("s", fn(n, pubkey)[0])]
+                    script_tree: TaprootScriptTree = [("s", fn(n, pubkey)[0])]
                     for _ in range(merkledepth):
-                        scripts = [scripts, random.choice(PARTNER_MERKLE_FN)]
-                    tap = taproot_construct(pubs[0], scripts)
+                        script_tree = [script_tree, random.choice(PARTNER_MERKLE_FN)]
+                    tap = taproot_construct(pubs[0], script_tree)
                     standard = annex is None and dummylen <= 80 and len(pubkey) == 32
                     add_spender(spenders, "tapscript/sigopsratio_%i" % fn_num, tap=tap, leaf="s", annex=annex, hashtype=hashtype, key=secs[1], inputs=[getter("sign"), random.randbytes(dummylen)], standard=standard, failure={"inputs": [getter("sign"), random.randbytes(dummylen - 1)]}, **ERR_TAPSCRIPT_VALIDATION_WEIGHT)
 
@@ -1148,7 +1152,7 @@ def spenders_taproot_active():
         if leafver == LEAF_VERSION_TAPSCRIPT or leafver == ANNEX_TAG:
             # Skip the defined LEAF_VERSION_TAPSCRIPT, and the ANNEX_TAG which is not usable as leaf version
             continue
-        scripts = [
+        leaf_scripts: list[TaprootLeaf] = [
             ("bare_c0", CScript([OP_NOP])),
             ("bare_unkver", CScript([OP_NOP]), leafver),
             ("return_c0", CScript([OP_RETURN])),
@@ -1160,8 +1164,8 @@ def spenders_taproot_active():
             ("1001push_c0", CScript([OP_0] * 1001)),
             ("1001push_unkver", CScript([OP_0] * 1001), leafver),
         ]
-        random.shuffle(scripts)
-        tap = taproot_construct(pubs[0], scripts)
+        random.shuffle(leaf_scripts)
+        tap = taproot_construct(pubs[0], leaf_scripts)
         add_spender(spenders, "unkver/bare", standard=False, tap=tap, leaf="bare_unkver", failure={"leaf": "bare_c0"}, **ERR_CLEANSTACK)
         add_spender(spenders, "unkver/return", standard=False, tap=tap, leaf="return_unkver", failure={"leaf": "return_c0"}, **ERR_OP_RETURN)
         add_spender(spenders, "unkver/undecodable", standard=False, tap=tap, leaf="undecodable_unkver", failure={"leaf": "undecodable_c0"}, **ERR_BAD_OPCODE)

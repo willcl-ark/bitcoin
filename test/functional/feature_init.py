@@ -10,6 +10,7 @@ import platform
 import shutil
 import signal
 import subprocess
+from typing import TypedDict
 
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.test_node import (
@@ -24,6 +25,11 @@ ALL_INDEX_ARGS = [
     '-coinstatsindex=1',
     '-txospenderindex=1',
 ]
+
+class PerturbationRound(TypedDict):
+    filepath_glob: str
+    error_message: str
+    startup_args: list[str]
 
 class InitTest(BitcoinTestFramework):
     """
@@ -119,7 +125,7 @@ class InitTest(BitcoinTestFramework):
                 match=ErrorMatch.PARTIAL_REGEX,
             )
 
-        deletion_rounds = [
+        deletion_rounds: list[PerturbationRound] = [
             {
                 'filepath_glob': 'blocks/index/*.ldb',
                 'error_message': 'Error opening block database.',
@@ -150,7 +156,7 @@ class InitTest(BitcoinTestFramework):
             # 'indexes/txindex/*.log', 'indexes/txindex/CURRENT', 'indexes/txindex/LOCK'
         ]
 
-        perturbation_rounds = [
+        perturbation_rounds: list[PerturbationRound] = [
             {
                 'filepath_glob': 'blocks/index/*.ldb',
                 'error_message': 'Error loading block database.',

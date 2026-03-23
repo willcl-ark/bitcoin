@@ -59,7 +59,7 @@ class WalletMiniscriptDecayingMultisigDescriptorPSBTTest(BitcoinTestFramework):
         self.M = 4  # starts as 4-of-4
         self.N = 4
 
-        self.locktimes = [104, 106, 108]
+        self.locktimes: list[int] = [104, 106, 108]
         assert_equal(len(self.locktimes), self.N - 1)
 
         self.name = f"{self.M}_of_{self.N}_decaying_multisig"

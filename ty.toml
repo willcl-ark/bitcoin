@@ -5,6 +5,5 @@ include = ["test/functional/*.py", "contrib/devtools/*.py"]
 root = ["test/functional"]
 
 [rules]
-invalid-argument-type = "ignore"
 unresolved-attribute = "ignore"
 unsupported-operator = "ignore"

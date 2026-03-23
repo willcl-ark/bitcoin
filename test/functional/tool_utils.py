@@ -89,6 +89,7 @@ class ToolUtils(BitcoinTestFramework):
                 data_mismatch = True
             # Compare formatting
             if res.stdout != outputData:
+                assert outputFn is not None
                 error_message = f"Output formatting mismatch for {outputFn}:\nres: {str(res)}\n"
                 error_message += "".join(difflib.context_diff(outputData.splitlines(True),
                                                               res.stdout.splitlines(True),

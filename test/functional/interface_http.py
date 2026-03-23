@@ -11,6 +11,10 @@ import http.client
 import time
 import urllib.parse
 
+def http_connection(url):
+    assert isinstance(url.hostname, str)
+    return http.client.HTTPConnection(url.hostname, url.port)
+
 class HTTPBasicsTest (BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 3
@@ -28,7 +32,7 @@ class HTTPBasicsTest (BitcoinTestFramework):
         authpair = f'{url.username}:{url.password}'
         headers = {"Authorization": f"Basic {str_to_b64str(authpair)}"}
 
-        conn = http.client.HTTPConnection(url.hostname, url.port)
+        conn = http_connection(url)
         conn.connect()
         conn.request('POST', '/', '{"method": "getbestblockhash"}', headers)
         out1 = conn.getresponse().read()
@@ -45,7 +49,7 @@ class HTTPBasicsTest (BitcoinTestFramework):
         #same should be if we add keep-alive because this should be the std. behaviour
         headers = {"Authorization": f"Basic {str_to_b64str(authpair)}", "Connection": "keep-alive"}
 
-        conn = http.client.HTTPConnection(url.hostname, url.port)
+        conn = http_connection(url)
         conn.connect()
         conn.request('POST', '/', '{"method": "getbestblockhash"}', headers)
         out1 = conn.getresponse().read()
@@ -62,7 +66,7 @@ class HTTPBasicsTest (BitcoinTestFramework):
         #now do the same with "Connection: close"
         headers = {"Authorization": f"Basic {str_to_b64str(authpair)}", "Connection":"close"}
 
-        conn = http.client.HTTPConnection(url.hostname, url.port)
+        conn = http_connection(url)
         conn.connect()
         conn.request('POST', '/', '{"method": "getbestblockhash"}', headers)
         out1 = conn.getresponse().read()
@@ -74,7 +78,7 @@ class HTTPBasicsTest (BitcoinTestFramework):
         authpair = f'{urlNode1.username}:{urlNode1.password}'
         headers = {"Authorization": f"Basic {str_to_b64str(authpair)}"}
 
-        conn = http.client.HTTPConnection(urlNode1.hostname, urlNode1.port)
+        conn = http_connection(urlNode1)
         conn.connect()
         conn.request('POST', '/', '{"method": "getbestblockhash"}', headers)
         out1 = conn.getresponse().read()
@@ -85,7 +89,7 @@ class HTTPBasicsTest (BitcoinTestFramework):
         authpair = f'{urlNode2.username}:{urlNode2.password}'
         headers = {"Authorization": f"Basic {str_to_b64str(authpair)}"}
 
-        conn = http.client.HTTPConnection(urlNode2.hostname, urlNode2.port)
+        conn = http_connection(urlNode2)
         conn.connect()
         conn.request('POST', '/', '{"method": "getbestblockhash"}', headers)
         out1 = conn.getresponse().read()
@@ -93,13 +97,13 @@ class HTTPBasicsTest (BitcoinTestFramework):
         assert conn.sock is not None  #connection must be closed because bitcoind should use keep-alive by default
 
         # Check excessive request size
-        conn = http.client.HTTPConnection(urlNode2.hostname, urlNode2.port)
+        conn = http_connection(urlNode2)
         conn.connect()
         conn.request('GET', f'/{"x"*1000}', '', headers)
         out1 = conn.getresponse()
         assert_equal(out1.status, http.client.NOT_FOUND)
 
-        conn = http.client.HTTPConnection(urlNode2.hostname, urlNode2.port)
+        conn = http_connection(urlNode2)
         conn.connect()
         conn.request('GET', f'/{"x"*10000}', '', headers)
         out1 = conn.getresponse()
@@ -126,7 +130,7 @@ class HTTPBasicsTest (BitcoinTestFramework):
         req2 += f'Content-Length: {len(body2)}\r\n\r\n'
         req2 += body2
         # Get the underlying socket from HTTP connection so we can send something unusual
-        conn = http.client.HTTPConnection(urlNode2.hostname, urlNode2.port)
+        conn = http_connection(urlNode2)
         conn.connect()
         sock = conn.sock
         sock.settimeout(5)
@@ -167,7 +171,7 @@ class HTTPBasicsTest (BitcoinTestFramework):
             b'3' * 1000000,
             b'"]}'
         ]
-        conn = http.client.HTTPConnection(urlNode2.hostname, urlNode2.port)
+        conn = http_connection(urlNode2)
         conn.connect()
         conn.request(
             method='POST',
@@ -198,7 +202,7 @@ class HTTPBasicsTest (BitcoinTestFramework):
         http_request = "GET /test1 HTTP/1.1\r\nHost: somehost\r\n"
 
         # Get the underlying socket from HTTP connection so we can send something unusual
-        conn = http.client.HTTPConnection(urlNode2.hostname, urlNode2.port)
+        conn = http_connection(urlNode2)
         conn.connect()
         sock = conn.sock
         sock.sendall(http_request.encode("utf-8"))
@@ -227,7 +231,7 @@ class HTTPBasicsTest (BitcoinTestFramework):
 
         # Sanity check
         http_request = "GET /test2 HTTP/1.1\r\nHost: somehost\r\n\r\n"
-        conn = http.client.HTTPConnection(urlNode2.hostname, urlNode2.port)
+        conn = http_connection(urlNode2)
         conn.connect()
         sock = conn.sock
         sock.sendall(http_request.encode("utf-8"))

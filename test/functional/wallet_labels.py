@@ -10,6 +10,7 @@ RPCs tested are:
     - setlabel
 """
 from collections import defaultdict
+from typing import Callable
 
 from test_framework.blocktools import COINBASE_MATURITY
 from test_framework.descriptors import descsum_create
@@ -30,12 +31,12 @@ class WalletLabelsTest(BitcoinTestFramework):
         node = self.nodes[0]
         address = node.getnewaddress()
         pubkey = node.getaddressinfo(address)['pubkey']
-        rpc_calls = [
-            [node.getnewaddress],
-            [node.setlabel, address],
-            [node.getaddressesbylabel],
-            [node.getreceivedbylabel],
-            [node.listsinceblock, node.getblockhash(0), 1, False, True, False],
+        rpc_calls: list[tuple[Callable[..., object], tuple[object, ...]]] = [
+            (node.getnewaddress, ()),
+            (node.setlabel, (address,)),
+            (node.getaddressesbylabel, ()),
+            (node.getreceivedbylabel, ()),
+            (node.listsinceblock, (node.getblockhash(0), 1, False, True, False)),
         ]
         response = node.importdescriptors([{
             'desc': f'pkh({pubkey})',
@@ -47,8 +48,8 @@ class WalletLabelsTest(BitcoinTestFramework):
         assert_equal(response[0]['error']['code'], -11)
         assert_equal(response[0]['error']['message'], "Invalid label name")
 
-        for rpc_call in rpc_calls:
-            assert_raises_rpc_error(-11, "Invalid label name", *rpc_call, label="*")
+        for rpc, args in rpc_calls:
+            assert_raises_rpc_error(-11, "Invalid label name", rpc, *args, label="*")
 
     def test_label_named_parameter_handling(self):
         """Test that getnewaddress with labels containing '=' characters is handled correctly in -named mode"""

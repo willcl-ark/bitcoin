@@ -62,7 +62,7 @@ class RESTTest (BitcoinTestFramework):
             uri: str,
             http_method: str = 'GET',
             req_type: ReqType = ReqType.JSON,
-            body: str = '',
+            body: str | bytes = '',
             status: int = 200,
             ret_type: RetType = RetType.JSON,
             query_params: typing.Union[dict[str, typing.Any], str, None] = None,
@@ -76,6 +76,7 @@ class RESTTest (BitcoinTestFramework):
             else:
                 rest_uri += f'?{urllib.parse.urlencode(query_params)}'
 
+        assert isinstance(self.url.hostname, str)
         conn = http.client.HTTPConnection(self.url.hostname, self.url.port)
         self.log.debug(f'{http_method} {rest_uri} {body}')
         if http_method == 'GET':
