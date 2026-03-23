@@ -34,6 +34,14 @@ class AuthServiceProxyWrapper():
         self.rpc_url = rpc_url
         self.coverage_logfile = coverage_logfile
 
+    @property
+    def ensure_ascii(self):
+        return self.auth_service_proxy_instance.ensure_ascii
+
+    @ensure_ascii.setter
+    def ensure_ascii(self, value):
+        self.auth_service_proxy_instance.ensure_ascii = value
+
     def __getattr__(self, name):
         return_val = getattr(self.auth_service_proxy_instance, name)
         if not isinstance(return_val, type(self.auth_service_proxy_instance)):

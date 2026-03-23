@@ -1716,7 +1716,7 @@ class TaprootTest(BitcoinTestFramework):
         # Compute a deterministic set of scriptPubKeys
         tap_spks = []
         old_spks = []
-        spend_info = {}
+        spend_info: dict[CScript, dict[str, Any]] = {}
         # First, taproot scriptPubKeys, for the tap objects constructed above
         for i, tap in enumerate(taps):
             tap_spks.append(tap.scriptPubKey)
@@ -1727,7 +1727,7 @@ class TaprootTest(BitcoinTestFramework):
             prv = ECKey()
             prv.set(i.to_bytes(32, 'big'), True)
             pub = prv.get_pubkey().get_bytes()
-            d = {"key": prv}
+            d: dict[str, Any] = {"key": prv}
             d["scriptcode"] = key_to_p2pkh_script(pub)
             d["inputs"] = [getter("sign"), pub]
             if i < 3:

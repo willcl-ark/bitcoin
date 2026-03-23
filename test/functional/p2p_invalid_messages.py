@@ -49,6 +49,17 @@ class msg_unrecognized:
         return "{}(data={})".format(self.msgtype, self.str_data)
 
 
+class msg_raw_addrv2(msg_unrecognized):
+    msgtype = b'addrv2'
+
+    def __init__(self, *, raw_payload):
+        super().__init__(str_data=b'')
+        self.raw_payload = raw_payload
+
+    def serialize(self):
+        return self.raw_payload
+
+
 class SenderOfAddrV2(P2PInterface):
     def wait_for_sendaddrv2(self):
         self.wait_until(lambda: 'sendaddrv2' in self.last_message)
@@ -189,11 +200,8 @@ class InvalidMessagesTest(BitcoinTestFramework):
 
         self.log.info('Test addrv2: ' + label)
 
-        msg = msg_unrecognized(str_data=b'')
-        msg.msgtype = b'addrv2'
+        msg = msg_raw_addrv2(raw_payload=raw_addrv2)
         with node.assert_debug_log(required_log_messages):
-            # override serialize() which would include the length of the data
-            msg.serialize = lambda: raw_addrv2
             conn.send_raw_message(conn.build_message(msg))
             conn.sync_with_ping()
 

@@ -8,6 +8,7 @@
 from decimal import Decimal
 from itertools import product
 from math import ceil
+from typing import Any
 from test_framework.address import address_to_scriptpubkey
 
 from test_framework.descriptors import descsum_create
@@ -1151,10 +1152,10 @@ class RawTransactionsTest(BitcoinTestFramework):
         self.generate(self.nodes[0], 1)
 
         # Select only one input.
-        options = {
-            "inputs": [
-                {
-                    "txid": source_tx["txid"],
+        options: dict[str, Any] = {
+                "inputs": [
+                    {
+                        "txid": source_tx["txid"],
                     "vout": 1  # change position was hardcoded to index 0
                 }
             ]

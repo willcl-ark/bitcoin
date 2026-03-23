@@ -7,6 +7,7 @@ from decimal import Decimal
 from itertools import product
 
 from test_framework.blocktools import COINBASE_MATURITY
+from test_framework.coverage import AuthServiceProxyWrapper
 from test_framework.descriptors import descsum_create
 from test_framework.messages import (
     COIN,
@@ -452,15 +453,17 @@ class WalletTest(BitcoinTestFramework):
         # Check modes:
         #   - True: unicode escaped as \u....
         #   - False: unicode directly as UTF-8
+        rpc = self.nodes[0]._rpc
+        assert isinstance(rpc, AuthServiceProxyWrapper)
         for mode in [True, False]:
-            self.nodes[0]._rpc.ensure_ascii = mode
+            rpc.ensure_ascii = mode
             # unicode check: Basic Multilingual Plane, Supplementary Plane respectively
             for label in [u'рыба', u'𝅘𝅥𝅯']:
                 addr = self.nodes[0].getnewaddress()
                 self.nodes[0].setlabel(addr, label)
                 test_address(self.nodes[0], addr, labels=[label])
                 assert label in self.nodes[0].listlabels()
-        self.nodes[0]._rpc.ensure_ascii = True  # restore to default
+        rpc.ensure_ascii = True  # restore to default
 
         # -reindex tests
         chainlimit = 6

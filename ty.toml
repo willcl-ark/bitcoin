@@ -6,7 +6,6 @@ root = ["test/functional"]
 
 [rules]
 invalid-argument-type = "ignore"
-invalid-assignment = "ignore"
 invalid-method-override = "ignore"
 not-subscriptable = "ignore"
 unresolved-attribute = "ignore"
