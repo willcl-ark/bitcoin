@@ -57,7 +57,7 @@ except UnicodeDecodeError:
 
 if platform.system() == 'Windows':
     import ctypes
-    kernel32 = ctypes.windll.kernel32  # type: ignore
+    kernel32 = ctypes.windll.kernel32
     ENABLE_VIRTUAL_TERMINAL_PROCESSING = 4
     STD_OUTPUT_HANDLE = -11
     STD_ERROR_HANDLE = -12

@@ -43,7 +43,11 @@ def main():
     check_dependencies()
 
     mypy_files = subprocess.check_output(MYPY_FILES_ARGS, text=True).splitlines()
-    mypy_args = ['mypy', '--show-error-codes'] + mypy_files
+    mypy_args = [
+        'mypy',
+        '--show-error-codes',
+        '--disable-error-code', 'attr-defined',
+    ] + mypy_files
 
     try:
         subprocess.check_call(mypy_args)

@@ -16,7 +16,6 @@ possibly-missing-submodule = "ignore"
 too-many-positional-arguments = "ignore"
 unresolved-attribute = "ignore"
 unsupported-operator = "ignore"
-unused-type-ignore-comment = "ignore"
 
 [analysis]
 respect-type-ignore-comments = false # Drop this when we deprecate mypy
