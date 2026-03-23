@@ -113,6 +113,7 @@ from test_framework.address import (
     program_to_witness,
 )
 from collections import OrderedDict, namedtuple
+from typing import Any
 import json
 import hashlib
 import os
@@ -1764,7 +1765,7 @@ class TaprootTest(BitcoinTestFramework):
         self.block_submit(self.nodes[0], txn, "Crediting txn", None, sigops_weight=10, accept=True)
 
         # scriptPubKey computation
-        tests = {"version": 1}
+        tests: dict[str, Any] = {"version": 1}
         spk_tests = tests.setdefault("scriptPubKey", [])
         for i, tap in enumerate(taps):
             test_case = {}
