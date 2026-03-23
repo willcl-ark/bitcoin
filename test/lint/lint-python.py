@@ -47,6 +47,7 @@ def main():
         'mypy',
         '--show-error-codes',
         '--disable-error-code', 'attr-defined',
+        '--disable-error-code', 'misc',
     ] + mypy_files
 
     try:

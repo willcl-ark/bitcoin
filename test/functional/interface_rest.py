@@ -95,6 +95,15 @@ class RESTTest (BitcoinTestFramework):
 
         return None
 
+    def test_rest_response(self, *args: typing.Any, **kwargs: typing.Any) -> http.client.HTTPResponse:
+        return typing.cast(http.client.HTTPResponse, self.test_rest_request(*args, ret_type=RetType.OBJ, **kwargs))
+
+    def test_rest_bytes(self, *args: typing.Any, **kwargs: typing.Any) -> bytes:
+        return typing.cast(bytes, self.test_rest_request(*args, ret_type=RetType.BYTES, **kwargs))
+
+    def test_rest_json(self, *args: typing.Any, **kwargs: typing.Any) -> typing.Any:
+        return self.test_rest_request(*args, ret_type=RetType.JSON, **kwargs)
+
     def run_test(self):
         self.url = urllib.parse.urlparse(self.nodes[0].url)
         self.wallet = MiniWallet(self.nodes[0])
@@ -435,9 +444,9 @@ class RESTTest (BitcoinTestFramework):
         block_count = self.nodes[0].getblockcount()
         for height in range(0, block_count + 1):
             blockhash = self.nodes[0].getblockhash(height)
-            spent_bin = self.test_rest_request(f"/spenttxouts/{blockhash}", req_type=ReqType.BIN, ret_type=RetType.BYTES)
-            spent_hex = self.test_rest_request(f"/spenttxouts/{blockhash}", req_type=ReqType.HEX, ret_type=RetType.BYTES)
-            spent_json = self.test_rest_request(f"/spenttxouts/{blockhash}", req_type=ReqType.JSON, ret_type=RetType.JSON)
+            spent_bin = self.test_rest_bytes(f"/spenttxouts/{blockhash}", req_type=ReqType.BIN)
+            spent_hex = self.test_rest_bytes(f"/spenttxouts/{blockhash}", req_type=ReqType.HEX)
+            spent_json = self.test_rest_json(f"/spenttxouts/{blockhash}")
 
             assert_equal(bytes.fromhex(spent_hex.decode()), spent_bin)
 
@@ -453,7 +462,8 @@ class RESTTest (BitcoinTestFramework):
                 expected = [(p["scriptPubKey"]["hex"], p["value"]) for p in prevouts]
                 assert_equal(expected, actual)
                 # also compare JSON format
-                actual = [(prevout["scriptPubKey"], prevout["value"]) for prevout in spent_json[i]]
+                spent_json_prevouts = spent_json[i]
+                actual = [(prevout["scriptPubKey"], prevout["value"]) for prevout in spent_json_prevouts]
                 expected = [(p["scriptPubKey"], p["value"]) for p in prevouts]
                 assert_equal(expected, actual)
 

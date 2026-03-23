@@ -147,7 +147,7 @@ class WalletGetHDKeyTest(BitcoinTestFramework):
         pub_multi_desc = descsum_create(f"wsh(multi(2,{within_wallet_xpub}/*,{outside_wallet_xpub}/*))")
         assert_equal(wallet.importdescriptors([{"desc": prv_multi_desc, "timestamp": "now"}])[0]["success"], True)
 
-        rpcs_req_resp = [[False, wallet.gethdkeys()], [True, wallet.gethdkeys(private=True)]]
+        rpcs_req_resp = ((False, wallet.gethdkeys()), (True, wallet.gethdkeys(private=True)))
         for rpc_req_resp in rpcs_req_resp:
             requested_private, hdkeys_response = rpc_req_resp
             assert_equal(len(hdkeys_response), 2)
