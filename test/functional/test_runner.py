@@ -57,7 +57,9 @@ except UnicodeDecodeError:
 
 if platform.system() == 'Windows':
     import ctypes
-    kernel32 = ctypes.windll.kernel32
+    windll = getattr(ctypes, "windll", None)
+    assert windll is not None
+    kernel32 = windll.kernel32
     ENABLE_VIRTUAL_TERMINAL_PROCESSING = 4
     STD_OUTPUT_HANDLE = -11
     STD_ERROR_HANDLE = -12
@@ -815,7 +817,9 @@ class TestHandler:
                     status = "Passed"
                 elif proc.returncode == TEST_EXIT_SKIPPED:
                     status = "Skipped"
-                    skip_reason = re.search(r"Test Skipped: (.*)", stdout).group(1).strip()
+                    skip_reason_match = re.search(r"Test Skipped: (.*)", stdout)
+                    assert skip_reason_match is not None
+                    skip_reason = skip_reason_match.group(1).strip()
                 else:
                     status = "Failed"
 

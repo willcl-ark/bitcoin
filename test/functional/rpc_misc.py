@@ -37,7 +37,9 @@ class RpcMiscTest(BitcoinTestFramework):
                 http.client.RemoteDisconnected,
         ):
             self.log.info("Restart node after crash")
-            assert_equal(-6, node.process.wait(timeout=10))
+            process = node.process
+            assert process is not None
+            assert_equal(-6, process.wait(timeout=10))
             self.start_node(0)
         except JSONRPCException as e:
             assert_equal(e.error["code"], -1)

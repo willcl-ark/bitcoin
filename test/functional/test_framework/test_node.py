@@ -209,6 +209,11 @@ class TestNode():
 
         self.mocktime = None
 
+    @property
+    def pid(self):
+        assert self.process is not None, self._node_msg("Error: no process")
+        return self.process.pid
+
     AddressKeyPair = collections.namedtuple('AddressKeyPair', ['address', 'key'])
     PRIV_KEYS = [
             # address , privkey

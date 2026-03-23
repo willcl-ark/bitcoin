@@ -33,6 +33,7 @@ from io import StringIO
 
 
 def main():
+    assert __doc__ is not None
     parser = argparse.ArgumentParser(
         description=__doc__.format(clang_format_diff="%(prog)s"),
         formatter_class=argparse.RawDescriptionHelpFormatter,

@@ -87,7 +87,9 @@ class ToolBitcoinTest(BitcoinTestFramework):
 
 
 def get_node_output(node):
-    ret = node.process.wait(timeout=60)
+    process = node.process
+    assert process is not None
+    ret = process.wait(timeout=60)
     node.stdout.seek(0)
     node.stderr.seek(0)
     out = node.stdout.read()
@@ -99,14 +101,16 @@ def get_node_output(node):
     node.running = False
     node.process = None
     node.rpc_connected = False
-    node.rpc = None
+    node._rpc = None
 
     return ret, out, err
 
 
 def get_exe_name(version_str):
     """Get exe name from last word of first line of version string."""
-    return re.match(rb".*?(\S+)\s*?(?:\n|$)", version_str.strip()).group(1)
+    match = re.match(rb".*?(\S+)\s*?(?:\n|$)", version_str.strip())
+    assert match is not None
+    return match.group(1)
 
 
 if __name__ == '__main__':

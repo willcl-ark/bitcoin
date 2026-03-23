@@ -32,6 +32,7 @@ from test_framework.util import (
 # the manual prune RPC avoids pruning blocks in the same window to be
 # compatible with pruning based on key creation time.
 TIMESTAMP_WINDOW = 2 * 60 * 60
+mine_large_blocks_nTime = 0
 
 def mine_large_blocks(node, n):
     # Make a large scriptPubKey for the coinbase transaction. This is OP_RETURN
@@ -41,18 +42,17 @@ def mine_large_blocks(node, n):
     # Set the nTime if this is the first time this function has been called.
     # A static variable ensures that time is monotonicly increasing and is therefore
     # different for each block created => blockhash is unique.
-    if "nTime" not in mine_large_blocks.__dict__:
-        mine_large_blocks.nTime = 0
+    global mine_large_blocks_nTime
 
     # Get the block parameters for the first block
     big_script = CScript([OP_RETURN] + [OP_NOP] * 950000)
     best_block = node.getblock(node.getbestblockhash())
     height = int(best_block["height"]) + 1
-    mine_large_blocks.nTime = max(mine_large_blocks.nTime, int(best_block["time"])) + 1
+    mine_large_blocks_nTime = max(mine_large_blocks_nTime, int(best_block["time"])) + 1
     previousblockhash = int(best_block["hash"], 16)
 
     for _ in range(n):
-        block = create_block(hashprev=previousblockhash, ntime=mine_large_blocks.nTime, coinbase=create_coinbase(height, script_pubkey=big_script))
+        block = create_block(hashprev=previousblockhash, ntime=mine_large_blocks_nTime, coinbase=create_coinbase(height, script_pubkey=big_script))
         block.solve()
 
         # Submit to the node
@@ -60,7 +60,7 @@ def mine_large_blocks(node, n):
 
         previousblockhash = block.hash_int
         height += 1
-        mine_large_blocks.nTime += 1
+        mine_large_blocks_nTime += 1
 
 def calc_usage(blockdir):
     return sum(os.path.getsize(blockdir + f) for f in os.listdir(blockdir) if os.path.isfile(os.path.join(blockdir, f))) / (1024. * 1024.)

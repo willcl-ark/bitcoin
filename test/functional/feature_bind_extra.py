@@ -39,11 +39,13 @@ class BindExtraTest(BitcoinTestFramework):
         loopback_ipv4 = addr_to_hex("127.0.0.1")
 
         # Start custom ports by reusing unused p2p ports
+        next_extra_port = self.num_nodes
+
         def extra_port():
-            port = p2p_port(extra_port.index)
-            extra_port.index += 1
+            nonlocal next_extra_port
+            port = p2p_port(next_extra_port)
+            next_extra_port += 1
             return port
-        extra_port.index = self.num_nodes
 
         # Array of tuples [command line arguments, expected bind addresses].
         self.expected = []
@@ -81,7 +83,9 @@ class BindExtraTest(BitcoinTestFramework):
     def run_test(self):
         for i, (args, expected_services) in enumerate(self.expected):
             self.log.info(f"Checking listening ports of node {i} with {args}")
-            pid = self.nodes[i].process.pid
+            process = self.nodes[i].process
+            assert process is not None
+            pid = process.pid
             binds = set(get_bind_addrs(pid))
             # Remove IPv6 addresses because on some CI environments "::1" is not configured
             # on the system (so our test_ipv6_local() would return False), but it is

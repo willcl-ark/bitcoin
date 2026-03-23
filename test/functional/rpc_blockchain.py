@@ -553,7 +553,9 @@ class BlockchainTest(BitcoinTestFramework):
         self.generate(self.wallet, 6)
         assert_equal(self.nodes[0].getblockcount(), HEIGHT + 6)
         self.log.debug('Node should not stop at this height')
-        assert_raises(subprocess.TimeoutExpired, lambda: self.nodes[0].process.wait(timeout=3))
+        process = self.nodes[0].process
+        assert process is not None
+        assert_raises(subprocess.TimeoutExpired, lambda: process.wait(timeout=3))
         try:
             self.generatetoaddress(self.nodes[0], 1, self.wallet.get_address(), sync_fun=self.no_op)
         except (ConnectionError, http.client.BadStatusLine):

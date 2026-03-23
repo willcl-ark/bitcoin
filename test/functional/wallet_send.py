@@ -58,6 +58,7 @@ class WalletSendTest(BitcoinTestFramework):
             to_untrusted_pending_before = to_wallet.getbalances()["mine"]["untrusted_pending"]
 
         if amount:
+            assert to_wallet is not None
             dest = to_wallet.getnewaddress()
             outputs = {dest: amount}
         else:

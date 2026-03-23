@@ -31,6 +31,9 @@ class PerturbationRound(TypedDict):
     error_message: str
     startup_args: list[str]
 
+CTRL_BREAK_EVENT = getattr(signal, "CTRL_BREAK_EVENT", None)
+CREATE_NEW_PROCESS_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+
 class InitTest(BitcoinTestFramework):
     """
     Ensure that initialization can be interrupted at a number of points and not impair
@@ -60,14 +63,17 @@ class InitTest(BitcoinTestFramework):
         self.stop_node(0)
 
         def sigterm_node():
+            process = node.process
+            assert process is not None
             if platform.system() == 'Windows':
+                assert CTRL_BREAK_EVENT is not None
                 # Don't call Python's terminate() since it calls
                 # TerminateProcess(), which unlike SIGTERM doesn't allow
                 # bitcoind to perform any shutdown logic.
-                os.kill(node.process.pid, signal.CTRL_BREAK_EVENT)
+                os.kill(process.pid, CTRL_BREAK_EVENT)
             else:
-                node.process.terminate()
-            assert_equal(0, node.process.wait())
+                process.terminate()
+            assert_equal(0, process.wait())
 
         lines_to_terminate_after = [
             b'Validating signatures for all blocks',
@@ -100,7 +106,7 @@ class InitTest(BitcoinTestFramework):
                 if platform.system() == 'Windows':
                     # CREATE_NEW_PROCESS_GROUP is required in order to be able
                     # to terminate the child without terminating the test.
-                    node.start(extra_args=ALL_INDEX_ARGS, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+                    node.start(extra_args=ALL_INDEX_ARGS, creationflags=CREATE_NEW_PROCESS_GROUP)
                 else:
                     node.start(extra_args=ALL_INDEX_ARGS)
             self.log.debug("Terminating node after terminate line was found")
@@ -288,7 +294,7 @@ class InitTest(BitcoinTestFramework):
         if platform.system() == 'Windows':
             # CREATE_NEW_PROCESS_GROUP prevents python test from exiting
             # with STATUS_CONTROL_C_EXIT (-1073741510) when break is sent.
-            self.start_node(node.index, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+            self.start_node(node.index, creationflags=CREATE_NEW_PROCESS_GROUP)
         else:
             self.start_node(node.index)
 
@@ -304,16 +310,19 @@ class InitTest(BitcoinTestFramework):
 
             self.wait_until(lambda: any(c["method"] == "waitforblockheight" for c in node.cli.getrpcinfo()["active_commands"]))
 
-            self.log.debug(f"Sending break signal to pid {node.process.pid}")
+            process = node.process
+            assert process is not None
+            self.log.debug(f"Sending break signal to pid {process.pid}")
             if platform.system() == 'Windows':
+                assert CTRL_BREAK_EVENT is not None
                 # Note: CTRL_C_EVENT should not be sent here because unlike
                 # CTRL_BREAK_EVENT it can not be targeted at a specific process
                 # group and may behave unpredictably.
-                node.process.send_signal(signal.CTRL_BREAK_EVENT)
+                process.send_signal(CTRL_BREAK_EVENT)
             else:
                 # Note: signal.SIGINT would work here as well
-                node.process.send_signal(signal.SIGTERM)
-            node.process.wait()
+                process.send_signal(signal.SIGTERM)
+            process.wait()
 
             result = fut.result()
             self.log.debug(f"waitforblockheight returned {result!r}")

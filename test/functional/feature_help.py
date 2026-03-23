@@ -17,7 +17,9 @@ class HelpTest(BitcoinTestFramework):
         # Don't start the node
 
     def get_node_output(self, *, ret_code_expected):
-        ret_code = self.nodes[0].process.wait(timeout=60)
+        process = self.nodes[0].process
+        assert process is not None
+        ret_code = process.wait(timeout=60)
         assert_equal(ret_code, ret_code_expected)
         self.nodes[0].stdout.seek(0)
         self.nodes[0].stderr.seek(0)
@@ -30,7 +32,7 @@ class HelpTest(BitcoinTestFramework):
         self.nodes[0].running = False
         self.nodes[0].process = None
         self.nodes[0].rpc_connected = False
-        self.nodes[0].rpc = None
+        self.nodes[0]._rpc = None
 
         return out, err
 

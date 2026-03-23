@@ -123,6 +123,7 @@ class MisbehavingV2Peer(P2PInterface):
     def data_received(self, t):
         if self.test_type == TestType.EARLY_KEY_RESPONSE:
             # check that data can be received on recvbuf only when mismatch from V1_PREFIX happens
+            assert isinstance(self.v2_state, EarlyKeyResponseState)
             assert self.v2_state.can_data_be_received
         else:
             super().data_received(t)
@@ -149,6 +150,7 @@ class EncryptedP2PMisbehaving(BitcoinTestFramework):
         peer1.send_raw_message(MAGIC_BYTES['regtest'])
         self.log.info('Sending remaining ellswift and garbage which are different from V1_PREFIX. Since a response is')
         self.log.info('expected now, our custom data_received() function wouldn\'t result in assertion failure')
+        assert isinstance(peer1.v2_state, EarlyKeyResponseState)
         peer1.v2_state.can_data_be_received = True
         self.wait_until(lambda: peer1.v2_state.ellswift_ours)
         peer1.send_raw_message(peer1.v2_state.ellswift_ours[4:] + peer1.v2_state.sent_garbage)
