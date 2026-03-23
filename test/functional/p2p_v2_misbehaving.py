@@ -50,15 +50,17 @@ class EarlyKeyResponseState(EncryptedP2PState):
 
 class ExcessGarbageState(EncryptedP2PState):
     """Generate > MAX_GARBAGE_LEN garbage bytes"""
-    def generate_keypair_and_garbage(self):
-        garbage_len = MAX_GARBAGE_LEN + random.randrange(1, MAX_GARBAGE_LEN + 1)
+    def generate_keypair_and_garbage(self, garbage_len=None):
+        if garbage_len is None:
+            garbage_len = MAX_GARBAGE_LEN + random.randrange(1, MAX_GARBAGE_LEN + 1)
         return super().generate_keypair_and_garbage(garbage_len)
 
 
 class WrongGarbageTerminatorState(EncryptedP2PState):
     """Add option for sending wrong garbage terminator"""
-    def generate_keypair_and_garbage(self):
-        garbage_len = random.randrange(MAX_GARBAGE_LEN//2)
+    def generate_keypair_and_garbage(self, garbage_len=None):
+        if garbage_len is None:
+            garbage_len = random.randrange(MAX_GARBAGE_LEN//2)
         return super().generate_keypair_and_garbage(garbage_len)
 
     def complete_handshake(self, response):
@@ -70,8 +72,9 @@ class WrongGarbageTerminatorState(EncryptedP2PState):
 
 class WrongGarbageState(EncryptedP2PState):
     """Generate tampered garbage bytes"""
-    def generate_keypair_and_garbage(self):
-        garbage_len = random.randrange(1, MAX_GARBAGE_LEN)
+    def generate_keypair_and_garbage(self, garbage_len=None):
+        if garbage_len is None:
+            garbage_len = random.randrange(1, MAX_GARBAGE_LEN)
         ellswift_garbage_bytes = super().generate_keypair_and_garbage(garbage_len)
         # assume that garbage bytes sent to TestNode were tampered with
         return ellswift_garbage_bytes[:64] + random_bitflip(ellswift_garbage_bytes[64:])
@@ -79,8 +82,9 @@ class WrongGarbageState(EncryptedP2PState):
 
 class NoAADState(EncryptedP2PState):
     """Add option for not filling first encrypted packet after garbage terminator with AAD"""
-    def generate_keypair_and_garbage(self):
-        garbage_len = random.randrange(1, MAX_GARBAGE_LEN)
+    def generate_keypair_and_garbage(self, garbage_len=None):
+        if garbage_len is None:
+            garbage_len = random.randrange(1, MAX_GARBAGE_LEN)
         return super().generate_keypair_and_garbage(garbage_len)
 
     def complete_handshake(self, response):
