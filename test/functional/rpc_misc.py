@@ -4,6 +4,8 @@
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test RPC misc output."""
 import xml.etree.ElementTree as ET
+import http.client
+import subprocess
 
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
@@ -14,9 +16,6 @@ from test_framework.util import (
 )
 
 from test_framework.authproxy import JSONRPCException
-
-import http
-import subprocess
 
 
 class RpcMiscTest(BitcoinTestFramework):
