@@ -56,6 +56,7 @@ The wallet subsystem owns local wallet databases, key and script managers, walle
 - `[[areas/rpc-rest-zmq-and-interfaces]]`
 - `[[areas/common-utils-and-configuration]]`
 - `[[areas/testing]]`
+- `[[concepts/descriptors]]`
 
 ## Sources Consulted
 

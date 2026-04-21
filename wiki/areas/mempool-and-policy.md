@@ -75,6 +75,7 @@ The mempool stores transactions that are valid for the current best chain and ar
 - `[[workflows/transaction-acceptance]]`
 - `[[workflows/block-validation-and-connection]]`
 - `[[areas/validation-and-chainstate]]`
+- `[[concepts/fee-estimation]]`
 
 ## Sources consulted
 

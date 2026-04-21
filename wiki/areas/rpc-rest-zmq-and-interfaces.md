@@ -62,6 +62,7 @@ This area covers the main external control and notification surfaces for Bitcoin
 - `[[areas/wallet]]`
 - `[[areas/p2p-and-networking]]`
 - `[[areas/common-utils-and-configuration]]`
+- `[[workflows/rpc-request-handling]]`
 
 ## Sources Consulted
 

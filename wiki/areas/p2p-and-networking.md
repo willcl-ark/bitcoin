@@ -55,6 +55,7 @@ This area owns peer connections, transport framing, handshake and message proces
 
 - [[areas/validation-and-chainstate]]
 - [[areas/mempool-and-policy]]
+- [[concepts/addrman]]
 - [[workflows/initial-block-download]]
 - [[workflows/block-validation-and-connection]]
 

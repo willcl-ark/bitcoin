@@ -60,9 +60,12 @@ tags:
 
 ## Adjacent pages
 
+- `[[concepts/chainstate]]`
+- `[[concepts/assumeutxo]]`
 - `[[workflows/block-validation-and-connection]]`
 - `[[workflows/initial-block-download]]`
 - `[[areas/mempool-and-policy]]`
+- `[[files/src/validation.cpp]]`
 
 ## Sources consulted
 

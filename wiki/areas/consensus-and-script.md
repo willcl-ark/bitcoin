@@ -44,6 +44,7 @@ This area defines context-free transaction and block validity, UTXO-contextual s
 
 - [[areas/validation-and-chainstate]]
 - [[areas/mempool-and-policy]]
+- [[concepts/script-verification]]
 - [[workflows/transaction-acceptance]]
 - [[workflows/block-validation-and-connection]]
 

@@ -40,6 +40,9 @@ in `README.md`, `CONTRIBUTING.md`, `doc/developer-notes.md`,
 - [[areas/p2p-and-networking]] covers transport, peer management, relay, and
   download logic under `src/net*`, `src/net_processing*`, `src/addrman*`,
   `src/banman*`, `src/txrequest*`, and `src/node/txdownloadman*`.
+- [[areas/mining-and-block-assembly]] covers candidate block construction,
+  mining RPCs, and the internal mining interface centered on
+  `src/node/miner.*` and `src/rpc/mining.cpp`.
 - [[areas/wallet]] covers optional wallet code under `src/wallet/`, wallet RPC,
   and wallet-specific tests.
 - [[areas/rpc-rest-zmq-and-interfaces]] covers the RPC server, REST handlers,
@@ -48,6 +51,8 @@ in `README.md`, `CONTRIBUTING.md`, `doc/developer-notes.md`,
 - [[areas/common-utils-and-configuration]] covers configuration parsing,
   reusable helpers, logging, and utility code under `src/common/`,
   `src/util/`, `src/logging/`, and related support code.
+- [[areas/gui]] covers the Qt application, node/wallet models, wallet views,
+  and GUI-specific startup/tests under `src/qt/`.
 - [[areas/testing]] covers unit, functional, fuzz, GUI, benchmark, and lint
   infrastructure across `src/test/`, `src/wallet/test/`, `src/qt/test/`,
   `src/test/fuzz/`, `test/functional/`, `test/fuzz/`, and `test/lint/`.
@@ -90,6 +95,18 @@ These workflows cut across consensus, validation, policy, networking, RPC, and
 testing, so they are a useful bridge between subsystem pages and file-level
 investigations.
 
+## Cross-Cutting Concepts
+
+The wiki also has concept pages for reusable ideas that span more than one
+subsystem:
+
+- [[concepts/chainstate]] and [[concepts/assumeutxo]] for UTXO-state ownership
+  and snapshot lifecycle.
+- [[concepts/descriptors]] and [[concepts/script-verification]] for script and
+  wallet-facing spend-description concepts.
+- [[concepts/addrman]] and [[concepts/fee-estimation]] for networking and
+  policy subsystems with dedicated internal data models.
+
 ## Testing and Build Context
 
 `src/test/README.md` defines the Boost-based unit test structure around
@@ -104,8 +121,9 @@ useful if they are tied back to the tests that exercise them.
 
 Start from [[index]] for navigation. For architecture questions, read the most
 relevant area page first, then a workflow page if the question crosses
-subsystems, and finally re-check the cited code paths in the current tree
-before relying on the wiki for a high-risk conclusion.
+subsystems, then a concept page if the question is about a reusable internal
+model, and finally re-check the cited code paths in the current tree before
+relying on the wiki for a high-risk conclusion.
 
 ## Sources Consulted
 
