@@ -456,3 +456,53 @@ The wiki is not:
 
 Prefer a small number of accurate, connected pages over exhaustive but shallow
 coverage.
+
+## Critical Priorities
+
+When choosing what to study, document, or review first, bias toward code paths
+where failure would have high operator or user impact.
+
+Treat a behavior or code path as **critical** if a bug, regression, malicious
+input, or misunderstood invariant could:
+
+- crash the node, trip an assertion, abort a process, or wedge startup/shutdown
+- knock the node offline, stall sync, disable RPC/GUI/wallet availability, or
+  otherwise stop normal operation
+- cause unbounded or attacker-amplifiable CPU, memory, disk, file-descriptor,
+  network, or wakeup usage, including OOM and pathological backlog growth
+- cause a user to lose funds, strand funds, miscompute balances, create or sign
+  the wrong transaction, lose key material, or corrupt backup/restore/migration
+  flows
+- reduce the privacy of the node operator by leaking IPs, peers, wallet names,
+  addresses, descriptors, startup mode, transport choices, chainstate/snapshot
+  state, or other identifying metadata
+- reduce the privacy of a transaction sender or receiver by linking coins,
+  outputs, wallets, xpubs, descriptors, labels, PSBT data, change patterns, or
+  transaction intent across subsystems
+
+For critical-focused wiki work, prioritize documenting:
+
+- fatal paths, assertions, exceptions, shutdown paths, and warmup/interrupt
+  behavior
+- lock ordering, thread ownership, callback reentrancy, queueing, and long-held
+  critical sections
+- resource caps, cache ownership, eviction/trimming, persistence/flush
+  boundaries, and attacker-controlled amplification surfaces
+- wallet safety boundaries: key handling, descriptor import/export, coin
+  selection, change generation, fee setting, signing, rebroadcast, backup,
+  restore, and migration
+- privacy boundaries: addr relay, peer selection, transport fallback, wallet
+  RPC routing, logging, ZMQ, wallet metadata, and transaction-origin leakage
+- exact tests that cover these properties, plus notable gaps where the current
+  tree appears weakly covered
+
+When writing these pages:
+
+- be explicit about what kind of impact is at stake: crash, offline, OOM,
+  fund-loss, operator-privacy loss, or sender/receiver-privacy loss
+- cite the concrete symbols, locks, options, and tests that enforce or weaken
+  the invariant
+- distinguish current guarantees from heuristics, policy, and best-effort
+  behavior
+- record open questions whenever safety or privacy depends on assumptions not
+  obviously enforced in code
