@@ -93,6 +93,11 @@ Single transactions and packages eventually enter the same validation core: `src
 - `[[areas/mempool-and-policy]]`
 - `[[workflows/block-validation-and-connection]]`
 - `[[areas/validation-and-chainstate]]`
+- `[[concepts/resource-exhaustion-and-backpressure]]`
+- `[[concepts/transaction-sender-and-receiver-privacy]]`
+- `[[concepts/wallet-fund-safety]]`
+- `[[files/src/txmempool.cpp]]`
+- `[[files/src/wallet/spend.cpp]]`
 
 ## Sources consulted
 

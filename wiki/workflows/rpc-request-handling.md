@@ -84,6 +84,8 @@ HTTP server but is registered separately and does not dispatch through
 
 - `[[areas/rpc-rest-zmq-and-interfaces]]`
 - `[[areas/wallet]]`
+- `[[concepts/operator-privacy]]`
+- `[[files/src/httprpc.cpp]]`
 
 ## Sources Consulted
 

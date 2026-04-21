@@ -11,3 +11,15 @@
 - Read targeted code and docs for mining, GUI, chainstate/assumeutxo, descriptors, script verification, addrman, fee estimation, `src/validation.cpp`, and HTTP RPC dispatch.
 - Created `wiki/areas/mining-and-block-assembly.md`, `wiki/areas/gui.md`, six concept pages, `wiki/files/src/validation.cpp.md`, and `wiki/workflows/rpc-request-handling.md`.
 - Updated `wiki/overview.md` and `wiki/index.md` to include the new pages and cross-cutting concept layer.
+
+## [2026-04-21] ingest | critical-path file pages and priority map
+
+- Appended a critical-priority rubric to `AGENTS.md` covering crash, offline, OOM/resource, fund-loss, operator-privacy, and sender/receiver-privacy risks.
+- Created file pages for `src/net.cpp`, `src/net_processing.cpp`, `src/txmempool.cpp`, `src/wallet/spend.cpp`, and `src/httprpc.cpp`, plus `wiki/investigations/critical-codepaths-priority-map.md`.
+- Updated overview, index, and adjacent links so critical-path review can start from one investigation page and drill into the corresponding files.
+
+## [2026-04-21] ingest | critical concepts and wallet-miner deep dives
+
+- Read targeted wallet, mining, networking, HTTP, orphanage, txdownload, pruning, and RPC files to turn the critical rubric into reusable concept pages.
+- Created `wiki/concepts/operator-privacy.md`, `wiki/concepts/transaction-sender-and-receiver-privacy.md`, `wiki/concepts/resource-exhaustion-and-backpressure.md`, `wiki/concepts/wallet-fund-safety.md`, `wiki/files/src/wallet/wallet.cpp.md`, and `wiki/files/src/node/miner.cpp.md`.
+- Updated overview, index, the critical priority map, and nearby area/workflow links so privacy, availability, and fund-safety review surfaces are reachable from the main wiki entry points.

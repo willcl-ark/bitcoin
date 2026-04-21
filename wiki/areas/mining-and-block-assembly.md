@@ -81,6 +81,8 @@ acceptance. The main implementation lives in `src/node/miner.*`
 - `[[areas/mempool-and-policy]]`
 - `[[areas/validation-and-chainstate]]`
 - `[[areas/rpc-rest-zmq-and-interfaces]]`
+- `[[concepts/resource-exhaustion-and-backpressure]]`
+- `[[files/src/node/miner.cpp]]`
 - `[[workflows/block-validation-and-connection]]`
 
 ## Sources Consulted

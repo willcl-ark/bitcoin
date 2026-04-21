@@ -62,7 +62,10 @@ This area covers the main external control and notification surfaces for Bitcoin
 - `[[areas/wallet]]`
 - `[[areas/p2p-and-networking]]`
 - `[[areas/common-utils-and-configuration]]`
+- `[[concepts/operator-privacy]]`
 - `[[workflows/rpc-request-handling]]`
+- `[[files/src/httprpc.cpp]]`
+- `[[investigations/critical-codepaths-priority-map]]`
 
 ## Sources Consulted
 

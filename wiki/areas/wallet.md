@@ -57,6 +57,11 @@ The wallet subsystem owns local wallet databases, key and script managers, walle
 - `[[areas/common-utils-and-configuration]]`
 - `[[areas/testing]]`
 - `[[concepts/descriptors]]`
+- `[[concepts/transaction-sender-and-receiver-privacy]]`
+- `[[concepts/wallet-fund-safety]]`
+- `[[files/src/wallet/spend.cpp]]`
+- `[[files/src/wallet/wallet.cpp]]`
+- `[[investigations/critical-codepaths-priority-map]]`
 
 ## Sources Consulted
 

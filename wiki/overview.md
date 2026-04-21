@@ -106,6 +106,27 @@ subsystem:
   wallet-facing spend-description concepts.
 - [[concepts/addrman]] and [[concepts/fee-estimation]] for networking and
   policy subsystems with dedicated internal data models.
+- [[concepts/operator-privacy]],
+  [[concepts/transaction-sender-and-receiver-privacy]],
+  [[concepts/resource-exhaustion-and-backpressure]], and
+  [[concepts/wallet-fund-safety]] for the cross-cutting invariants most likely
+  to matter in high-impact reviews.
+
+## Critical-Focused Starting Points
+
+The highest-priority review and documentation targets are now grouped in
+[[investigations/critical-codepaths-priority-map]]. It maps the current tree's
+most important crash, offline, resource, fund-safety, and privacy-sensitive
+paths into concrete files and tests. The first critical file pages cover:
+
+- [[files/src/net.cpp]]
+- [[files/src/net_processing.cpp]]
+- [[files/src/txmempool.cpp]]
+- [[files/src/wallet/spend.cpp]]
+- [[files/src/wallet/wallet.cpp]]
+- [[files/src/httprpc.cpp]]
+- [[files/src/node/miner.cpp]]
+- [[files/src/validation.cpp]]
 
 ## Testing and Build Context
 

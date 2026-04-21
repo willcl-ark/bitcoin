@@ -76,6 +76,10 @@ The mempool stores transactions that are valid for the current best chain and ar
 - `[[workflows/block-validation-and-connection]]`
 - `[[areas/validation-and-chainstate]]`
 - `[[concepts/fee-estimation]]`
+- `[[concepts/resource-exhaustion-and-backpressure]]`
+- `[[concepts/transaction-sender-and-receiver-privacy]]`
+- `[[files/src/txmempool.cpp]]`
+- `[[investigations/critical-codepaths-priority-map]]`
 
 ## Sources consulted
 
