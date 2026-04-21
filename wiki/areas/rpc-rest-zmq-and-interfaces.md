@@ -2,7 +2,7 @@
 kind: area
 title: RPC, REST, ZMQ, and Interfaces
 status: active
-last_reviewed: 2026-04-20
+last_reviewed: 2026-04-21
 paths:
   - src/rpc/
   - src/rest.cpp
@@ -28,6 +28,10 @@ This area covers the main external control and notification surfaces for Bitcoin
 - The JSON-RPC HTTP entry point is `HTTPReq_JSONRPC()` in `src/httprpc.cpp`. It only accepts POST, authenticates first, parses the request body, and forwards to `ExecuteHTTPRPC()`.
 - `ExecuteHTTPRPC()` builds a `JSONRPCRequest` and forwards execution to `JSONRPCExec()`, which dispatches through the global `tableRPC` and `CRPCTable::execute()` in `src/rpc/server.cpp`.
 - `StartHTTPRPC()` registers `/` unconditionally and `/wallet/` only when `g_wallet_init_interface.HasWalletSupport()` is true (`src/httprpc.cpp`). The local interface doc in `doc/JSON-RPC-interface.md` documents `/wallet/<walletname>/` as the required endpoint for wallet RPCs when multiple wallets are loaded.
+- `src/wallet/rpc/util.cpp` (`GetWalletForJSONRPCRequest`) applies wallet
+  selection after HTTP authentication and RPC method authorization have
+  already happened. Wallet routing is a dispatch boundary, not a second
+  per-wallet auth layer.
 - REST is a separate HTTP surface, not a wrapper around `tableRPC`. `StartREST()` in `src/rest.cpp` registers fixed `/rest/...` handlers such as `/rest/tx/`, `/rest/block/`, `/rest/headers/`, `/rest/getutxos`, and `/rest/chaininfo`. `AppInitServers()` only enables it when `-rest` is true.
 - `src/interfaces/` defines C++ abstraction boundaries between major components. `interfaces::Init` in `src/interfaces/init.h` can vend `Node`, `Chain`, `Mining`, `WalletLoader`, `Rpc`, and `Ipc` implementations depending on the process (`bitcoind`, `bitcoin-node`, `bitcoin-gui`, `bitcoin-qt`, `bitcoin-wallet`).
 - `interfaces::Rpc` in `src/interfaces/rpc.h` is an in-process adapter for HTTP-style RPC execution. `node::RpcImpl::executeRpc()` in `src/node/interfaces.cpp` fills a `JSONRPCRequest` and calls `ExecuteHTTPRPC()`.
@@ -55,7 +59,7 @@ This area covers the main external control and notification surfaces for Bitcoin
 ## Related Tests
 
 - Unit tests: `src/test/rpc_tests.cpp`, `src/test/rest_tests.cpp`, `src/test/interfaces_tests.cpp`
-- Functional coverage: `test/functional/interface_rpc.py`, `test/functional/interface_http.py`, `test/functional/interface_rest.py`, `test/functional/interface_zmq.py`, `test/functional/interface_ipc.py`, `test/functional/interface_bitcoin_cli.py`, `test/functional/rpc_bind.py`, `test/functional/rpc_users.py`, `test/functional/rpc_whitelist.py`
+- Functional coverage: `test/functional/interface_rpc.py`, `test/functional/interface_http.py`, `test/functional/interface_rest.py`, `test/functional/interface_zmq.py`, `test/functional/interface_ipc.py`, `test/functional/interface_bitcoin_cli.py`, `test/functional/rpc_bind.py`, `test/functional/rpc_users.py`, `test/functional/rpc_whitelist.py`, `test/functional/wallet_multiwallet.py`
 
 ## Adjacent Pages
 
@@ -63,6 +67,7 @@ This area covers the main external control and notification surfaces for Bitcoin
 - `[[areas/p2p-and-networking]]`
 - `[[areas/common-utils-and-configuration]]`
 - `[[concepts/operator-privacy]]`
+- `[[concepts/rpc-authentication-and-wallet-routing]]`
 - `[[workflows/rpc-request-handling]]`
 - `[[files/src/httprpc.cpp]]`
 - `[[investigations/critical-codepaths-priority-map]]`

@@ -139,6 +139,7 @@ not consensus guarantees.
 - `[[areas/rpc-rest-zmq-and-interfaces]]`
 - `[[concepts/descriptors]]`
 - `[[concepts/fee-estimation]]`
+- `[[files/src/wallet/load.cpp]]`
 - `[[files/src/wallet/spend.cpp]]`
 
 ## Open questions

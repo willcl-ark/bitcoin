@@ -30,6 +30,7 @@
 - `[[concepts/fee-estimation]]` - Policy estimator ownership, persistence, and wallet/RPC consumers.
 - `[[concepts/package-policy-and-relay]]` - Package shape rules, child-with-parents submission, package RBF/TRUC policy, and current 1p1c relay behavior.
 - `[[concepts/operator-privacy]]` - Operator identity and metadata leak boundaries across networking, RPC, and wallet-facing surfaces.
+- `[[concepts/rpc-authentication-and-wallet-routing]]` - HTTP allowlist/authentication, RPC method authorization, warmup, and later wallet URI selection boundaries.
 - `[[concepts/transaction-sender-and-receiver-privacy]]` - Sender/receiver privacy boundaries in wallet construction, metadata handling, and relay.
 - `[[concepts/resource-exhaustion-and-backpressure]]` - Memory, CPU, queue, and connection-pressure limits on untrusted-input paths.
 - `[[concepts/wallet-fund-safety]]` - Wallet invariants that keep balances, transaction creation, signing, and persistence from losing funds.
@@ -46,15 +47,19 @@
 
 ## Files
 
+- `[[files/src/addrman.cpp]]` - Bucketized address-manager persistence, selection, rebucketing, and operator-privacy boundaries.
+- `[[files/src/init.cpp]]` - Startup/shutdown ordering, RPC warmup, partial-init failure handling, and safe teardown.
 - `[[files/src/validation.cpp]]` - File-level map of the central validation integration unit.
 - `[[files/src/net.cpp]]` - Transport, connection lifecycle, socket/message loops, and address-response privacy boundaries.
 - `[[files/src/net_processing.cpp]]` - Peer message handling, sync/relay logic, discouragement, and anti-DoS choke points.
 - `[[files/src/txmempool.cpp]]` - Mempool resource ownership, trimming, expiry, block removal, and rolling-fee behavior.
 - `[[files/src/wallet/spend.cpp]]` - Wallet transaction creation, coin selection, change handling, and fee-sensitive spend construction.
+- `[[files/src/wallet/load.cpp]]` - Wallet startup verification/load/start/unload coordination and startup-setting boundaries.
 - `[[files/src/wallet/wallet.cpp]]` - Wallet lifecycle, persistence boundaries, load/create/restore flows, and state ownership.
 - `[[files/src/httprpc.cpp]]` - HTTP JSON-RPC ingress, auth, wallet URI routing, and RPC availability boundary.
 - `[[files/src/node/miner.cpp]]` - Candidate block assembly, template refresh, and self-validation before block handoff.
 - `[[files/src/node/txdownloadman_impl.cpp]]` - Transaction download scheduling, orphan resolution, retry state, and per-peer backpressure.
+- `[[files/src/node/txorphanage.cpp]]` - Bounded orphan storage, per-peer trimming, reconsideration worksets, and anti-DoS invariants.
 
 ## Sources
 
@@ -67,3 +72,4 @@
 ## Investigations
 
 - `[[investigations/critical-codepaths-priority-map]]` - Map of the current tree's highest-priority crash, offline, resource, fund-safety, and privacy-sensitive paths.
+- `[[investigations/critical-test-coverage-gaps]]` - Critical-path areas where current unit, fuzz, or functional coverage looks thinner than the failure impact.

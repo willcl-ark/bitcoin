@@ -171,7 +171,9 @@ uses `/wallet/<walletname>` via `src/wallet/rpc/util.cpp`
 - `[[areas/rpc-rest-zmq-and-interfaces]]`
 - `[[areas/wallet]]`
 - `[[concepts/addrman]]`
+- `[[concepts/rpc-authentication-and-wallet-routing]]`
 - `[[workflows/rpc-request-handling]]`
+- `[[files/src/addrman.cpp]]`
 - `[[files/src/net.cpp]]`
 - `[[files/src/net_processing.cpp]]`
 - `[[files/src/httprpc.cpp]]`

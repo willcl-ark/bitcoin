@@ -60,7 +60,9 @@ and returns randomized subsets for outbound dialing or address gossip.
 ## Adjacent Pages
 
 - `[[areas/p2p-and-networking]]`
+- `[[concepts/operator-privacy]]`
 - `[[concepts/fee-estimation]]`
+- `[[files/src/addrman.cpp]]`
 
 ## Sources Consulted
 

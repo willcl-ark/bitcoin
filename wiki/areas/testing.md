@@ -2,7 +2,7 @@
 kind: area
 title: Testing
 status: active
-last_reviewed: 2026-04-20
+last_reviewed: 2026-04-21
 paths:
   - src/test/
   - src/wallet/test/
@@ -59,6 +59,7 @@ and Python-driven suites under `test/`. The main strata in the current tree are:
 - `[[areas/build-packaging-and-ci]]`
 - `[[areas/libbitcoinkernel-and-libraries]]`
 - `[[workflows/transaction-acceptance]]`
+- `[[investigations/critical-test-coverage-gaps]]`
 
 ## Sources consulted
 

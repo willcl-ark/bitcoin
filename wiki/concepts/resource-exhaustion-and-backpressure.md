@@ -144,12 +144,15 @@ work, or failing fast on low disk space.
 - `[[areas/mempool-and-policy]]`
 - `[[areas/validation-and-chainstate]]`
 - `[[areas/rpc-rest-zmq-and-interfaces]]`
+- `[[files/src/init.cpp]]`
 - `[[files/src/net.cpp]]`
 - `[[files/src/net_processing.cpp]]`
+- `[[files/src/node/txorphanage.cpp]]`
 - `[[files/src/txmempool.cpp]]`
 - `[[files/src/validation.cpp]]`
 - `[[workflows/transaction-acceptance]]`
 - `[[workflows/block-validation-and-connection]]`
+- `[[investigations/critical-test-coverage-gaps]]`
 
 ## Open questions
 

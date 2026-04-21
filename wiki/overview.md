@@ -118,8 +118,12 @@ subsystem:
 - [[concepts/package-policy-and-relay]] for package shape rules, real
   child-with-parents submission, package RBF/TRUC policy, and the current 1p1c
   relay path.
-- [[concepts/operator-privacy]],
-  [[concepts/transaction-sender-and-receiver-privacy]],
+- [[concepts/operator-privacy]] for operator identity and metadata leak
+  boundaries across networking, RPC, and wallet-facing surfaces.
+- [[concepts/rpc-authentication-and-wallet-routing]] for the boundary between
+  HTTP reachability/auth, RPC method authorization, and later
+  `/wallet/<walletname>` selection.
+- [[concepts/transaction-sender-and-receiver-privacy]],
   [[concepts/resource-exhaustion-and-backpressure]], and
   [[concepts/wallet-fund-safety]] for the cross-cutting invariants most likely
   to matter in high-impact reviews.
@@ -141,11 +145,15 @@ architecture and contributor context before drilling into runtime behavior:
 The highest-priority review and documentation targets are now grouped in
 [[investigations/critical-codepaths-priority-map]]. It maps the current tree's
 most important crash, offline, resource, fund-safety, and privacy-sensitive
-paths into concrete files and tests. The first critical file pages cover:
+paths into concrete files and tests. The critical file pages now cover:
 
+- [[files/src/addrman.cpp]]
+- [[files/src/init.cpp]]
 - [[files/src/net.cpp]]
 - [[files/src/net_processing.cpp]]
+- [[files/src/node/txorphanage.cpp]]
 - [[files/src/txmempool.cpp]]
+- [[files/src/wallet/load.cpp]]
 - [[files/src/wallet/spend.cpp]]
 - [[files/src/wallet/wallet.cpp]]
 - [[files/src/httprpc.cpp]]
@@ -156,6 +164,11 @@ paths into concrete files and tests. The first critical file pages cover:
 Availability-sensitive review also now has dedicated workflow pages for
 [[workflows/node-startup-and-shutdown]], [[workflows/block-relay]], and
 [[workflows/wallet-rescan]].
+
+Coverage prioritization now also has
+[[investigations/critical-test-coverage-gaps]], which points at critical paths
+whose current unit, fuzz, or functional coverage looks thinner than their
+impact.
 
 ## Testing and Build Context
 

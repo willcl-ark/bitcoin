@@ -16,17 +16,22 @@ tags:
 This page turns the `AGENTS.md` critical-priority rubric into a concrete map of
 where to deepen the wiki first. The focus is on code paths where failures could
 crash the node, take it offline, cause OOM/resource exhaustion, lose funds, or
-harm operator or transaction privacy.
+harm operator or transaction privacy. The follow-on pages created from this map
+now cover `src/init.cpp`, `src/addrman.cpp`, `src/node/txorphanage.cpp`,
+`src/wallet/load.cpp`, RPC auth/wallet routing, and critical test-coverage
+gaps.
 
 ## Priority Map
 
 - Crash / fatal shutdown surfaces:
+  - `src/init.cpp` (`AppInitMain`, `Interrupt`, `Shutdown`)
   - `src/validation.cpp` (`ProcessNewBlock`, `ConnectBlock`,
     `ActivateBestChain`)
   - `src/net.cpp` (`ThreadSocketHandler`, `ThreadMessageHandler`)
   - `src/node/miner.cpp` (`CreateNewBlock` self-validation path)
   - Tests: `src/test/validation_*`, `src/test/net_*`, `src/test/miner_tests.cpp`
 - Offline / service-loss surfaces:
+  - `src/init.cpp` (`AppInitServers`, `StartIndexBackgroundSync`)
   - `src/net.cpp` (`OpenNetworkConnection`, `AcceptConnection`,
     `AttemptToEvictConnection`)
   - `src/net_processing.cpp` (`ProcessHeadersMessage`, `ProcessBlock`,
@@ -35,6 +40,8 @@ harm operator or transaction privacy.
   - Tests: `test/functional/p2p_*`, `test/functional/interface_http.py`,
     `test/functional/interface_rpc.py`
 - OOM / resource-exhaustion surfaces:
+  - `src/node/txorphanage.cpp` (`AddTx`, `LimitOrphans`,
+    `AddChildrenToWorkSet`)
   - `src/txmempool.cpp` (`TrimToSize`, `DynamicMemoryUsage`, `Expire`,
     `GetMinFee`)
   - `src/net_processing.cpp` orphan/retry handling
@@ -53,7 +60,7 @@ harm operator or transaction privacy.
   - `src/net_processing.cpp` (`SetupAddressRelay`, handshake behavior)
   - `src/httprpc.cpp` and `src/wallet/rpc/util.cpp` (wallet URI routing and
     RPC ingress)
-  - `src/addrman.*` and related peer-selection state
+  - `src/addrman.cpp` and related peer-selection state
 - Sender / receiver privacy surfaces:
   - `src/wallet/spend.cpp` (coin selection and change behavior)
   - `src/net_processing.cpp` tx relay, orphan retry, and package handling
@@ -65,23 +72,29 @@ harm operator or transaction privacy.
   construction, or long-lived resource ownership.
 - They connect multiple subsystems, so a misunderstanding of boundaries can
   turn a local bug into an availability or privacy regression.
-- They already have specialized tests, which makes them good candidates for
-  deeper file pages and for identifying coverage gaps.
+- They already have specialized tests or obvious test gaps, which makes them
+  good candidates for deeper file pages and for identifying coverage gaps.
 
 ## Related Pages
 
 - `[[concepts/operator-privacy]]`
+- `[[concepts/rpc-authentication-and-wallet-routing]]`
 - `[[concepts/transaction-sender-and-receiver-privacy]]`
 - `[[concepts/resource-exhaustion-and-backpressure]]`
 - `[[concepts/wallet-fund-safety]]`
+- `[[files/src/addrman.cpp]]`
+- `[[files/src/init.cpp]]`
 - `[[files/src/validation.cpp]]`
 - `[[files/src/net.cpp]]`
 - `[[files/src/net_processing.cpp]]`
 - `[[files/src/txmempool.cpp]]`
+- `[[files/src/node/txorphanage.cpp]]`
 - `[[files/src/wallet/spend.cpp]]`
+- `[[files/src/wallet/load.cpp]]`
 - `[[files/src/wallet/wallet.cpp]]`
 - `[[files/src/httprpc.cpp]]`
 - `[[files/src/node/miner.cpp]]`
+- `[[investigations/critical-test-coverage-gaps]]`
 - `[[areas/validation-and-chainstate]]`
 - `[[areas/p2p-and-networking]]`
 - `[[areas/mempool-and-policy]]`
@@ -89,12 +102,14 @@ harm operator or transaction privacy.
 
 ## Open Questions
 
-- Which privacy-sensitive surfaces deserve dedicated concept pages beyond the
-  current `addrman` and wallet-spending coverage?
-- Which resource-exhaustion paths are bounded only by policy/heuristics rather
-  than hard structural limits?
-- Which of the critical paths above have weak fuzz or functional coverage
-  compared with their failure impact?
+- Which remaining RPC/privacy surfaces deserve standalone file pages beyond
+  the new routing concept page, especially `src/httpserver.cpp` and
+  `src/wallet/rpc/util.cpp`?
+- Which policy- or heuristic-bounded availability paths called out in
+  `[[concepts/resource-exhaustion-and-backpressure]]` deserve their own
+  investigations next?
+- Which gaps listed in `[[investigations/critical-test-coverage-gaps]]` are the
+  highest-value candidates for future focused tests?
 
 ## Sources Consulted
 

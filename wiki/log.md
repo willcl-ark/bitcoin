@@ -29,3 +29,9 @@
 - Read targeted code and docs for init/shutdown, block relay, wallet rescans, package policy, tx download scheduling, and the repo's local architecture/testing documents.
 - Created `wiki/workflows/node-startup-and-shutdown.md`, `wiki/workflows/block-relay.md`, `wiki/workflows/wallet-rescan.md`, `wiki/concepts/package-policy-and-relay.md`, `wiki/files/src/node/txdownloadman_impl.cpp.md`, and source summary pages for `doc/developer-notes.md`, `src/node/README.md`, `src/interfaces/README.md`, `src/test/README.md`, and `test/README.md`.
 - Updated `wiki/overview.md`, `wiki/index.md`, and nearby area/workflow pages so startup, relay, rescans, package policy, tx download internals, and local docs are reachable from the main navigation.
+
+## [2026-04-21] ingest | vulnerability-oriented startup, routing, and coverage pass
+
+- Read targeted code and tests for `src/init.cpp`, `src/addrman.cpp`, `src/node/txorphanage.cpp`, `src/wallet/load.cpp`, `src/httpserver.cpp`, `src/httprpc.cpp`, `src/rpc/server.cpp`, `src/wallet/rpc/util.cpp`, and the test files tied to those paths.
+- Created `wiki/files/src/init.cpp.md`, `wiki/files/src/addrman.cpp.md`, `wiki/files/src/node/txorphanage.cpp.md`, `wiki/files/src/wallet/load.cpp.md`, `wiki/concepts/rpc-authentication-and-wallet-routing.md`, and `wiki/investigations/critical-test-coverage-gaps.md`.
+- Updated `wiki/overview.md`, `wiki/index.md`, `wiki/investigations/critical-codepaths-priority-map.md`, and nearby area/concept/workflow pages so startup ordering, wallet load boundaries, addrman privacy properties, orphanage anti-DoS behavior, RPC auth/routing, and critical coverage gaps are reachable from the main navigation.

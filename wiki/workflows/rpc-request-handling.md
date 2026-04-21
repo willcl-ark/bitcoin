@@ -62,6 +62,8 @@ HTTP server but is registered separately and does not dispatch through
 ### 4. Wallet routing
 
 - Wallet selection comes from the request URI, not just the RPC method name.
+- HTTP authentication, per-user RPC whitelists, and warmup checks happen
+  earlier; wallet routing is later dispatch, not a second auth layer.
 - `src/wallet/rpc/util.cpp` (`GetWalletNameFromJSONRPCRequest`) extracts the
   wallet name from `/wallet/<walletname>/`.
 - If multiple wallets are loaded and no wallet endpoint is specified, wallet
@@ -85,6 +87,7 @@ HTTP server but is registered separately and does not dispatch through
 - `[[areas/rpc-rest-zmq-and-interfaces]]`
 - `[[areas/wallet]]`
 - `[[concepts/operator-privacy]]`
+- `[[concepts/rpc-authentication-and-wallet-routing]]`
 - `[[files/src/httprpc.cpp]]`
 
 ## Sources Consulted

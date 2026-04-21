@@ -63,6 +63,11 @@ and destroy node-owned objects.
   scheduler startup, validation callback plumbing, warnings/notifications,
   chainstate loading, optional indexes, wallet and other chain clients, and
   finally P2P startup.
+- Wallet startup is also staged deliberately. `src/init.cpp` drives the
+  generic chain-client lifecycle so wallet verification happens before network
+  start, wallet DB loading happens after chainstate and index setup, and
+  wallet post-init work is deferred until late startup
+  (`src/wallet/load.cpp` (`VerifyWallets`, `LoadWallets`, `StartWallets`)).
 - Validation callbacks are serialized through
   `src/init.cpp` (`AppInitMain`) creating `ValidationSignals` with
   `SerialTaskRunner(*node.scheduler)`. The ordering guarantee comes from
@@ -275,6 +280,8 @@ and destroy node-owned objects.
 - `[[workflows/rpc-request-handling]]`
 - `[[workflows/block-validation-and-connection]]`
 - `[[workflows/initial-block-download]]`
+- `[[files/src/init.cpp]]`
+- `[[files/src/wallet/load.cpp]]`
 
 ## Open questions
 
