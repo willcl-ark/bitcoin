@@ -2,7 +2,7 @@
 kind: area
 title: Mempool and Policy
 status: active
-last_reviewed: 2026-04-20
+last_reviewed: 2026-04-21
 paths:
   - src/validation.cpp
   - src/txmempool.h
@@ -76,6 +76,7 @@ The mempool stores transactions that are valid for the current best chain and ar
 - `[[workflows/block-validation-and-connection]]`
 - `[[areas/validation-and-chainstate]]`
 - `[[concepts/fee-estimation]]`
+- `[[concepts/package-policy-and-relay]]`
 - `[[concepts/resource-exhaustion-and-backpressure]]`
 - `[[concepts/transaction-sender-and-receiver-privacy]]`
 - `[[files/src/txmempool.cpp]]`

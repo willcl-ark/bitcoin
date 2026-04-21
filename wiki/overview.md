@@ -2,7 +2,7 @@
 kind: overview
 title: Bitcoin Core Codebase Overview
 status: active
-last_reviewed: 2026-04-20
+last_reviewed: 2026-04-21
 paths:
   - README.md
   - CONTRIBUTING.md
@@ -83,17 +83,26 @@ out these gates whenever they affect whether a behavior exists in a build.
 
 ## End-to-End Workflows
 
-The first workflow pages focus on three high-leverage paths:
+The current workflow pages focus on the cross-subsystem paths that most often
+matter for review or orientation:
 
 - [[workflows/transaction-acceptance]] for mempool admission and policy checks.
 - [[workflows/block-validation-and-connection]] for block processing,
   validation, and active chain updates.
 - [[workflows/initial-block-download]] for IBD state, headers-first sync, and
   related gating behavior.
+- [[workflows/rpc-request-handling]] for HTTP JSON-RPC ingress, routing, and
+  wallet-aware dispatch.
+- [[workflows/block-relay]] for headers, compact-block, full-block, and
+  outbound announcement behavior.
+- [[workflows/node-startup-and-shutdown]] for `bitcoind` lifecycle, warmup,
+  interrupt propagation, and ordered teardown.
+- [[workflows/wallet-rescan]] for wallet load/import/restore rescans, block
+  filter acceleration, and prune/assumeutxo boundaries.
 
-These workflows cut across consensus, validation, policy, networking, RPC, and
-testing, so they are a useful bridge between subsystem pages and file-level
-investigations.
+These workflows cut across consensus, validation, policy, networking, RPC,
+wallet, and testing, so they are a useful bridge between subsystem pages and
+file-level investigations.
 
 ## Cross-Cutting Concepts
 
@@ -106,11 +115,26 @@ subsystem:
   wallet-facing spend-description concepts.
 - [[concepts/addrman]] and [[concepts/fee-estimation]] for networking and
   policy subsystems with dedicated internal data models.
+- [[concepts/package-policy-and-relay]] for package shape rules, real
+  child-with-parents submission, package RBF/TRUC policy, and the current 1p1c
+  relay path.
 - [[concepts/operator-privacy]],
   [[concepts/transaction-sender-and-receiver-privacy]],
   [[concepts/resource-exhaustion-and-backpressure]], and
   [[concepts/wallet-fund-safety]] for the cross-cutting invariants most likely
   to matter in high-impact reviews.
+
+## Source Summaries
+
+The `wiki/sources/` layer now captures the local documents that establish
+architecture and contributor context before drilling into runtime behavior:
+
+- [[sources/doc-developer-notes]] for contributor tooling, style, logging,
+  locking, RPC, and interface conventions.
+- [[sources/src-node-readme]] and [[sources/src-interfaces-readme]] for the
+  intended boundary between node, wallet, GUI, and interface code.
+- [[sources/src-test-readme]] and [[sources/test-readme]] for the compiled and
+  end-to-end test layers that back many behavior claims elsewhere in the wiki.
 
 ## Critical-Focused Starting Points
 
@@ -126,7 +150,12 @@ paths into concrete files and tests. The first critical file pages cover:
 - [[files/src/wallet/wallet.cpp]]
 - [[files/src/httprpc.cpp]]
 - [[files/src/node/miner.cpp]]
+- [[files/src/node/txdownloadman_impl.cpp]]
 - [[files/src/validation.cpp]]
+
+Availability-sensitive review also now has dedicated workflow pages for
+[[workflows/node-startup-and-shutdown]], [[workflows/block-relay]], and
+[[workflows/wallet-rescan]].
 
 ## Testing and Build Context
 

@@ -23,3 +23,9 @@
 - Read targeted wallet, mining, networking, HTTP, orphanage, txdownload, pruning, and RPC files to turn the critical rubric into reusable concept pages.
 - Created `wiki/concepts/operator-privacy.md`, `wiki/concepts/transaction-sender-and-receiver-privacy.md`, `wiki/concepts/resource-exhaustion-and-backpressure.md`, `wiki/concepts/wallet-fund-safety.md`, `wiki/files/src/wallet/wallet.cpp.md`, and `wiki/files/src/node/miner.cpp.md`.
 - Updated overview, index, the critical priority map, and nearby area/workflow links so privacy, availability, and fund-safety review surfaces are reachable from the main wiki entry points.
+
+## [2026-04-21] ingest | source summaries and startup-relay-wallet workflows
+
+- Read targeted code and docs for init/shutdown, block relay, wallet rescans, package policy, tx download scheduling, and the repo's local architecture/testing documents.
+- Created `wiki/workflows/node-startup-and-shutdown.md`, `wiki/workflows/block-relay.md`, `wiki/workflows/wallet-rescan.md`, `wiki/concepts/package-policy-and-relay.md`, `wiki/files/src/node/txdownloadman_impl.cpp.md`, and source summary pages for `doc/developer-notes.md`, `src/node/README.md`, `src/interfaces/README.md`, `src/test/README.md`, and `test/README.md`.
+- Updated `wiki/overview.md`, `wiki/index.md`, and nearby area/workflow pages so startup, relay, rescans, package policy, tx download internals, and local docs are reachable from the main navigation.

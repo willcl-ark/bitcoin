@@ -2,7 +2,7 @@
 kind: area
 title: P2P and Networking
 status: active
-last_reviewed: 2026-04-20
+last_reviewed: 2026-04-21
 paths:
   - src/net.cpp
   - src/net.h
@@ -56,11 +56,14 @@ This area owns peer connections, transport framing, handshake and message proces
 - [[areas/validation-and-chainstate]]
 - [[areas/mempool-and-policy]]
 - [[concepts/addrman]]
+- [[concepts/package-policy-and-relay]]
 - [[concepts/operator-privacy]]
 - [[concepts/resource-exhaustion-and-backpressure]]
 - [[files/src/net.cpp]]
 - [[files/src/net_processing.cpp]]
+- [[files/src/node/txdownloadman_impl.cpp]]
 - [[investigations/critical-codepaths-priority-map]]
+- [[workflows/block-relay]]
 - [[workflows/initial-block-download]]
 - [[workflows/block-validation-and-connection]]
 

@@ -2,7 +2,7 @@
 kind: area
 title: Common Utils and Configuration
 status: active
-last_reviewed: 2026-04-20
+last_reviewed: 2026-04-21
 paths:
   - src/common/
   - src/util/
@@ -58,6 +58,7 @@ tags:
 - `[[areas/rpc-rest-zmq-and-interfaces]]`
 - `[[areas/wallet]]`
 - `[[areas/build-packaging-and-ci]]`
+- `[[workflows/node-startup-and-shutdown]]`
 
 ## Sources Consulted
 

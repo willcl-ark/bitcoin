@@ -2,7 +2,7 @@
 kind: area
 title: Wallet
 status: active
-last_reviewed: 2026-04-20
+last_reviewed: 2026-04-21
 paths:
   - src/wallet/
   - src/interfaces/wallet.h
@@ -61,6 +61,7 @@ The wallet subsystem owns local wallet databases, key and script managers, walle
 - `[[concepts/wallet-fund-safety]]`
 - `[[files/src/wallet/spend.cpp]]`
 - `[[files/src/wallet/wallet.cpp]]`
+- `[[workflows/wallet-rescan]]`
 - `[[investigations/critical-codepaths-priority-map]]`
 
 ## Sources Consulted

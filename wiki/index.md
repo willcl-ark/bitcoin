@@ -28,6 +28,7 @@
 - `[[concepts/script-verification]]` - Interpreter flow, script flags, sigcache use, and consensus-vs-policy verification boundaries.
 - `[[concepts/addrman]]` - Bucketized peer-address storage, promotion, selection, and export behavior.
 - `[[concepts/fee-estimation]]` - Policy estimator ownership, persistence, and wallet/RPC consumers.
+- `[[concepts/package-policy-and-relay]]` - Package shape rules, child-with-parents submission, package RBF/TRUC policy, and current 1p1c relay behavior.
 - `[[concepts/operator-privacy]]` - Operator identity and metadata leak boundaries across networking, RPC, and wallet-facing surfaces.
 - `[[concepts/transaction-sender-and-receiver-privacy]]` - Sender/receiver privacy boundaries in wallet construction, metadata handling, and relay.
 - `[[concepts/resource-exhaustion-and-backpressure]]` - Memory, CPU, queue, and connection-pressure limits on untrusted-input paths.
@@ -39,6 +40,9 @@
 - `[[workflows/block-validation-and-connection]]` - `ProcessNewBlock` through `ActivateBestChain`, including `ConnectBlock` and reorg repair.
 - `[[workflows/initial-block-download]]` - IBD exit conditions, sync behavior, relay suppression, and assumeutxo interaction.
 - `[[workflows/rpc-request-handling]]` - HTTP JSON-RPC startup, dispatch through `tableRPC`, wallet URI routing, and the REST boundary.
+- `[[workflows/block-relay]]` - Headers, compact-block, full-block, download-scheduling, and outbound-announcement paths.
+- `[[workflows/node-startup-and-shutdown]]` - `bitcoind` lifecycle, warmup, chainstate load, interrupt propagation, and ordered teardown.
+- `[[workflows/wallet-rescan]]` - Wallet load/import/restore rescans, block-filter acceleration, mempool replay, and prune/assumeutxo boundaries.
 
 ## Files
 
@@ -50,10 +54,15 @@
 - `[[files/src/wallet/wallet.cpp]]` - Wallet lifecycle, persistence boundaries, load/create/restore flows, and state ownership.
 - `[[files/src/httprpc.cpp]]` - HTTP JSON-RPC ingress, auth, wallet URI routing, and RPC availability boundary.
 - `[[files/src/node/miner.cpp]]` - Candidate block assembly, template refresh, and self-validation before block handoff.
+- `[[files/src/node/txdownloadman_impl.cpp]]` - Transaction download scheduling, orphan resolution, retry state, and per-peer backpressure.
 
 ## Sources
 
-- No source summary pages yet.
+- `[[sources/doc-developer-notes]]` - Contributor and maintainer guidance for style, tooling, logging, locking, RPC, and interface conventions.
+- `[[sources/src-node-readme]]` - Stated ownership boundary for `src/node/` relative to wallet and GUI code.
+- `[[sources/src-interfaces-readme]]` - Internal interface map for node, wallet, GUI, RPC, and multiprocess boundaries.
+- `[[sources/src-test-readme]]` - Unit and GUI test runner layout, naming conventions, and local debugging workflow.
+- `[[sources/test-readme]]` - Functional, fuzz, and lint test-layer overview plus local test-runner guidance.
 
 ## Investigations
 

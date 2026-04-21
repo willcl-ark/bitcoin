@@ -2,7 +2,7 @@
 kind: workflow
 title: Transaction Acceptance
 status: active
-last_reviewed: 2026-04-20
+last_reviewed: 2026-04-21
 paths:
   - src/validation.cpp
   - src/net_processing.cpp
@@ -93,9 +93,11 @@ Single transactions and packages eventually enter the same validation core: `src
 - `[[areas/mempool-and-policy]]`
 - `[[workflows/block-validation-and-connection]]`
 - `[[areas/validation-and-chainstate]]`
+- `[[concepts/package-policy-and-relay]]`
 - `[[concepts/resource-exhaustion-and-backpressure]]`
 - `[[concepts/transaction-sender-and-receiver-privacy]]`
 - `[[concepts/wallet-fund-safety]]`
+- `[[files/src/node/txdownloadman_impl.cpp]]`
 - `[[files/src/txmempool.cpp]]`
 - `[[files/src/wallet/spend.cpp]]`
 
