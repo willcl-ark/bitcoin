@@ -170,6 +170,12 @@ Coverage prioritization now also has
 whose current unit, fuzz, or functional coverage looks thinner than their
 impact.
 
+The current concern rollup and follow-up backlog now live in
+[[investigations/security-review-concerns]] and
+[[investigations/actionable-security-work-items]]. These pages separate
+confirmed defects from review signals and turn the current concerns into a
+concrete work queue.
+
 ## Testing and Build Context
 
 `src/test/README.md` defines the Boost-based unit test structure around

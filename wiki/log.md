@@ -35,3 +35,9 @@
 - Read targeted code and tests for `src/init.cpp`, `src/addrman.cpp`, `src/node/txorphanage.cpp`, `src/wallet/load.cpp`, `src/httpserver.cpp`, `src/httprpc.cpp`, `src/rpc/server.cpp`, `src/wallet/rpc/util.cpp`, and the test files tied to those paths.
 - Created `wiki/files/src/init.cpp.md`, `wiki/files/src/addrman.cpp.md`, `wiki/files/src/node/txorphanage.cpp.md`, `wiki/files/src/wallet/load.cpp.md`, `wiki/concepts/rpc-authentication-and-wallet-routing.md`, and `wiki/investigations/critical-test-coverage-gaps.md`.
 - Updated `wiki/overview.md`, `wiki/index.md`, `wiki/investigations/critical-codepaths-priority-map.md`, and nearby area/concept/workflow pages so startup ordering, wallet load boundaries, addrman privacy properties, orphanage anti-DoS behavior, RPC auth/routing, and critical coverage gaps are reachable from the main navigation.
+
+## [2026-04-21] ingest | security concern rollup and action backlog
+
+- Consolidated the current security-relevant findings from the critical priority map, coverage-gap analysis, privacy pages, and file pages into a single concern rollup.
+- Created `wiki/investigations/security-review-concerns.md` and `wiki/investigations/actionable-security-work-items.md`.
+- Updated `wiki/index.md`, `wiki/overview.md`, and `wiki/investigations/critical-codepaths-priority-map.md` so the concern rollup and work backlog are reachable from the main navigation and critical review entry points.

@@ -73,3 +73,5 @@
 
 - `[[investigations/critical-codepaths-priority-map]]` - Map of the current tree's highest-priority crash, offline, resource, fund-safety, and privacy-sensitive paths.
 - `[[investigations/critical-test-coverage-gaps]]` - Critical-path areas where current unit, fuzz, or functional coverage looks thinner than the failure impact.
+- `[[investigations/security-review-concerns]]` - Rollup of current security-relevant concerns, separating confirmed defects from review signals and operational/privacy surfaces.
+- `[[investigations/actionable-security-work-items]]` - Concrete backlog of tests, hardening tasks, and review support items derived from the current security concerns.

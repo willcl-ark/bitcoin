@@ -95,6 +95,8 @@ gaps.
 - `[[files/src/httprpc.cpp]]`
 - `[[files/src/node/miner.cpp]]`
 - `[[investigations/critical-test-coverage-gaps]]`
+- `[[investigations/security-review-concerns]]`
+- `[[investigations/actionable-security-work-items]]`
 - `[[areas/validation-and-chainstate]]`
 - `[[areas/p2p-and-networking]]`
 - `[[areas/mempool-and-policy]]`
