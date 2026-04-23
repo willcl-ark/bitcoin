@@ -357,8 +357,8 @@ if(BUILD_CLI)
     bitcoin_common
     bitcoin_ipc
     bitcoin_util
-    libevent::core
     libevent::extra
+    libevent::core
   )
   install_binary_component(bitcoin-cli HAS_MANPAGE)
 endif()
