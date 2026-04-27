@@ -418,6 +418,20 @@ To enable test parallelism:
 cmake -DJOBS=$(nproc) -P build/Coverage.cmake
 ```
 
+To run coverage in a pinned Ubuntu container:
+
+```shell
+docker build -t bitcoin-core-coverage -f contrib/containers/coverage.Dockerfile .
+docker network create --ipv6 --subnet 1111:1111::/112 bitcoin-coverage-ip6net
+docker run --rm \
+   --network bitcoin-coverage-ip6net \
+   --user "$(id -u):$(id -g)" \
+   --env HOME=/tmp \
+   -v "$PWD:/src" \
+   -w /src \
+   bitcoin-core-coverage
+```
+
 #### Compiling for Fuzz Coverage
 
 ```shell
