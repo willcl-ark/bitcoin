@@ -5,6 +5,8 @@
 """Test the -alertnotify, -blocknotify and -walletnotify options."""
 import os
 import platform
+import shlex
+import sys
 
 from test_framework.address import ADDRESS_BCRT1_UNSPENDABLE
 from test_framework.blocktools import (
@@ -14,6 +16,7 @@ from test_framework.descriptors import descsum_create
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
     assert_equal,
+    ensure_for,
 )
 
 # Linux allow all characters other than \x00
@@ -32,6 +35,10 @@ def notify_outputname(walletname, txid):
     return txid if platform.system() == 'Windows' else f'{walletname}_{txid}'
 
 
+def shell_quote(s):
+    return f'"{s}"' if platform.system() == 'Windows' else shlex.quote(s)
+
+
 class NotificationsTest(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 2
@@ -47,11 +54,31 @@ class NotificationsTest(BitcoinTestFramework):
         self.walletnotify_dir = os.path.join(self.options.tmpdir, "walletnotify")
         self.shutdownnotify_dir = os.path.join(self.options.tmpdir, "shutdownnotify")
         self.shutdownnotify_file = os.path.join(self.shutdownnotify_dir, "shutdownnotify.txt")
+        self.shutdownnotify_file_2 = os.path.join(self.shutdownnotify_dir, "shutdownnotify_2.txt")
+        self.shutdownnotify_started_file = os.path.join(self.shutdownnotify_dir, "shutdownnotify_started.txt")
+        self.shutdownnotify_wait_file = os.path.join(self.shutdownnotify_dir, "shutdownnotify_wait")
+        self.shutdownnotify_script = os.path.join(self.shutdownnotify_dir, "shutdownnotify.py")
         os.mkdir(self.alertnotify_dir)
         os.mkdir(self.blocknotify_dir)
         os.mkdir(self.walletnotify_dir)
         os.mkdir(self.shutdownnotify_dir)
-
+        with open(self.shutdownnotify_script, "w", encoding="utf8") as f:
+            f.write(
+                "import pathlib\n"
+                "import sys\n"
+                "import time\n"
+                "\n"
+                "wait_file = pathlib.Path(sys.argv[1])\n"
+                "started_file = pathlib.Path(sys.argv[2])\n"
+                "done_file = pathlib.Path(sys.argv[3])\n"
+                "started_file.write_text('started\\n', encoding='utf8')\n"
+                "for _ in range(1000):\n"
+                "    if wait_file.exists():\n"
+                "        done_file.write_text('done\\n', encoding='utf8')\n"
+                "        sys.exit(0)\n"
+                "    time.sleep(0.05)\n"
+                "raise SystemExit('timed out waiting for ' + str(wait_file))\n"
+            )
         # -alertnotify and -blocknotify on node0, walletnotify on node1
         self.extra_args = [[
             f"-alertnotify=echo %s >> {self.alertnotify_file}",
@@ -61,6 +88,18 @@ class NotificationsTest(BitcoinTestFramework):
         ], [
             f"-walletnotify=echo %h_%b > {os.path.join(self.walletnotify_dir, notify_outputname('%w', '%s'))}",
         ]]
+        # In Windows cross-build CI, bitcoind is a Windows process and cannot
+        # reliably launch the test runner's Python helper through
+        # -shutdownnotify.
+        if platform.system() != 'Windows':
+            wait_shutdownnotify_cmd = " ".join(shell_quote(s) for s in [
+                sys.executable,
+                self.shutdownnotify_script,
+                self.shutdownnotify_wait_file,
+                self.shutdownnotify_started_file,
+                self.shutdownnotify_file_2,
+            ])
+            self.extra_args[0].append(f"-shutdownnotify={wait_shutdownnotify_cmd}")
         self.wallet_names = [self.default_wallet_name, self.wallet]
         super().setup_network()
 
@@ -209,8 +248,19 @@ class NotificationsTest(BitcoinTestFramework):
         self.wait_until(self.large_work_invalid_chain_warning_in_alert_file, timeout=10)
 
         self.log.info("test -shutdownnotify")
-        self.stop_nodes()
+        for node in self.nodes:
+            node.stop_node(wait_until_stopped=False)
         self.wait_until(lambda: os.path.isfile(self.shutdownnotify_file), timeout=10)
+        if platform.system() != 'Windows':
+            try:
+                self.wait_until(lambda: os.path.isfile(self.shutdownnotify_started_file), timeout=10)
+                ensure_for(duration=1, f=lambda: self.nodes[0].process.poll() is None)
+            finally:
+                with open(self.shutdownnotify_wait_file, "w", encoding="utf8"):
+                    pass
+            self.wait_until(lambda: os.path.isfile(self.shutdownnotify_file_2), timeout=10)
+        for node in self.nodes:
+            node.wait_until_stopped()
 
     def large_work_invalid_chain_warning_in_alert_file(self):
         with open(self.alertnotify_file, 'r') as f:
