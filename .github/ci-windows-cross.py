@@ -90,8 +90,8 @@ def prepare_tests():
 def run_functional_tests():
     workspace = Path.cwd()
     num_procs = str(os.process_cpu_count())
-    test_runner_extra = shlex.split(os.environ.get("TEST_RUNNER_EXTRA", "").strip())
-    run_extended = "--extended" in test_runner_extra
+    functional_test_extra = shlex.split(os.environ.get("FUNCTIONAL_TEST_EXTRA", "").strip())
+    run_extended = "--extended" in functional_test_extra
     excluded_tests = [
         # feature_unsupported_utxo_db.py fails on Windows because of emojis in the test data directory.
         "feature_unsupported_utxo_db",

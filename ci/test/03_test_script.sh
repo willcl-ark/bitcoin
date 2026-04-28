@@ -115,14 +115,14 @@ FUNCTIONAL_TEST_EXCLUDE_REGEX=""
 FUNCTIONAL_TEST_ARGS=(--combinedlogslen=99999999)
 FUNCTIONAL_TEST_COVERAGE="OFF"
 FUNCTIONAL_EXTENDED_TESTS="OFF"
-if [ -n "$TEST_RUNNER_EXTRA" ]; then
-  # parses TEST_RUNNER_EXTRA as an array which allows for multiple arguments such as TEST_RUNNER_EXTRA='--exclude "rpc_bind.py --ipv6"'
-  eval "TEST_RUNNER_EXTRA=($TEST_RUNNER_EXTRA)"
-  for ((i = 0; i < ${#TEST_RUNNER_EXTRA[@]}; i++)); do
-    case "${TEST_RUNNER_EXTRA[$i]}" in
+if [ -n "$FUNCTIONAL_TEST_EXTRA" ]; then
+  # parses FUNCTIONAL_TEST_EXTRA as an array which allows for multiple arguments such as FUNCTIONAL_TEST_EXTRA='--exclude "rpc_bind.py --ipv6"'
+  eval "FUNCTIONAL_TEST_EXTRA=($FUNCTIONAL_TEST_EXTRA)"
+  for ((i = 0; i < ${#FUNCTIONAL_TEST_EXTRA[@]}; i++)); do
+    case "${FUNCTIONAL_TEST_EXTRA[$i]}" in
       --exclude|-x)
         i=$((i + 1))
-        exclude_name="${TEST_RUNNER_EXTRA[$i]%.py}"
+        exclude_name="${FUNCTIONAL_TEST_EXTRA[$i]%.py}"
         exclude_name="${exclude_name// /\\.}"
         exclude_name="${exclude_name//--/}"
         if [ -n "$FUNCTIONAL_TEST_EXCLUDE_REGEX" ]; then
@@ -142,7 +142,7 @@ if [ -n "$TEST_RUNNER_EXTRA" ]; then
         i=$((i + 1))
         ;;
       *)
-        FUNCTIONAL_TEST_ARGS+=("${TEST_RUNNER_EXTRA[$i]}")
+        FUNCTIONAL_TEST_ARGS+=("${FUNCTIONAL_TEST_EXTRA[$i]}")
         ;;
     esac
   done
