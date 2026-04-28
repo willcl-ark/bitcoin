@@ -90,20 +90,33 @@ def prepare_tests():
 def run_functional_tests():
     workspace = Path.cwd()
     num_procs = str(os.process_cpu_count())
-    test_runner_cmd = [
-        sys.executable,
-        str(workspace / "test" / "functional" / "test_runner.py"),
-        "--jobs",
-        num_procs,
-        "--quiet",
-        f"--tmpdirprefix={workspace}",
-        "--combinedlogslen=99999999",
-        *shlex.split(os.environ.get("TEST_RUNNER_EXTRA", "").strip()),
+    test_runner_extra = shlex.split(os.environ.get("TEST_RUNNER_EXTRA", "").strip())
+    run_extended = "--extended" in test_runner_extra
+    excluded_tests = [
         # feature_unsupported_utxo_db.py fails on Windows because of emojis in the test data directory.
-        "--exclude",
-        "feature_unsupported_utxo_db.py",
+        "feature_unsupported_utxo_db",
     ]
-    run(test_runner_cmd)
+    if not run_extended:
+        excluded_tests.extend([
+            "feature_pruning",
+            "feature_dbcrash",
+            "feature_index_prune",
+        ])
+
+    functional_test_cmd = [
+        "ctest",
+        "--test-dir",
+        str(workspace / "test" / "functional"),
+        "--output-on-failure",
+        "--stop-on-failure",
+        "-R",
+        "^functional\\.",
+        "-E",
+        "|".join(f"^functional\\.{test}$" for test in excluded_tests),
+        "-j",
+        num_procs,
+    ]
+    run(functional_test_cmd)
 
     # Run feature_unsupported_utxo_db sequentially in ASCII-only tmp dir,
     # because it is excluded above due to lack of UTF-8 support in the
