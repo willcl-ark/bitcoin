@@ -391,6 +391,7 @@ add_test(NAME functional.create_cache
 )
 set_tests_properties(functional.create_cache PROPERTIES
   FIXTURES_SETUP functional_cache
+  LABELS functional
   SKIP_RETURN_CODE 77
   ENVIRONMENT PYTHON_GIL=1
 )
@@ -403,6 +404,7 @@ if(BITCOIN_FUNCTIONAL_TEST_COVERAGE)
   )
   set_tests_properties(functional.coverage_setup PROPERTIES
     FIXTURES_SETUP functional_coverage
+    LABELS functional
     ENVIRONMENT PYTHON_GIL=1
   )
 
@@ -413,6 +415,7 @@ if(BITCOIN_FUNCTIONAL_TEST_COVERAGE)
   )
   set_tests_properties(functional.coverage_report PROPERTIES
     FIXTURES_CLEANUP functional_coverage
+    LABELS functional
     ENVIRONMENT PYTHON_GIL=1
   )
 endif()
@@ -445,6 +448,7 @@ foreach(test_command IN LISTS FUNCTIONAL_TEST_COMMANDS)
   )
   set_tests_properties("functional.${test_name}" PROPERTIES
     FIXTURES_REQUIRED "${functional_test_fixtures}"
+    LABELS functional
     SKIP_RETURN_CODE 77
     ENVIRONMENT PYTHON_GIL=1
   )

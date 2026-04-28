@@ -204,6 +204,7 @@ function(add_boost_test source_file)
         "skipping script_assets_test"
         "skipping total_ram"
     )
+    set_property(TEST ${test_suite_name} PROPERTY LABELS unit)
   endforeach()
 endfunction()
 

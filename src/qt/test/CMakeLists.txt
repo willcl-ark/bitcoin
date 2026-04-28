@@ -39,6 +39,7 @@ endif()
 add_test(NAME test_bitcoin-qt
   COMMAND test_bitcoin-qt
 )
+set_property(TEST test_bitcoin-qt PROPERTY LABELS unit)
 if(WIN32 AND VCPKG_TARGET_TRIPLET)
   set(plugin_path "$<SHELL_PATH:$<PATH:GET_PARENT_PATH,$<PATH:GET_PARENT_PATH,$<TARGET_PROPERTY:Qt6::QWindowsIntegrationPlugin,LOCATION_$<CONFIG>>>>>")
   set_property(TEST test_bitcoin-qt APPEND PROPERTY
