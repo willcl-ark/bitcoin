@@ -330,6 +330,61 @@ if(BITCOIN_FUNCTIONAL_EXTENDED_TESTS)
 endif()
 set(FUNCTIONAL_ALL_TEST_COMMANDS ${FUNCTIONAL_EXTENDED_TEST_COMMANDS} ${FUNCTIONAL_BASE_TEST_COMMANDS})
 
+set(FUNCTIONAL_TEST_COST_OVERRIDES
+  # Observed runtimes from a full CTest run, scaled by 100. CTest uses higher
+  # COST values to prioritize tests in parallel runs.
+  feature_taproot=8250
+  wallet_migration=7036
+  mempool_ephemeral_dust=6825
+  mining_getblocktemplate_longpoll=6706
+  p2p_segwit=6579
+  feature_maxuploadtarget=5841
+  feature_block=5068
+  wallet_conflicts=4933
+  p2p_opportunistic_1p1c=4150
+  mining_basic=3989
+  p2p_tx_download=3485
+  feature_fee_estimation=3209
+  p2p_sendheaders=2874
+  rpc_psbt=2782
+  p2p_dns_seeds=2665
+  p2p_orphan_handling=2548
+  feature_init=2415
+  feature_assumeutxo=2078
+  wallet_bumpfee=1721
+  wallet_basic=1710
+  feature_csv_activation=1658
+  mempool_persist=1629
+  feature_config_args=1617
+  wallet_backup=1583
+  mempool_cluster=1563
+  p2p_addr_relay=1546
+  wallet_send=1515
+  p2p_private_broadcast=1501
+  rpc_blockchain.v1transport=1491
+  rpc_blockchain.v2transport=1485
+  wallet_taproot=1473
+  feature_torcontrol=1473
+  interface_http=1447
+  mempool_package_rbf=1445
+  p2p_permissions=1382
+  p2p_compactblocks_hb.v1transport=1368
+  wallet_backwards_compatibility=1318
+  mempool_updatefromblock=1280
+  p2p_compactblocks_hb.v2transport=1270
+  wallet_fundrawtransaction=1244
+  feature_notifications=1242
+  wallet_address_types=1234
+  interface_ipc_mining=1224
+  wallet_listtransactions=1201
+  p2p_node_network_limited.v1transport=1191
+  feature_minchainwork=1067
+  interface_bitcoin_cli=1057
+  wallet_miniscript=1045
+  rpc_users=1045
+  feature_coinstatsindex=989
+)
+
 set(FUNCTIONAL_TEST_HELPERS
   combine_logs.py
   create_cache.py
@@ -405,7 +460,11 @@ if(BITCOIN_FUNCTIONAL_TEST_COVERAGE)
 endif()
 
 set(portseed 1)
+list(LENGTH FUNCTIONAL_TEST_COMMANDS functional_test_count)
+set(functional_test_index 0)
 foreach(test_command IN LISTS FUNCTIONAL_TEST_COMMANDS)
+  math(EXPR functional_test_index "${functional_test_index} + 1")
+  math(EXPR functional_test_cost "${functional_test_count} - ${functional_test_index} + 1")
   math(EXPR portseed "${portseed} + 1")
   separate_arguments(command_parts UNIX_COMMAND "${test_command}")
   list(GET command_parts 0 script)
@@ -420,6 +479,15 @@ foreach(test_command IN LISTS FUNCTIONAL_TEST_COMMANDS)
     string(APPEND test_name ".${test_arg_name}")
   endforeach()
 
+  foreach(test_cost_override IN LISTS FUNCTIONAL_TEST_COST_OVERRIDES)
+    string(REPLACE "=" ";" test_cost_override_parts "${test_cost_override}")
+    list(GET test_cost_override_parts 0 test_cost_override_name)
+    list(GET test_cost_override_parts 1 test_cost_override_value)
+    if(test_name STREQUAL test_cost_override_name)
+      set(functional_test_cost ${test_cost_override_value})
+    endif()
+  endforeach()
+
   add_test(NAME "functional.${test_name}"
     COMMAND ${functional_test_command}
       ${BITCOIN_FUNCTIONAL_TEST_SCRIPT_DIR}/${script}
@@ -431,6 +499,7 @@ foreach(test_command IN LISTS FUNCTIONAL_TEST_COMMANDS)
       --timeout-factor=${BITCOIN_FUNCTIONAL_TEST_TIMEOUT_FACTOR}
   )
   set_tests_properties("functional.${test_name}" PROPERTIES
+    COST ${functional_test_cost}
     FIXTURES_REQUIRED "${functional_test_fixtures}"
     SKIP_RETURN_CODE 77
     ENVIRONMENT PYTHON_GIL=1
