@@ -18,6 +18,7 @@ from concurrent import futures
 import configparser
 import csv
 import datetime
+import json
 import os
 import pathlib
 import platform
@@ -94,6 +95,9 @@ EXTENDED_SCRIPTS = [
 
 # Special script to run each bench sanity check
 TOOL_BENCH_SANITY_CHECK = "tool_bench_sanity_check.py"
+
+# Special test runner entry to run the unit tests through ctest
+TOOL_UNIT_TESTS = "unit_"
 
 BASE_SCRIPTS = [
     # Special scripts that are "expanded" later
@@ -413,11 +417,13 @@ def main():
     parser.add_argument('--ansi', action='store_true', default=sys.stdout.isatty(), help="Use ANSI colors and dots in output (enabled by default when standard output is a TTY)")
     parser.add_argument('--combinedlogslen', '-c', type=int, default=0, metavar='n', help='On failure, print a log (of length n lines) to the console, combined from the test framework and all test nodes.')
     parser.add_argument('--coverage', action='store_true', help='generate a basic coverage report for the RPC interface')
+    parser.add_argument('--ctest-timeout', type=int, help='timeout, in seconds, for each ctest test when using --run-ctest-tests')
     parser.add_argument('--exclude', '-x', action='append', help='specify a script to exclude. Can be specified multiple times. The .py extension is optional.')
     parser.add_argument('--extended', action='store_true', help='run the extended test suite in addition to the basic tests')
     parser.add_argument('--help', '-h', '-?', action='store_true', help='print help text and exit')
     parser.add_argument('--jobs', '-j', type=int, default=4, help='how many test scripts to run in parallel. Default=4.')
     parser.add_argument('--quiet', '-q', action='store_true', help='only print dots, results summary and failure logs')
+    parser.add_argument('--run-ctest-tests', action='store_true', help='run the unit tests through ctest')
     parser.add_argument('--tmpdirprefix', '-t', default=tempfile.gettempdir(), help="Root directory for datadirs")
     parser.add_argument('--failfast', '-F', action='store_true', help='stop execution after the first test failure')
     parser.add_argument('--filter', help='filter scripts to run by regular expression')
@@ -503,6 +509,9 @@ def main():
         # Run base tests only
         test_list += BASE_SCRIPTS
 
+    if args.run_ctest_tests:
+        test_list.appendleft(TOOL_UNIT_TESTS)
+
     # Remove the test cases that the user has explicitly asked to exclude.
     # The user can specify a test case with or without the .py extension.
     if args.exclude:
@@ -542,6 +551,17 @@ def main():
         # Start with special scripts (variable, unknown runtime)
         test_list.extendleft(reversed(bench_list))
 
+    if TOOL_UNIT_TESTS in test_list:
+        # Remove it, and expand it for each ctest test in the list
+        test_list.remove(TOOL_UNIT_TESTS)
+        ctest_cmd = ["ctest", "--test-dir", config["environment"]["BUILDDIR"], "--show-only=json-v1"]
+        if os.getenv("CTEST_BUILD_CONFIG"):
+            ctest_cmd += ["--build-config", os.getenv("CTEST_BUILD_CONFIG")]
+        ctest_tests = json.loads(subprocess.check_output(ctest_cmd, text=True))["tests"]
+        ctest_list = [f"{TOOL_UNIT_TESTS}{t['name']}" for t in ctest_tests]
+        # Keep functional tests first as they take longer
+        test_list.extend(ctest_list)
+
     if args.filter:
         test_list = deque(filter(re.compile(args.filter).search, test_list))
 
@@ -571,6 +591,7 @@ def main():
         build_dir=config["environment"]["BUILDDIR"],
         tmpdir=tmpdir,
         jobs=args.jobs,
+        ctest_timeout=args.ctest_timeout,
         enable_coverage=args.coverage,
         args=passon_args,
         combined_logs_len=args.combinedlogslen,
@@ -579,7 +600,7 @@ def main():
         results_filepath=results_filepath,
     )
 
-def run_tests(*, test_list, build_dir, tmpdir, jobs=1, enable_coverage=False, args=None, combined_logs_len=0, failfast=False, use_term_control, results_filepath=None):
+def run_tests(*, test_list, build_dir, tmpdir, jobs=1, ctest_timeout=None, enable_coverage=False, args=None, combined_logs_len=0, failfast=False, use_term_control, results_filepath=None):
     args = args or []
 
     # Some optional Python dependencies (e.g. pycapnp) may emit warnings or fail under
@@ -632,6 +653,8 @@ def run_tests(*, test_list, build_dir, tmpdir, jobs=1, enable_coverage=False, ar
         tmpdir=tmpdir,
         test_list=test_list,
         flags=flags,
+        build_dir=build_dir,
+        ctest_timeout=ctest_timeout,
         use_term_control=use_term_control,
     )
     start_time = time.time()
@@ -738,7 +761,7 @@ class TestHandler:
     """
     Trigger the test scripts passed in via the list.
     """
-    def __init__(self, *, num_tests_parallel, tests_dir, tmpdir, test_list, flags, use_term_control):
+    def __init__(self, *, num_tests_parallel, tests_dir, tmpdir, test_list, flags, build_dir, ctest_timeout, use_term_control):
         assert num_tests_parallel >= 1
         self.executor = futures.ThreadPoolExecutor(max_workers=num_tests_parallel)
         self.num_jobs = num_tests_parallel
@@ -746,6 +769,8 @@ class TestHandler:
         self.tmpdir = tmpdir
         self.test_list = test_list
         self.flags = flags
+        self.build_dir = build_dir
+        self.ctest_timeout = ctest_timeout
         self.jobs = {}
         self.use_term_control = use_term_control
 
@@ -768,15 +793,39 @@ class TestHandler:
                 task[2].wait()
                 return task
 
-            task = [
-                test,
-                time.time(),
-                subprocess.Popen(
+            if test_argv[0].startswith(TOOL_UNIT_TESTS):
+                ctest_name = test_argv[0].removeprefix(TOOL_UNIT_TESTS)
+                ctest_cmd = [
+                    "ctest",
+                    "--test-dir",
+                    self.build_dir,
+                    "--output-on-failure",
+                    "--stop-on-failure",
+                    "-R",
+                    f"^{re.escape(ctest_name)}$",
+                ]
+                if self.ctest_timeout:
+                    ctest_cmd += ["--timeout", str(self.ctest_timeout)]
+                if os.getenv("CTEST_BUILD_CONFIG"):
+                    ctest_cmd += ["--build-config", os.getenv("CTEST_BUILD_CONFIG")]
+                proc = subprocess.Popen(
+                    ctest_cmd,
+                    text=True,
+                    stdout=log_stdout,
+                    stderr=log_stderr,
+                )
+            else:
+                proc = subprocess.Popen(
                     [sys.executable, self.tests_dir + test_argv[0]] + test_argv[1:] + self.flags + portseed_arg + tmpdir_arg,
                     text=True,
                     stdout=log_stdout,
                     stderr=log_stderr,
-                ),
+                )
+
+            task = [
+                test,
+                time.time(),
+                proc,
                 testdir,
                 log_stdout,
                 log_stderr,
