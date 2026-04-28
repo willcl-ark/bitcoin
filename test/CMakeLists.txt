@@ -97,3 +97,5 @@ function(create_test_directory_links)
 endfunction()
 
 create_test_directory_links()
+
+add_subdirectory(functional)
