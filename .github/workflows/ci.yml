@@ -428,7 +428,7 @@ jobs:
 
       - name: Run functional tests
         env:
-          TEST_RUNNER_EXTRA: "--timeout-factor=${{ env.TEST_RUNNER_TIMEOUT_FACTOR }} ${{ case(github.event_name == 'pull_request', '', '--extended') }}"
+          FUNCTIONAL_TEST_EXTRA: "--timeout-factor=${{ env.TEST_RUNNER_TIMEOUT_FACTOR }} ${{ case(github.event_name == 'pull_request', '', '--extended') }}"
         run: |
           py -3 .github/ci-windows-cross.py run_functional_tests
 

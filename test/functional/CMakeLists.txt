@@ -335,7 +335,6 @@ set(FUNCTIONAL_TEST_HELPERS
   create_cache.py
   coverage_report.py
   coverage_setup.py
-  test_runner.py
 )
 
 function(get_functional_test_script command output_var)
