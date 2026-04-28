@@ -29,6 +29,7 @@ import sys
 import tempfile
 import re
 import logging
+from test_framework.coverage import get_uncovered_rpc_commands
 from test_framework.util import (
     Binaries,
     export_env_build_path,
@@ -906,7 +907,7 @@ class RPCCoverage():
         Print out RPC commands that were unexercised by tests.
 
         """
-        uncovered = self._get_uncovered_rpc_commands()
+        uncovered = get_uncovered_rpc_commands(self.dir)
 
         if uncovered:
             print("Uncovered RPC commands:")
@@ -915,39 +916,6 @@ class RPCCoverage():
         else:
             print("All RPC commands covered.")
             return True
-
-    def _get_uncovered_rpc_commands(self):
-        """
-        Return a set of currently untested RPC commands.
-
-        """
-        # This is shared from `test/functional/test_framework/coverage.py`
-        reference_filename = 'rpc_interface.txt'
-        coverage_file_prefix = 'coverage.'
-
-        coverage_ref_filename = os.path.join(self.dir, reference_filename)
-        coverage_filenames = set()
-        all_cmds = set()
-        # Consider RPC generate covered, because it is overloaded in
-        # test_framework/test_node.py and not seen by the coverage check.
-        covered_cmds = set({'generate'})
-
-        if not os.path.isfile(coverage_ref_filename):
-            raise RuntimeError("No coverage reference found")
-
-        with open(coverage_ref_filename, 'r') as coverage_ref_file:
-            all_cmds.update([line.strip() for line in coverage_ref_file.readlines()])
-
-        for root, _, files in os.walk(self.dir):
-            for filename in files:
-                if filename.startswith(coverage_file_prefix):
-                    coverage_filenames.add(os.path.join(root, filename))
-
-        for filename in coverage_filenames:
-            with open(filename, 'r') as coverage_file:
-                covered_cmds.update([line.strip() for line in coverage_file.readlines()])
-
-        return all_cmds - covered_cmds
 
 
 if __name__ == '__main__':

@@ -11,10 +11,10 @@ that file and modify to fit your needs.
 #### Coverage
 
 Assuming the build directory is `build`,
-configure with `-DBITCOIN_FUNCTIONAL_TEST_ARGS=--coverage` and run
+configure with `-DBITCOIN_FUNCTIONAL_TEST_COVERAGE=ON` and run
 `ctest --test-dir build -R '^functional\.'` to track which RPCs are called by
-the tests. This prints a report of uncovered RPCs from the coverage collector
-after the tests run.
+the tests. CTest will run coverage setup and report fixtures around the selected
+functional tests, and the report step fails if any RPC commands are uncovered.
 
 #### Style guidelines
 
