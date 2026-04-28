@@ -12,3 +12,4 @@ target_link_libraries(test_kernel
 add_windows_application_manifest(test_kernel)
 
 add_test(NAME test_kernel COMMAND test_kernel)
+set_property(TEST test_kernel PROPERTY LABELS unit)
