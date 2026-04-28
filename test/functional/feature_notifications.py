@@ -97,6 +97,18 @@ class NotificationsTest(BitcoinTestFramework):
         assert_equal(sorted(blocks), sorted(os.listdir(self.blocknotify_dir)))
         assert_equal(os.path.exists(self.blocknotify_ignored_file), False)
 
+        self.log.info("test -blocknotify after best block changes")
+        self.wait_until(self.remove_blocknotify_files, timeout=10)
+
+        tip = self.nodes[0].getbestblockhash()
+        previous_tip = self.nodes[0].getblock(tip)["previousblockhash"]
+
+        self.nodes[0].invalidateblock(tip)
+        self.wait_until(lambda: previous_tip in os.listdir(self.blocknotify_dir), timeout=10)
+
+        self.nodes[0].reconsiderblock(tip)
+        self.wait_until(lambda: tip in os.listdir(self.blocknotify_dir), timeout=10)
+
         if self.is_wallet_compiled():
             self.log.info("test -walletnotify")
             # wait at most 10 seconds for expected number of files before reading the content
@@ -204,6 +216,14 @@ class NotificationsTest(BitcoinTestFramework):
         with open(self.alertnotify_file, 'r') as f:
             alert_text = f.read()
         return LARGE_WORK_INVALID_CHAIN_WARNING in alert_text
+
+    def remove_blocknotify_files(self):
+        for block_file in os.listdir(self.blocknotify_dir):
+            try:
+                os.remove(os.path.join(self.blocknotify_dir, block_file))
+            except OSError:
+                return False
+        return not os.listdir(self.blocknotify_dir)
 
     def expect_wallet_notify(self, tx_details):
         self.wait_until(lambda: len(os.listdir(self.walletnotify_dir)) >= len(tx_details), timeout=10)
