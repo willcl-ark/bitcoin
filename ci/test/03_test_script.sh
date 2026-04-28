@@ -113,6 +113,7 @@ BITCOIN_CONFIG_ALL="$BITCOIN_CONFIG_ALL -DCMAKE_INSTALL_PREFIX=$BASE_OUTDIR -Wer
 
 FUNCTIONAL_TEST_EXCLUDE_REGEX=""
 FUNCTIONAL_TEST_ARGS=(--combinedlogslen=99999999)
+FUNCTIONAL_TEST_COVERAGE="OFF"
 if [ -n "$TEST_RUNNER_EXTRA" ]; then
   # parses TEST_RUNNER_EXTRA as an array which allows for multiple arguments such as TEST_RUNNER_EXTRA='--exclude "rpc_bind.py --ipv6"'
   eval "TEST_RUNNER_EXTRA=($TEST_RUNNER_EXTRA)"
@@ -130,6 +131,9 @@ if [ -n "$TEST_RUNNER_EXTRA" ]; then
         ;;
       --extended)
         ;;
+      --coverage)
+        FUNCTIONAL_TEST_COVERAGE="ON"
+        ;;
       --timeout-factor=*)
         ;;
       --timeout-factor)
@@ -141,6 +145,8 @@ if [ -n "$TEST_RUNNER_EXTRA" ]; then
     esac
   done
 fi
+
+BITCOIN_CONFIG_ALL="$BITCOIN_CONFIG_ALL -DBITCOIN_FUNCTIONAL_TEST_COVERAGE=$FUNCTIONAL_TEST_COVERAGE"
 
 if [ ${#FUNCTIONAL_TEST_ARGS[@]} -gt 0 ]; then
   BITCOIN_CONFIG_ALL="$BITCOIN_CONFIG_ALL -DBITCOIN_FUNCTIONAL_TEST_ARGS='${FUNCTIONAL_TEST_ARGS[*]}'"

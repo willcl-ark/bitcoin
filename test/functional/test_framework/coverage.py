@@ -14,6 +14,7 @@ from .authproxy import AuthServiceProxy
 from typing import Optional
 
 REFERENCE_FILENAME = 'rpc_interface.txt'
+COVERAGE_FILE_PREFIX = 'coverage.'
 
 
 class AuthServiceProxyWrapper():
@@ -75,7 +76,7 @@ def get_filename(dirname, n_node):
     """
     pid = str(os.getpid())
     return os.path.join(
-        dirname, "coverage.pid%s.node%s.txt" % (pid, str(n_node)))
+        dirname, f"{COVERAGE_FILE_PREFIX}pid{pid}.node{n_node}.txt")
 
 
 def write_all_rpc_commands(dirname: str, node: AuthServiceProxy) -> bool:
@@ -110,4 +111,48 @@ def write_all_rpc_commands(dirname: str, node: AuthServiceProxy) -> bool:
     with open(filename, 'w') as f:
         f.writelines(list(commands))
 
+    return True
+
+
+def get_uncovered_rpc_commands(dirname: str) -> set[str]:
+    """
+    Return a set of currently untested RPC commands.
+    """
+    coverage_ref_filename = os.path.join(dirname, REFERENCE_FILENAME)
+    coverage_filenames: set[str] = set()
+    all_cmds: set[str] = set()
+    # Consider RPC generate covered, because it is overloaded in
+    # test_framework/test_node.py and not seen by the coverage check.
+    covered_cmds = {'generate'}
+
+    if not os.path.isfile(coverage_ref_filename):
+        raise RuntimeError("No coverage reference found")
+
+    with open(coverage_ref_filename, 'r', encoding='utf8') as coverage_ref_file:
+        all_cmds.update(line.strip() for line in coverage_ref_file.readlines())
+
+    for root, _, files in os.walk(dirname):
+        for filename in files:
+            if filename.startswith(COVERAGE_FILE_PREFIX):
+                coverage_filenames.add(os.path.join(root, filename))
+
+    for filename in coverage_filenames:
+        with open(filename, 'r', encoding='utf8') as coverage_file:
+            covered_cmds.update(line.strip() for line in coverage_file.readlines())
+
+    return all_cmds - covered_cmds
+
+
+def report_rpc_coverage(dirname: str) -> bool:
+    """
+    Print out RPC commands that were unexercised by tests.
+    """
+    uncovered = get_uncovered_rpc_commands(dirname)
+
+    if uncovered:
+        print("Uncovered RPC commands:")
+        print("".join(f"  - {command}\n" for command in sorted(uncovered)))
+        return False
+
+    print("All RPC commands covered.")
     return True

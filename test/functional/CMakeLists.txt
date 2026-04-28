@@ -14,7 +14,15 @@ endif()
 
 set(BITCOIN_FUNCTIONAL_TEST_TIMEOUT_FACTOR "1" CACHE STRING "Timeout factor passed to functional tests")
 set(BITCOIN_FUNCTIONAL_TEST_ARGS "" CACHE STRING "Additional arguments passed to functional tests")
+option(BITCOIN_FUNCTIONAL_TEST_COVERAGE "Enable functional test RPC coverage reporting" OFF)
 separate_arguments(functional_test_args UNIX_COMMAND "${BITCOIN_FUNCTIONAL_TEST_ARGS}")
+set(functional_test_fixtures functional_cache)
+
+if(BITCOIN_FUNCTIONAL_TEST_COVERAGE)
+  set(functional_coverage_dir ${PROJECT_BINARY_DIR}/test/functional/coverage)
+  list(APPEND functional_test_args --coveragedir=${functional_coverage_dir})
+  list(APPEND functional_test_fixtures functional_coverage)
+endif()
 
 set(FUNCTIONAL_TEST_LONG_COMMANDS
   [=[feature_pruning.py]=]
@@ -322,6 +330,8 @@ set(FUNCTIONAL_TEST_COMMANDS
 set(FUNCTIONAL_TEST_HELPERS
   combine_logs.py
   create_cache.py
+  coverage_report.py
+  coverage_setup.py
   test_runner.py
 )
 
@@ -370,6 +380,28 @@ set_tests_properties(functional.create_cache PROPERTIES
   ENVIRONMENT PYTHON_GIL=1
 )
 
+if(BITCOIN_FUNCTIONAL_TEST_COVERAGE)
+  add_test(NAME functional.coverage_setup
+    COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_BINARY_DIR}/coverage_setup.py
+      --coveragedir=${functional_coverage_dir}
+  )
+  set_tests_properties(functional.coverage_setup PROPERTIES
+    FIXTURES_SETUP functional_coverage
+    ENVIRONMENT PYTHON_GIL=1
+  )
+
+  add_test(NAME functional.coverage_report
+    COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_BINARY_DIR}/coverage_report.py
+      --coveragedir=${functional_coverage_dir}
+  )
+  set_tests_properties(functional.coverage_report PROPERTIES
+    FIXTURES_CLEANUP functional_coverage
+    ENVIRONMENT PYTHON_GIL=1
+  )
+endif()
+
 set(portseed 1)
 foreach(test_command IN LISTS FUNCTIONAL_TEST_COMMANDS)
   math(EXPR portseed "${portseed} + 1")
@@ -397,7 +429,7 @@ foreach(test_command IN LISTS FUNCTIONAL_TEST_COMMANDS)
       --timeout-factor=${BITCOIN_FUNCTIONAL_TEST_TIMEOUT_FACTOR}
   )
   set_tests_properties("functional.${test_name}" PROPERTIES
-    FIXTURES_REQUIRED functional_cache
+    FIXTURES_REQUIRED "${functional_test_fixtures}"
     SKIP_RETURN_CODE 77
     ENVIRONMENT PYTHON_GIL=1
   )

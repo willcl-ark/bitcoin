@@ -4,17 +4,15 @@
 
 include(${CMAKE_CURRENT_LIST_DIR}/CoverageInclude.cmake)
 
-set(functional_test_runner test/functional/test_runner.py)
-if(EXTENDED_FUNCTIONAL_TESTS)
-  list(APPEND functional_test_runner --extended)
-endif()
+set(unit_test_runner ${CMAKE_CTEST_COMMAND} -E "^functional\\.")
+set(functional_test_runner ${CMAKE_CTEST_COMMAND} -R "^functional\\.")
 if(DEFINED JOBS)
-  list(APPEND CMAKE_CTEST_COMMAND -j ${JOBS})
+  list(APPEND unit_test_runner -j ${JOBS})
   list(APPEND functional_test_runner -j ${JOBS})
 endif()
 
 execute_process(
-  COMMAND ${CMAKE_CTEST_COMMAND} --build-config Coverage
+  COMMAND ${unit_test_runner} --build-config Coverage
   WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
   COMMAND_ERROR_IS_FATAL ANY
 )
