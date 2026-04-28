@@ -399,7 +399,8 @@ $ valgrind --suppressions=test/sanitizer_suppressions/valgrind.supp build/bin/te
 $ valgrind --suppressions=test/sanitizer_suppressions/valgrind.supp --leak-check=full \
       --show-leak-kinds=all build/bin/test_bitcoin --log_level=test_suite
 $ valgrind -v --leak-check=full build/bin/bitcoind -printtoconsole
-$ ./build/test/functional/test_runner.py --valgrind
+$ cmake -B build-valgrind -DBITCOIN_FUNCTIONAL_TEST_ARGS=--valgrind
+$ ctest --test-dir build-valgrind -R '^functional\.' --output-on-failure
 ```
 
 ### Compiling for test coverage
@@ -461,7 +462,6 @@ mkdir -p build/raw_profile_data
 
 # Run tests to generate profiles
 LLVM_PROFILE_FILE="$(pwd)/build/raw_profile_data/%m_%p.profraw" ctest --test-dir build # Append "-j N" here for N parallel jobs.
-LLVM_PROFILE_FILE="$(pwd)/build/raw_profile_data/%m_%p.profraw" build/test/functional/test_runner.py # Append "-j N" here for N parallel jobs
 
 # Merge all the raw profile data into a single file
 find build/raw_profile_data -name "*.profraw" > build/raw_profile_data_files.txt

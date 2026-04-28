@@ -185,6 +185,8 @@ def run_tests(ci_type):
             str(build_dir),
             "--output-on-failure",
             "--stop-on-failure",
+            "-E",
+            "^functional\\.",
             "-j",
             num_procs,
             "--build-config",
@@ -192,17 +194,20 @@ def run_tests(ci_type):
         ]
         run(ctest_cmd)
 
-        test_cmd = [
-            sys.executable,
-            str(build_dir / "test" / "functional" / "test_runner.py"),
-            "--jobs",
+        functional_test_cmd = [
+            "ctest",
+            "--test-dir",
+            str(build_dir),
+            "--output-on-failure",
+            "--stop-on-failure",
+            "-R",
+            "^functional\\.",
+            "-j",
             num_procs,
-            "--quiet",
-            f"--tmpdirprefix={workspace}",
-            "--combinedlogslen=99999999",
-            *shlex.split(os.environ.get("TEST_RUNNER_EXTRA", "").strip()),
+            "--build-config",
+            "Release",
         ]
-        run(test_cmd)
+        run(functional_test_cmd)
 
     elif ci_type == "fuzz":
         os.environ["BITCOINFUZZ"] = str(release_bin / "fuzz.exe")

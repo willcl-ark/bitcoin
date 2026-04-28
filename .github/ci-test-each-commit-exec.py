@@ -54,16 +54,21 @@ def main():
         "--stop-on-failure",
         "--test-dir",
         build_dir,
+        "-E",
+        "^functional\\.",
         "-j",
         str(num_procs),
     ])
     run([
-        sys.executable,
-        f"./{build_dir}/test/functional/test_runner.py",
+        "ctest",
+        "--output-on-failure",
+        "--stop-on-failure",
+        "--test-dir",
+        build_dir,
+        "-R",
+        "^functional\\.",
         "-j",
-        str(num_procs * 2),
-        "--failfast",
-        "--combinedlogslen=99999999",
+        str(num_procs),
     ])
 
 
