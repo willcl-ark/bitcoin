@@ -179,24 +179,14 @@ def run_tests(ci_type):
         for var, exe in test_envs.items():
             os.environ[var] = str(release_bin / exe)
 
-        ctest_cmd = [
-            "ctest",
-            "--test-dir",
-            str(build_dir),
-            "--output-on-failure",
-            "--stop-on-failure",
-            "-j",
-            num_procs,
-            "--build-config",
-            "Release",
-        ]
-        run(ctest_cmd)
+        os.environ["CTEST_BUILD_CONFIG"] = "Release"
 
         test_cmd = [
             sys.executable,
             str(build_dir / "test" / "functional" / "test_runner.py"),
             "--jobs",
             num_procs,
+            "--run-ctest-tests",
             "--quiet",
             f"--tmpdirprefix={workspace}",
             "--combinedlogslen=99999999",

@@ -163,19 +163,12 @@ if [[ "$CI_OS_NAME" == "macos" && "${GOAL}" = "install deploy" ]]; then
   fi
 fi
 
-if [ "$RUN_UNIT_TESTS" = "true" ]; then
-  DIR_UNIT_TEST_DATA="${DIR_UNIT_TEST_DATA}" \
-  LD_LIBRARY_PATH="${DEPENDS_DIR}/${HOST}/lib" \
-  CTEST_OUTPUT_ON_FAILURE=ON \
-  ctest --test-dir "${BASE_BUILD_DIR}" \
-    --stop-on-failure \
-    "${MAKEJOBS}" \
-    --timeout $(( TEST_RUNNER_TIMEOUT_FACTOR * 60 ))
-fi
-
 if [ "$RUN_FUNCTIONAL_TESTS" = "true" ]; then
   # parses TEST_RUNNER_EXTRA as an array which allows for multiple arguments such as TEST_RUNNER_EXTRA='--exclude "rpc_bind.py --ipv6"'
   eval "TEST_RUNNER_EXTRA=($TEST_RUNNER_EXTRA)"
+  if [ "$RUN_UNIT_TESTS" = "true" ]; then
+    TEST_RUNNER_EXTRA+=(--run-ctest-tests --ctest-timeout=$(( TEST_RUNNER_TIMEOUT_FACTOR * 60 )))
+  fi
   LD_LIBRARY_PATH="${DEPENDS_DIR}/${HOST}/lib" \
   "${BASE_BUILD_DIR}/test/functional/test_runner.py" \
     "${MAKEJOBS}" \
