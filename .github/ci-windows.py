@@ -78,6 +78,7 @@ def generate(ci_type):
         # See https://github.com/microsoft/vcpkg/issues/50927.
         "-DVCPKG_HOST_TRIPLET=x64-windows-release",
         "-DVCPKG_TARGET_TRIPLET=x64-windows-release",
+        "-DBITCOIN_FUNCTIONAL_TEST_ARGS=--combinedlogslen=99999999",
     ] + GENERATE_OPTIONS[ci_type]
     if run(command, check=False).returncode != 0:
         print("=== ⚠️ ===")

@@ -12,6 +12,10 @@ if(NOT Python3_FOUND)
   return()
 endif()
 
+set(BITCOIN_FUNCTIONAL_TEST_TIMEOUT_FACTOR "1" CACHE STRING "Timeout factor passed to functional tests")
+set(BITCOIN_FUNCTIONAL_TEST_ARGS "" CACHE STRING "Additional arguments passed to functional tests")
+separate_arguments(functional_test_args UNIX_COMMAND "${BITCOIN_FUNCTIONAL_TEST_ARGS}")
+
 set(FUNCTIONAL_TEST_LONG_COMMANDS
   [=[feature_pruning.py]=]
   [=[feature_dbcrash.py]=]
@@ -386,9 +390,11 @@ foreach(test_command IN LISTS FUNCTIONAL_TEST_COMMANDS)
     COMMAND ${Python3_EXECUTABLE}
       ${CMAKE_CURRENT_BINARY_DIR}/${script}
       ${command_parts}
+      ${functional_test_args}
       --configfile=${PROJECT_BINARY_DIR}/test/config.ini
       --cachedir=${PROJECT_BINARY_DIR}/test/functional/cache
       --portseed=${portseed}
+      --timeout-factor=${BITCOIN_FUNCTIONAL_TEST_TIMEOUT_FACTOR}
   )
   set_tests_properties("functional.${test_name}" PROPERTIES
     FIXTURES_REQUIRED functional_cache

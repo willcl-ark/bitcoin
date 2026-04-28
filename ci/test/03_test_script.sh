@@ -109,7 +109,42 @@ ccache --zero-stats
 # Folder where the build is done.
 BASE_BUILD_DIR=${BASE_BUILD_DIR:-$BASE_SCRATCH_DIR/build-$HOST}
 
-BITCOIN_CONFIG_ALL="$BITCOIN_CONFIG_ALL -DCMAKE_INSTALL_PREFIX=$BASE_OUTDIR -Werror=dev"
+BITCOIN_CONFIG_ALL="$BITCOIN_CONFIG_ALL -DCMAKE_INSTALL_PREFIX=$BASE_OUTDIR -Werror=dev -DBITCOIN_FUNCTIONAL_TEST_TIMEOUT_FACTOR=$TEST_RUNNER_TIMEOUT_FACTOR"
+
+FUNCTIONAL_TEST_EXCLUDE_REGEX=""
+FUNCTIONAL_TEST_ARGS=(--combinedlogslen=99999999)
+if [ -n "$TEST_RUNNER_EXTRA" ]; then
+  # parses TEST_RUNNER_EXTRA as an array which allows for multiple arguments such as TEST_RUNNER_EXTRA='--exclude "rpc_bind.py --ipv6"'
+  eval "TEST_RUNNER_EXTRA=($TEST_RUNNER_EXTRA)"
+  for ((i = 0; i < ${#TEST_RUNNER_EXTRA[@]}; i++)); do
+    case "${TEST_RUNNER_EXTRA[$i]}" in
+      --exclude|-x)
+        i=$((i + 1))
+        exclude_name="${TEST_RUNNER_EXTRA[$i]%.py}"
+        exclude_name="${exclude_name// /\\.}"
+        exclude_name="${exclude_name//--/}"
+        if [ -n "$FUNCTIONAL_TEST_EXCLUDE_REGEX" ]; then
+          FUNCTIONAL_TEST_EXCLUDE_REGEX="${FUNCTIONAL_TEST_EXCLUDE_REGEX}|"
+        fi
+        FUNCTIONAL_TEST_EXCLUDE_REGEX="${FUNCTIONAL_TEST_EXCLUDE_REGEX}^functional\\.${exclude_name}$"
+        ;;
+      --extended)
+        ;;
+      --timeout-factor=*)
+        ;;
+      --timeout-factor)
+        i=$((i + 1))
+        ;;
+      *)
+        FUNCTIONAL_TEST_ARGS+=("${TEST_RUNNER_EXTRA[$i]}")
+        ;;
+    esac
+  done
+fi
+
+if [ ${#FUNCTIONAL_TEST_ARGS[@]} -gt 0 ]; then
+  BITCOIN_CONFIG_ALL="$BITCOIN_CONFIG_ALL -DBITCOIN_FUNCTIONAL_TEST_ARGS='${FUNCTIONAL_TEST_ARGS[*]}'"
+fi
 
 if [[ "${RUN_IWYU}" == true || "${RUN_TIDY}" == true ]]; then
   BITCOIN_CONFIG_ALL="$BITCOIN_CONFIG_ALL -DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
@@ -168,24 +203,24 @@ if [ "$RUN_UNIT_TESTS" = "true" ]; then
   LD_LIBRARY_PATH="${DEPENDS_DIR}/${HOST}/lib" \
   CTEST_OUTPUT_ON_FAILURE=ON \
   ctest --test-dir "${BASE_BUILD_DIR}" \
+    -E '^functional\.' \
     --stop-on-failure \
     "${MAKEJOBS}" \
     --timeout $(( TEST_RUNNER_TIMEOUT_FACTOR * 60 ))
 fi
 
 if [ "$RUN_FUNCTIONAL_TESTS" = "true" ]; then
-  # parses TEST_RUNNER_EXTRA as an array which allows for multiple arguments such as TEST_RUNNER_EXTRA='--exclude "rpc_bind.py --ipv6"'
-  eval "TEST_RUNNER_EXTRA=($TEST_RUNNER_EXTRA)"
+  FUNCTIONAL_TEST_SELECTION=(-R '^functional\.')
+  if [ -n "$FUNCTIONAL_TEST_EXCLUDE_REGEX" ]; then
+    FUNCTIONAL_TEST_SELECTION+=(-E "$FUNCTIONAL_TEST_EXCLUDE_REGEX")
+  fi
   LD_LIBRARY_PATH="${DEPENDS_DIR}/${HOST}/lib" \
-  "${BASE_BUILD_DIR}/test/functional/test_runner.py" \
+  CTEST_OUTPUT_ON_FAILURE=ON \
+  ctest --test-dir "${BASE_BUILD_DIR}" \
+    "${FUNCTIONAL_TEST_SELECTION[@]}" \
     "${MAKEJOBS}" \
-    --tmpdirprefix "${BASE_SCRATCH_DIR}/test_runner/" \
-    --ansi \
-    --combinedlogslen=99999999 \
-    --timeout-factor="${TEST_RUNNER_TIMEOUT_FACTOR}" \
-    "${TEST_RUNNER_EXTRA[@]}" \
-    --quiet \
-    --failfast
+    --stop-on-failure \
+    --timeout $(( TEST_RUNNER_TIMEOUT_FACTOR * 60 ))
 fi
 
 if [ "${RUN_TIDY}" = "true" ]; then
