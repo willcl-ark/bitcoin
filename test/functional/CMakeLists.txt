@@ -14,14 +14,19 @@ endif()
 
 set(BITCOIN_FUNCTIONAL_TEST_TIMEOUT_FACTOR "1" CACHE STRING "Timeout factor passed to functional tests")
 set(BITCOIN_FUNCTIONAL_TEST_ARGS "" CACHE STRING "Additional arguments passed to functional tests")
+set(BITCOIN_FUNCTIONAL_TEST_COMMAND "${Python3_EXECUTABLE}" CACHE STRING "Command used to run functional tests")
+set(BITCOIN_FUNCTIONAL_TEST_SCRIPT_DIR "${CMAKE_CURRENT_BINARY_DIR}" CACHE STRING "Directory containing functional test scripts")
+set(BITCOIN_FUNCTIONAL_TEST_CONFIG_FILE "${PROJECT_BINARY_DIR}/test/config.ini" CACHE STRING "Functional test config file")
+set(BITCOIN_FUNCTIONAL_TEST_CACHE_DIR "${PROJECT_BINARY_DIR}/test/functional/cache" CACHE STRING "Functional test cache directory")
+set(BITCOIN_FUNCTIONAL_TEST_COVERAGE_DIR "${PROJECT_BINARY_DIR}/test/functional/coverage" CACHE STRING "Functional test RPC coverage directory")
 option(BITCOIN_FUNCTIONAL_TEST_COVERAGE "Enable functional test RPC coverage reporting" OFF)
 option(BITCOIN_FUNCTIONAL_EXTENDED_TESTS "Enable extended functional tests" OFF)
+separate_arguments(functional_test_command UNIX_COMMAND "${BITCOIN_FUNCTIONAL_TEST_COMMAND}")
 separate_arguments(functional_test_args UNIX_COMMAND "${BITCOIN_FUNCTIONAL_TEST_ARGS}")
 set(functional_test_fixtures functional_cache)
 
 if(BITCOIN_FUNCTIONAL_TEST_COVERAGE)
-  set(functional_coverage_dir ${PROJECT_BINARY_DIR}/test/functional/coverage)
-  list(APPEND functional_test_args --coveragedir=${functional_coverage_dir})
+  list(APPEND functional_test_args --coveragedir=${BITCOIN_FUNCTIONAL_TEST_COVERAGE_DIR})
   list(APPEND functional_test_fixtures functional_coverage)
 endif()
 
@@ -378,10 +383,10 @@ if(NOT all_functional_scripts STREQUAL functional_test_scripts)
 endif()
 
 add_test(NAME functional.create_cache
-  COMMAND ${Python3_EXECUTABLE}
-    ${CMAKE_CURRENT_BINARY_DIR}/create_cache.py
-    --configfile=${PROJECT_BINARY_DIR}/test/config.ini
-    --cachedir=${PROJECT_BINARY_DIR}/test/functional/cache
+  COMMAND ${functional_test_command}
+    ${BITCOIN_FUNCTIONAL_TEST_SCRIPT_DIR}/create_cache.py
+    --configfile=${BITCOIN_FUNCTIONAL_TEST_CONFIG_FILE}
+    --cachedir=${BITCOIN_FUNCTIONAL_TEST_CACHE_DIR}
     --portseed=1
 )
 set_tests_properties(functional.create_cache PROPERTIES
@@ -392,9 +397,9 @@ set_tests_properties(functional.create_cache PROPERTIES
 
 if(BITCOIN_FUNCTIONAL_TEST_COVERAGE)
   add_test(NAME functional.coverage_setup
-    COMMAND ${Python3_EXECUTABLE}
-      ${CMAKE_CURRENT_BINARY_DIR}/coverage_setup.py
-      --coveragedir=${functional_coverage_dir}
+    COMMAND ${functional_test_command}
+      ${BITCOIN_FUNCTIONAL_TEST_SCRIPT_DIR}/coverage_setup.py
+      --coveragedir=${BITCOIN_FUNCTIONAL_TEST_COVERAGE_DIR}
   )
   set_tests_properties(functional.coverage_setup PROPERTIES
     FIXTURES_SETUP functional_coverage
@@ -402,9 +407,9 @@ if(BITCOIN_FUNCTIONAL_TEST_COVERAGE)
   )
 
   add_test(NAME functional.coverage_report
-    COMMAND ${Python3_EXECUTABLE}
-      ${CMAKE_CURRENT_BINARY_DIR}/coverage_report.py
-      --coveragedir=${functional_coverage_dir}
+    COMMAND ${functional_test_command}
+      ${BITCOIN_FUNCTIONAL_TEST_SCRIPT_DIR}/coverage_report.py
+      --coveragedir=${BITCOIN_FUNCTIONAL_TEST_COVERAGE_DIR}
   )
   set_tests_properties(functional.coverage_report PROPERTIES
     FIXTURES_CLEANUP functional_coverage
@@ -429,12 +434,12 @@ foreach(test_command IN LISTS FUNCTIONAL_TEST_COMMANDS)
   endforeach()
 
   add_test(NAME "functional.${test_name}"
-    COMMAND ${Python3_EXECUTABLE}
-      ${CMAKE_CURRENT_BINARY_DIR}/${script}
+    COMMAND ${functional_test_command}
+      ${BITCOIN_FUNCTIONAL_TEST_SCRIPT_DIR}/${script}
       ${command_parts}
       ${functional_test_args}
-      --configfile=${PROJECT_BINARY_DIR}/test/config.ini
-      --cachedir=${PROJECT_BINARY_DIR}/test/functional/cache
+      --configfile=${BITCOIN_FUNCTIONAL_TEST_CONFIG_FILE}
+      --cachedir=${BITCOIN_FUNCTIONAL_TEST_CACHE_DIR}
       --portseed=${portseed}
       --timeout-factor=${BITCOIN_FUNCTIONAL_TEST_TIMEOUT_FACTOR}
   )
