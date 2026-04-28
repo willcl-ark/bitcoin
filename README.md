@@ -53,8 +53,9 @@ and extending unit tests can be found in [/src/test/README.md](/src/test/README.
 
 There are also [regression and integration tests](/test), written
 in Python.
-These tests can be run (if the [test dependencies](/test) are installed) with: `build/test/functional/test_runner.py`
-(assuming `build` is your build directory).
+These tests can be run (if the [test dependencies](/test) are installed) with:
+`ctest --test-dir build -R '^functional\.' --output-on-failure` (assuming
+`build` is your build directory).
 
 The CI (Continuous Integration) systems make sure that every pull request is tested on Windows, Linux, and macOS.
 The CI must pass on all commits before merge to avoid unrelated CI failures on new pull requests.

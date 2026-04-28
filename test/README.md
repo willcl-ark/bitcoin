@@ -61,57 +61,40 @@ set PYTHONUTF8=1
 
 #### Running the tests
 
-Individual tests can be run by directly calling the test script, e.g.:
+Run the full CTest suite with:
+
+```
+ctest --test-dir build --output-on-failure
+```
+
+Run the functional test suite with:
+
+```
+ctest --test-dir build -R '^functional\.' -j 8 --output-on-failure
+```
+
+Run an individual functional test with:
+
+```
+ctest --test-dir build -R '^functional\.feature_rbf$' --output-on-failure
+```
+
+Run tests matching a pattern with a CTest regex:
+
+```
+ctest --test-dir build -R '^functional\.wallet_' --output-on-failure
+```
+
+Run everything except functional tests with:
+
+```
+ctest --test-dir build -E '^functional\.'
+```
+
+Individual tests can also be run by directly calling the test script, e.g.:
 
 ```
 build/test/functional/feature_rbf.py
-```
-
-or can be run through the test_runner harness, eg:
-
-```
-build/test/functional/test_runner.py feature_rbf.py
-```
-
-You can run any combination (incl. duplicates) of tests by calling:
-
-```
-build/test/functional/test_runner.py <testname1> <testname2> <testname3> ...
-```
-
-Wildcard test names can be passed, if the paths are coherent and the test runner
-is called from a `bash` shell or similar that does the globbing. For example,
-to run all the wallet tests:
-
-```
-build/test/functional/test_runner.py test/functional/wallet*
-functional/test_runner.py functional/wallet*  # (called from the build/test/ directory)
-test_runner.py wallet*  # (called from the build/test/functional/ directory)
-```
-
-but not
-
-```
-build/test/functional/test_runner.py wallet*
-```
-
-Combinations of wildcards can be passed:
-
-```
-build/test/functional/test_runner.py ./test/functional/tool* test/functional/mempool*
-test_runner.py tool* mempool*
-```
-
-Run the regression test suite with:
-
-```
-build/test/functional/test_runner.py
-```
-
-Run all possible tests with
-
-```
-build/test/functional/test_runner.py --extended
 ```
 
 In order to run backwards compatibility tests, first run:
@@ -122,11 +105,19 @@ test/get_previous_releases.py
 
 to download the necessary previous release binaries.
 
-By default, up to 4 tests will be run in parallel by test_runner. To specify
-how many jobs to run, append `--jobs=n`
+CTest owns parallelism. To specify how many jobs to run, pass `-j n`, for
+example:
 
-The individual tests and the test_runner harness have many command-line
-options. Run `build/test/functional/test_runner.py -h` to see them all.
+```
+ctest --test-dir build -R '^functional\.' -j 16 --output-on-failure
+```
+
+The individual tests have command-line options. Run a test script with `-h` to
+see them, for example:
+
+```
+build/test/functional/feature_rbf.py -h
+```
 
 #### Speed up test runs with a RAM disk
 
@@ -144,12 +135,12 @@ sudo mount -t tmpfs -o size=4g tmpfs /mnt/tmp/
 
 Configure the size of the RAM disk using the `size=` option.
 The size of the RAM disk needed is relative to the number of concurrent jobs the test suite runs.
-For example running the test suite with `--jobs=100` might need a 4 GiB RAM disk, but running with `--jobs=32` will only need a 2.5 GiB RAM disk.
+For example running the test suite with `-j 100` might need a 4 GiB RAM disk, but running with `-j 32` will only need a 2.5 GiB RAM disk.
 
-To use, run the test suite specifying the RAM disk as the `cachedir` and `tmpdir`:
+To use, run an individual test specifying the RAM disk as the `cachedir`:
 
 ```bash
-build/test/functional/test_runner.py --cachedir=/mnt/tmp/cache --tmpdir=/mnt/tmp
+build/test/functional/feature_rbf.py --cachedir=/mnt/tmp/cache
 ```
 
 Once finished with the tests and the disk, and to free the RAM, simply unmount the disk:
@@ -167,10 +158,10 @@ diskutil erasevolume HFS+ ramdisk $(hdiutil attach -nomount ram://8388608)
 ```
 
 Configure the RAM disk size, expressed as the number of blocks, at the end of the command
-(`4096 MiB * 2048 blocks/MiB = 8388608 blocks` for 4 GiB). To run the tests using the RAM disk:
+(`4096 MiB * 2048 blocks/MiB = 8388608 blocks` for 4 GiB). To run an individual test using the RAM disk:
 
 ```bash
-build/test/functional/test_runner.py --cachedir=/Volumes/ramdisk/cache --tmpdir=/Volumes/ramdisk/tmp
+build/test/functional/feature_rbf.py --cachedir=/Volumes/ramdisk/cache
 ```
 
 To unmount:
@@ -212,14 +203,14 @@ pkill -9 bitcoind
 ##### Data directory cache
 
 A pre-mined blockchain with 200 blocks is generated the first time a
-functional test is run and is stored in build/test/cache. This speeds up
+functional test is run and is stored in build/test/functional/cache. This speeds up
 test startup times since new blockchains don't need to be generated for
 each test. However, the cache may get into a bad state, in which case
 tests will fail. If this happens, remove the cache directory (and make
 sure bitcoind processes are stopped as above):
 
 ```bash
-rm -rf build/test/cache
+rm -rf build/test/functional/cache
 killall bitcoind
 ```
 
@@ -230,8 +221,6 @@ and CRITICAL). From within your functional tests you can log to these different
 levels using the logger included in the test_framework, e.g.
 `self.log.debug(object)`. By default:
 
-- when run through the test_runner harness, *all* logs are written to
-  `test_framework.log` and no logs are output to the console.
 - when run directly, *all* logs are written to `test_framework.log` and INFO
   level and above are output to the console.
 - when run by [our CI (Continuous Integration)](/ci/README.md), no logs are output to the console. However, if a test

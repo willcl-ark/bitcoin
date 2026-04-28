@@ -31,13 +31,13 @@ if [ -n "${FILE_ENV}" ]; then
 fi
 
 echo "Fallback to default values in env (if not yet set)"
-# The number of parallel jobs to pass down to make and test_runner.py
+# The number of parallel jobs to pass down to make and ctest.
 export MAKEJOBS=${MAKEJOBS:--j$(if command -v nproc > /dev/null 2>&1; then nproc; else sysctl -n hw.logicalcpu; fi)}
 
 export RUN_UNIT_TESTS=${RUN_UNIT_TESTS:-true}
 export RUN_FUNCTIONAL_TESTS=${RUN_FUNCTIONAL_TESTS:-true}
 export RUN_TIDY=${RUN_TIDY:-false}
-# By how much to scale the test_runner timeouts (option --timeout-factor).
+# By how much to scale CTest timeouts and functional test internal timeouts.
 # This is needed because some ci machines have slow CPU or disk, so sanitizers
 # might be slow or a reindex might be waiting on disk IO.
 export TEST_RUNNER_TIMEOUT_FACTOR=${TEST_RUNNER_TIMEOUT_FACTOR:-40}

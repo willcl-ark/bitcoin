@@ -11,10 +11,10 @@ that file and modify to fit your needs.
 #### Coverage
 
 Assuming the build directory is `build`,
-running `build/test/functional/test_runner.py` with the `--coverage` argument tracks which RPCs are
-called by the tests and prints a report of uncovered RPCs in the summary. This
-can be used (along with the `--extended` argument) to find out which RPCs we
-don't have test cases for.
+configure with `-DBITCOIN_FUNCTIONAL_TEST_ARGS=--coverage` and run
+`ctest --test-dir build -R '^functional\.'` to track which RPCs are called by
+the tests. This prints a report of uncovered RPCs from the coverage collector
+after the tests run.
 
 #### Style guidelines
 
