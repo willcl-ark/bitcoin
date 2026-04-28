@@ -15,6 +15,8 @@ configure with `-DBITCOIN_FUNCTIONAL_TEST_COVERAGE=ON` and run
 `ctest --test-dir build -R '^functional\.'` to track which RPCs are called by
 the tests. CTest will run coverage setup and report fixtures around the selected
 functional tests, and the report step fails if any RPC commands are uncovered.
+Configure with `-DBITCOIN_FUNCTIONAL_EXTENDED_TESTS=ON` as well to include the
+extended tests in the coverage run.
 
 #### Style guidelines
 

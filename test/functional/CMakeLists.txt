@@ -15,6 +15,7 @@ endif()
 set(BITCOIN_FUNCTIONAL_TEST_TIMEOUT_FACTOR "1" CACHE STRING "Timeout factor passed to functional tests")
 set(BITCOIN_FUNCTIONAL_TEST_ARGS "" CACHE STRING "Additional arguments passed to functional tests")
 option(BITCOIN_FUNCTIONAL_TEST_COVERAGE "Enable functional test RPC coverage reporting" OFF)
+option(BITCOIN_FUNCTIONAL_EXTENDED_TESTS "Enable extended functional tests" OFF)
 separate_arguments(functional_test_args UNIX_COMMAND "${BITCOIN_FUNCTIONAL_TEST_ARGS}")
 set(functional_test_fixtures functional_cache)
 
@@ -24,10 +25,13 @@ if(BITCOIN_FUNCTIONAL_TEST_COVERAGE)
   list(APPEND functional_test_fixtures functional_coverage)
 endif()
 
-set(FUNCTIONAL_TEST_LONG_COMMANDS
+set(FUNCTIONAL_EXTENDED_TEST_COMMANDS
   [=[feature_pruning.py]=]
   [=[feature_dbcrash.py]=]
   [=[feature_index_prune.py]=]
+)
+
+set(FUNCTIONAL_TEST_LONG_COMMANDS
   [=[tool_bench_sanity_check.py]=]
   [=[feature_fee_estimation.py]=]
   [=[feature_taproot.py]=]
@@ -321,11 +325,17 @@ set(FUNCTIONAL_TEST_SHORT_COMMANDS
   [=[p2p_seednode.py]=]
 )
 
-set(FUNCTIONAL_TEST_COMMANDS
+set(FUNCTIONAL_BASE_TEST_COMMANDS
   ${FUNCTIONAL_TEST_LONG_COMMANDS}
   ${FUNCTIONAL_TEST_MEDIUM_COMMANDS}
   ${FUNCTIONAL_TEST_SHORT_COMMANDS}
 )
+
+set(FUNCTIONAL_TEST_COMMANDS ${FUNCTIONAL_BASE_TEST_COMMANDS})
+if(BITCOIN_FUNCTIONAL_EXTENDED_TESTS)
+  list(PREPEND FUNCTIONAL_TEST_COMMANDS ${FUNCTIONAL_EXTENDED_TEST_COMMANDS})
+endif()
+set(FUNCTIONAL_ALL_TEST_COMMANDS ${FUNCTIONAL_EXTENDED_TEST_COMMANDS} ${FUNCTIONAL_BASE_TEST_COMMANDS})
 
 set(FUNCTIONAL_TEST_HELPERS
   combine_logs.py
@@ -342,7 +352,7 @@ function(get_functional_test_script command output_var)
 endfunction()
 
 set(functional_test_scripts)
-foreach(test_command IN LISTS FUNCTIONAL_TEST_COMMANDS)
+foreach(test_command IN LISTS FUNCTIONAL_ALL_TEST_COMMANDS)
   get_functional_test_script("${test_command}" script)
   list(APPEND functional_test_scripts "${script}")
 endforeach()

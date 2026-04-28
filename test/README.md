@@ -73,6 +73,9 @@ Run the functional test suite with:
 ctest --test-dir build -R '^functional\.' -j 8 --output-on-failure
 ```
 
+Former extended functional tests are not registered by default. Configure with
+`-DBITCOIN_FUNCTIONAL_EXTENDED_TESTS=ON` to include them in CTest runs.
+
 Run an individual functional test with:
 
 ```
