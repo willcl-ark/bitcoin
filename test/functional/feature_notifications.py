@@ -41,7 +41,7 @@ def shell_quote(s):
 
 class NotificationsTest(BitcoinTestFramework):
     def set_test_params(self):
-        self.num_nodes = 2
+        self.num_nodes = 3
         self.setup_clean_chain = True
         self.uses_wallet = None
 
@@ -51,6 +51,7 @@ class NotificationsTest(BitcoinTestFramework):
         self.alertnotify_file = os.path.join(self.alertnotify_dir, "alertnotify.txt")
         self.blocknotify_dir = os.path.join(self.options.tmpdir, "blocknotify")
         self.blocknotify_ignored_file = os.path.join(self.blocknotify_dir, "ignored.txt")
+        self.reindex_blocknotify_dir = os.path.join(self.options.tmpdir, "reindex_blocknotify")
         self.walletnotify_dir = os.path.join(self.options.tmpdir, "walletnotify")
         self.shutdownnotify_dir = os.path.join(self.options.tmpdir, "shutdownnotify")
         self.shutdownnotify_file = os.path.join(self.shutdownnotify_dir, "shutdownnotify.txt")
@@ -60,6 +61,7 @@ class NotificationsTest(BitcoinTestFramework):
         self.shutdownnotify_script = os.path.join(self.shutdownnotify_dir, "shutdownnotify.py")
         os.mkdir(self.alertnotify_dir)
         os.mkdir(self.blocknotify_dir)
+        os.mkdir(self.reindex_blocknotify_dir)
         os.mkdir(self.walletnotify_dir)
         os.mkdir(self.shutdownnotify_dir)
         with open(self.shutdownnotify_script, "w", encoding="utf8") as f:
@@ -79,7 +81,8 @@ class NotificationsTest(BitcoinTestFramework):
                 "    time.sleep(0.05)\n"
                 "raise SystemExit('timed out waiting for ' + str(wait_file))\n"
             )
-        # -alertnotify and -blocknotify on node0, walletnotify on node1
+        # -alertnotify and -blocknotify on node0, walletnotify on node1,
+        # an isolated -blocknotify on node2 used to test reindex suppression.
         self.extra_args = [[
             f"-alertnotify=echo %s >> {self.alertnotify_file}",
             f"-blocknotify=echo > {self.blocknotify_ignored_file}",
@@ -87,6 +90,8 @@ class NotificationsTest(BitcoinTestFramework):
             f"-shutdownnotify=echo > {self.shutdownnotify_file}",
         ], [
             f"-walletnotify=echo %h_%b > {os.path.join(self.walletnotify_dir, notify_outputname('%w', '%s'))}",
+        ], [
+            f"-blocknotify=echo > {os.path.join(self.reindex_blocknotify_dir, '%s')}",
         ]]
         # In Windows cross-build CI, bitcoind is a Windows process and cannot
         # reliably launch the test runner's Python helper through
@@ -147,6 +152,32 @@ class NotificationsTest(BitcoinTestFramework):
 
         self.nodes[0].reconsiderblock(tip)
         self.wait_until(lambda: tip in os.listdir(self.blocknotify_dir), timeout=10)
+
+        self.log.info("test -blocknotify is suppressed during reindex")
+        # Node 2 received the same blocks via P2P; drain those notifications
+        # before restarting it so any post-restart entries are fresh.
+        expected_tip = self.nodes[2].getbestblockhash()
+        self.wait_until(lambda: expected_tip in os.listdir(self.reindex_blocknotify_dir), timeout=10)
+        for f in os.listdir(self.reindex_blocknotify_dir):
+            os.remove(os.path.join(self.reindex_blocknotify_dir, f))
+
+        self.disconnect_nodes(1, 2)
+        self.restart_node(2, extra_args=self.extra_args[2] + ["-reindex"])
+        # Wait for reindex to reach POST_INIT (i.e. leave INIT_REINDEX); only
+        # then would -blocknotify fire if it were going to.
+        self.wait_until(
+            lambda: self.nodes[2].getbestblockhash() == expected_tip
+                and not self.nodes[2].getblockchaininfo()["initialblockdownload"],
+            timeout=60,
+        )
+        ensure_for(duration=1, f=lambda: not os.listdir(self.reindex_blocknotify_dir))
+
+        # A new block after reindex completes still triggers -blocknotify.
+        post_reindex_tip = self.generatetoaddress(self.nodes[2], 1, ADDRESS_BCRT1_UNSPENDABLE, sync_fun=self.no_op)[0]
+        self.wait_until(lambda: post_reindex_tip in os.listdir(self.reindex_blocknotify_dir), timeout=10)
+        assert_equal(os.listdir(self.reindex_blocknotify_dir), [post_reindex_tip])
+
+        self.connect_nodes(1, 2)
 
         if self.is_wallet_compiled():
             self.log.info("test -walletnotify")
