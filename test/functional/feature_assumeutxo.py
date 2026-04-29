@@ -38,6 +38,7 @@ from test_framework.util import (
     assert_raises_rpc_error,
     dumb_sync_blocks,
     ensure_for,
+    p2p_port,
     sha256sum_file,
     try_rpc,
 )
@@ -52,6 +53,14 @@ from test_framework.blocktools import (
     target_str,
 )
 
+# Test may be run without pyzmq installed.
+try:
+    import zmq
+except ImportError:
+    ZMQ_AVAILABLE = False
+else:
+    ZMQ_AVAILABLE = True
+
 START_HEIGHT = 199
 SNAPSHOT_BASE_HEIGHT = 299
 FINAL_HEIGHT = 399
@@ -64,6 +73,7 @@ class AssumeutxoTest(BitcoinTestFramework):
         """Use the pregenerated, deterministic chain up to height 199."""
         self.num_nodes = 4
         self.rpc_timeout = 120
+        self.assumeutxo_zmq_address = f"tcp://127.0.0.1:{p2p_port(self.num_nodes + 1)}"
         self.extra_args = [
             [],
             ["-fastprune", "-prune=1", "-blockfilterindex=1", "-coinstatsindex=1"],
@@ -74,8 +84,43 @@ class AssumeutxoTest(BitcoinTestFramework):
     def setup_network(self):
         """Start with the nodes disconnected so that one can generate a snapshot
         including blocks the other hasn't yet seen."""
+        self.assumeutxo_zmq_ctx = None
+        self.assumeutxo_zmq_sockets = {}
+        self.assumeutxo_zmq_sequences = {}
+        self.enable_assumeutxo_zmq_test = ZMQ_AVAILABLE and self.is_zmq_compiled()
+        if self.enable_assumeutxo_zmq_test:
+            self.extra_args[1].append(f"-zmqpubrawtx={self.assumeutxo_zmq_address}")
         self.add_nodes(4)
         self.start_nodes(extra_args=self.extra_args)
+        if self.enable_assumeutxo_zmq_test:
+            self.assumeutxo_zmq_ctx = zmq.Context()
+            for topic in ("rawtx",):
+                socket = self.assumeutxo_zmq_ctx.socket(zmq.SUB)
+                socket.setsockopt(zmq.SUBSCRIBE, topic.encode())
+                socket.set(zmq.RCVTIMEO, 1000)
+                socket.connect(self.assumeutxo_zmq_address)
+                self.assumeutxo_zmq_sockets[topic] = socket
+        else:
+            self.log.info("Skipping assumeutxo ZMQ checks")
+
+    def receive_assumeutxo_zmq(self, topic):
+        received_topic, body, sequence = self.assumeutxo_zmq_sockets[topic].recv_multipart()
+        assert_equal(received_topic, topic.encode())
+        sequence = int.from_bytes(sequence, "little")
+        assert_equal(sequence, self.assumeutxo_zmq_sequences.get(topic, sequence))
+        self.assumeutxo_zmq_sequences[topic] = sequence + 1
+        return tx_from_hex(body.hex()).txid_hex
+
+    def wait_for_assumeutxo_zmq(self, topic, expected, *, forbidden=()):
+        def received():
+            try:
+                notification = self.receive_assumeutxo_zmq(topic)
+            except zmq.error.Again:
+                return False
+            assert notification not in forbidden, f"Unexpected ZMQ {topic} notification for background chainstate: {notification}"
+            return notification == expected
+
+        self.wait_until(received)
 
     def test_invalid_snapshot_scenarios(self, valid_snapshot_path):
         self.log.info("Test different scenarios of loading invalid snapshot files")
@@ -414,6 +459,7 @@ class AssumeutxoTest(BitcoinTestFramework):
         # but that n1 and n2 don't yet see.
         assert_equal(n0.getblockcount(), START_HEIGHT)
         blocks = {START_HEIGHT: Block(n0.getbestblockhash(), 1, START_HEIGHT + 1)}
+        historical_zmq_txids = set()
         for i in range(100):
             block_tx = 1
             if i % 3 == 0:
@@ -423,6 +469,7 @@ class AssumeutxoTest(BitcoinTestFramework):
             height = n0.getblockcount()
             hash = n0.getbestblockhash()
             blocks[height] = Block(hash, block_tx, blocks[height-1].chain_tx + block_tx)
+            historical_zmq_txids.update(n0.getblock(hash)["tx"])
             if i == 4:
                 # Create a stale block that forks off the main chain before the snapshot.
                 temp_invalid = n0.getbestblockhash()
@@ -652,6 +699,8 @@ class AssumeutxoTest(BitcoinTestFramework):
         n1.sendrawtransaction(signed_tx)
         assert signed_txid in n1.getrawmempool()
         assert not n1.gettxout(prev_tx['txid'], 0)
+        if self.enable_assumeutxo_zmq_test:
+            self.wait_for_assumeutxo_zmq("rawtx", signed_txid)
 
         PAUSE_HEIGHT = FINAL_HEIGHT - 40
 
@@ -685,6 +734,17 @@ class AssumeutxoTest(BitcoinTestFramework):
 
         self.log.info("Ensuring background validation completes")
         self.wait_until(lambda: len(n1.getchainstates()['chainstates']) == 1)
+        if self.enable_assumeutxo_zmq_test:
+            # Observe a notification after all background callbacks, rather than
+            # treating an idle socket as proof that background validation was quiet.
+            n1.syncwithvalidationinterfacequeue()
+            marker_txid = MiniWallet(n1).send_self_transfer(from_node=n1)["txid"]
+            self.wait_for_assumeutxo_zmq("rawtx", marker_txid, forbidden=historical_zmq_txids)
+            for socket in self.assumeutxo_zmq_sockets.values():
+                socket.close()
+            self.assumeutxo_zmq_sockets = {}
+            self.assumeutxo_zmq_ctx.destroy(linger=None)
+            self.assumeutxo_zmq_ctx = None
 
         # Since n1 is a pruned node, it will not signal NODE_NETWORK after
         # completing the background sync.
