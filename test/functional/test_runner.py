@@ -445,6 +445,8 @@ def main():
     config.read_file(open(configfile))
 
     passon_args.append("--configfile=%s" % configfile)
+    if args.combinedlogslen:
+        passon_args.append("--combinedlogslen=%s" % args.combinedlogslen)
 
     # Set up logging
     logging_level = logging.INFO if args.quiet else logging.DEBUG
@@ -573,13 +575,12 @@ def main():
         jobs=args.jobs,
         enable_coverage=args.coverage,
         args=passon_args,
-        combined_logs_len=args.combinedlogslen,
         failfast=args.failfast,
         use_term_control=args.ansi,
         results_filepath=results_filepath,
     )
 
-def run_tests(*, test_list, build_dir, tmpdir, jobs=1, enable_coverage=False, args=None, combined_logs_len=0, failfast=False, use_term_control, results_filepath=None):
+def run_tests(*, test_list, build_dir, tmpdir, jobs=1, enable_coverage=False, args=None, failfast=False, use_term_control, results_filepath=None):
     args = args or []
 
     # Some optional Python dependencies (e.g. pycapnp) may emit warnings or fail under
@@ -655,17 +656,6 @@ def run_tests(*, test_list, build_dir, tmpdir, jobs=1, enable_coverage=False, ar
                 print("%s failed, Duration: %s s\n" % (done_str, test_result.time))
                 print(BOLD[1] + 'stdout:\n' + BOLD[0] + stdout + '\n')
                 print(BOLD[1] + 'stderr:\n' + BOLD[0] + stderr + '\n')
-                if combined_logs_len and os.path.isdir(testdir):
-                    # Print the final `combinedlogslen` lines of the combined logs
-                    print('{}Combine the logs and print the last {} lines ...{}'.format(BOLD[1], combined_logs_len, BOLD[0]))
-                    print('\n============')
-                    print('{}Combined log for {}:{}'.format(BOLD[1], testdir, BOLD[0]))
-                    print('============\n')
-                    combined_logs_args = [sys.executable, os.path.join(tests_dir, 'combine_logs.py'), testdir]
-                    if BOLD[0]:
-                        combined_logs_args += ['--color']
-                    combined_logs, _ = subprocess.Popen(combined_logs_args, text=True, stdout=subprocess.PIPE).communicate()
-                    print("\n".join(deque(combined_logs.splitlines(), combined_logs_len)))
 
                 if failfast:
                     logging.debug("Early exiting after test failure")

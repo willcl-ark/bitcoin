@@ -5,6 +5,7 @@
 """Base class for RPC testing."""
 
 import configparser
+from collections import deque
 from enum import Enum
 import argparse
 from datetime import datetime, timezone
@@ -183,6 +184,8 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
                             help="Force test of previous releases (default: %(default)s). Previous releases binaries can be downloaded via `test/get_previous_releases.py`.")
         parser.add_argument("--coveragedir", dest="coveragedir",
                             help="Write tested RPC commands into this directory")
+        parser.add_argument('--combinedlogslen', '-c', type=int, default=0, metavar='n',
+                            help='On failure, print a log (of length n lines) to the console, combined from the test framework and all test nodes.')
         parser.add_argument("--configfile", dest="configfile",
                             default=os.path.abspath(os.path.dirname(test_file) + "/../config.ini"),
                             help="Location of the test framework config file (default: %(default)s)")
@@ -318,6 +321,17 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
             self.log.error("If this failure happened unexpectedly or intermittently, please file a bug and provide a link or upload of the combined log.")
             self.log.error(self.config['environment']['CLIENT_BUGREPORT'])
             self.log.error("")
+            if self.options.combinedlogslen and os.path.isdir(self.options.tmpdir):
+                for h in list(self.log.handlers):
+                    h.flush()
+                # Print the final `combinedlogslen` lines of the combined logs
+                print("Combine the logs and print the last {} lines ...".format(self.options.combinedlogslen))
+                print("\n============")
+                print("Combined log for {}:".format(self.options.tmpdir))
+                print("============\n")
+                combined_logs_args = [sys.executable, os.path.normpath(os.path.dirname(os.path.realpath(__file__)) + "/../combine_logs.py"), self.options.tmpdir]
+                combined_logs, _ = subprocess.Popen(combined_logs_args, text=True, stdout=subprocess.PIPE).communicate()
+                print("\n".join(deque(combined_logs.splitlines(), self.options.combinedlogslen)))
             exit_code = TEST_EXIT_FAILED
         # Logging.shutdown will not remove stream- and filehandlers, so we must
         # do it explicitly. Handlers are removed so the next test run can apply
