@@ -6,7 +6,15 @@
 
 import argparse
 import os
-import shutil
+
+
+def remove_tree(dirname):
+    for root, dirs, files in os.walk(dirname, topdown=False):
+        for filename in files:
+            os.remove(os.path.join(root, filename))
+        for dirname in dirs:
+            os.rmdir(os.path.join(root, dirname))
+    os.rmdir(dirname)
 
 
 def main():
@@ -15,7 +23,7 @@ def main():
     args = parser.parse_args()
 
     if os.path.isdir(args.coveragedir):
-        shutil.rmtree(args.coveragedir)
+        remove_tree(args.coveragedir)
     os.makedirs(args.coveragedir)
 
 

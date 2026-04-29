@@ -119,8 +119,8 @@ def get_uncovered_rpc_commands(dirname: str) -> set[str]:
     Return a set of currently untested RPC commands.
     """
     coverage_ref_filename = os.path.join(dirname, REFERENCE_FILENAME)
-    coverage_filenames = set()
-    all_cmds = set()
+    coverage_filenames: set[str] = set()
+    all_cmds: set[str] = set()
     # Consider RPC generate covered, because it is overloaded in
     # test_framework/test_node.py and not seen by the coverage check.
     covered_cmds = {'generate'}
