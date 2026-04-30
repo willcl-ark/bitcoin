@@ -7,6 +7,7 @@ import os
 import platform
 import shlex
 import sys
+import time
 
 from test_framework.address import ADDRESS_BCRT1_UNSPENDABLE
 from test_framework.blocktools import (
@@ -129,6 +130,22 @@ class NotificationsTest(BitcoinTestFramework):
             for i, name in enumerate(self.wallet_names):
                 self.nodes[i].createwallet(wallet_name=name, blank=True, load_on_startup=True)
                 self.nodes[i].importdescriptors(desc_imports)
+
+        self.log.info("test -blocknotify is suppressed during initial block download")
+        block = create_block(int(self.nodes[0].getbestblockhash(), 16), height=1, ntime=int(time.time()) - 2 * 24 * 60 * 60)
+        block.solve()
+        self.nodes[0].submitblock(block.serialize().hex())
+        self.nodes[1].submitblock(block.serialize().hex())
+        ibd_block = block.hash_hex
+        assert_equal(self.nodes[0].getblockchaininfo()["initialblockdownload"], True)
+        ensure_for(duration=1, f=lambda: not os.listdir(self.blocknotify_dir))
+
+        post_ibd_block = self.generatetoaddress(self.nodes[0], 1, ADDRESS_BCRT1_UNSPENDABLE, sync_fun=self.no_op)[0]
+        self.sync_blocks(nodes=(self.nodes[0], self.nodes[1]))
+        self.wait_until(lambda: not self.nodes[0].getblockchaininfo()["initialblockdownload"], timeout=10)
+        self.wait_until(lambda: post_ibd_block in os.listdir(self.blocknotify_dir), timeout=10)
+        assert ibd_block not in os.listdir(self.blocknotify_dir)
+        self.wait_until(self.remove_blocknotify_files, timeout=10)
 
         self.log.info("test -blocknotify")
         block_count = 10
