@@ -49,6 +49,7 @@ class NotificationsTest(BitcoinTestFramework):
         self.alertnotify_dir = os.path.join(self.options.tmpdir, "alertnotify")
         self.alertnotify_file = os.path.join(self.alertnotify_dir, "alertnotify.txt")
         self.blocknotify_dir = os.path.join(self.options.tmpdir, "blocknotify")
+        self.blocknotify_ignored_file = os.path.join(self.blocknotify_dir, "ignored.txt")
         self.walletnotify_dir = os.path.join(self.options.tmpdir, "walletnotify")
         self.shutdownnotify_dir = os.path.join(self.options.tmpdir, "shutdownnotify")
         self.shutdownnotify_file = os.path.join(self.shutdownnotify_dir, "shutdownnotify.txt")
@@ -65,6 +66,7 @@ class NotificationsTest(BitcoinTestFramework):
         # -alertnotify and -blocknotify on node0, walletnotify on node1
         self.extra_args = [[
             f"-alertnotify=echo %s >> \"{self.alertnotify_file}\"",
+            f'-blocknotify=echo > "{self.blocknotify_ignored_file}"',
             f"-blocknotify=echo > \"{os.path.join(self.blocknotify_dir, '%s')}\"",
             f"-shutdownnotify=echo > \"{self.shutdownnotify_file}\"",
         ], [
@@ -104,6 +106,7 @@ class NotificationsTest(BitcoinTestFramework):
 
         # directory content should equal the generated blocks hashes
         assert_equal(sorted(blocks), sorted(os.listdir(self.blocknotify_dir)))
+        assert_equal(os.path.exists(self.blocknotify_ignored_file), False)
 
         if self.is_wallet_compiled():
             self.log.info("test -walletnotify")
