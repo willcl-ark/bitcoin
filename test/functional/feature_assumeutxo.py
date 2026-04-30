@@ -91,11 +91,12 @@ class AssumeutxoTest(BitcoinTestFramework):
         if self.enable_assumeutxo_zmq_test:
             self.extra_args[1].append(f"-zmqpubrawtx={self.assumeutxo_zmq_address}")
             self.extra_args[1].append(f"-zmqpubsequence={self.assumeutxo_zmq_address}")
+            self.extra_args[1].append(f"-zmqpubhashtx={self.assumeutxo_zmq_address}")
         self.add_nodes(4)
         self.start_nodes(extra_args=self.extra_args)
         if self.enable_assumeutxo_zmq_test:
             self.assumeutxo_zmq_ctx = zmq.Context()
-            for topic in ("rawtx", "sequence"):
+            for topic in ("rawtx", "sequence", "hashtx"):
                 socket = self.assumeutxo_zmq_ctx.socket(zmq.SUB)
                 socket.setsockopt(zmq.SUBSCRIBE, topic.encode())
                 socket.set(zmq.RCVTIMEO, 1000)
@@ -110,6 +111,8 @@ class AssumeutxoTest(BitcoinTestFramework):
         sequence = int.from_bytes(sequence, "little")
         assert_equal(sequence, self.assumeutxo_zmq_sequences.get(topic, sequence))
         self.assumeutxo_zmq_sequences[topic] = sequence + 1
+        if topic == "hashtx":
+            return body.hex()
         if topic == "sequence":
             return (body[:32].hex(), chr(body[32]))
         return tx_from_hex(body.hex()).txid_hex
@@ -707,6 +710,7 @@ class AssumeutxoTest(BitcoinTestFramework):
         if self.enable_assumeutxo_zmq_test:
             self.wait_for_assumeutxo_zmq("rawtx", signed_txid)
             self.wait_for_assumeutxo_zmq("sequence", (signed_txid, "A"))
+            self.wait_for_assumeutxo_zmq("hashtx", signed_txid)
 
         PAUSE_HEIGHT = FINAL_HEIGHT - 40
 
@@ -746,6 +750,7 @@ class AssumeutxoTest(BitcoinTestFramework):
             n1.syncwithvalidationinterfacequeue()
             marker_txid = MiniWallet(n1).send_self_transfer(from_node=n1)["txid"]
             self.wait_for_assumeutxo_zmq("rawtx", marker_txid, forbidden=historical_zmq_txids)
+            self.wait_for_assumeutxo_zmq("hashtx", marker_txid, forbidden=historical_zmq_txids)
             self.wait_for_assumeutxo_zmq(
                 "sequence", (marker_txid, "A"),
                 forbidden={(block_hash, "C") for block_hash in historical_zmq_block_hashes},
