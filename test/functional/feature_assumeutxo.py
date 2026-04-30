@@ -92,11 +92,12 @@ class AssumeutxoTest(BitcoinTestFramework):
         if self.enable_assumeutxo_zmq_test:
             self.extra_args[1].append(f"-zmqpubrawtx={self.assumeutxo_zmq_address}")
             self.extra_args[1].append(f"-zmqpubsequence={self.assumeutxo_zmq_address}")
+            self.extra_args[1].append(f"-zmqpubhashtx={self.assumeutxo_zmq_address}")
         self.add_nodes(4)
         self.start_nodes(extra_args=self.extra_args)
         if self.enable_assumeutxo_zmq_test:
             self.assumeutxo_zmq_ctx = zmq.Context()
-            for topic in ("rawtx", "sequence"):
+            for topic in ("rawtx", "sequence", "hashtx"):
                 socket = self.assumeutxo_zmq_ctx.socket(zmq.SUB)
                 socket.setsockopt(zmq.SUBSCRIBE, topic.encode())
                 socket.set(zmq.RCVTIMEO, 1000)
@@ -110,6 +111,11 @@ class AssumeutxoTest(BitcoinTestFramework):
         assert_equal(topic, b"rawtx")
         return tx_from_hex(body.hex()).txid_hex
 
+    def receive_assumeutxo_hashtx(self):
+        topic, body, _ = self.assumeutxo_zmq_sockets["hashtx"].recv_multipart()
+        assert_equal(topic, b"hashtx")
+        return body.hex()
+
     def receive_assumeutxo_sequence(self):
         topic, body, _ = self.assumeutxo_zmq_sockets["sequence"].recv_multipart()
         assert_equal(topic, b"sequence")
@@ -120,6 +126,15 @@ class AssumeutxoTest(BitcoinTestFramework):
         def received():
             try:
                 return self.receive_assumeutxo_rawtx() == txid
+            except zmq.error.Again:
+                return False
+
+        self.wait_until(received, timeout=10)
+
+    def wait_for_assumeutxo_hashtx(self, txid):
+        def received():
+            try:
+                return self.receive_assumeutxo_hashtx() == txid
             except zmq.error.Again:
                 return False
 
@@ -147,6 +162,19 @@ class AssumeutxoTest(BitcoinTestFramework):
             assert txid not in historical_txids, f"Unexpected ZMQ rawtx for background chainstate transaction {txid}"
             end_time = time.monotonic() + 1
         self.log.info(f"Checked {received_count} active-chain ZMQ rawtx notifications")
+
+    def assert_no_assumeutxo_background_hashtx(self, historical_txids):
+        end_time = time.monotonic() + 1
+        received_count = 0
+        while time.monotonic() < end_time:
+            try:
+                txid = self.receive_assumeutxo_hashtx()
+            except zmq.error.Again:
+                break
+            received_count += 1
+            assert txid not in historical_txids, f"Unexpected ZMQ hashtx for background chainstate transaction {txid}"
+            end_time = time.monotonic() + 1
+        self.log.info(f"Checked {received_count} active-chain ZMQ hashtx notifications")
 
     def assert_no_assumeutxo_background_sequence(self, historical_block_hashes):
         end_time = time.monotonic() + 1
@@ -744,6 +772,7 @@ class AssumeutxoTest(BitcoinTestFramework):
         if self.enable_assumeutxo_zmq_test:
             self.wait_for_assumeutxo_rawtx(signed_txid)
             self.wait_for_assumeutxo_sequence(signed_txid, "A")
+            self.wait_for_assumeutxo_hashtx(signed_txid)
 
         PAUSE_HEIGHT = FINAL_HEIGHT - 40
 
@@ -779,6 +808,7 @@ class AssumeutxoTest(BitcoinTestFramework):
         self.wait_until(lambda: len(n1.getchainstates()['chainstates']) == 1)
         if self.enable_assumeutxo_zmq_test:
             self.assert_no_assumeutxo_background_rawtx(historical_zmq_txids)
+            self.assert_no_assumeutxo_background_hashtx(historical_zmq_txids)
             self.assert_no_assumeutxo_background_sequence(historical_zmq_block_hashes)
             for socket in self.assumeutxo_zmq_sockets.values():
                 socket.close()
