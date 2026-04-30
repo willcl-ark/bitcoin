@@ -111,24 +111,32 @@ message _body_, and _message sequence number_:
 
 where:
 
- - message sequence number represents message count to detect lost messages, distinct for each topic
+ - message sequence number represents message count to detect lost messages,
+   distinct for each configured notifier stream
  - all transaction and block hashes are in _reversed byte order_ (i. e. with bytes
    produced by hashing function reversed), the same format as the RPC interface and block
    explorers use to display transaction and block hashes
 
 #### rawtx
 
-Notifies about all transactions, both when they are added to mempool or when a new block
-arrives. This means a transaction could be published multiple times: first when it enters
-mempool and then again in each block that includes it. The body part of the message is the
-serialized transaction.
+Notifies about transactions when they are added to the mempool, when a block is
+connected, and when a block is disconnected. This means a transaction could be
+published multiple times: when it enters the mempool, when it is included in a
+connected block, and again if that block is disconnected during a reorganization.
+When assumeutxo is in use, transactions in historical blocks connected to the
+background validation chainstate are not published.
+The body part of the message is the serialized transaction.
 
 #### hashtx
 
-Notifies about all transactions, both when they are added to mempool or when a new block
-arrives. This means a transaction could be published multiple times: first when it enters
-mempool and then again in each block that includes it. The body part of the message is the
-32-byte transaction hash in reversed byte order.
+Notifies about transactions when they are added to the mempool, when a block is
+connected, and when a block is disconnected. This means a transaction could be
+published multiple times: when it enters the mempool, when it is included in a
+connected block, and again if that block is disconnected during a reorganization.
+When assumeutxo is in use, transactions in historical blocks connected to the
+background validation chainstate are not published.
+The body part of the message is the 32-byte transaction hash in reversed byte
+order.
 
 #### rawblock
 
@@ -150,6 +158,23 @@ The 8-byte LE uints correspond to _mempool sequence number_ and the types of bod
    - `D` : block with this hash disconnected
    - `R` : transaction with this hash removed from mempool for non-block inclusion reason
    - `A` : transaction with this hash added to mempool
+
+The `sequence` topic publishes block connect and disconnect events, and mempool
+add and removal events. It does not publish every transaction from connected or
+disconnected blocks. Transaction removal messages are published for non-block
+inclusion removals, such as expiry, size limiting, reorg, conflict, or
+replacement. When assumeutxo is in use, `C` messages are not published for
+historical blocks connected to the background validation chainstate.
+
+For a single ZMQ notifier, messages are published in the order the node processes
+the corresponding validation and mempool events. Subscribers should still use the
+notifier stream's message sequence number to detect lost messages and should use
+RPC to confirm current state when needed. ZMQ delivery is not synchronized with
+RPC responses unless the RPC explicitly documents such synchronization.
+
+Clients that track the mempool can use `getrawmempool` with
+`mempool_sequence=true` to reconcile a mempool snapshot with the mempool sequence
+numbers published on the `sequence` topic.
 
 ### Implementing ZMQ client
 
