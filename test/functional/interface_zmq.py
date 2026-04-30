@@ -266,18 +266,22 @@ class ZMQTest (BitcoinTestFramework):
         address = f"tcp://127.0.0.1:{self.zmq_port_base}"
 
         # Should only notify the tip if a reorg occurs
-        hashblock, hashtx = self.setup_zmq_test(
-            [(topic, address) for topic in ["hashblock", "hashtx"]],
+        hashblock, hashtx, rawtx = self.setup_zmq_test(
+            [(topic, address) for topic in ["hashblock", "hashtx", "rawtx"]],
             recv_timeout=2)  # 2 second timeout to check end of notifications
         self.disconnect_nodes(0, 1)
+
+        def assert_tx_notification(txid):
+            assert_equal(hashtx.receive().hex(), txid)
+            assert_equal(tx_from_hex(rawtx.receive().hex()).txid_hex, txid)
 
         # Generate 1 block in nodes[0] with 1 mempool tx and receive all notifications
         payment_txid = self.wallet.send_self_transfer(from_node=self.nodes[0])['txid']
         disconnect_block = self.generatetoaddress(self.nodes[0], 1, ADDRESS_BCRT1_UNSPENDABLE, sync_fun=self.no_op)[0]
         disconnect_cb = self.nodes[0].getblock(disconnect_block)["tx"][0]
         assert_equal(self.nodes[0].getbestblockhash(), hashblock.receive().hex())
-        assert_equal(hashtx.receive().hex(), payment_txid)
-        assert_equal(hashtx.receive().hex(), disconnect_cb)
+        assert_tx_notification(payment_txid)
+        assert_tx_notification(disconnect_cb)
 
         # Generate 2 blocks in nodes[1] to a different address to ensure split
         connect_blocks = self.generatetoaddress(self.nodes[1], 2, ADDRESS_BCRT1_P2WSH_OP_TRUE, sync_fun=self.no_op)
@@ -291,20 +295,20 @@ class ZMQTest (BitcoinTestFramework):
 
         # During reorg:
         # Get old payment transaction notification from disconnect and disconnected cb
-        assert_equal(hashtx.receive().hex(), payment_txid)
-        assert_equal(hashtx.receive().hex(), disconnect_cb)
+        assert_tx_notification(payment_txid)
+        assert_tx_notification(disconnect_cb)
         # And the payment transaction again due to mempool entry
-        assert_equal(hashtx.receive().hex(), payment_txid)
-        assert_equal(hashtx.receive().hex(), payment_txid)
+        assert_tx_notification(payment_txid)
+        assert_tx_notification(payment_txid)
         # And the new connected coinbases
         for i in [0, 1]:
-            assert_equal(hashtx.receive().hex(), self.nodes[1].getblock(connect_blocks[i])["tx"][0])
+            assert_tx_notification(self.nodes[1].getblock(connect_blocks[i])["tx"][0])
 
         # If we do a simple invalidate we announce the disconnected coinbase
         self.nodes[0].invalidateblock(connect_blocks[1])
-        assert_equal(hashtx.receive().hex(), self.nodes[1].getblock(connect_blocks[1])["tx"][0])
+        assert_tx_notification(self.nodes[1].getblock(connect_blocks[1])["tx"][0])
         # And the current tip
-        assert_equal(hashtx.receive().hex(), self.nodes[1].getblock(connect_blocks[0])["tx"][0])
+        assert_tx_notification(self.nodes[1].getblock(connect_blocks[0])["tx"][0])
 
     def test_sequence(self):
         """
