@@ -90,11 +90,12 @@ class AssumeutxoTest(BitcoinTestFramework):
         self.enable_assumeutxo_zmq_test = ZMQ_AVAILABLE and self.is_zmq_compiled()
         if self.enable_assumeutxo_zmq_test:
             self.extra_args[1].append(f"-zmqpubrawtx={self.assumeutxo_zmq_address}")
+            self.extra_args[1].append(f"-zmqpubsequence={self.assumeutxo_zmq_address}")
         self.add_nodes(4)
         self.start_nodes(extra_args=self.extra_args)
         if self.enable_assumeutxo_zmq_test:
             self.assumeutxo_zmq_ctx = zmq.Context()
-            for topic in ("rawtx",):
+            for topic in ("rawtx", "sequence"):
                 socket = self.assumeutxo_zmq_ctx.socket(zmq.SUB)
                 socket.setsockopt(zmq.SUBSCRIBE, topic.encode())
                 socket.set(zmq.RCVTIMEO, 1000)
@@ -109,6 +110,8 @@ class AssumeutxoTest(BitcoinTestFramework):
         sequence = int.from_bytes(sequence, "little")
         assert_equal(sequence, self.assumeutxo_zmq_sequences.get(topic, sequence))
         self.assumeutxo_zmq_sequences[topic] = sequence + 1
+        if topic == "sequence":
+            return (body[:32].hex(), chr(body[32]))
         return tx_from_hex(body.hex()).txid_hex
 
     def wait_for_assumeutxo_zmq(self, topic, expected, *, forbidden=()):
@@ -460,6 +463,7 @@ class AssumeutxoTest(BitcoinTestFramework):
         assert_equal(n0.getblockcount(), START_HEIGHT)
         blocks = {START_HEIGHT: Block(n0.getbestblockhash(), 1, START_HEIGHT + 1)}
         historical_zmq_txids = set()
+        historical_zmq_block_hashes = set()
         for i in range(100):
             block_tx = 1
             if i % 3 == 0:
@@ -470,6 +474,7 @@ class AssumeutxoTest(BitcoinTestFramework):
             hash = n0.getbestblockhash()
             blocks[height] = Block(hash, block_tx, blocks[height-1].chain_tx + block_tx)
             historical_zmq_txids.update(n0.getblock(hash)["tx"])
+            historical_zmq_block_hashes.add(hash)
             if i == 4:
                 # Create a stale block that forks off the main chain before the snapshot.
                 temp_invalid = n0.getbestblockhash()
@@ -701,6 +706,7 @@ class AssumeutxoTest(BitcoinTestFramework):
         assert not n1.gettxout(prev_tx['txid'], 0)
         if self.enable_assumeutxo_zmq_test:
             self.wait_for_assumeutxo_zmq("rawtx", signed_txid)
+            self.wait_for_assumeutxo_zmq("sequence", (signed_txid, "A"))
 
         PAUSE_HEIGHT = FINAL_HEIGHT - 40
 
@@ -740,6 +746,10 @@ class AssumeutxoTest(BitcoinTestFramework):
             n1.syncwithvalidationinterfacequeue()
             marker_txid = MiniWallet(n1).send_self_transfer(from_node=n1)["txid"]
             self.wait_for_assumeutxo_zmq("rawtx", marker_txid, forbidden=historical_zmq_txids)
+            self.wait_for_assumeutxo_zmq(
+                "sequence", (marker_txid, "A"),
+                forbidden={(block_hash, "C") for block_hash in historical_zmq_block_hashes},
+            )
             for socket in self.assumeutxo_zmq_sockets.values():
                 socket.close()
             self.assumeutxo_zmq_sockets = {}
