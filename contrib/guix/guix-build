@@ -444,7 +444,9 @@ EOF
     case "$HOST" in
         *linux*)
         # Build daemon + utils
-        time-machine shell --manifest="${PWD}/contrib/guix/manifest.scm" \
+        time-machine shell --load-path="${PWD}/contrib/guix" \
+                                 --manifest="${PWD}/contrib/guix/manifest.scm" \
+                                 --manifest="${PWD}/contrib/guix/linux_static.scm" \
                                  --container \
                                  --writable-root \
                                  --pure \
@@ -477,7 +479,8 @@ EOF
                                       bash -c "cd /bitcoin && bash contrib/guix/libexec/build_linux.sh"
 
         # Build the GUI
-        time-machine shell --manifest="${PWD}/contrib/guix/manifest.scm" \
+        time-machine shell --load-path="${PWD}/contrib/guix" \
+                                 --manifest="${PWD}/contrib/guix/manifest.scm" \
                                  --manifest="${PWD}/contrib/guix/manifest_gui.scm" \
                                  --container \
                                  --writable-root \
@@ -512,7 +515,8 @@ EOF
         ;;
         # darwin & windows
         *)
-        time-machine shell --manifest="${PWD}/contrib/guix/manifest.scm" \
+        time-machine shell --load-path="${PWD}/contrib/guix" \
+                                 --manifest="${PWD}/contrib/guix/manifest.scm" \
                                  --manifest="${PWD}/contrib/guix/manifest_gui.scm" \
                                  --container \
                                  --writable-root \
