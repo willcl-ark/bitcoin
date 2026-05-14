@@ -355,6 +355,7 @@ for host in $HOSTS; do
         # Required for 'contrib/guix/manifest.scm' to output the right manifest
         # for the particular $HOST we're building for
         export HOST="$host"
+        export GUIX_PACKAGE_PATH="${PWD}/contrib/guix/"
 
         # shellcheck disable=SC2030
 cat << EOF
@@ -444,7 +445,7 @@ EOF
     case "$HOST" in
         *linux*)
         # Build daemon + utils
-        time-machine shell --load-path="${PWD}/contrib/guix" \
+        time-machine shell --load-path=. \
                                  --manifest="${PWD}/contrib/guix/manifest.scm" \
                                  --manifest="${PWD}/contrib/guix/linux_static.scm" \
                                  --container \
@@ -479,7 +480,7 @@ EOF
                                       bash -c "cd /bitcoin && bash contrib/guix/libexec/build_linux.sh"
 
         # Build the GUI
-        time-machine shell --load-path="${PWD}/contrib/guix" \
+        time-machine shell --load-path=. \
                                  --manifest="${PWD}/contrib/guix/manifest.scm" \
                                  --manifest="${PWD}/contrib/guix/manifest_gui.scm" \
                                  --container \
@@ -515,7 +516,7 @@ EOF
         ;;
         # darwin & windows
         *)
-        time-machine shell --load-path="${PWD}/contrib/guix" \
+        time-machine shell --load-path=. \
                                  --manifest="${PWD}/contrib/guix/manifest.scm" \
                                  --manifest="${PWD}/contrib/guix/manifest_gui.scm" \
                                  --container \
