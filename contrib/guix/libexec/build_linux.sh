@@ -199,8 +199,6 @@ mkdir -p "$DISTSRC"
     env CFLAGS="${HOST_CFLAGS}" CXXFLAGS="${HOST_CXXFLAGS}" LDFLAGS="${HOST_LDFLAGS}" \
     cmake -S . -B build \
           --toolchain "${BASEPREFIX}/${HOST}/toolchain.cmake" \
-          -DWITH_CCACHE=OFF \
-          -Werror=dev \
           ${CONFIGFLAGS} \
           "${CMAKE_EXE_LINKER_FLAGS}"
 
