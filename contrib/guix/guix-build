@@ -355,7 +355,11 @@ for host in $HOSTS; do
         # Required for 'contrib/guix/manifest.scm' to output the right manifest
         # for the particular $HOST we're building for
         export HOST="$host"
-        export GUIX_PACKAGE_PATH="${PWD}/contrib/guix/"
+        guix_package_path="${VERSION_BASE}/guix-package-path"
+        mkdir -p "$guix_package_path"
+        ln -sfn "${PWD}/contrib/guix/toolchains.scm" "${guix_package_path}/toolchains.scm"
+        ln -sfn "${PWD}/contrib/guix/patches" "${guix_package_path}/patches"
+        export GUIX_PACKAGE_PATH="$guix_package_path"
 
         # shellcheck disable=SC2030
 cat << EOF
