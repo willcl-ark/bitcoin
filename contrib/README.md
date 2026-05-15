@@ -15,6 +15,10 @@ Construct a linear, no-fork, best version of the blockchain.
 
 A Linux bash script that will set up traffic control (tc) to limit the outgoing bandwidth for connections to the Bitcoin network. This means one can have an always-on bitcoind instance running, and another local bitcoind/bitcoin-qt instance which connects to this node and receives blocks from it.
 
+### [Holepunch](/contrib/holepunch) ###
+
+Experimental TCP hole-punching sidecar for proxying Bitcoin P2P connections.
+
 ### [Seeds](/contrib/seeds) ###
 Utility to generate the pnSeed[] array that is compiled into the client.
 
