@@ -140,6 +140,9 @@ protected:
     /// Update the internal best block index as well as the prune lock.
     void SetBestBlockIndex(const CBlockIndex* block);
 
+    /// Child indexes can use the last fully-applied index tip.
+    const CBlockIndex* GetBestBlockIndex() const { return m_best_block_index.load(); }
+
 public:
     BaseIndex(std::unique_ptr<interfaces::Chain> chain, std::string name);
     /// Destructor interrupts sync thread if running and blocks until it exits.
