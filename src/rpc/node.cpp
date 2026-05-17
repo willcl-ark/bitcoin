@@ -9,6 +9,7 @@
 #include <httpserver.h>
 #include <index/blockfilterindex.h>
 #include <index/coinstatsindex.h>
+#include <index/scripthashindex.h>
 #include <index/txindex.h>
 #include <index/txospenderindex.h>
 #include <interfaces/chain.h>
@@ -400,6 +401,10 @@ static RPCMethod getindexinfo()
 
     if (g_txospenderindex) {
         result.pushKVs(SummaryToJSON(g_txospenderindex->GetSummary(), index_name));
+    }
+
+    if (g_scripthashindex) {
+        result.pushKVs(SummaryToJSON(g_scripthashindex->GetSummary(), index_name));
     }
 
     ForEachBlockFilterIndex([&result, &index_name](const BlockFilterIndex& index) {
