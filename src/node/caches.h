@@ -23,6 +23,7 @@ struct IndexCacheSizes {
     size_t tx_index{0};
     size_t filter_index{0};
     size_t txospender_index{0};
+    size_t scripthash_index{0};
 };
 struct CacheSizes {
     IndexCacheSizes index;
