@@ -41,6 +41,7 @@ EOF
 
 ACTUAL_OUTDIR="${OUTDIR}"
 OUTDIR="${DISTSRC}/output"
+INSTALLPATH="${DISTSRC}/installed/${DISTNAME}"
 
 #####################
 # Environment Setup #
