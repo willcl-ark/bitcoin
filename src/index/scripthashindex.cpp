@@ -52,6 +52,9 @@ constexpr unsigned char DB_SIGN_BIT{0x80};
 // Six-byte tagged prefixes keep expected false-positive scans negligible for
 // mainnet: roughly 6.3B indexed rows / 2^46 ~= 0.00009 extra candidates.
 constexpr size_t DB_PREFIX_SIZE{6};
+// Three-byte heights cover blocks up to 16,777,215 while saving a byte in every
+// marker row.
+constexpr uint32_t DB_MAX_HEIGHT{0x00ffffff};
 
 std::unique_ptr<ScriptHashIndex> g_scripthashindex;
 
@@ -102,6 +105,21 @@ static bool HasFamilyTag(const DBPrefix& prefix, unsigned char tag)
     return (prefix.front() & DB_TAG_MASK) == tag;
 }
 
+template <typename Stream>
+void WriteDBHeight(Stream& s, uint32_t height)
+{
+    Assume(height <= DB_MAX_HEIGHT);
+    ser_writedata8(s, height >> 16);
+    ser_writedata8(s, height >> 8);
+    ser_writedata8(s, height);
+}
+
+template <typename Stream>
+uint32_t ReadDBHeight(Stream& s)
+{
+    return (uint32_t{ser_readdata8(s)} << 16) | (uint32_t{ser_readdata8(s)} << 8) | uint32_t{ser_readdata8(s)};
+}
+
 struct FundingKey {
     DBPrefix scripthash_prefix;
     uint32_t height;
@@ -110,7 +128,7 @@ struct FundingKey {
     void Serialize(Stream& s) const
     {
         s.write(std::as_bytes(std::span{scripthash_prefix}));
-        ser_writedata32be(s, height);
+        WriteDBHeight(s, height);
     }
 
     template <typename Stream>
@@ -120,7 +138,7 @@ struct FundingKey {
         if (!HasFamilyTag(scripthash_prefix, DB_FUNDING_TAG)) {
             throw std::ios_base::failure("Invalid format for scripthash index funding key");
         }
-        height = ser_readdata32be(s);
+        height = ReadDBHeight(s);
     }
 };
 
@@ -142,7 +160,7 @@ struct SpendingKey {
     void Serialize(Stream& s) const
     {
         s.write(std::as_bytes(std::span{outpoint_prefix}));
-        ser_writedata32be(s, height);
+        WriteDBHeight(s, height);
     }
 
     template <typename Stream>
@@ -152,7 +170,7 @@ struct SpendingKey {
         if (!HasFamilyTag(outpoint_prefix, DB_SPENDING_TAG)) {
             throw std::ios_base::failure("Invalid format for scripthash index spending key");
         }
-        height = ser_readdata32be(s);
+        height = ReadDBHeight(s);
     }
 };
 
