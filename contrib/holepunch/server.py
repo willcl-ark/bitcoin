@@ -67,6 +67,7 @@ class Client:
     reader: asyncio.StreamReader
     writer: asyncio.StreamWriter
     addr: tuple[str, int]
+    network: str
     excluded_ips: set[str]
 
     @property
@@ -77,7 +78,7 @@ class Client:
 class RendezvousServer:
     def __init__(self, match_interval):
         self.match_interval = match_interval
-        self.waiting = {"v4": [], "v6": []}
+        self.waiting = {}
 
     async def handle_client(self, reader, writer):
         addr = normalize_addr(writer.get_extra_info("peername"))
@@ -95,27 +96,35 @@ class RendezvousServer:
             await writer.wait_closed()
             log(tag, f"closed before lobby join: {e}")
             return
-        if msg.get("type") != "exclude":
+        if msg.get("type") != "join":
             writer.close()
             await writer.wait_closed()
             log(tag, f"closed with unexpected lobby message: {msg}")
             return
 
-        excluded_ips = {ip for ip in msg.get("ips", []) if isinstance(ip, str)}
+        network = msg.get("network", "main")
+        if not isinstance(network, str):
+            network = "main"
+        excluded_ips = {ip for ip in msg.get("exclude", []) if isinstance(ip, str)}
         client = Client(
             reader=reader,
             writer=writer,
             addr=addr,
+            network=network,
             excluded_ips=excluded_ips,
         )
-        log(tag, f"joined ({client.family}) excluding {len(excluded_ips)} peer(s)")
-        self.waiting[client.family].append(client)
+        pool = (client.family, client.network)
+        log(
+            tag,
+            f"joined {client.network} ({client.family}) excluding {len(excluded_ips)} peer(s)",
+        )
+        self.waiting.setdefault(pool, []).append(client)
         try:
             while await reader.readline():
                 pass
         finally:
-            if client in self.waiting[client.family]:
-                self.waiting[client.family].remove(client)
+            if client in self.waiting.get(pool, []):
+                self.waiting[pool].remove(client)
             writer.close()
             await writer.wait_closed()
             log(tag, "closed")
@@ -123,12 +132,12 @@ class RendezvousServer:
     async def match_loop(self):
         while True:
             await asyncio.sleep(self.match_interval)
-            for family in ("v4", "v6"):
-                await self.match_family(family)
+            for pool in list(self.waiting):
+                await self.match_pool(pool)
 
-    async def match_family(self, family):
-        live = [c for c in self.waiting[family] if not c.writer.is_closing()]
-        self.waiting[family] = live
+    async def match_pool(self, pool):
+        live = [c for c in self.waiting[pool] if not c.writer.is_closing()]
+        self.waiting[pool] = live
         if len(live) < 2:
             for client in live:
                 await send_msg(client.writer, {"type": "wait"})
@@ -149,7 +158,7 @@ class RendezvousServer:
 
             match_id = secrets.token_hex(16)
             log(
-                f"POOL[{family}]",
+                f"POOL[{pool[1]}/{pool[0]}]",
                 f"pair {fmt_addr(left.addr)} <-> {fmt_addr(right.addr)}",
             )
             await send_msg(
@@ -173,10 +182,10 @@ class RendezvousServer:
             matched.append(left)
             matched.append(right)
 
-        self.waiting[family] = [c for c in live if c not in matched]
+        self.waiting[pool] = [c for c in live if c not in matched]
         for client in matched:
             client.writer.close()
-        for client in self.waiting[family]:
+        for client in self.waiting[pool]:
             await send_msg(client.writer, {"type": "wait"})
 
     def can_pair(self, left, right):

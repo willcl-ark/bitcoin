@@ -42,8 +42,9 @@ Run the sidecar on both peers:
 
 By default, the sidecar connects to the coordinator at
 `116.202.23.118:57996`, binds a fresh rendezvous port for each registration,
-and proxies to local bitcoind at `127.0.0.1:8333`. Use `--bitcoind-host` if
-bitcoind listens somewhere else.
+joins the `main` network lobby, and proxies to local bitcoind at
+`127.0.0.1:8333`. Use `--bitcoind-host` if bitcoind listens somewhere else,
+and `--network` for another lobby such as `signet` or `testnet4`.
 
 On the side that the coordinator logs as `role=initiator`, the sidecar tries
 to make Core open an outbound connection to a temporary loopback listener by
@@ -72,15 +73,17 @@ register again with a new rendezvous port while the existing proxy session
 continues running, until it reaches `--target-peers`.
 
 Each registration also sends the coordinator the public IP addresses of peers
-with pending or active proxy sessions. The coordinator avoids pairing clients
-when either side has excluded the other's observed IP address, so a sidecar
-does not open multiple connections to the same peer IP.
+with pending or active proxy sessions. The coordinator only pairs clients in
+the same network lobby, and avoids pairing clients when either side has
+excluded the other's observed IP address, so a sidecar does not open multiple
+connections to the same peer IP.
 
 ## Limitations
 
 - This is not production-ready.
 - NAT behavior varies; symmetric NATs may fail.
 - The coordinator learns which sidecars are online and pairs them.
+- The coordinator learns which network lobby each sidecar joins.
 - The coordinator learns which peer IPs each sidecar is already connected to.
 - The sidecar starts raw proxying after the punched TCP connection is
   established.

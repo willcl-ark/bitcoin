@@ -191,8 +191,9 @@ class Sidecar:
                     await send_msg(
                         writer,
                         {
-                            "type": "exclude",
-                            "ips": sorted(
+                            "type": "join",
+                            "network": self.args.network,
+                            "exclude": sorted(
                                 {s.match.peer[0] for s in self.matches.values()}
                             ),
                         },
@@ -500,6 +501,11 @@ async def main():
         "--bitcoind-host",
         default="127.0.0.1:8333",
         help="HOST:PORT of local bitcoind listener",
+    )
+    parser.add_argument(
+        "--network",
+        choices=("main", "testnet4", "signet"),
+        default="main",
     )
     parser.add_argument("--target-peers", type=int, default=1)
     parser.add_argument(
