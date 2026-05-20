@@ -61,13 +61,12 @@ std::unique_ptr<Init> MakeGuiInit(int argc, char* argv[]);
 //! Return implementation of Init interface for a basic IPC client that doesn't
 //! provide any IPC services itself.
 //!
-//! When an IPC client connects to a socket or spawns a process, it gets a pointer
-//! to an Init object allowing it to create objects and threads on the remote
-//! side of the IPC connection. But the client also needs to provide a local Init
-//! object to allow the remote side of the connection to create objects and
-//! threads on this side. This function just returns a basic Init object
-//! allowing remote connections to only create local threads, not other objects
-//! (because its Init::make* methods return null.)
+//! When an IPC client connects to a socket or spawns a process, it gets a native
+//! Cap'n Proto connection allowing it to create capabilities on the remote side
+//! of the IPC connection. But the client also needs to provide a local Init
+//! object to the IPC implementation. This function just returns a basic Init
+//! object that does not expose local objects because its Init::make* methods
+//! return null.
 //!
 //! @param exe_name Current executable name, which is just passed to the IPC
 //!     system and used for logging.

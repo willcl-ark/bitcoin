@@ -14,7 +14,6 @@
 #include <compat/stdin.h>
 #include <interfaces/init.h>
 #include <interfaces/ipc.h>
-#include <interfaces/rpc.h>
 #include <policy/feerate.h>
 #include <rpc/client.h>
 #include <rpc/mining.h>
@@ -27,6 +26,12 @@
 #include <util/strencodings.h>
 #include <util/time.h>
 #include <util/translation.h>
+
+#ifdef ENABLE_IPC
+#include <ipc/capnp/conversions.h>
+#include <ipc/capnp/protocol.h>
+#include <ipc/capnp/rpc.capnp.h>
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -814,10 +819,11 @@ static std::optional<UniValue> CallIPC(BaseRequestHandler* rh, const std::string
         throw std::runtime_error("bitcoin-cli was not built with IPC support");
     }
 
-    std::unique_ptr<interfaces::Init> node_init;
+#ifdef ENABLE_IPC
+    std::unique_ptr<ipc::capnp::NativeConnection> node_connection;
     try {
-        node_init = local_init->ipc()->connectAddress(ipcconnect);
-        if (!node_init) return {}; // Fall back to HTTP if -ipcconnect=auto connect failed.
+        node_connection = local_init->ipc()->connectAddress(ipcconnect);
+        if (!node_connection) return {}; // Fall back to HTTP if -ipcconnect=auto connect failed.
     } catch (const std::exception& e) {
         // Catch connect error if -ipcconnect=unix was specified
         throw CConnectionFailed{strprintf("%s\n\n"
@@ -825,11 +831,20 @@ static std::optional<UniValue> CallIPC(BaseRequestHandler* rh, const std::string
             "    bitcoin-node -chain=%s -ipcbind=unix", e.what(), gArgs.GetChainTypeString())};
     }
 
-    std::unique_ptr<interfaces::Rpc> rpc{node_init->makeRpc()};
-    assert(rpc);
     UniValue request{rh->PrepareRequest(strMethod, args)};
-    UniValue reply{rpc->executeRpc(std::move(request), endpoint, username)};
+    auto make_rpc_response{node_connection->init().makeRpcRequest().send().wait(node_connection->waitScope())};
+    auto rpc{make_rpc_response.getResult()};
+    auto rpc_request{rpc.executeRpcRequest()};
+    rpc_request.setRequest(ipc::capnp::WriteUniValue(request));
+    rpc_request.setUri(endpoint);
+    rpc_request.setUser(username);
+    auto rpc_response{rpc_request.send().wait(node_connection->waitScope())};
+    UniValue reply{ipc::capnp::ReadUniValue(rpc_response.getResult().cStr())};
     return rh->ProcessReply(reply);
+#else
+    if (ipcconnect == "auto") return {};
+    throw std::runtime_error("bitcoin-cli was not built with IPC support");
+#endif
 }
 
 static UniValue CallRPC(BaseRequestHandler* rh, const std::string& strMethod, const std::vector<std::string>& args, const std::string& endpoint, const std::string& username)

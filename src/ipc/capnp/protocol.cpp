@@ -8,7 +8,6 @@
 #include <interfaces/rpc.h>
 #include <ipc/capnp/conversions.h>
 #include <ipc/capnp/echo.capnp.h>
-#include <ipc/capnp/context.h>
 #include <ipc/capnp/init.capnp.h>
 #include <ipc/capnp/protocol.h>
 #include <ipc/capnp/rpc.capnp.h>
@@ -24,7 +23,6 @@
 #include <util/threadnames.h>
 
 #include <atomic>
-#include <cassert>
 #include <cerrno>
 #include <cstring>
 #include <memory>
@@ -36,7 +34,6 @@
 #include <system_error>
 #include <thread>
 #include <tuple>
-#include <typeinfo>
 #include <unistd.h>
 #include <utility>
 #include <vector>
@@ -333,307 +330,6 @@ private:
     std::shared_ptr<WorkerQueue> m_worker_queue;
 };
 
-struct ClientContext {
-    explicit ClientContext(int fd) : connection{ConnectNative(fd)} {}
-
-    std::unique_ptr<NativeConnection> connection;
-    std::mutex mutex;
-};
-
-class CleanupHandler
-{
-public:
-    void addCleanup(std::function<void()> cleanup) { m_cleanups.emplace_back(std::move(cleanup)); }
-
-protected:
-    virtual ~CleanupHandler() noexcept
-    {
-        for (auto& cleanup : m_cleanups) {
-            try {
-                cleanup();
-            } catch (const std::exception& e) {
-                LogError("ipc: cleanup failed: %s", e.what());
-            }
-        }
-    }
-
-private:
-    std::vector<std::function<void()>> m_cleanups;
-};
-
-class EchoClient final : public interfaces::Echo, public CleanupHandler
-{
-public:
-    EchoClient(messages::Echo::Client echo, std::shared_ptr<ClientContext> context)
-        : m_echo{kj::mv(echo)}, m_context{std::move(context)}
-    {
-    }
-    ~EchoClient() noexcept override = default;
-
-    std::string echo(const std::string& message) override
-    {
-        std::lock_guard<std::mutex> lock{m_context->mutex};
-        auto request{m_echo.echoRequest()};
-        request.setEcho(message);
-        auto response{request.send().wait(m_context->connection->waitScope())};
-        return response.getResult().cStr();
-    }
-
-private:
-    messages::Echo::Client m_echo;
-    std::shared_ptr<ClientContext> m_context;
-};
-
-class RpcClient final : public interfaces::Rpc, public CleanupHandler
-{
-public:
-    RpcClient(messages::Rpc::Client rpc, std::shared_ptr<ClientContext> context)
-        : m_rpc{kj::mv(rpc)}, m_context{std::move(context)}
-    {
-    }
-    ~RpcClient() noexcept override = default;
-
-    UniValue executeRpc(UniValue request, std::string uri, std::string user) override
-    {
-        std::lock_guard<std::mutex> lock{m_context->mutex};
-        auto rpc_request{m_rpc.executeRpcRequest()};
-        rpc_request.setRequest(WriteUniValue(request));
-        rpc_request.setUri(uri);
-        rpc_request.setUser(user);
-        auto response{rpc_request.send().wait(m_context->connection->waitScope())};
-        return ReadUniValue(response.getResult().cStr());
-    }
-
-private:
-    messages::Rpc::Client m_rpc;
-    std::shared_ptr<ClientContext> m_context;
-};
-
-class BlockTemplateClient final : public interfaces::BlockTemplate, public CleanupHandler
-{
-public:
-    BlockTemplateClient(messages::BlockTemplate::Client block_template, std::shared_ptr<ClientContext> context)
-        : m_block_template{kj::mv(block_template)}, m_context{std::move(context)}
-    {
-    }
-    ~BlockTemplateClient() noexcept override = default;
-
-    CBlockHeader getBlockHeader() override
-    {
-        std::lock_guard<std::mutex> lock{m_context->mutex};
-        auto response{m_block_template.getBlockHeaderRequest().send().wait(m_context->connection->waitScope())};
-        return ReadData<CBlockHeader>(response.getResult());
-    }
-
-    CBlock getBlock() override
-    {
-        std::lock_guard<std::mutex> lock{m_context->mutex};
-        auto response{m_block_template.getBlockRequest().send().wait(m_context->connection->waitScope())};
-        return ReadData<CBlock>(response.getResult());
-    }
-
-    std::vector<CAmount> getTxFees() override
-    {
-        std::lock_guard<std::mutex> lock{m_context->mutex};
-        auto response{m_block_template.getTxFeesRequest().send().wait(m_context->connection->waitScope())};
-        std::vector<CAmount> result;
-        for (auto fee : response.getResult()) {
-            result.push_back(fee);
-        }
-        return result;
-    }
-
-    std::vector<int64_t> getTxSigops() override
-    {
-        std::lock_guard<std::mutex> lock{m_context->mutex};
-        auto response{m_block_template.getTxSigopsRequest().send().wait(m_context->connection->waitScope())};
-        std::vector<int64_t> result;
-        for (auto sigops : response.getResult()) {
-            result.push_back(sigops);
-        }
-        return result;
-    }
-
-    node::CoinbaseTx getCoinbaseTx() override
-    {
-        std::lock_guard<std::mutex> lock{m_context->mutex};
-        auto response{m_block_template.getCoinbaseTxRequest().send().wait(m_context->connection->waitScope())};
-        return ReadCoinbaseTx(response.getResult());
-    }
-
-    std::vector<uint256> getCoinbaseMerklePath() override
-    {
-        std::lock_guard<std::mutex> lock{m_context->mutex};
-        auto response{m_block_template.getCoinbaseMerklePathRequest().send().wait(m_context->connection->waitScope())};
-        std::vector<uint256> result;
-        for (auto hash : response.getResult()) {
-            result.push_back(ReadUint256(hash));
-        }
-        return result;
-    }
-
-    bool submitSolution(uint32_t version, uint32_t timestamp, uint32_t nonce, CTransactionRef coinbase) override
-    {
-        std::lock_guard<std::mutex> lock{m_context->mutex};
-        auto request{m_block_template.submitSolutionRequest()};
-        request.setVersion(version);
-        request.setTimestamp(timestamp);
-        request.setNonce(nonce);
-        const std::vector<unsigned char> serialized_coinbase{SerializeData(*coinbase)};
-        request.setCoinbase(MakeDataReader(serialized_coinbase));
-        auto response{request.send().wait(m_context->connection->waitScope())};
-        return response.getResult();
-    }
-
-    std::unique_ptr<interfaces::BlockTemplate> waitNext(node::BlockWaitOptions options) override
-    {
-        std::lock_guard<std::mutex> lock{m_context->mutex};
-        auto request{m_block_template.waitNextRequest()};
-        BuildBlockWaitOptions(request.initOptions(), options);
-        auto response{request.send().wait(m_context->connection->waitScope())};
-        return readOptionalBlockTemplate(response.getResult());
-    }
-
-    void interruptWait() override
-    {
-        std::lock_guard<std::mutex> lock{m_context->mutex};
-        m_block_template.interruptWaitRequest().send().wait(m_context->connection->waitScope());
-    }
-
-private:
-    std::unique_ptr<interfaces::BlockTemplate> readOptionalBlockTemplate(messages::OptionalBlockTemplate::Reader input)
-    {
-        switch (input.which()) {
-        case messages::OptionalBlockTemplate::NONE:
-            return nullptr;
-        case messages::OptionalBlockTemplate::VALUE:
-            return std::make_unique<BlockTemplateClient>(input.getValue(), m_context);
-        }
-        assert(false);
-        return nullptr;
-    }
-
-    messages::BlockTemplate::Client m_block_template;
-    std::shared_ptr<ClientContext> m_context;
-};
-
-class MiningClient final : public interfaces::Mining, public CleanupHandler
-{
-public:
-    MiningClient(messages::Mining::Client mining, std::shared_ptr<ClientContext> context)
-        : m_mining{kj::mv(mining)}, m_context{std::move(context)}
-    {
-    }
-    ~MiningClient() noexcept override = default;
-
-    bool isTestChain() override
-    {
-        std::lock_guard<std::mutex> lock{m_context->mutex};
-        auto response{m_mining.isTestChainRequest().send().wait(m_context->connection->waitScope())};
-        return response.getResult();
-    }
-
-    bool isInitialBlockDownload() override
-    {
-        std::lock_guard<std::mutex> lock{m_context->mutex};
-        auto response{m_mining.isInitialBlockDownloadRequest().send().wait(m_context->connection->waitScope())};
-        return response.getResult();
-    }
-
-    std::optional<interfaces::BlockRef> getTip() override
-    {
-        std::lock_guard<std::mutex> lock{m_context->mutex};
-        auto response{m_mining.getTipRequest().send().wait(m_context->connection->waitScope())};
-        return ReadOptionalBlockRef(response.getResult());
-    }
-
-    std::optional<interfaces::BlockRef> waitTipChanged(uint256 current_tip, MillisecondsDouble timeout) override
-    {
-        std::lock_guard<std::mutex> lock{m_context->mutex};
-        auto request{m_mining.waitTipChangedRequest()};
-        request.setCurrentTip(MakeDataReader({current_tip.data(), current_tip.size()}));
-        request.setTimeout(timeout.count());
-        auto response{request.send().wait(m_context->connection->waitScope())};
-        return ReadOptionalBlockRef(response.getResult());
-    }
-
-    std::unique_ptr<interfaces::BlockTemplate> createNewBlock(const node::BlockCreateOptions& options, bool cooldown) override
-    {
-        std::lock_guard<std::mutex> lock{m_context->mutex};
-        auto request{m_mining.createNewBlockRequest()};
-        BuildBlockCreateOptions(request.initOptions(), options);
-        request.setCooldown(cooldown);
-        auto response{request.send().wait(m_context->connection->waitScope())};
-        return readOptionalBlockTemplate(response.getResult());
-    }
-
-    void interrupt() override
-    {
-        std::lock_guard<std::mutex> lock{m_context->mutex};
-        m_mining.interruptRequest().send().wait(m_context->connection->waitScope());
-    }
-
-    bool checkBlock(const CBlock& block, const node::BlockCheckOptions& options, std::string& reason, std::string& debug) override
-    {
-        std::lock_guard<std::mutex> lock{m_context->mutex};
-        auto request{m_mining.checkBlockRequest()};
-        const std::vector<unsigned char> serialized_block{SerializeData(block)};
-        request.setBlock(MakeDataReader(serialized_block));
-        BuildBlockCheckOptions(request.initOptions(), options);
-        auto response{request.send().wait(m_context->connection->waitScope())};
-        reason = response.getReason().cStr();
-        debug = response.getDebug().cStr();
-        return response.getResult();
-    }
-
-private:
-    std::unique_ptr<interfaces::BlockTemplate> readOptionalBlockTemplate(messages::OptionalBlockTemplate::Reader input)
-    {
-        switch (input.which()) {
-        case messages::OptionalBlockTemplate::NONE:
-            return nullptr;
-        case messages::OptionalBlockTemplate::VALUE:
-            return std::make_unique<BlockTemplateClient>(input.getValue(), m_context);
-        }
-        assert(false);
-        return nullptr;
-    }
-
-    messages::Mining::Client m_mining;
-    std::shared_ptr<ClientContext> m_context;
-};
-
-class InitClient final : public interfaces::Init, public CleanupHandler
-{
-public:
-    explicit InitClient(int fd) : m_context{std::make_shared<ClientContext>(fd)} {}
-    ~InitClient() noexcept override = default;
-
-    std::unique_ptr<interfaces::Echo> makeEcho() override
-    {
-        std::lock_guard<std::mutex> lock{m_context->mutex};
-        auto response{m_context->connection->init().makeEchoRequest().send().wait(m_context->connection->waitScope())};
-        return std::make_unique<EchoClient>(response.getResult(), m_context);
-    }
-
-    std::unique_ptr<interfaces::Rpc> makeRpc() override
-    {
-        std::lock_guard<std::mutex> lock{m_context->mutex};
-        auto response{m_context->connection->init().makeRpcRequest().send().wait(m_context->connection->waitScope())};
-        return std::make_unique<RpcClient>(response.getResult(), m_context);
-    }
-
-    std::unique_ptr<interfaces::Mining> makeMining() override
-    {
-        std::lock_guard<std::mutex> lock{m_context->mutex};
-        auto response{m_context->connection->init().makeMiningRequest().send().wait(m_context->connection->waitScope())};
-        return std::make_unique<MiningClient>(response.getResult(), m_context);
-    }
-
-private:
-    std::shared_ptr<ClientContext> m_context;
-};
-
 class ServerConnection
 {
 public:
@@ -669,9 +365,9 @@ public:
         joinThreads();
     }
 
-    std::unique_ptr<interfaces::Init> connect(int fd, const char*) override
+    std::unique_ptr<NativeConnection> connect(int fd, const char*) override
     {
-        return std::make_unique<InitClient>(fd);
+        return ConnectNative(fd);
     }
 
     void listen(int listen_fd, const char*, interfaces::Init& init) override
@@ -698,26 +394,6 @@ public:
         closeListeners();
         shutdownConnections();
     }
-
-    void addCleanup(std::type_index type, void* iface, std::function<void()> cleanup) override
-    {
-        CleanupHandler* handler{nullptr};
-        if (type == typeid(interfaces::Init)) {
-            handler = dynamic_cast<CleanupHandler*>(static_cast<interfaces::Init*>(iface));
-        } else if (type == typeid(interfaces::Echo)) {
-            handler = dynamic_cast<CleanupHandler*>(static_cast<interfaces::Echo*>(iface));
-        } else if (type == typeid(interfaces::Rpc)) {
-            handler = dynamic_cast<CleanupHandler*>(static_cast<interfaces::Rpc*>(iface));
-        } else if (type == typeid(interfaces::Mining)) {
-            handler = dynamic_cast<CleanupHandler*>(static_cast<interfaces::Mining*>(iface));
-        } else if (type == typeid(interfaces::BlockTemplate)) {
-            handler = dynamic_cast<CleanupHandler*>(static_cast<interfaces::BlockTemplate*>(iface));
-        }
-        if (!handler) throw std::runtime_error("IPC cleanup can only be added to native IPC clients.");
-        handler->addCleanup(std::move(cleanup));
-    }
-
-    Context& context() override { return m_context; }
 
 private:
     struct Listener {
@@ -801,7 +477,6 @@ private:
         }
     }
 
-    Context m_context;
     std::atomic<bool> m_stop{false};
     std::mutex m_mutex;
     std::vector<Listener> m_listeners;
@@ -834,7 +509,17 @@ private:
 };
 
 NativeConnection::NativeConnection(int fd) : m_impl{std::make_unique<Impl>(fd)} {}
-NativeConnection::~NativeConnection() = default;
+NativeConnection::~NativeConnection()
+{
+    m_impl.reset();
+    for (auto& cleanup : m_cleanups) {
+        try {
+            cleanup();
+        } catch (const std::exception& e) {
+            LogError("ipc: cleanup failed: %s", e.what());
+        }
+    }
+}
 
 messages::Init::Client NativeConnection::init()
 {
@@ -844,6 +529,11 @@ messages::Init::Client NativeConnection::init()
 kj::WaitScope& NativeConnection::waitScope()
 {
     return m_impl->waitScope();
+}
+
+void NativeConnection::addCleanup(std::function<void()> cleanup)
+{
+    m_cleanups.emplace_back(std::move(cleanup));
 }
 
 std::unique_ptr<NativeConnection> ConnectNative(int fd)

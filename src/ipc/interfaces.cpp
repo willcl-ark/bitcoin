@@ -14,16 +14,12 @@
 #include <util/fs.h>
 
 #include <csignal>
-#include <cstdio>
 #include <cstdlib>
-#include <cstring>
-#include <functional>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <unistd.h>
 #include <utility>
-#include <vector>
 
 namespace ipc {
 namespace {
@@ -57,17 +53,17 @@ public:
           m_protocol(ipc::capnp::MakeCapnpProtocol()), m_process(ipc::MakeProcess())
     {
     }
-    std::unique_ptr<interfaces::Init> spawnProcess(const char* new_exe_name) override
+    std::unique_ptr<ipc::capnp::NativeConnection> spawnProcess(const char* new_exe_name) override
     {
         int pid;
         int fd = m_process->spawn(new_exe_name, m_process_argv0, pid);
         LogDebug(::BCLog::IPC, "Process %s pid %i launched\n", new_exe_name, pid);
-        auto init = m_protocol->connect(fd, m_exe_name);
-        Ipc::addCleanup(*init, [this, new_exe_name, pid] {
+        auto connection = m_protocol->connect(fd, m_exe_name);
+        connection->addCleanup([this, new_exe_name, pid] {
             int status = m_process->waitSpawned(pid);
             LogDebug(::BCLog::IPC, "Process %s pid %i exited with status %i\n", new_exe_name, pid, status);
         });
-        return init;
+        return connection;
     }
     bool startSpawnedProcess(int argc, char* argv[], int& exit_status) override
     {
@@ -81,7 +77,7 @@ public:
         exit_status = EXIT_SUCCESS;
         return true;
     }
-    std::unique_ptr<interfaces::Init> connectAddress(std::string& address) override
+    std::unique_ptr<ipc::capnp::NativeConnection> connectAddress(std::string& address) override
     {
         if (address.empty() || address == "0") return nullptr;
         int fd;
@@ -117,11 +113,6 @@ public:
     {
         m_protocol->disconnectIncoming();
     }
-    void addCleanup(std::type_index type, void* iface, std::function<void()> cleanup) override
-    {
-        m_protocol->addCleanup(type, iface, std::move(cleanup));
-    }
-    Context& context() override { return m_protocol->context(); }
     const char* m_exe_name;
     const char* m_process_argv0;
     interfaces::Init& m_init;

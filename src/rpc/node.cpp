@@ -28,6 +28,11 @@
 #include <util/check.h>
 #include <util/time.h>
 
+#ifdef ENABLE_IPC
+#include <ipc/capnp/echo.capnp.h>
+#include <ipc/capnp/protocol.h>
+#endif
+
 #include <cstdint>
 #ifdef HAVE_MALLOC_INFO
 #include <malloc.h>
@@ -322,27 +327,31 @@ static RPCMethod echoipc()
                     HelpExampleRpc("echo", "\"Hello world\"")},
         [](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue {
             interfaces::Init& local_init = *EnsureAnyNodeContext(request.context).init;
-            std::unique_ptr<interfaces::Echo> echo;
+#ifdef ENABLE_IPC
             if (interfaces::Ipc* ipc = local_init.ipc()) {
                 // Spawn a new bitcoin-node process and call makeEcho to get a
-                // client pointer to a interfaces::Echo instance running in
-                // that process. This is just for testing. A slightly more
-                // realistic test spawning a different executable instead of
-                // the same executable would add a new bitcoin-echo executable,
-                // and spawn bitcoin-echo below instead of bitcoin-node. But
-                // using bitcoin-node avoids the need to build and install a
-                // new executable just for this one test.
-                auto init = ipc->spawnProcess("bitcoin-node");
-                echo = init->makeEcho();
-                ipc->addCleanup(*echo, [init = init.release()] { delete init; });
-            } else {
-                // IPC support is not available because this is a bitcoind
-                // process not a bitcoind-node process, so just create a local
-                // interfaces::Echo object and return it so the `echoipc` RPC
-                // method will work, and the python test calling `echoipc`
-                // can expect the same result.
-                echo = local_init.makeEcho();
+                // Cap'n Proto Echo capability running in that process. This is
+                // just for testing. A slightly more realistic test spawning a
+                // different executable instead of the same executable would add
+                // a new bitcoin-echo executable, and spawn bitcoin-echo below
+                // instead of bitcoin-node. But using bitcoin-node avoids the
+                // need to build and install a new executable just for this one
+                // test.
+                auto connection = ipc->spawnProcess("bitcoin-node");
+                auto make_echo_response{connection->init().makeEchoRequest().send().wait(connection->waitScope())};
+                auto echo{make_echo_response.getResult()};
+                auto echo_request{echo.echoRequest()};
+                echo_request.setEcho(request.params[0].get_str());
+                return echo_request.send().wait(connection->waitScope()).getResult().cStr();
             }
+#endif
+
+            // IPC support is not available because this is a bitcoind
+            // process not a bitcoind-node process, so just create a local
+            // interfaces::Echo object and return it so the `echoipc` RPC
+            // method will work, and the python test calling `echoipc`
+            // can expect the same result.
+            std::unique_ptr<interfaces::Echo> echo{local_init.makeEcho()};
             return echo->echo(request.params[0].get_str());
         },
     };

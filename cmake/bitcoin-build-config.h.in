@@ -32,6 +32,9 @@
 /* Define if external signer support is enabled */
 #cmakedefine ENABLE_EXTERNAL_SIGNER 1
 
+/* Define to 1 to enable IPC support. */
+#cmakedefine ENABLE_IPC 1
+
 /* Define to 1 to enable tracepoints for Userspace, Statically Defined Tracing
    */
 #cmakedefine ENABLE_TRACING 1

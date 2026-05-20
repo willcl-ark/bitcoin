@@ -435,17 +435,20 @@ void IpcSocketPairTest()
         protocol->serve(fds[0], "test-serve", *init, [&] { promise.set_value(); });
     });
     promise.get_future().wait();
-    std::unique_ptr<interfaces::Init> remote_init{protocol->connect(fds[1], "test-connect")};
-    std::unique_ptr<interfaces::Echo> remote_echo{remote_init->makeEcho()};
-    BOOST_CHECK_EQUAL(remote_echo->echo("echo test"), "echo test");
-    std::unique_ptr<interfaces::Mining> remote_mining{remote_init->makeMining()};
-    BOOST_CHECK(remote_mining->isTestChain());
-    std::optional<interfaces::BlockRef> tip{remote_mining->getTip()};
+    std::unique_ptr<ipc::capnp::NativeConnection> connection{protocol->connect(fds[1], "test-connect")};
+    auto remote_init{connection->init()};
+    auto echo_response{remote_init.makeEchoRequest().send().wait(connection->waitScope())};
+    auto remote_echo{echo_response.getResult()};
+    auto echo_request{remote_echo.echoRequest()};
+    echo_request.setEcho("echo test");
+    BOOST_CHECK_EQUAL(echo_request.send().wait(connection->waitScope()).getResult().cStr(), "echo test");
+    auto mining_response{remote_init.makeMiningRequest().send().wait(connection->waitScope())};
+    auto remote_mining{mining_response.getResult()};
+    BOOST_CHECK(remote_mining.isTestChainRequest().send().wait(connection->waitScope()).getResult());
+    std::optional<interfaces::BlockRef> tip{ipc::capnp::ReadOptionalBlockRef(remote_mining.getTipRequest().send().wait(connection->waitScope()).getResult())};
     BOOST_REQUIRE(tip);
     BOOST_CHECK_EQUAL(tip->height, 456);
-    remote_echo.reset();
-    remote_mining.reset();
-    remote_init.reset();
+    connection.reset();
     thread.join();
 }
 
@@ -472,9 +475,12 @@ void IpcSocketTest(const fs::path& datadir)
         std::string address{connect_address};
         int connect_fd{process->connect(datadir, "test_bitcoin", address)};
         BOOST_CHECK_EQUAL(address, connect_address);
-        std::unique_ptr<interfaces::Init> remote_init{protocol->connect(connect_fd, "test-connect")};
-        std::unique_ptr<interfaces::Echo> remote_echo{remote_init->makeEcho()};
-        BOOST_CHECK_EQUAL(remote_echo->echo("echo test"), "echo test");
+        std::unique_ptr<ipc::capnp::NativeConnection> connection{protocol->connect(connect_fd, "test-connect")};
+        auto echo_response{connection->init().makeEchoRequest().send().wait(connection->waitScope())};
+        auto remote_echo{echo_response.getResult()};
+        auto echo_request{remote_echo.echoRequest()};
+        echo_request.setEcho("echo test");
+        BOOST_CHECK_EQUAL(echo_request.send().wait(connection->waitScope()).getResult().cStr(), "echo test");
     }};
 
     // Need to specify explicit socket addresses outside the data directory, because the data

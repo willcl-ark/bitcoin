@@ -9,10 +9,11 @@
 
 #include <functional>
 #include <memory>
-#include <typeindex>
 
 namespace ipc {
-struct Context;
+namespace capnp {
+class NativeConnection;
+} // namespace capnp
 
 //! IPC protocol interface for calling IPC methods over sockets.
 //!
@@ -23,16 +24,9 @@ class Protocol
 public:
     virtual ~Protocol() = default;
 
-    //! Return Init interface that forwards requests over given socket descriptor.
-    //! Socket communication is handled on a background thread.
-    //!
-    //! @note It could be potentially useful in the future to add
-    //! std::function<void()> on_disconnect callback argument here. But there
-    //! isn't an immediate need, because the protocol implementation can clean
-    //! up its own state (calling ProxyServer destructors, etc) on disconnect,
-    //! and any client calls will just throw ipc::Exception errors after a
-    //! disconnect.
-    virtual std::unique_ptr<interfaces::Init> connect(int fd, const char* exe_name) = 0;
+    //! Return native connection using the given socket descriptor. Callers send
+    //! requests through the returned connection and wait on its wait scope.
+    virtual std::unique_ptr<capnp::NativeConnection> connect(int fd, const char* exe_name) = 0;
 
     //! Listen for connections on provided socket descriptor, accept them, and
     //! handle requests on accepted connections. This method doesn't block, and
@@ -60,13 +54,6 @@ public:
 
     //! Disconnect any incoming connections that are still connected.
     virtual void disconnectIncoming() = 0;
-
-    //! Add cleanup callback to interface that will run when the interface is
-    //! deleted.
-    virtual void addCleanup(std::type_index type, void* iface, std::function<void()> cleanup) = 0;
-
-    //! Context accessor.
-    virtual Context& context() = 0;
 };
 } // namespace ipc
 

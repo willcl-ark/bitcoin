@@ -9,6 +9,7 @@
 
 #include <functional>
 #include <memory>
+#include <vector>
 
 namespace interfaces {
 class Init;
@@ -29,10 +30,12 @@ public:
 
     messages::Init::Client init();
     kj::WaitScope& waitScope();
+    void addCleanup(std::function<void()> cleanup);
 
 private:
     class Impl;
     std::unique_ptr<Impl> m_impl;
+    std::vector<std::function<void()>> m_cleanups;
 };
 
 std::unique_ptr<NativeConnection> ConnectNative(int fd);
