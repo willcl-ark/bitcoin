@@ -3,17 +3,21 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <interfaces/init.h>
+#include <interfaces/types.h>
+#include <ipc/capnp/conversions.h>
+#include <ipc/capnp/mining.capnp.h>
 #include <ipc/capnp/protocol.h>
 #include <ipc/process.h>
 #include <ipc/protocol.h>
 #include <logging.h>
 #include <mp/proxy-types.h>
-#include <ipc/capnp/mining.capnp.h>
 #include <ipc/test/ipc_test.capnp.h>
 #include <ipc/test/ipc_test.capnp.proxy.h>
 #include <ipc/test/ipc_test.h>
 #include <tinyformat.h>
 #include <validation.h>
+
+#include <capnp/message.h>
 
 #include <future>
 #include <thread>
@@ -28,6 +32,135 @@ static_assert(ipc::capnp::messages::MAX_MONEY == MAX_MONEY);
 static_assert(ipc::capnp::messages::MAX_DOUBLE == std::numeric_limits<double>::max());
 static_assert(ipc::capnp::messages::DEFAULT_BLOCK_RESERVED_WEIGHT == DEFAULT_BLOCK_RESERVED_WEIGHT);
 static_assert(ipc::capnp::messages::DEFAULT_COINBASE_OUTPUT_MAX_ADDITIONAL_SIGOPS == DEFAULT_COINBASE_OUTPUT_MAX_ADDITIONAL_SIGOPS);
+
+void IpcConversionTest()
+{
+    using namespace ipc::capnp;
+
+    {
+        interfaces::BlockRef block_ref{uint256{123}, 456};
+        ::capnp::MallocMessageBuilder builder;
+        auto output{builder.initRoot<messages::BlockRef>()};
+        BuildBlockRef(output, block_ref);
+
+        interfaces::BlockRef input{ReadBlockRef(output.asReader())};
+        BOOST_CHECK_EQUAL(input.hash.ToString(), block_ref.hash.ToString());
+        BOOST_CHECK_EQUAL(input.height, block_ref.height);
+    }
+
+    {
+        std::optional<interfaces::BlockRef> block_ref{interfaces::BlockRef{uint256{234}, 567}};
+        ::capnp::MallocMessageBuilder builder;
+        auto output{builder.initRoot<messages::OptionalBlockRef>()};
+        BuildOptionalBlockRef(output, block_ref);
+
+        std::optional<interfaces::BlockRef> input{ReadOptionalBlockRef(output.asReader())};
+        BOOST_REQUIRE(input);
+        BOOST_CHECK_EQUAL(input->hash.ToString(), block_ref->hash.ToString());
+        BOOST_CHECK_EQUAL(input->height, block_ref->height);
+    }
+
+    {
+        ::capnp::MallocMessageBuilder builder;
+        auto output{builder.initRoot<messages::OptionalBlockRef>()};
+        BuildOptionalBlockRef(output, std::nullopt);
+        BOOST_CHECK(!ReadOptionalBlockRef(output.asReader()));
+    }
+
+    {
+        node::BlockCreateOptions options;
+        options.use_mempool = false;
+        options.block_reserved_weight = 9000;
+        options.coinbase_output_max_additional_sigops = 123;
+
+        ::capnp::MallocMessageBuilder builder;
+        auto output{builder.initRoot<messages::BlockCreateOptions>()};
+        BuildBlockCreateOptions(output, options);
+
+        node::BlockCreateOptions input{ReadBlockCreateOptions(output.asReader())};
+        BOOST_CHECK_EQUAL(input.use_mempool, options.use_mempool);
+        BOOST_REQUIRE(input.block_reserved_weight);
+        BOOST_CHECK_EQUAL(*input.block_reserved_weight, *options.block_reserved_weight);
+        BOOST_CHECK_EQUAL(input.coinbase_output_max_additional_sigops, options.coinbase_output_max_additional_sigops);
+    }
+
+    {
+        node::BlockWaitOptions options;
+        options.timeout = MillisecondsDouble{2500};
+        options.fee_threshold = 12345;
+
+        ::capnp::MallocMessageBuilder builder;
+        auto output{builder.initRoot<messages::BlockWaitOptions>()};
+        BuildBlockWaitOptions(output, options);
+
+        node::BlockWaitOptions input{ReadBlockWaitOptions(output.asReader())};
+        BOOST_CHECK_EQUAL(input.timeout.count(), options.timeout.count());
+        BOOST_CHECK_EQUAL(input.fee_threshold, options.fee_threshold);
+    }
+
+    {
+        node::BlockCheckOptions options;
+        options.check_merkle_root = false;
+        options.check_pow = false;
+
+        ::capnp::MallocMessageBuilder builder;
+        auto output{builder.initRoot<messages::BlockCheckOptions>()};
+        BuildBlockCheckOptions(output, options);
+
+        node::BlockCheckOptions input{ReadBlockCheckOptions(output.asReader())};
+        BOOST_CHECK_EQUAL(input.check_merkle_root, options.check_merkle_root);
+        BOOST_CHECK_EQUAL(input.check_pow, options.check_pow);
+    }
+
+    {
+        node::CoinbaseTx tx;
+        tx.version = 2;
+        tx.sequence = 3;
+        tx.script_sig_prefix = CScript() << OP_1 << std::vector<unsigned char>{0x04, 0x05};
+        tx.witness = uint256{45};
+        tx.block_reward_remaining = 50 * COIN;
+        tx.required_outputs.emplace_back(1000, CScript() << OP_TRUE);
+        tx.lock_time = 4;
+
+        ::capnp::MallocMessageBuilder builder;
+        auto output{builder.initRoot<messages::CoinbaseTx>()};
+        BuildCoinbaseTx(output, tx);
+
+        node::CoinbaseTx input{ReadCoinbaseTx(output.asReader())};
+        BOOST_CHECK_EQUAL(input.version, tx.version);
+        BOOST_CHECK_EQUAL(input.sequence, tx.sequence);
+        BOOST_CHECK(input.script_sig_prefix == tx.script_sig_prefix);
+        BOOST_REQUIRE(input.witness);
+        BOOST_CHECK_EQUAL(input.witness->ToString(), tx.witness->ToString());
+        BOOST_CHECK_EQUAL(input.block_reward_remaining, tx.block_reward_remaining);
+        BOOST_REQUIRE_EQUAL(input.required_outputs.size(), tx.required_outputs.size());
+        BOOST_CHECK(input.required_outputs[0] == tx.required_outputs[0]);
+        BOOST_CHECK_EQUAL(input.lock_time, tx.lock_time);
+    }
+
+    {
+        CMutableTransaction mtx;
+        mtx.version = 2;
+        mtx.nLockTime = 3;
+        mtx.vin.emplace_back(COutPoint{Txid::FromUint256(uint256{56}), 7});
+        mtx.vout.emplace_back(8 * COIN, CScript() << OP_2);
+        CTransactionRef tx{MakeTransactionRef(mtx)};
+
+        std::vector<unsigned char> serialized{ipc::capnp::SerializeData(*tx)};
+        CTransactionRef input{ReadTransaction(MakeDataReader(serialized))};
+        BOOST_CHECK(*input == *tx);
+    }
+
+    {
+        UniValue value{UniValue::VOBJ};
+        value.pushKV("number", 1);
+        value.pushKV("string", "two");
+
+        std::string json{WriteUniValue(value)};
+        UniValue input{ReadUniValue(json)};
+        BOOST_CHECK_EQUAL(input.write(), value.write());
+    }
+}
 
 //! Remote init class.
 class TestInit : public interfaces::Init
