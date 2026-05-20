@@ -27,5 +27,6 @@ void IpcPipeTest();
 void IpcSocketPairTest();
 void IpcSocketTest(const fs::path& datadir);
 void IpcConversionTest();
+void IpcWorkerQueueTest();
 
 #endif // BITCOIN_IPC_TEST_IPC_TEST_H

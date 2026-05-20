@@ -7,6 +7,7 @@
 #include <ipc/capnp/conversions.h>
 #include <ipc/capnp/mining.capnp.h>
 #include <ipc/capnp/protocol.h>
+#include <ipc/capnp/worker_queue.h>
 #include <ipc/process.h>
 #include <ipc/protocol.h>
 #include <logging.h>
@@ -19,7 +20,9 @@
 
 #include <capnp/message.h>
 
+#include <atomic>
 #include <future>
+#include <string>
 #include <thread>
 #include <kj/common.h>
 #include <kj/memory.h>
@@ -159,6 +162,67 @@ void IpcConversionTest()
         std::string json{WriteUniValue(value)};
         UniValue input{ReadUniValue(json)};
         BOOST_CHECK_EQUAL(input.write(), value.write());
+    }
+}
+
+void IpcWorkerQueueTest()
+{
+    kj::EventLoop loop;
+    kj::WaitScope wait_scope{loop};
+    ipc::capnp::WorkerQueue queue{"ipc-test-worker"};
+
+    {
+        std::vector<int> order;
+        auto first{queue.post([&] {
+            order.push_back(1);
+            return 10;
+        })};
+        auto second{queue.post([&] {
+            order.push_back(2);
+            return 20;
+        })};
+
+        BOOST_CHECK_EQUAL(first.wait(wait_scope), 10);
+        BOOST_CHECK_EQUAL(second.wait(wait_scope), 20);
+        BOOST_REQUIRE_EQUAL(order.size(), 2);
+        BOOST_CHECK_EQUAL(order[0], 1);
+        BOOST_CHECK_EQUAL(order[1], 2);
+    }
+
+    {
+        std::promise<void> started;
+        auto started_future{started.get_future()};
+        std::promise<void> release;
+        auto release_future{release.get_future().share()};
+        std::atomic<bool> second_started{false};
+
+        auto blocking{queue.post([&] {
+            started.set_value();
+            release_future.wait();
+            return 1;
+        })};
+        started_future.wait();
+
+        auto queued{queue.post([&] {
+            second_started = true;
+            return 2;
+        })};
+        BOOST_CHECK(!second_started);
+
+        release.set_value();
+        BOOST_CHECK_EQUAL(blocking.wait(wait_scope), 1);
+        BOOST_CHECK_EQUAL(queued.wait(wait_scope), 2);
+        BOOST_CHECK(second_started);
+    }
+
+    {
+        auto failed{queue.post([]() -> int {
+            throw std::runtime_error{"queue failure"};
+        })};
+
+        BOOST_CHECK_EXCEPTION(failed.wait(wait_scope), kj::Exception, [](const kj::Exception& e) {
+            return std::string{e.getDescription().cStr()}.find("queue failure") != std::string::npos;
+        });
     }
 }
 

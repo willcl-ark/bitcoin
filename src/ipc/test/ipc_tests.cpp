@@ -13,6 +13,7 @@ BOOST_FIXTURE_TEST_SUITE(ipc_tests, BasicTestingSetup)
 BOOST_AUTO_TEST_CASE(ipc_tests)
 {
     IpcConversionTest();
+    IpcWorkerQueueTest();
     IpcPipeTest();
     IpcSocketPairTest();
     IpcSocketTest(m_args.GetDataDirNet());
