@@ -10,10 +10,6 @@
 #include <ipc/capnp/worker_queue.h>
 #include <ipc/process.h>
 #include <ipc/protocol.h>
-#include <logging.h>
-#include <mp/proxy-types.h>
-#include <ipc/test/ipc_test.capnp.h>
-#include <ipc/test/ipc_test.capnp.proxy.h>
 #include <ipc/test/ipc_test.h>
 #include <tinyformat.h>
 #include <validation.h>
@@ -25,7 +21,6 @@
 #include <string>
 #include <thread>
 #include <kj/common.h>
-#include <kj/memory.h>
 #include <kj/test.h>
 #include <stdexcept>
 
@@ -307,73 +302,6 @@ static std::string TempPath(std::string_view pattern)
     temp.resize(temp.size() - 1);
     fs::remove(fs::PathFromString(temp));
     return temp;
-}
-
-//! Unit test that tests execution of IPC calls without actually creating a
-//! separate process. This test is primarily intended to verify behavior of type
-//! conversion code that converts C++ objects to Cap'n Proto messages and vice
-//! versa.
-//!
-//! The test creates a thread which creates a FooImplementation object (defined
-//! in ipc_test.h) and a two-way pipe accepting IPC requests which call methods
-//! on the object through FooInterface (defined in ipc_test.capnp).
-void IpcPipeTest()
-{
-    // Setup: create FooImplementation object and listen for FooInterface requests
-    std::promise<std::unique_ptr<mp::ProxyClient<gen::FooInterface>>> foo_promise;
-    std::thread thread([&]() {
-        mp::EventLoop loop("IpcPipeTest", [](bool raise, const std::string& log) { LogInfo("LOG%i: %s", raise, log); });
-        auto pipe = loop.m_io_context.provider->newTwoWayPipe();
-
-        auto connection_client = std::make_unique<mp::Connection>(loop, kj::mv(pipe.ends[0]));
-        auto foo_client = std::make_unique<mp::ProxyClient<gen::FooInterface>>(
-            connection_client->m_rpc_system->bootstrap(mp::ServerVatId().vat_id).castAs<gen::FooInterface>(),
-            connection_client.get(), /* destroy_connection= */ true);
-        (void)connection_client.release();
-        foo_promise.set_value(std::move(foo_client));
-
-        auto connection_server = std::make_unique<mp::Connection>(loop, kj::mv(pipe.ends[1]), [&](mp::Connection& connection) {
-            auto foo_server = kj::heap<mp::ProxyServer<gen::FooInterface>>(std::make_shared<FooImplementation>(), connection);
-            return capnp::Capability::Client(kj::mv(foo_server));
-        });
-        connection_server->onDisconnect([&] { connection_server.reset(); });
-        loop.loop();
-    });
-    std::unique_ptr<mp::ProxyClient<gen::FooInterface>> foo{foo_promise.get_future().get()};
-
-    // Test: make sure arguments were sent and return value is received
-    BOOST_CHECK_EQUAL(foo->add(1, 2), 3);
-
-    COutPoint txout1{Txid::FromUint256(uint256{100}), 200};
-    COutPoint txout2{foo->passOutPoint(txout1)};
-    BOOST_CHECK(txout1 == txout2);
-
-    UniValue uni1{UniValue::VOBJ};
-    uni1.pushKV("i", 1);
-    uni1.pushKV("s", "two");
-    UniValue uni2{foo->passUniValue(uni1)};
-    BOOST_CHECK_EQUAL(uni1.write(), uni2.write());
-
-    CMutableTransaction mtx;
-    mtx.version = 2;
-    mtx.nLockTime = 3;
-    mtx.vin.emplace_back(txout1);
-    mtx.vout.emplace_back(COIN, CScript());
-    CTransactionRef tx1{MakeTransactionRef(mtx)};
-    CTransactionRef tx2{foo->passTransaction(tx1)};
-    BOOST_CHECK(*Assert(tx1) == *Assert(tx2));
-
-    std::vector<char> vec1{'H', 'e', 'l', 'l', 'o'};
-    std::vector<char> vec2{foo->passVectorChar(vec1)};
-    BOOST_CHECK_EQUAL(std::string_view(vec1.begin(), vec1.end()), std::string_view(vec2.begin(), vec2.end()));
-
-    auto script1{CScript() << OP_11};
-    auto script2{foo->passScript(script1)};
-    BOOST_CHECK_EQUAL(HexStr(script1), HexStr(script2));
-
-    // Test cleanup: disconnect and join thread
-    foo.reset();
-    thread.join();
 }
 
 //! Test ipc::Protocol connect() and serve() methods connecting over a socketpair.

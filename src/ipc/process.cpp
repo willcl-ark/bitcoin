@@ -5,42 +5,107 @@
 #include <ipc/process.h>
 #include <ipc/protocol.h>
 #include <logging.h>
-#include <mp/util.h>
 #include <tinyformat.h>
 #include <util/fs.h>
 #include <util/strencodings.h>
 #include <util/syserror.h>
 
+#include <algorithm>
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 #include <cerrno>
-#include <exception>
-#include <iostream>
+#include <limits>
+#include <cstdio>
 #include <stdexcept>
 #include <sys/socket.h>
+#include <sys/resource.h>
 #include <sys/un.h>
+#include <sys/wait.h>
+#include <system_error>
 #include <unistd.h>
-#include <utility>
 #include <vector>
 
 using util::RemovePrefixView;
 
 namespace ipc {
 namespace {
+std::vector<char*> MakeArgv(const std::vector<std::string>& args)
+{
+    std::vector<char*> argv;
+    argv.reserve(args.size() + 1);
+    for (const auto& arg : args) {
+        argv.push_back(const_cast<char*>(arg.c_str()));
+    }
+    argv.push_back(nullptr);
+    return argv;
+}
+
+int MaxFd()
+{
+    struct rlimit nofile;
+    if (::getrlimit(RLIMIT_NOFILE, &nofile) == 0 && nofile.rlim_cur > 0) {
+        return static_cast<int>(std::min<rlim_t>(nofile.rlim_cur - 1, std::numeric_limits<int>::max()));
+    }
+    return 1023;
+}
+
 class ProcessImpl : public Process
 {
 public:
     int spawn(const std::string& new_exe_name, const fs::path& argv0_path, int& pid) override
     {
-        return mp::SpawnProcess(pid, [&](int fd) {
-            fs::path path = argv0_path;
-            path.remove_filename();
-            path /= fs::PathFromString(new_exe_name);
-            return std::vector<std::string>{fs::PathToString(path), "-ipcfd", strprintf("%i", fd)};
-        });
+        int fds[2];
+        if (::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) != 0) {
+            throw std::system_error(errno, std::system_category(), "socketpair");
+        }
+
+        fs::path path = argv0_path;
+        path.remove_filename();
+        path /= fs::PathFromString(new_exe_name);
+        const std::vector<std::string> args{fs::PathToString(path), "-ipcfd", strprintf("%i", fds[0])};
+        const std::vector<char*> argv{MakeArgv(args)};
+
+        pid = ::fork();
+        if (pid == -1) {
+            const int fork_error{errno};
+            (void)::close(fds[0]);
+            (void)::close(fds[1]);
+            throw std::system_error(fork_error, std::system_category(), "fork");
+        }
+
+        if (::close(fds[pid ? 0 : 1]) != 0) {
+            if (pid) {
+                const int close_error{errno};
+                (void)::close(fds[1]);
+                throw std::system_error(close_error, std::system_category(), "close");
+            }
+            static constexpr char msg[] = "ProcessImpl::spawn child close failed\n";
+            const ssize_t write_result{::write(STDERR_FILENO, msg, sizeof(msg) - 1)};
+            (void)write_result;
+            _exit(126);
+        }
+
+        if (!pid) {
+            const int max_fd{MaxFd()};
+            for (int fd = 3; fd < max_fd; ++fd) {
+                if (fd != fds[0]) (void)::close(fd);
+            }
+
+            ::execvp(argv[0], argv.data());
+            perror("execvp failed");
+            _exit(127);
+        }
+
+        return fds[1];
     }
-    int waitSpawned(int pid) override { return mp::WaitProcess(pid); }
+    int waitSpawned(int pid) override
+    {
+        int status;
+        if (::waitpid(pid, &status, /*options=*/0) != pid) {
+            throw std::system_error(errno, std::system_category(), "waitpid");
+        }
+        return status;
+    }
     bool checkSpawned(int argc, char* argv[], int& fd) override
     {
         // If this process was not started with a single -ipcfd argument, it is

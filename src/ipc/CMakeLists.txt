@@ -4,24 +4,18 @@
 
 add_library(bitcoin_ipc STATIC EXCLUDE_FROM_ALL
   capnp/conversions.cpp
-  capnp/mining.cpp
   capnp/protocol.cpp
   capnp/worker_queue.cpp
   interfaces.cpp
   process.cpp
 )
 
-target_capnp_sources(bitcoin_ipc ${CMAKE_CURRENT_SOURCE_DIR}
-  capnp/common.capnp
-  capnp/mining.capnp
-)
-
-get_property(mp_include_dir GLOBAL PROPERTY MP_INCLUDE_DIR)
 target_native_capnp_sources(bitcoin_ipc ${CMAKE_CURRENT_SOURCE_DIR}
+  capnp/common.capnp
   capnp/echo.capnp
   capnp/init.capnp
+  capnp/mining.capnp
   capnp/rpc.capnp
-  IMPORT_PATHS ${mp_include_dir}
 )
 
 target_link_libraries(bitcoin_ipc
@@ -32,17 +26,8 @@ target_link_libraries(bitcoin_ipc
 )
 
 if(BUILD_TESTS)
-  # bitcoin_ipc_test library target is defined here in src/ipc/CMakeLists.txt
-  # instead of src/ipc/test/CMakeLists.txt so capnp files in src/ipc/test/ are able to
-  # reference capnp files in src/ipc/capnp/ by relative path. The Cap'n Proto
-  # compiler only allows importing by relative path when the importing and
-  # imported files are underneath the same compilation source prefix, so the
-  # source prefix must be src/ipc, not src/ipc/test/
   add_library(bitcoin_ipc_test STATIC EXCLUDE_FROM_ALL
     test/ipc_test.cpp
-  )
-  target_capnp_sources(bitcoin_ipc_test ${CMAKE_CURRENT_SOURCE_DIR}
-    test/ipc_test.capnp
   )
   add_dependencies(bitcoin_ipc_test bitcoin_ipc_headers)
 

@@ -7,10 +7,7 @@
 using Cxx = import "/capnp/c++.capnp";
 $Cxx.namespace("ipc::capnp::messages");
 
-using Proxy = import "/mp/proxy.capnp";
-$Proxy.includeTypes("ipc/capnp/common-types.h");
-
-struct BlockRef $Proxy.wrap("interfaces::BlockRef") {
+struct BlockRef {
     hash @0 :Data;
     height @1 :Int32;
 }

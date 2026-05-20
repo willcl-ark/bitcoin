@@ -14,7 +14,6 @@ BOOST_AUTO_TEST_CASE(ipc_tests)
 {
     IpcConversionTest();
     IpcWorkerQueueTest();
-    IpcPipeTest();
     IpcNativeSocketPairTest();
     IpcSocketPairTest();
     IpcSocketTest(m_args.GetDataDirNet());
