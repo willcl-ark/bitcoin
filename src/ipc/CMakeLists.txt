@@ -3,6 +3,7 @@
 # file COPYING or https://opensource.org/license/mit/.
 
 add_library(bitcoin_ipc STATIC EXCLUDE_FROM_ALL
+  capnp/conversions.cpp
   capnp/mining.cpp
   capnp/protocol.cpp
   interfaces.cpp
