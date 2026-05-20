@@ -2,13 +2,12 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <interfaces/echo.h>
 #include <interfaces/init.h>
 #include <ipc/capnp/echo.capnp.h>
 #include <ipc/capnp/context.h>
 #include <ipc/capnp/init.capnp.h>
-#include <ipc/capnp/init.capnp.proxy.h>
 #include <ipc/capnp/protocol.h>
-#include <ipc/exception.h>
 #include <ipc/protocol.h>
 
 #include <capnp/rpc-twoparty.h>
@@ -17,63 +16,27 @@
 #include <kj/async.h>
 #include <kj/debug.h>
 #include <logging.h>
-#include <mp/proxy-io.h>
-#include <mp/proxy-types.h>
-#include <mp/util.h>
 #include <util/threadnames.h>
 
-#include <cassert>
+#include <atomic>
 #include <cerrno>
-#include <future>
+#include <cstring>
 #include <memory>
 #include <mutex>
-#include <optional>
+#include <poll.h>
+#include <stdexcept>
 #include <string>
 #include <sys/socket.h>
 #include <system_error>
 #include <thread>
+#include <typeinfo>
+#include <unistd.h>
 #include <utility>
+#include <vector>
 
 namespace ipc {
 namespace capnp {
 namespace {
-
-mp::Log GetRequestedIPCLogLevel()
-{
-    if (LogAcceptCategory(BCLog::IPC, BCLog::Level::Trace)) return mp::Log::Trace;
-    if (LogAcceptCategory(BCLog::IPC, BCLog::Level::Debug)) return mp::Log::Debug;
-
-    // Info, Warning, and Error are logged unconditionally
-    return mp::Log::Info;
-}
-
-void IpcLogFn(mp::LogMessage message)
-{
-    switch (message.level) {
-    case mp::Log::Trace:
-        LogTrace(BCLog::IPC, "%s", message.message);
-        return;
-    case mp::Log::Debug:
-        LogDebug(BCLog::IPC, "%s", message.message);
-        return;
-    case mp::Log::Info:
-        LogInfo("ipc: %s", message.message);
-        return;
-    case mp::Log::Warning:
-        LogWarning("ipc: %s", message.message);
-        return;
-    case mp::Log::Error:
-        LogError("ipc: %s", message.message);
-        return;
-    case mp::Log::Raise:
-        LogError("ipc: %s", message.message);
-        throw Exception(message.message);
-    } // no default case, so the compiler can warn about missing cases
-
-    // Be conservative and assume that if MP ever adds a new log level, it
-    // should only be shown at our most verbose level.
-    LogTrace(BCLog::IPC, "%s", message.message);
-}
 
 struct NativeServerVatId
 {
@@ -89,15 +52,8 @@ public:
     explicit EchoServer(std::unique_ptr<interfaces::Echo> echo) : m_echo{std::move(echo)} {}
 
 protected:
-    kj::Promise<void> destroy(DestroyContext) override
-    {
-        m_echo.reset();
-        return kj::READY_NOW;
-    }
-
     kj::Promise<void> echo(EchoContext context) override
     {
-        KJ_REQUIRE(m_echo != nullptr, "Echo interface was already destroyed.");
         const std::string result{m_echo->echo(context.getParams().getEcho().cStr())};
         context.getResults().setResult(result);
         return kj::READY_NOW;
@@ -125,86 +81,241 @@ private:
     interfaces::Init& m_init;
 };
 
+struct ClientContext {
+    explicit ClientContext(int fd) : connection{ConnectNative(fd)} {}
+
+    std::unique_ptr<NativeConnection> connection;
+    std::mutex mutex;
+};
+
+class CleanupHandler
+{
+public:
+    void addCleanup(std::function<void()> cleanup) { m_cleanups.emplace_back(std::move(cleanup)); }
+
+protected:
+    virtual ~CleanupHandler() noexcept
+    {
+        for (auto& cleanup : m_cleanups) {
+            try {
+                cleanup();
+            } catch (const std::exception& e) {
+                LogError("ipc: cleanup failed: %s", e.what());
+            }
+        }
+    }
+
+private:
+    std::vector<std::function<void()>> m_cleanups;
+};
+
+class EchoClient final : public interfaces::Echo, public CleanupHandler
+{
+public:
+    EchoClient(messages::Echo::Client echo, std::shared_ptr<ClientContext> context)
+        : m_echo{kj::mv(echo)}, m_context{std::move(context)}
+    {
+    }
+    ~EchoClient() noexcept override = default;
+
+    std::string echo(const std::string& message) override
+    {
+        std::lock_guard<std::mutex> lock{m_context->mutex};
+        auto request{m_echo.echoRequest()};
+        request.setEcho(message);
+        auto response{request.send().wait(m_context->connection->waitScope())};
+        return response.getResult().cStr();
+    }
+
+private:
+    messages::Echo::Client m_echo;
+    std::shared_ptr<ClientContext> m_context;
+};
+
+class InitClient final : public interfaces::Init, public CleanupHandler
+{
+public:
+    explicit InitClient(int fd) : m_context{std::make_shared<ClientContext>(fd)} {}
+    ~InitClient() noexcept override = default;
+
+    std::unique_ptr<interfaces::Echo> makeEcho() override
+    {
+        std::lock_guard<std::mutex> lock{m_context->mutex};
+        auto response{m_context->connection->init().makeEchoRequest().send().wait(m_context->connection->waitScope())};
+        return std::make_unique<EchoClient>(response.getResult(), m_context);
+    }
+
+private:
+    std::shared_ptr<ClientContext> m_context;
+};
+
+class ServerConnection
+{
+public:
+    explicit ServerConnection(int fd) : m_fd{fd} {}
+    ~ServerConnection() { close(); }
+
+    void shutdown()
+    {
+        std::lock_guard<std::mutex> lock{m_mutex};
+        if (m_fd >= 0) (void)::shutdown(m_fd, SHUT_RDWR);
+    }
+
+    void close()
+    {
+        std::lock_guard<std::mutex> lock{m_mutex};
+        if (m_fd >= 0) {
+            (void)::close(m_fd);
+            m_fd = -1;
+        }
+    }
+
+private:
+    std::mutex m_mutex;
+    int m_fd{-1};
+};
+
 class CapnpProtocol : public Protocol
 {
 public:
-    ~CapnpProtocol() noexcept(true)
+    ~CapnpProtocol() noexcept(true) override
     {
-        m_loop_ref.reset();
-        if (m_loop_thread.joinable()) m_loop_thread.join();
-        assert(!m_loop);
-    };
-    std::unique_ptr<interfaces::Init> connect(int fd, const char* exe_name) override
-    {
-        startLoop(exe_name);
-        return mp::ConnectStream<messages::Init>(*m_loop, fd);
+        disconnectIncoming();
+        joinThreads();
     }
-    void listen(int listen_fd, const char* exe_name, interfaces::Init& init) override
+
+    std::unique_ptr<interfaces::Init> connect(int fd, const char*) override
     {
-        startLoop(exe_name);
+        return std::make_unique<InitClient>(fd);
+    }
+
+    void listen(int listen_fd, const char*, interfaces::Init& init) override
+    {
         if (::listen(listen_fd, /*backlog=*/5) != 0) {
             throw std::system_error(errno, std::system_category());
         }
-        mp::ListenConnections<messages::Init>(*m_loop, listen_fd, init);
+        std::lock_guard<std::mutex> lock{m_mutex};
+        m_listeners.push_back({listen_fd, {}});
+        m_listeners.back().thread = std::thread([this, listen_fd, &init] {
+            util::ThreadRename("ipc-listen");
+            acceptLoop(listen_fd, init);
+        });
     }
-    void serve(int fd, const char* exe_name, interfaces::Init& init, const std::function<void()>& ready_fn = {}) override
+
+    void serve(int fd, const char*, interfaces::Init& init, const std::function<void()>& ready_fn = {}) override
     {
-        assert(!m_loop);
-        mp::g_thread_context.thread_name = mp::ThreadName(exe_name);
-        mp::LogOptions opts = {
-            .log_fn = IpcLogFn,
-            .log_level = GetRequestedIPCLogLevel()
-        };
-        m_loop.emplace(exe_name, std::move(opts), &m_context);
-        if (ready_fn) ready_fn();
-        mp::ServeStream<messages::Init>(*m_loop, fd, init);
-        m_parent_connection = &m_loop->m_incoming_connections.back();
-        m_loop->loop();
-        m_loop.reset();
+        ServeNative(fd, init, ready_fn);
     }
+
     void disconnectIncoming() override
     {
-        if (!m_loop) return;
-        // Delete incoming connections, except the connection to a parent
-        // process (if there is one), since a parent process should be able to
-        // monitor and control this process, even during shutdown.
-        m_loop->sync([&] {
-            m_loop->m_incoming_connections.remove_if([this](mp::Connection& c) { return &c != m_parent_connection; });
-        });
+        m_stop = true;
+        closeListeners();
+        shutdownConnections();
     }
+
     void addCleanup(std::type_index type, void* iface, std::function<void()> cleanup) override
     {
-        mp::ProxyTypeRegister::types().at(type)(iface).cleanup_fns.emplace_back(std::move(cleanup));
+        CleanupHandler* handler{nullptr};
+        if (type == typeid(interfaces::Init)) {
+            handler = dynamic_cast<CleanupHandler*>(static_cast<interfaces::Init*>(iface));
+        } else if (type == typeid(interfaces::Echo)) {
+            handler = dynamic_cast<CleanupHandler*>(static_cast<interfaces::Echo*>(iface));
+        }
+        if (!handler) throw std::runtime_error("IPC cleanup can only be added to native IPC clients.");
+        handler->addCleanup(std::move(cleanup));
     }
+
     Context& context() override { return m_context; }
-    void startLoop(const char* exe_name)
+
+private:
+    struct Listener {
+        int fd{-1};
+        std::thread thread;
+    };
+
+    void acceptLoop(int listen_fd, interfaces::Init& init)
     {
-        if (m_loop) return;
-        std::promise<void> promise;
-        m_loop_thread = std::thread([&] {
-            util::ThreadRename("capnp-loop");
-            mp::LogOptions opts = {
-                .log_fn = IpcLogFn,
-                .log_level = GetRequestedIPCLogLevel()
-            };
-            m_loop.emplace(exe_name, std::move(opts), &m_context);
-            m_loop_ref.emplace(*m_loop);
-            promise.set_value();
-            m_loop->loop();
-            m_loop.reset();
-        });
-        promise.get_future().wait();
+        while (!m_stop) {
+            pollfd poll_fd{listen_fd, POLLIN, 0};
+            const int poll_result{::poll(&poll_fd, 1, 100)};
+            if (poll_result < 0) {
+                if (errno == EINTR) continue;
+                if (!m_stop) LogError("ipc: listen poll failed: %s", std::strerror(errno));
+                return;
+            }
+            if (poll_result == 0 || !(poll_fd.revents & POLLIN)) continue;
+
+            const int connection_fd{::accept(listen_fd, nullptr, nullptr)};
+            if (connection_fd < 0) {
+                if (errno == EINTR) continue;
+                if (!m_stop) LogError("ipc: accept failed: %s", std::strerror(errno));
+                continue;
+            }
+
+            const int shutdown_fd{::dup(connection_fd)};
+            if (shutdown_fd < 0) {
+                LogError("ipc: dup failed: %s", std::strerror(errno));
+                (void)::close(connection_fd);
+                continue;
+            }
+
+            auto connection{std::make_shared<ServerConnection>(shutdown_fd)};
+            std::lock_guard<std::mutex> lock{m_mutex};
+            if (m_stop) {
+                connection->close();
+                (void)::close(connection_fd);
+                return;
+            }
+            m_connections.push_back(connection);
+            m_server_threads.emplace_back([connection_fd, connection, &init] {
+                util::ThreadRename("ipc-serve");
+                try {
+                    ServeNative(connection_fd, init);
+                } catch (const std::exception& e) {
+                    LogError("ipc: server connection failed: %s", e.what());
+                }
+                connection->close();
+            });
+        }
     }
+
+    void closeListeners() noexcept
+    {
+        std::lock_guard<std::mutex> lock{m_mutex};
+        for (auto& listener : m_listeners) {
+            if (listener.fd >= 0) {
+                (void)::close(listener.fd);
+                listener.fd = -1;
+            }
+        }
+    }
+
+    void shutdownConnections() noexcept
+    {
+        std::lock_guard<std::mutex> lock{m_mutex};
+        for (auto& connection : m_connections) {
+            connection->shutdown();
+        }
+    }
+
+    void joinThreads() noexcept
+    {
+        for (auto& listener : m_listeners) {
+            if (listener.thread.joinable()) listener.thread.join();
+        }
+        shutdownConnections();
+        for (auto& thread : m_server_threads) {
+            if (thread.joinable()) thread.join();
+        }
+    }
+
     Context m_context;
-    std::thread m_loop_thread;
-    //! EventLoop object which manages I/O events for all connections.
-    std::optional<mp::EventLoop> m_loop;
-    //! Reference to the same EventLoop. Increments the loop’s refcount on
-    //! creation, decrements on destruction. The loop thread exits when the
-    //! refcount reaches 0. Other IPC objects also hold their own EventLoopRef.
-    std::optional<mp::EventLoopRef> m_loop_ref;
-    //! Connection to parent, if this is a child process spawned by a parent process.
-    mp::Connection* m_parent_connection{nullptr};
+    std::atomic<bool> m_stop{false};
+    std::mutex m_mutex;
+    std::vector<Listener> m_listeners;
+    std::vector<std::thread> m_server_threads;
+    std::vector<std::shared_ptr<ServerConnection>> m_connections;
 };
 } // namespace
 
