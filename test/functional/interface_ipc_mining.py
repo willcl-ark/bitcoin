@@ -5,7 +5,6 @@
 """Test the IPC (multiprocess) Mining interface."""
 import asyncio
 import time
-from contextlib import AsyncExitStack
 from io import BytesIO
 from test_framework.blocktools import NULL_OUTPOINT, script_BIP34_coinbase_height
 from test_framework.messages import (
@@ -29,14 +28,14 @@ from test_framework.util import (
 from test_framework.wallet import MiniWallet
 from test_framework.p2p import P2PInterface
 from test_framework.ipc_util import (
-    destroying,
     mining_create_block_template,
     load_capnp_modules,
     mining_get_block,
     mining_get_coinbase_tx,
     mining_wait_next_template,
+    optional_value,
     wait_and_do,
-    make_mining_ctx,
+    make_capnp_mining,
     assert_capnp_failed
 )
 
@@ -63,10 +62,10 @@ class IPCMiningTest(BitcoinTestFramework):
         # as it is being called before knowing whether capnp is available).
         self.capnp_modules = load_capnp_modules(self.config)
 
-    async def build_coinbase_test(self, template, ctx, miniwallet, extra_nonce=b""):
+    async def build_coinbase_test(self, template, miniwallet, extra_nonce=b""):
         self.log.debug("Build coinbase transaction using getCoinbaseTx()")
         assert template is not None
-        coinbase_res = await mining_get_coinbase_tx(template, ctx)
+        coinbase_res = await mining_get_coinbase_tx(template)
         coinbase_tx = CTransaction()
         coinbase_tx.version = coinbase_res.version
         coinbase_tx.vin = [CTxIn()]
@@ -109,19 +108,22 @@ class IPCMiningTest(BitcoinTestFramework):
         timeout = 1000.0 * self.options.timeout_factor # 1000 milliseconds
 
         async def async_routine():
-            ctx, mining = await make_mining_ctx(self)
-            blockref = await mining.getTip(ctx)
+            mining = await make_capnp_mining(self)
+            blockref = optional_value((await mining.getTip()).result)
+            assert blockref is not None
             current_block_height = self.nodes[0].getchaintips()[0]["height"]
-            assert_equal(blockref.result.height, current_block_height)
+            assert_equal(blockref.height, current_block_height)
 
             self.log.debug("Mine a block")
-            newblockref = (await wait_and_do(
-                mining.waitTipChanged(ctx, blockref.result.hash, timeout),
-                lambda: self.generate(self.nodes[0], 1))).result
+            newblockref = optional_value((await wait_and_do(
+                mining.waitTipChanged(blockref.hash, timeout),
+                lambda: self.generate(self.nodes[0], 1))).result)
+            assert newblockref is not None
             assert_equal(len(newblockref.hash), block_hash_size)
             assert_equal(newblockref.height, current_block_height + 1)
             self.log.debug("Wait for timeout")
-            oldblockref = (await mining.waitTipChanged(ctx, newblockref.hash, timeout)).result
+            oldblockref = optional_value((await mining.waitTipChanged(newblockref.hash, timeout)).result)
+            assert oldblockref is not None
             assert_equal(len(newblockref.hash), block_hash_size)
             assert_equal(oldblockref.hash, newblockref.hash)
             assert_equal(oldblockref.height, newblockref.height)
@@ -129,9 +131,8 @@ class IPCMiningTest(BitcoinTestFramework):
             self.log.debug("interrupt() should abort waitTipChanged()")
             async def wait_for_tip():
                 long_timeout = max(timeout, 60000.0)  # at least 1 minute
-                result = (await mining.waitTipChanged(ctx, newblockref.hash, long_timeout)).result
-                # Unlike a timeout, interrupt() returns an empty BlockRef.
-                assert_equal(len(result.hash), 0)
+                result = optional_value((await mining.waitTipChanged(newblockref.hash, long_timeout)).result)
+                assert result is None
             await wait_and_do(wait_for_tip(), mining.interrupt())
 
         asyncio.run(capnp.run(async_routine()))
@@ -148,7 +149,7 @@ class IPCMiningTest(BitcoinTestFramework):
         async def async_routine():
             while True:
                 try:
-                    ctx, mining = await make_mining_ctx(self)
+                    mining = await make_capnp_mining(self)
                     break
                 except (ConnectionRefusedError, FileNotFoundError):
                     # Poll quickly to connect as soon as socket becomes
@@ -156,7 +157,7 @@ class IPCMiningTest(BitcoinTestFramework):
                     await asyncio.sleep(0.005)
 
             opts = self.capnp_modules['mining'].BlockCreateOptions()
-            await mining.createNewBlock(ctx, opts)
+            await mining.createNewBlock(opts)
 
         asyncio.run(capnp.run(async_routine()))
 
@@ -171,121 +172,119 @@ class IPCMiningTest(BitcoinTestFramework):
         timeout = 1000.0 * self.options.timeout_factor
 
         async def async_routine():
-            ctx, mining = await make_mining_ctx(self)
+            mining = await make_capnp_mining(self)
 
-            async with AsyncExitStack() as stack:
-                self.log.debug("createNewBlock() should wait if tip is still updating")
-                self.disconnect_nodes(0, 1)
-                node1_block_hash = self.generate(self.nodes[1], 1, sync_fun=self.no_op)[0]
-                header = from_hex(CBlockHeader(), self.nodes[1].getblockheader(node1_block_hash, False))
-                header_only_peer = self.nodes[0].add_p2p_connection(P2PInterface())
-                header_only_peer.send_and_ping(msg_headers([header]))
+            self.log.debug("createNewBlock() should wait if tip is still updating")
+            self.disconnect_nodes(0, 1)
+            node1_block_hash = self.generate(self.nodes[1], 1, sync_fun=self.no_op)[0]
+            header = from_hex(CBlockHeader(), self.nodes[1].getblockheader(node1_block_hash, False))
+            header_only_peer = self.nodes[0].add_p2p_connection(P2PInterface())
+            header_only_peer.send_and_ping(msg_headers([header]))
+            start = time.time()
+            template = optional_value((await mining.createNewBlock(self.default_block_create_options)).result)
+            assert template is not None
+            # Lower-bound only: a heavily loaded CI host might still exceed 0.9s
+            # even without the cooldown, so this can miss regressions but avoids
+            # spurious failures.
+            assert_greater_than_or_equal(time.time() - start, 0.9)
+
+            self.log.debug("createNewBlock() should wake up promptly after tip advances")
+            success = False
+            duration = 0.0
+            async def wait_fn():
+                nonlocal success, duration
                 start = time.time()
-                async with destroying((await mining.createNewBlock(ctx, self.default_block_create_options)).result, ctx):
-                    pass
-                # Lower-bound only: a heavily loaded CI host might still exceed 0.9s
-                # even without the cooldown, so this can miss regressions but avoids
-                # spurious failures.
-                assert_greater_than_or_equal(time.time() - start, 0.9)
+                res = await mining.createNewBlock(self.default_block_create_options)
+                duration = time.time() - start
+                success = optional_value(res.result) is not None
+            def do_fn():
+                block_hex = self.nodes[1].getblock(node1_block_hash, False)
+                self.nodes[0].submitblock(block_hex)
+            await wait_and_do(wait_fn(), do_fn)
+            assert_equal(success, True)
+            if self.options.timeout_factor <= 1:
+                assert duration < 3.0, f"createNewBlock took {duration:.2f}s, did not wake up promptly after tip advances"
+            else:
+                self.log.debug("Skipping strict wake-up duration check because timeout_factor > 1")
 
-                self.log.debug("createNewBlock() should wake up promptly after tip advances")
-                success = False
-                duration = 0.0
-                async def wait_fn():
-                    nonlocal success, duration
-                    start = time.time()
-                    res = await mining.createNewBlock(ctx, self.default_block_create_options)
-                    duration = time.time() - start
-                    success = res._has("result")
-                def do_fn():
-                    block_hex = self.nodes[1].getblock(node1_block_hash, False)
-                    self.nodes[0].submitblock(block_hex)
-                await wait_and_do(wait_fn(), do_fn)
-                assert_equal(success, True)
-                if self.options.timeout_factor <= 1:
-                    assert duration < 3.0, f"createNewBlock took {duration:.2f}s, did not wake up promptly after tip advances"
-                else:
-                    self.log.debug("Skipping strict wake-up duration check because timeout_factor > 1")
+            self.log.debug("interrupt() should abort createNewBlock() during cooldown")
+            async def create_block():
+                result = await mining.createNewBlock(self.default_block_create_options)
+                assert optional_value(result.result) is None
 
-                self.log.debug("interrupt() should abort createNewBlock() during cooldown")
-                async def create_block():
-                    result = await mining.createNewBlock(ctx, self.default_block_create_options)
-                    # interrupt() causes createNewBlock to return nullptr
-                    assert_equal(result._has("result"), False)
+            await wait_and_do(create_block(), mining.interrupt())
 
-                await wait_and_do(create_block(), mining.interrupt())
+            header_only_peer.peer_disconnect()
+            self.connect_nodes(0, 1)
+            self.sync_all()
 
-                header_only_peer.peer_disconnect()
-                self.connect_nodes(0, 1)
-                self.sync_all()
+            self.log.debug("Create a template")
+            template = await mining_create_block_template(mining, self.default_block_create_options)
+            assert template is not None
 
-                self.log.debug("Create a template")
-                template = await mining_create_block_template(mining, stack, ctx, self.default_block_create_options)
-                assert template is not None
+            self.log.debug("Test some inspectors of Template")
+            header = (await template.getBlockHeader()).result
+            assert_equal(len(header), block_header_size)
+            block = await mining_get_block(template)
+            current_tip = self.nodes[0].getbestblockhash()
+            assert_equal(ser_uint256(block.hashPrevBlock), ser_uint256(int(current_tip, 16)))
+            assert_greater_than_or_equal(len(block.vtx), 1)
+            txfees = await template.getTxFees()
+            assert_equal(len(txfees.result), 0)
+            txsigops = await template.getTxSigops()
+            assert_equal(len(txsigops.result), 0)
 
-                self.log.debug("Test some inspectors of Template")
-                header = (await template.getBlockHeader(ctx)).result
-                assert_equal(len(header), block_header_size)
-                block = await mining_get_block(template, ctx)
-                current_tip = self.nodes[0].getbestblockhash()
-                assert_equal(ser_uint256(block.hashPrevBlock), ser_uint256(int(current_tip, 16)))
-                assert_greater_than_or_equal(len(block.vtx), 1)
-                txfees = await template.getTxFees(ctx)
-                assert_equal(len(txfees.result), 0)
-                txsigops = await template.getTxSigops(ctx)
-                assert_equal(len(txsigops.result), 0)
+            self.log.debug("Wait for a new template")
+            waitoptions = self.capnp_modules['mining'].BlockWaitOptions()
+            waitoptions.timeout = timeout
+            waitoptions.feeThreshold = 1
+            template2 = await wait_and_do(
+                mining_wait_next_template(template, waitoptions),
+                lambda: self.generate(self.nodes[0], 1))
+            assert template2 is not None
+            block2 = await mining_get_block(template2)
+            assert_equal(len(block2.vtx), 1)
 
-                self.log.debug("Wait for a new template")
-                waitoptions = self.capnp_modules['mining'].BlockWaitOptions()
-                waitoptions.timeout = timeout
-                waitoptions.feeThreshold = 1
-                template2 = await wait_and_do(
-                    mining_wait_next_template(template, stack, ctx, waitoptions),
-                    lambda: self.generate(self.nodes[0], 1))
-                assert template2 is not None
-                block2 = await mining_get_block(template2, ctx)
-                assert_equal(len(block2.vtx), 1)
+            self.log.debug("Wait for another, but time out")
+            template3 = await mining_wait_next_template(template2, waitoptions)
+            assert template3 is None
 
-                self.log.debug("Wait for another, but time out")
-                template3 = await mining_wait_next_template(template2, stack, ctx, waitoptions)
-                assert template3 is None
+            self.log.debug("Wait for another, get one after increase in fees in the mempool")
+            template4 = await wait_and_do(
+                mining_wait_next_template(template2, waitoptions),
+                lambda: self.miniwallet.send_self_transfer(fee_rate=10, from_node=self.nodes[0]))
+            assert template4 is not None
+            block3 = await mining_get_block(template4)
+            assert_equal(len(block3.vtx), 2)
 
-                self.log.debug("Wait for another, get one after increase in fees in the mempool")
-                template4 = await wait_and_do(
-                    mining_wait_next_template(template2, stack, ctx, waitoptions),
-                    lambda: self.miniwallet.send_self_transfer(fee_rate=10, from_node=self.nodes[0]))
-                assert template4 is not None
-                block3 = await mining_get_block(template4, ctx)
-                assert_equal(len(block3.vtx), 2)
+            self.log.debug("Wait again, this should return the same template, since the fee threshold is zero")
+            waitoptions.feeThreshold = 0
+            template5 = await mining_wait_next_template(template4, waitoptions)
+            assert template5 is not None
+            block4 = await mining_get_block(template5)
+            assert_equal(len(block4.vtx), 2)
+            waitoptions.feeThreshold = 1
 
-                self.log.debug("Wait again, this should return the same template, since the fee threshold is zero")
-                waitoptions.feeThreshold = 0
-                template5 = await mining_wait_next_template(template4, stack, ctx, waitoptions)
-                assert template5 is not None
-                block4 = await mining_get_block(template5, ctx)
-                assert_equal(len(block4.vtx), 2)
-                waitoptions.feeThreshold = 1
+            self.log.debug("Wait for another, get one after increase in fees in the mempool")
+            template6 = await wait_and_do(
+                mining_wait_next_template(template5, waitoptions),
+                lambda: self.miniwallet.send_self_transfer(fee_rate=10, from_node=self.nodes[0]))
+            assert template6 is not None
+            block4 = await mining_get_block(template6)
+            assert_equal(len(block4.vtx), 3)
 
-                self.log.debug("Wait for another, get one after increase in fees in the mempool")
-                template6 = await wait_and_do(
-                    mining_wait_next_template(template5, stack, ctx, waitoptions),
-                    lambda: self.miniwallet.send_self_transfer(fee_rate=10, from_node=self.nodes[0]))
-                assert template6 is not None
-                block4 = await mining_get_block(template6, ctx)
-                assert_equal(len(block4.vtx), 3)
+            self.log.debug("Wait for another, but time out, since the fee threshold is set now")
+            template7 = await mining_wait_next_template(template6, waitoptions)
+            assert template7 is None
 
-                self.log.debug("Wait for another, but time out, since the fee threshold is set now")
-                template7 = await mining_wait_next_template(template6, stack, ctx, waitoptions)
+            self.log.debug("interruptWait should abort the current wait")
+            async def wait_for_block():
+                new_waitoptions = self.capnp_modules['mining'].BlockWaitOptions()
+                new_waitoptions.timeout = max(timeout, 60000.0) # at least 1 minute
+                new_waitoptions.feeThreshold = 1
+                template7 = await mining_wait_next_template(template6, new_waitoptions)
                 assert template7 is None
-
-                self.log.debug("interruptWait should abort the current wait")
-                async def wait_for_block():
-                    new_waitoptions = self.capnp_modules['mining'].BlockWaitOptions()
-                    new_waitoptions.timeout = max(timeout, 60000.0) # at least 1 minute
-                    new_waitoptions.feeThreshold = 1
-                    template7 = await mining_wait_next_template(template6, stack, ctx, new_waitoptions)
-                    assert template7 is None
-                await wait_and_do(wait_for_block(), template6.interruptWait())
+            await wait_and_do(wait_for_block(), template6.interruptWait())
 
         asyncio.run(capnp.run(async_routine()))
 
@@ -298,27 +297,26 @@ class IPCMiningTest(BitcoinTestFramework):
         self.restart_node(0, extra_args=[f"-blockreservedweight={MAX_BLOCK_WEIGHT}"])
 
         async def async_routine():
-            ctx, mining = await make_mining_ctx(self)
+            mining = await make_capnp_mining(self)
             self.miniwallet.send_self_transfer(fee_rate=10, from_node=self.nodes[0])
 
-            async with AsyncExitStack() as stack:
-                opts = self.capnp_modules['mining'].BlockCreateOptions()
-                template = await mining_create_block_template(mining, stack, ctx, opts)
-                assert template is not None
-                block = await mining_get_block(template, ctx)
-                assert_equal(len(block.vtx), 2)
+            opts = self.capnp_modules['mining'].BlockCreateOptions()
+            template = await mining_create_block_template(mining, opts)
+            assert template is not None
+            block = await mining_get_block(template)
+            assert_equal(len(block.vtx), 2)
 
-                self.log.debug("Use absurdly large reserved weight to force an empty template")
-                opts.blockReservedWeight = MAX_BLOCK_WEIGHT
-                empty_template = await mining_create_block_template(mining, stack, ctx, opts)
-                assert empty_template is not None
-                empty_block = await mining_get_block(empty_template, ctx)
-                assert_equal(len(empty_block.vtx), 1)
+            self.log.debug("Use absurdly large reserved weight to force an empty template")
+            opts.blockReservedWeight = MAX_BLOCK_WEIGHT
+            empty_template = await mining_create_block_template(mining, opts)
+            assert empty_template is not None
+            empty_block = await mining_get_block(empty_template)
+            assert_equal(len(empty_block.vtx), 1)
 
             self.log.debug("Enforce minimum reserved weight for IPC clients too")
             opts.blockReservedWeight = 0
             try:
-                await mining.createNewBlock(ctx, opts)
+                await mining.createNewBlock(opts)
                 raise AssertionError("createNewBlock unexpectedly succeeded")
             except capnp.lib.capnp.KjException as e:
                 assert_capnp_failed(e, "remote exception: std::exception: block_reserved_weight (0) must be at least 2000 weight units")
@@ -330,61 +328,62 @@ class IPCMiningTest(BitcoinTestFramework):
         self.log.info("Running coinbase construction and submission test")
 
         async def async_routine():
-            ctx, mining = await make_mining_ctx(self)
+            mining = await make_capnp_mining(self)
 
             current_block_height = self.nodes[0].getchaintips()[0]["height"]
             check_opts = self.capnp_modules['mining'].BlockCheckOptions()
 
-            async with destroying((await mining.createNewBlock(ctx, self.default_block_create_options)).result, ctx) as template:
-                block = await mining_get_block(template, ctx)
-                balance = self.miniwallet.get_balance()
-                coinbase = await self.build_coinbase_test(template, ctx, self.miniwallet)
-                # Reduce payout for balance comparison simplicity
-                coinbase.vout[0].nValue = COIN
-                block.vtx[0] = coinbase
-                block.hashMerkleRoot = block.calc_merkle_root()
-                original_version = block.nVersion
+            template = optional_value((await mining.createNewBlock(self.default_block_create_options)).result)
+            assert template is not None
+            block = await mining_get_block(template)
+            balance = self.miniwallet.get_balance()
+            coinbase = await self.build_coinbase_test(template, self.miniwallet)
+            # Reduce payout for balance comparison simplicity
+            coinbase.vout[0].nValue = COIN
+            block.vtx[0] = coinbase
+            block.hashMerkleRoot = block.calc_merkle_root()
+            original_version = block.nVersion
 
-                self.log.debug("Submit solution that can't be deserialized")
-                try:
-                    await template.submitSolution(ctx, 0, 0, 0, b"")
-                    raise AssertionError("submitSolution unexpectedly succeeded")
-                except capnp.lib.capnp.KjException as e:
-                    assert_capnp_failed(e, "remote exception: std::exception: SpanReader::read(): end of data:")
+            self.log.debug("Submit solution that can't be deserialized")
+            try:
+                await template.submitSolution(0, 0, 0, b"")
+                raise AssertionError("submitSolution unexpectedly succeeded")
+            except capnp.lib.capnp.KjException as e:
+                assert_capnp_failed(e, "remote exception: std::exception: SpanReader::read(): end of data:")
 
-                self.log.debug("Submit a block with a bad version")
-                block.nVersion = 0
-                block.solve()
-                check = await mining.checkBlock(ctx, block.serialize(), check_opts)
-                assert_equal(check.result, False)
-                assert_equal(check.reason, "bad-version(0x00000000)")
-                submitted = (await template.submitSolution(ctx, block.nVersion, block.nTime, block.nNonce, coinbase.serialize())).result
-                assert_equal(submitted, False)
-                self.log.debug("Submit a valid block")
-                block.nVersion = original_version
-                block.solve()
+            self.log.debug("Submit a block with a bad version")
+            block.nVersion = 0
+            block.solve()
+            check = await mining.checkBlock(block.serialize(), check_opts)
+            assert_equal(check.result, False)
+            assert_equal(check.reason, "bad-version(0x00000000)")
+            submitted = (await template.submitSolution(block.nVersion, block.nTime, block.nNonce, coinbase.serialize())).result
+            assert_equal(submitted, False)
+            self.log.debug("Submit a valid block")
+            block.nVersion = original_version
+            block.solve()
 
-                self.log.debug("First call checkBlock()")
-                block_valid = (await mining.checkBlock(ctx, block.serialize(), check_opts)).result
-                assert_equal(block_valid, True)
+            self.log.debug("First call checkBlock()")
+            block_valid = (await mining.checkBlock(block.serialize(), check_opts)).result
+            assert_equal(block_valid, True)
 
-                # The remote template block will be mutated, capture the original:
-                remote_block_before = await mining_get_block(template, ctx)
+            # The remote template block will be mutated, capture the original:
+            remote_block_before = await mining_get_block(template)
 
-                self.log.debug("Submitted coinbase must include witness")
-                assert_not_equal(coinbase.serialize_without_witness().hex(), coinbase.serialize().hex())
-                submitted = (await template.submitSolution(ctx, block.nVersion, block.nTime, block.nNonce, coinbase.serialize_without_witness())).result
-                assert_equal(submitted, False)
+            self.log.debug("Submitted coinbase must include witness")
+            assert_not_equal(coinbase.serialize_without_witness().hex(), coinbase.serialize().hex())
+            submitted = (await template.submitSolution(block.nVersion, block.nTime, block.nNonce, coinbase.serialize_without_witness())).result
+            assert_equal(submitted, False)
 
-                self.log.debug("Even a rejected submitSolution() mutates the template's block")
-                # Can be used by clients to download and inspect the (rejected)
-                # reconstructed block.
-                remote_block_after = await mining_get_block(template, ctx)
-                assert_not_equal(remote_block_before.serialize().hex(), remote_block_after.serialize().hex())
+            self.log.debug("Even a rejected submitSolution() mutates the template's block")
+            # Can be used by clients to download and inspect the (rejected)
+            # reconstructed block.
+            remote_block_after = await mining_get_block(template)
+            assert_not_equal(remote_block_before.serialize().hex(), remote_block_after.serialize().hex())
 
-                self.log.debug("Submit again, with the witness")
-                submitted = (await template.submitSolution(ctx, block.nVersion, block.nTime, block.nNonce, coinbase.serialize())).result
-                assert_equal(submitted, True)
+            self.log.debug("Submit again, with the witness")
+            submitted = (await template.submitSolution(block.nVersion, block.nTime, block.nNonce, coinbase.serialize())).result
+            assert_equal(submitted, True)
 
             self.log.debug("Block should propagate")
             # Check that the IPC node actually updates its own chain
@@ -397,7 +396,7 @@ class IPCMiningTest(BitcoinTestFramework):
             self.miniwallet.rescan_utxos()
             assert_equal(self.miniwallet.get_balance(), balance + 1)
             self.log.debug("Check block should fail now, since it is a duplicate")
-            check = await mining.checkBlock(ctx, block.serialize(), check_opts)
+            check = await mining.checkBlock(block.serialize(), check_opts)
             assert_equal(check.result, False)
             assert_equal(check.reason, "inconclusive-not-best-prevblk")
 
@@ -424,26 +423,25 @@ class IPCMiningTest(BitcoinTestFramework):
         miniwallet = MiniWallet(node)
 
         async def async_routine():
-            ctx, mining = await make_mining_ctx(self)
+            mining = await make_capnp_mining(self)
             opts = self.capnp_modules['mining'].BlockCreateOptions()
 
             # Mine blocks 1-17 to exercise the boundary at height 16, where the
             # internal scriptSig padding is no longer needed.
             for height in range(1, 18):
-                async with AsyncExitStack() as stack:
-                    # Disable cooldown to avoid hanging in the IBD loop on a fresh chain
-                    template = await mining_create_block_template(mining, stack, ctx, opts, cooldown=False)
-                    assert template is not None
-                    block = await mining_get_block(template, ctx)
-                    # Heights <= 16 need extra nonce padding.
-                    extra_nonce = b'\xaa\xbb\xcc\xdd' if height <= 16 else b""
-                    coinbase = await self.build_coinbase_test(template, ctx, miniwallet, extra_nonce=extra_nonce)
-                    block.vtx[0] = coinbase
-                    block.hashMerkleRoot = block.calc_merkle_root()
-                    block.solve()
-                    submitted = (await template.submitSolution(ctx, block.nVersion, block.nTime, block.nNonce, coinbase.serialize())).result
-                    assert_equal(submitted, True)
-                    assert_equal(node.getblockcount(), height)
+                # Disable cooldown to avoid hanging in the IBD loop on a fresh chain
+                template = await mining_create_block_template(mining, opts, cooldown=False)
+                assert template is not None
+                block = await mining_get_block(template)
+                # Heights <= 16 need extra nonce padding.
+                extra_nonce = b'\xaa\xbb\xcc\xdd' if height <= 16 else b""
+                coinbase = await self.build_coinbase_test(template, miniwallet, extra_nonce=extra_nonce)
+                block.vtx[0] = coinbase
+                block.hashMerkleRoot = block.calc_merkle_root()
+                block.solve()
+                submitted = (await template.submitSolution(block.nVersion, block.nTime, block.nNonce, coinbase.serialize())).result
+                assert_equal(submitted, True)
+                assert_equal(node.getblockcount(), height)
 
         asyncio.run(capnp.run(async_routine()))
 

@@ -4,14 +4,13 @@
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test the IPC (multiprocess) interface."""
 import asyncio
-
-from contextlib import ExitStack
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import assert_equal
 from test_framework.ipc_util import (
     load_capnp_modules,
-    make_capnp_init_ctx,
-    make_mining_ctx,
+    make_capnp_init,
+    make_capnp_mining,
+    optional_value,
 )
 
 # Test may be skipped and not have capnp installed
@@ -40,15 +39,13 @@ class IPCInterfaceTest(BitcoinTestFramework):
     def run_echo_test(self):
         self.log.info("Running echo test")
         async def async_routine():
-            ctx, init = await make_capnp_init_ctx(self)
-            self.log.debug("Create Echo proxy object")
-            echo = init.makeEcho(ctx).result
+            init = await make_capnp_init(self)
+            self.log.debug("Create Echo client")
+            echo = init.makeEcho().result
             self.log.debug("Test a few invocations of echo")
             for s in ["hallo", "", "haha"]:
-                result_eval = (await echo.echo(ctx, s)).result
+                result_eval = (await echo.echo(s)).result
                 assert_equal(s, result_eval)
-            self.log.debug("Destroy the Echo object")
-            echo.destroy(ctx)
         asyncio.run(capnp.run(async_routine()))
 
     def run_mining_test(self):
@@ -56,31 +53,16 @@ class IPCInterfaceTest(BitcoinTestFramework):
         block_hash_size = 32
 
         async def async_routine():
-            ctx, mining = await make_mining_ctx(self)
+            mining = await make_capnp_mining(self)
             self.log.debug("Test simple inspectors")
-            assert (await mining.isTestChain(ctx)).result
-            assert not (await mining.isInitialBlockDownload(ctx)).result
-            blockref = await mining.getTip(ctx)
-            assert blockref.hasResult
-            assert_equal(len(blockref.result.hash), block_hash_size)
+            assert (await mining.isTestChain()).result
+            assert not (await mining.isInitialBlockDownload()).result
+            blockref = optional_value((await mining.getTip()).result)
+            assert blockref is not None
+            assert_equal(len(blockref.hash), block_hash_size)
             current_block_height = self.nodes[0].getchaintips()[0]["height"]
-            assert_equal(blockref.result.height, current_block_height)
+            assert_equal(blockref.height, current_block_height)
 
-        asyncio.run(capnp.run(async_routine()))
-
-    def run_deprecated_mining_test(self):
-        self.log.info("Running deprecated mining interface test")
-        async def async_routine():
-            node = self.nodes[0]
-            connection = await capnp.AsyncIoStream.create_unix_connection(node.ipc_socket_path)
-            init = capnp.TwoPartyClient(connection).bootstrap().cast_as(self.capnp_modules['init'].Init)
-            self.log.debug("Calling deprecated makeMiningOld2 should raise an error")
-            try:
-                await init.makeMiningOld2()
-                raise AssertionError("makeMiningOld2 unexpectedly succeeded")
-            except capnp.KjException as e:
-                assert_equal(e.description, "remote exception: std::exception: Old mining interface (@2) not supported. Please update your client!")
-                assert_equal(e.type, "FAILED")
         asyncio.run(capnp.run(async_routine()))
 
     def run_unclean_disconnect_test(self):
@@ -91,32 +73,31 @@ class IPCInterfaceTest(BitcoinTestFramework):
         node = self.nodes[0]
         self.log.info("Running disconnect during BlockTemplate.waitNext")
         timeout = self.rpc_timeout * 1000.0
-        disconnected_log_check = ExitStack()
 
         async def async_routine():
-            ctx, mining = await make_mining_ctx(self)
+            mining = await make_capnp_mining(self)
             self.log.debug("Create a template")
             opts = self.capnp_modules['mining'].BlockCreateOptions()
-            template = (await mining.createNewBlock(ctx, opts)).result
+            template = optional_value((await mining.createNewBlock(opts)).result)
+            assert template is not None
 
             self.log.debug("Wait for a new template")
             waitoptions = self.capnp_modules['mining'].BlockWaitOptions()
             waitoptions.timeout = timeout
             waitoptions.feeThreshold = 1
-            with node.assert_debug_log(expected_msgs=["BlockTemplate.waitNext", "IPC server post request"], timeout=2):
-                promise = template.waitNext(ctx, waitoptions)
-                await asyncio.sleep(0.1)
-            disconnected_log_check.enter_context(node.assert_debug_log(expected_msgs=["IPC server: socket disconnected", "canceled while executing"], timeout=2))
+            promise = template.waitNext(waitoptions)
+            await asyncio.sleep(0.1)
             del promise
 
         asyncio.run(capnp.run(async_routine()))
 
-        # Wait for socket disconnected log message, then generate a block to
-        # cause the waitNext() call to return a new template. Look for a
-        # canceled IPC log message after waitNext returns.
-        with node.assert_debug_log(expected_msgs=["interrupted (canceled)"], timeout=2):
-            disconnected_log_check.close()
-            self.generate(node, 1)
+        self.generate(node, 1)
+
+        async def fresh_connection_check():
+            mining = await make_capnp_mining(self)
+            assert (await mining.isTestChain()).result
+
+        asyncio.run(capnp.run(fresh_connection_check()))
 
     def run_thread_busy_test(self):
         """Test behavior when sending multiple calls to the same server thread
@@ -127,45 +108,35 @@ class IPCInterfaceTest(BitcoinTestFramework):
         timeout = self.rpc_timeout * 1000.0
 
         async def async_routine():
-            ctx, mining = await make_mining_ctx(self)
+            mining = await make_capnp_mining(self)
             self.log.debug("Create a template")
             opts = self.capnp_modules['mining'].BlockCreateOptions()
-            template = (await mining.createNewBlock(ctx, opts)).result
+            template = optional_value((await mining.createNewBlock(opts)).result)
+            assert template is not None
 
             self.log.debug("Wait for a new template")
             waitoptions = self.capnp_modules['mining'].BlockWaitOptions()
             waitoptions.timeout = timeout
             waitoptions.feeThreshold = 1
 
-            # Make multiple waitNext calls where the first will start to
-            # execute, and the second and third will be posted waiting to
-            # execute. Previously, the third call would fail calling
-            # mp::Waiter::post() because the waiting function slot is occupied,
-            # but now posts are queued.
-            with node.assert_debug_log(expected_msgs=["BlockTemplate.waitNext", "IPC server post request"], timeout=2):
-                promise1 = template.waitNext(ctx, waitoptions)
-                await asyncio.sleep(0.1)
-            with node.assert_debug_log(expected_msgs=["BlockTemplate.waitNext", "IPC server post request"], timeout=2):
-                promise2 = template.waitNext(ctx, waitoptions)
-                await asyncio.sleep(0.1)
-            with node.assert_debug_log(expected_msgs=["BlockTemplate.waitNext", "IPC server post request"], timeout=2):
-                promise3 = template.waitNext(ctx, waitoptions)
-                await asyncio.sleep(0.1)
+            promise1 = template.waitNext(waitoptions)
+            await asyncio.sleep(0.1)
+            promise2 = template.waitNext(waitoptions)
+            await asyncio.sleep(0.1)
+            promise3 = template.waitNext(waitoptions)
+            await asyncio.sleep(0.1)
 
             # Generate a new block to make the active waitNext calls return, then clean up.
-            with node.assert_debug_log(expected_msgs=["IPC server send response"], timeout=2):
-                self.generate(node, 1, sync_fun=self.no_op)
-            await ((await promise1).result).destroy(ctx)
-            await ((await promise2).result).destroy(ctx)
-            await ((await promise3).result).destroy(ctx)
-            await template.destroy(ctx)
+            self.generate(node, 1, sync_fun=self.no_op)
+            assert optional_value((await promise1).result) is not None
+            assert optional_value((await promise2).result) is not None
+            assert optional_value((await promise3).result) is not None
 
         asyncio.run(capnp.run(async_routine()))
 
     def run_test(self):
         self.run_echo_test()
         self.run_mining_test()
-        self.run_deprecated_mining_test()
         self.run_unclean_disconnect_test()
         self.run_thread_busy_test()
 

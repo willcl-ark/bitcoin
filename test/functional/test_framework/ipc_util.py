@@ -2,10 +2,9 @@
 # Copyright (c) The Bitcoin Core developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
-"""Shared utilities for IPC (multiprocess) interface tests."""
+"""Shared utilities for IPC interface tests."""
 import asyncio
 import inspect
-from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -36,13 +35,11 @@ class CoinbaseTxData:
     lockTime: int
 
 
-@asynccontextmanager
-async def destroying(obj, ctx):
-    """Call obj.destroy(ctx) at end of with: block. Similar to contextlib.closing."""
-    try:
-        yield obj
-    finally:
-        await obj.destroy(ctx)
+def optional_value(result):
+    if result.which() == "none":
+        return None
+    assert_equal(result.which(), "value")
+    return result.value
 
 
 async def wait_and_do(wait_fn, do_fn):
@@ -79,66 +76,48 @@ def load_capnp_modules(config):
         # capnp/c++.capnp can be found here.
         capnp_dir = Path(capnp.__path__[0]).parent
     src_dir = Path(config['environment']['SRCDIR']) / "src"
-    mp_dir = src_dir / "ipc" / "libmultiprocess" / "include"
-    # List of import directories. Note: it is important for mp_dir to be
-    # listed first, in case there are other libmultiprocess installations on
-    # the system, to ensure that `import "/mp/proxy.capnp"` lines load the
-    # same file as capnp.load() loads directly below, and there are not
-    # "failed: Duplicate ID @0xcc316e3f71a040fb" errors.
-    imports = [str(mp_dir), str(capnp_dir), str(src_dir)]
+    imports = [str(capnp_dir), str(src_dir)]
     return {
-        "proxy": capnp.load(str(mp_dir / "mp" / "proxy.capnp"), imports=imports),
         "init": capnp.load(str(src_dir / "ipc" / "capnp" / "init.capnp"), imports=imports),
         "echo": capnp.load(str(src_dir / "ipc" / "capnp" / "echo.capnp"), imports=imports),
         "mining": capnp.load(str(src_dir / "ipc" / "capnp" / "mining.capnp"), imports=imports),
     }
 
 
-async def make_capnp_init_ctx(self):
+async def make_capnp_init(self):
+    """Establish a connection and return an Init client."""
     node = self.nodes[0]
-    # Establish a connection, and create Init proxy object.
     connection = await capnp.AsyncIoStream.create_unix_connection(node.ipc_socket_path)
     client = capnp.TwoPartyClient(connection)
-    init = client.bootstrap().cast_as(self.capnp_modules['init'].Init)
-    # Create a remote thread on the server for the IPC calls to be executed in.
-    threadmap = init.construct().threadMap
-    thread = threadmap.makeThread("pythread").result
-    ctx = self.capnp_modules['proxy'].Context()
-    ctx.thread = thread
-    # Return both.
-    return ctx, init
+    return client.bootstrap().cast_as(self.capnp_modules['init'].Init)
 
 
-async def mining_create_block_template(mining, stack, ctx, *args, **kwargs):
-    """Call mining.createNewBlock() and return template, then call template.destroy() when stack exits."""
-    response = await mining.createNewBlock(ctx, *args, **kwargs)
-    if not response._has("result"):
-        return None
-    return await stack.enter_async_context(destroying(response.result, ctx))
+async def mining_create_block_template(mining, *args, **kwargs):
+    """Call mining.createNewBlock() and return template."""
+    response = await mining.createNewBlock(*args, **kwargs)
+    return optional_value(response.result)
 
 
-async def mining_wait_next_template(template, stack, ctx, opts):
-    """Call template.waitNext() and return template, then call template.destroy() when stack exits."""
-    response = await template.waitNext(ctx, opts)
-    if not response._has("result"):
-        return None
-    return await stack.enter_async_context(destroying(response.result, ctx))
+async def mining_wait_next_template(template, opts):
+    """Call template.waitNext() and return template."""
+    response = await template.waitNext(opts)
+    return optional_value(response.result)
 
 
-async def mining_get_block(block_template, ctx):
-    block_data = BytesIO((await block_template.getBlock(ctx)).result)
+async def mining_get_block(block_template):
+    block_data = BytesIO((await block_template.getBlock()).result)
     block = CBlock()
     block.deserialize(block_data)
     return block
 
 
-async def mining_get_coinbase_tx(block_template, ctx) -> CoinbaseTxData:
+async def mining_get_coinbase_tx(block_template) -> CoinbaseTxData:
     assert block_template is not None
     # Note: the template_capnp struct will be garbage-collected when this
     # method returns, so it is important to copy any Data fields from it
     # which need to be accessed later using the bytes() cast. Starting with
     # pycapnp v2.2.0, Data fields have type `memoryview` and are ephemeral.
-    template_capnp = (await block_template.getCoinbaseTx(ctx)).result
+    template_capnp = (await block_template.getCoinbaseTx()).result
     witness: Optional[bytes] = None
     if template_capnp._has("witness"):
         witness = bytes(template_capnp.witness)
@@ -152,12 +131,13 @@ async def mining_get_coinbase_tx(block_template, ctx) -> CoinbaseTxData:
         lockTime=int(template_capnp.lockTime),
     )
 
-async def make_mining_ctx(self):
-    """Create IPC context and Mining proxy object."""
-    ctx, init = await make_capnp_init_ctx(self)
-    self.log.debug("Create Mining proxy object")
-    mining = init.makeMining(ctx).result
-    return ctx, mining
+
+async def make_capnp_mining(self):
+    """Create a Mining client."""
+    init = await make_capnp_init(self)
+    self.log.debug("Create Mining client")
+    return init.makeMining().result
+
 
 def assert_capnp_failed(e, description_prefix):
     assert e.description.startswith(description_prefix), f"Expected description starting with '{description_prefix}', got '{e.description}'"
