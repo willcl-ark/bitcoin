@@ -4,6 +4,7 @@
 
 #include <interfaces/echo.h>
 #include <interfaces/init.h>
+#include <interfaces/mining.h>
 #include <interfaces/rpc.h>
 #include <ipc/capnp/conversions.h>
 #include <ipc/capnp/echo.capnp.h>
@@ -23,6 +24,7 @@
 #include <util/threadnames.h>
 
 #include <atomic>
+#include <cassert>
 #include <cerrno>
 #include <cstring>
 #include <memory>
@@ -33,6 +35,7 @@
 #include <sys/socket.h>
 #include <system_error>
 #include <thread>
+#include <tuple>
 #include <typeinfo>
 #include <unistd.h>
 #include <utility>
@@ -94,6 +97,204 @@ private:
     std::shared_ptr<WorkerQueue> m_worker_queue;
 };
 
+class BlockTemplateServer final : public messages::BlockTemplate::Server
+{
+public:
+    BlockTemplateServer(std::unique_ptr<interfaces::BlockTemplate> block_template, std::shared_ptr<WorkerQueue> worker_queue)
+        : m_block_template{std::move(block_template)}, m_worker_queue{std::move(worker_queue)}
+    {
+    }
+
+protected:
+    kj::Promise<void> getBlockHeader(GetBlockHeaderContext context) override
+    {
+        return m_worker_queue->post([block_template = m_block_template] {
+            return SerializeData(block_template->getBlockHeader());
+        }).then([context = kj::mv(context)](std::vector<unsigned char> result) mutable {
+            context.getResults().setResult(MakeDataReader(result));
+        });
+    }
+
+    kj::Promise<void> getBlock(GetBlockContext context) override
+    {
+        return m_worker_queue->post([block_template = m_block_template] {
+            return SerializeData(block_template->getBlock());
+        }).then([context = kj::mv(context)](std::vector<unsigned char> result) mutable {
+            context.getResults().setResult(MakeDataReader(result));
+        });
+    }
+
+    kj::Promise<void> getTxFees(GetTxFeesContext context) override
+    {
+        return m_worker_queue->post([block_template = m_block_template] {
+            return block_template->getTxFees();
+        }).then([context = kj::mv(context)](std::vector<CAmount> result) mutable {
+            auto output{context.getResults().initResult(result.size())};
+            for (size_t i{0}; i < result.size(); ++i) {
+                output.set(i, result[i]);
+            }
+        });
+    }
+
+    kj::Promise<void> getTxSigops(GetTxSigopsContext context) override
+    {
+        return m_worker_queue->post([block_template = m_block_template] {
+            return block_template->getTxSigops();
+        }).then([context = kj::mv(context)](std::vector<int64_t> result) mutable {
+            auto output{context.getResults().initResult(result.size())};
+            for (size_t i{0}; i < result.size(); ++i) {
+                output.set(i, result[i]);
+            }
+        });
+    }
+
+    kj::Promise<void> getCoinbaseTx(GetCoinbaseTxContext context) override
+    {
+        return m_worker_queue->post([block_template = m_block_template] {
+            return block_template->getCoinbaseTx();
+        }).then([context = kj::mv(context)](node::CoinbaseTx result) mutable {
+            BuildCoinbaseTx(context.getResults().initResult(), result);
+        });
+    }
+
+    kj::Promise<void> getCoinbaseMerklePath(GetCoinbaseMerklePathContext context) override
+    {
+        return m_worker_queue->post([block_template = m_block_template] {
+            return block_template->getCoinbaseMerklePath();
+        }).then([context = kj::mv(context)](std::vector<uint256> result) mutable {
+            std::vector<::capnp::Data::Reader> readers;
+            readers.reserve(result.size());
+            for (const auto& hash : result) {
+                readers.push_back(MakeDataReader({hash.data(), hash.size()}));
+            }
+            context.getResults().setResult({readers.data(), readers.size()});
+        });
+    }
+
+    kj::Promise<void> submitSolution(SubmitSolutionContext context) override
+    {
+        auto params{context.getParams()};
+        const uint32_t version{params.getVersion()};
+        const uint32_t timestamp{params.getTimestamp()};
+        const uint32_t nonce{params.getNonce()};
+        CTransactionRef coinbase{ReadTransaction(params.getCoinbase())};
+        return m_worker_queue->post([block_template = m_block_template, version, timestamp, nonce, coinbase = std::move(coinbase)] {
+            return block_template->submitSolution(version, timestamp, nonce, coinbase);
+        }).then([context = kj::mv(context)](bool result) mutable {
+            context.getResults().setResult(result);
+        });
+    }
+
+    kj::Promise<void> waitNext(WaitNextContext context) override
+    {
+        node::BlockWaitOptions options{ReadBlockWaitOptions(context.getParams().getOptions())};
+        return m_worker_queue->post([block_template = m_block_template, options] {
+            return block_template->waitNext(options);
+        }).then([context = kj::mv(context), worker_queue = m_worker_queue](std::unique_ptr<interfaces::BlockTemplate> result) mutable {
+            auto output{context.getResults().initResult()};
+            if (result) {
+                output.setValue(messages::BlockTemplate::Client{kj::heap<BlockTemplateServer>(std::move(result), worker_queue)});
+            } else {
+                output.setNone({});
+            }
+        });
+    }
+
+    kj::Promise<void> interruptWait(InterruptWaitContext) override
+    {
+        m_block_template->interruptWait();
+        return kj::READY_NOW;
+    }
+
+private:
+    std::shared_ptr<interfaces::BlockTemplate> m_block_template;
+    std::shared_ptr<WorkerQueue> m_worker_queue;
+};
+
+class MiningServer final : public messages::Mining::Server
+{
+public:
+    MiningServer(std::unique_ptr<interfaces::Mining> mining, std::shared_ptr<WorkerQueue> worker_queue)
+        : m_mining{std::move(mining)}, m_worker_queue{std::move(worker_queue)}
+    {
+    }
+
+protected:
+    kj::Promise<void> isTestChain(IsTestChainContext context) override
+    {
+        context.getResults().setResult(m_mining->isTestChain());
+        return kj::READY_NOW;
+    }
+
+    kj::Promise<void> isInitialBlockDownload(IsInitialBlockDownloadContext context) override
+    {
+        context.getResults().setResult(m_mining->isInitialBlockDownload());
+        return kj::READY_NOW;
+    }
+
+    kj::Promise<void> getTip(GetTipContext context) override
+    {
+        BuildOptionalBlockRef(context.getResults().initResult(), m_mining->getTip());
+        return kj::READY_NOW;
+    }
+
+    kj::Promise<void> waitTipChanged(WaitTipChangedContext context) override
+    {
+        auto params{context.getParams()};
+        uint256 current_tip{ReadUint256(params.getCurrentTip())};
+        MillisecondsDouble timeout{params.getTimeout()};
+        return m_worker_queue->post([mining = m_mining, current_tip, timeout] {
+            return mining->waitTipChanged(current_tip, timeout);
+        }).then([context = kj::mv(context)](std::optional<interfaces::BlockRef> result) mutable {
+            BuildOptionalBlockRef(context.getResults().initResult(), result);
+        });
+    }
+
+    kj::Promise<void> createNewBlock(CreateNewBlockContext context) override
+    {
+        auto params{context.getParams()};
+        node::BlockCreateOptions options{ReadBlockCreateOptions(params.getOptions())};
+        const bool cooldown{params.getCooldown()};
+        return m_worker_queue->post([mining = m_mining, options, cooldown] {
+            return mining->createNewBlock(options, cooldown);
+        }).then([context = kj::mv(context), worker_queue = m_worker_queue](std::unique_ptr<interfaces::BlockTemplate> result) mutable {
+            auto output{context.getResults().initResult()};
+            if (result) {
+                output.setValue(messages::BlockTemplate::Client{kj::heap<BlockTemplateServer>(std::move(result), worker_queue)});
+            } else {
+                output.setNone({});
+            }
+        });
+    }
+
+    kj::Promise<void> checkBlock(CheckBlockContext context) override
+    {
+        auto params{context.getParams()};
+        CBlock block{ReadData<CBlock>(params.getBlock())};
+        node::BlockCheckOptions options{ReadBlockCheckOptions(params.getOptions())};
+        return m_worker_queue->post([mining = m_mining, block = std::move(block), options]() mutable {
+            std::string reason;
+            std::string debug;
+            const bool result{mining->checkBlock(block, options, reason, debug)};
+            return std::make_tuple(result, std::move(reason), std::move(debug));
+        }).then([context = kj::mv(context)](std::tuple<bool, std::string, std::string> result) mutable {
+            context.getResults().setResult(std::get<0>(result));
+            context.getResults().setReason(std::get<1>(result));
+            context.getResults().setDebug(std::get<2>(result));
+        });
+    }
+
+    kj::Promise<void> interrupt(InterruptContext) override
+    {
+        m_mining->interrupt();
+        return kj::READY_NOW;
+    }
+
+private:
+    std::shared_ptr<interfaces::Mining> m_mining;
+    std::shared_ptr<WorkerQueue> m_worker_queue;
+};
+
 class InitServer final : public messages::Init::Server
 {
 public:
@@ -116,6 +317,14 @@ protected:
         auto rpc{m_init.makeRpc()};
         KJ_REQUIRE(rpc != nullptr, "Init::makeRpc returned null.");
         context.getResults().setResult(messages::Rpc::Client{kj::heap<RpcServer>(std::move(rpc), m_worker_queue)});
+        return kj::READY_NOW;
+    }
+
+    kj::Promise<void> makeMining(MakeMiningContext context) override
+    {
+        auto mining{m_init.makeMining()};
+        KJ_REQUIRE(mining != nullptr, "Init::makeMining returned null.");
+        context.getResults().setResult(messages::Mining::Client{kj::heap<MiningServer>(std::move(mining), m_worker_queue)});
         return kj::READY_NOW;
     }
 
@@ -200,6 +409,200 @@ private:
     std::shared_ptr<ClientContext> m_context;
 };
 
+class BlockTemplateClient final : public interfaces::BlockTemplate, public CleanupHandler
+{
+public:
+    BlockTemplateClient(messages::BlockTemplate::Client block_template, std::shared_ptr<ClientContext> context)
+        : m_block_template{kj::mv(block_template)}, m_context{std::move(context)}
+    {
+    }
+    ~BlockTemplateClient() noexcept override = default;
+
+    CBlockHeader getBlockHeader() override
+    {
+        std::lock_guard<std::mutex> lock{m_context->mutex};
+        auto response{m_block_template.getBlockHeaderRequest().send().wait(m_context->connection->waitScope())};
+        return ReadData<CBlockHeader>(response.getResult());
+    }
+
+    CBlock getBlock() override
+    {
+        std::lock_guard<std::mutex> lock{m_context->mutex};
+        auto response{m_block_template.getBlockRequest().send().wait(m_context->connection->waitScope())};
+        return ReadData<CBlock>(response.getResult());
+    }
+
+    std::vector<CAmount> getTxFees() override
+    {
+        std::lock_guard<std::mutex> lock{m_context->mutex};
+        auto response{m_block_template.getTxFeesRequest().send().wait(m_context->connection->waitScope())};
+        std::vector<CAmount> result;
+        for (auto fee : response.getResult()) {
+            result.push_back(fee);
+        }
+        return result;
+    }
+
+    std::vector<int64_t> getTxSigops() override
+    {
+        std::lock_guard<std::mutex> lock{m_context->mutex};
+        auto response{m_block_template.getTxSigopsRequest().send().wait(m_context->connection->waitScope())};
+        std::vector<int64_t> result;
+        for (auto sigops : response.getResult()) {
+            result.push_back(sigops);
+        }
+        return result;
+    }
+
+    node::CoinbaseTx getCoinbaseTx() override
+    {
+        std::lock_guard<std::mutex> lock{m_context->mutex};
+        auto response{m_block_template.getCoinbaseTxRequest().send().wait(m_context->connection->waitScope())};
+        return ReadCoinbaseTx(response.getResult());
+    }
+
+    std::vector<uint256> getCoinbaseMerklePath() override
+    {
+        std::lock_guard<std::mutex> lock{m_context->mutex};
+        auto response{m_block_template.getCoinbaseMerklePathRequest().send().wait(m_context->connection->waitScope())};
+        std::vector<uint256> result;
+        for (auto hash : response.getResult()) {
+            result.push_back(ReadUint256(hash));
+        }
+        return result;
+    }
+
+    bool submitSolution(uint32_t version, uint32_t timestamp, uint32_t nonce, CTransactionRef coinbase) override
+    {
+        std::lock_guard<std::mutex> lock{m_context->mutex};
+        auto request{m_block_template.submitSolutionRequest()};
+        request.setVersion(version);
+        request.setTimestamp(timestamp);
+        request.setNonce(nonce);
+        const std::vector<unsigned char> serialized_coinbase{SerializeData(*coinbase)};
+        request.setCoinbase(MakeDataReader(serialized_coinbase));
+        auto response{request.send().wait(m_context->connection->waitScope())};
+        return response.getResult();
+    }
+
+    std::unique_ptr<interfaces::BlockTemplate> waitNext(node::BlockWaitOptions options) override
+    {
+        std::lock_guard<std::mutex> lock{m_context->mutex};
+        auto request{m_block_template.waitNextRequest()};
+        BuildBlockWaitOptions(request.initOptions(), options);
+        auto response{request.send().wait(m_context->connection->waitScope())};
+        return readOptionalBlockTemplate(response.getResult());
+    }
+
+    void interruptWait() override
+    {
+        std::lock_guard<std::mutex> lock{m_context->mutex};
+        m_block_template.interruptWaitRequest().send().wait(m_context->connection->waitScope());
+    }
+
+private:
+    std::unique_ptr<interfaces::BlockTemplate> readOptionalBlockTemplate(messages::OptionalBlockTemplate::Reader input)
+    {
+        switch (input.which()) {
+        case messages::OptionalBlockTemplate::NONE:
+            return nullptr;
+        case messages::OptionalBlockTemplate::VALUE:
+            return std::make_unique<BlockTemplateClient>(input.getValue(), m_context);
+        }
+        assert(false);
+        return nullptr;
+    }
+
+    messages::BlockTemplate::Client m_block_template;
+    std::shared_ptr<ClientContext> m_context;
+};
+
+class MiningClient final : public interfaces::Mining, public CleanupHandler
+{
+public:
+    MiningClient(messages::Mining::Client mining, std::shared_ptr<ClientContext> context)
+        : m_mining{kj::mv(mining)}, m_context{std::move(context)}
+    {
+    }
+    ~MiningClient() noexcept override = default;
+
+    bool isTestChain() override
+    {
+        std::lock_guard<std::mutex> lock{m_context->mutex};
+        auto response{m_mining.isTestChainRequest().send().wait(m_context->connection->waitScope())};
+        return response.getResult();
+    }
+
+    bool isInitialBlockDownload() override
+    {
+        std::lock_guard<std::mutex> lock{m_context->mutex};
+        auto response{m_mining.isInitialBlockDownloadRequest().send().wait(m_context->connection->waitScope())};
+        return response.getResult();
+    }
+
+    std::optional<interfaces::BlockRef> getTip() override
+    {
+        std::lock_guard<std::mutex> lock{m_context->mutex};
+        auto response{m_mining.getTipRequest().send().wait(m_context->connection->waitScope())};
+        return ReadOptionalBlockRef(response.getResult());
+    }
+
+    std::optional<interfaces::BlockRef> waitTipChanged(uint256 current_tip, MillisecondsDouble timeout) override
+    {
+        std::lock_guard<std::mutex> lock{m_context->mutex};
+        auto request{m_mining.waitTipChangedRequest()};
+        request.setCurrentTip(MakeDataReader({current_tip.data(), current_tip.size()}));
+        request.setTimeout(timeout.count());
+        auto response{request.send().wait(m_context->connection->waitScope())};
+        return ReadOptionalBlockRef(response.getResult());
+    }
+
+    std::unique_ptr<interfaces::BlockTemplate> createNewBlock(const node::BlockCreateOptions& options, bool cooldown) override
+    {
+        std::lock_guard<std::mutex> lock{m_context->mutex};
+        auto request{m_mining.createNewBlockRequest()};
+        BuildBlockCreateOptions(request.initOptions(), options);
+        request.setCooldown(cooldown);
+        auto response{request.send().wait(m_context->connection->waitScope())};
+        return readOptionalBlockTemplate(response.getResult());
+    }
+
+    void interrupt() override
+    {
+        std::lock_guard<std::mutex> lock{m_context->mutex};
+        m_mining.interruptRequest().send().wait(m_context->connection->waitScope());
+    }
+
+    bool checkBlock(const CBlock& block, const node::BlockCheckOptions& options, std::string& reason, std::string& debug) override
+    {
+        std::lock_guard<std::mutex> lock{m_context->mutex};
+        auto request{m_mining.checkBlockRequest()};
+        const std::vector<unsigned char> serialized_block{SerializeData(block)};
+        request.setBlock(MakeDataReader(serialized_block));
+        BuildBlockCheckOptions(request.initOptions(), options);
+        auto response{request.send().wait(m_context->connection->waitScope())};
+        reason = response.getReason().cStr();
+        debug = response.getDebug().cStr();
+        return response.getResult();
+    }
+
+private:
+    std::unique_ptr<interfaces::BlockTemplate> readOptionalBlockTemplate(messages::OptionalBlockTemplate::Reader input)
+    {
+        switch (input.which()) {
+        case messages::OptionalBlockTemplate::NONE:
+            return nullptr;
+        case messages::OptionalBlockTemplate::VALUE:
+            return std::make_unique<BlockTemplateClient>(input.getValue(), m_context);
+        }
+        assert(false);
+        return nullptr;
+    }
+
+    messages::Mining::Client m_mining;
+    std::shared_ptr<ClientContext> m_context;
+};
+
 class InitClient final : public interfaces::Init, public CleanupHandler
 {
 public:
@@ -218,6 +621,13 @@ public:
         std::lock_guard<std::mutex> lock{m_context->mutex};
         auto response{m_context->connection->init().makeRpcRequest().send().wait(m_context->connection->waitScope())};
         return std::make_unique<RpcClient>(response.getResult(), m_context);
+    }
+
+    std::unique_ptr<interfaces::Mining> makeMining() override
+    {
+        std::lock_guard<std::mutex> lock{m_context->mutex};
+        auto response{m_context->connection->init().makeMiningRequest().send().wait(m_context->connection->waitScope())};
+        return std::make_unique<MiningClient>(response.getResult(), m_context);
     }
 
 private:
@@ -298,6 +708,10 @@ public:
             handler = dynamic_cast<CleanupHandler*>(static_cast<interfaces::Echo*>(iface));
         } else if (type == typeid(interfaces::Rpc)) {
             handler = dynamic_cast<CleanupHandler*>(static_cast<interfaces::Rpc*>(iface));
+        } else if (type == typeid(interfaces::Mining)) {
+            handler = dynamic_cast<CleanupHandler*>(static_cast<interfaces::Mining*>(iface));
+        } else if (type == typeid(interfaces::BlockTemplate)) {
+            handler = dynamic_cast<CleanupHandler*>(static_cast<interfaces::BlockTemplate*>(iface));
         }
         if (!handler) throw std::runtime_error("IPC cleanup can only be added to native IPC clients.");
         handler->addCleanup(std::move(cleanup));

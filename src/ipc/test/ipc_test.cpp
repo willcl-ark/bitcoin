@@ -242,9 +242,87 @@ public:
         };
         return std::make_unique<Rpc>();
     }
+    std::unique_ptr<interfaces::Mining> makeMining() override
+    {
+        class BlockTemplate final : public interfaces::BlockTemplate
+        {
+        public:
+            CBlockHeader getBlockHeader() override
+            {
+                CBlockHeader header;
+                header.nVersion = 7;
+                return header;
+            }
+
+            CBlock getBlock() override
+            {
+                CBlock block;
+                block.nVersion = 8;
+                return block;
+            }
+
+            std::vector<CAmount> getTxFees() override { return {1, 2}; }
+            std::vector<int64_t> getTxSigops() override { return {3, 4}; }
+
+            node::CoinbaseTx getCoinbaseTx() override
+            {
+                node::CoinbaseTx tx;
+                tx.version = 2;
+                tx.sequence = 3;
+                tx.script_sig_prefix = CScript() << OP_1;
+                tx.witness = uint256{4};
+                tx.block_reward_remaining = 5;
+                tx.required_outputs.emplace_back(6, CScript() << OP_TRUE);
+                tx.lock_time = 7;
+                return tx;
+            }
+
+            std::vector<uint256> getCoinbaseMerklePath() override { return {uint256{9}}; }
+
+            bool submitSolution(uint32_t version, uint32_t timestamp, uint32_t nonce, CTransactionRef) override
+            {
+                return version == 1 && timestamp == 2 && nonce == 3;
+            }
+
+            std::unique_ptr<interfaces::BlockTemplate> waitNext(node::BlockWaitOptions options) override
+            {
+                return options.fee_threshold == 7 ? std::make_unique<BlockTemplate>() : nullptr;
+            }
+
+            void interruptWait() override {}
+        };
+
+        class Mining final : public interfaces::Mining
+        {
+        public:
+            bool isTestChain() override { return true; }
+            bool isInitialBlockDownload() override { return false; }
+            std::optional<interfaces::BlockRef> getTip() override { return interfaces::BlockRef{uint256{123}, 456}; }
+
+            std::optional<interfaces::BlockRef> waitTipChanged(uint256, MillisecondsDouble) override
+            {
+                return interfaces::BlockRef{uint256{234}, 567};
+            }
+
+            std::unique_ptr<interfaces::BlockTemplate> createNewBlock(const node::BlockCreateOptions&, bool) override
+            {
+                return std::make_unique<BlockTemplate>();
+            }
+
+            void interrupt() override {}
+
+            bool checkBlock(const CBlock& block, const node::BlockCheckOptions&, std::string& reason, std::string& debug) override
+            {
+                reason = "reason";
+                debug = "debug";
+                return block.nVersion == 7;
+            }
+        };
+        return std::make_unique<Mining>();
+    }
 };
 
-//! Test native Cap'n Proto Init, Echo, and Rpc calls over a socketpair.
+//! Test native Cap'n Proto Init, Echo, Rpc, Mining, and BlockTemplate calls over a socketpair.
 void IpcNativeSocketPairTest()
 {
     int fds[2];
@@ -287,6 +365,47 @@ void IpcNativeSocketPairTest()
         BOOST_CHECK_EQUAL(rpc_output["request"]["method"].get_str(), "test");
         BOOST_CHECK_EQUAL(rpc_output["uri"].get_str(), "/test");
         BOOST_CHECK_EQUAL(rpc_output["user"].get_str(), "user");
+
+        auto make_mining_response{remote_init.makeMiningRequest().send().wait(connection->waitScope())};
+        BOOST_CHECK(make_mining_response.hasResult());
+        auto remote_mining{make_mining_response.getResult()};
+
+        auto is_test_chain_response{remote_mining.isTestChainRequest().send().wait(connection->waitScope())};
+        BOOST_CHECK(is_test_chain_response.getResult());
+
+        auto get_tip_response{remote_mining.getTipRequest().send().wait(connection->waitScope())};
+        std::optional<interfaces::BlockRef> tip{ipc::capnp::ReadOptionalBlockRef(get_tip_response.getResult())};
+        BOOST_REQUIRE(tip);
+        BOOST_CHECK_EQUAL(tip->height, 456);
+
+        auto create_block_request{remote_mining.createNewBlockRequest()};
+        node::BlockCreateOptions create_options;
+        create_options.use_mempool = false;
+        ipc::capnp::BuildBlockCreateOptions(create_block_request.initOptions(), create_options);
+        auto create_block_response{create_block_request.send().wait(connection->waitScope())};
+        auto optional_template{create_block_response.getResult()};
+        BOOST_REQUIRE(optional_template.which() == ipc::capnp::messages::OptionalBlockTemplate::VALUE);
+        auto remote_template{optional_template.getValue()};
+
+        auto header_response{remote_template.getBlockHeaderRequest().send().wait(connection->waitScope())};
+        CBlockHeader header{ipc::capnp::ReadData<CBlockHeader>(header_response.getResult())};
+        BOOST_CHECK_EQUAL(header.nVersion, 7);
+
+        auto fees_response{remote_template.getTxFeesRequest().send().wait(connection->waitScope())};
+        BOOST_REQUIRE_EQUAL(fees_response.getResult().size(), 2);
+        BOOST_CHECK_EQUAL(fees_response.getResult()[0], 1);
+        BOOST_CHECK_EQUAL(fees_response.getResult()[1], 2);
+
+        auto check_block_request{remote_mining.checkBlockRequest()};
+        CBlock block;
+        block.nVersion = 7;
+        const std::vector<unsigned char> serialized_block{ipc::capnp::SerializeData(block)};
+        check_block_request.setBlock(ipc::capnp::MakeDataReader(serialized_block));
+        ipc::capnp::BuildBlockCheckOptions(check_block_request.initOptions(), {});
+        auto check_block_response{check_block_request.send().wait(connection->waitScope())};
+        BOOST_CHECK(check_block_response.getResult());
+        BOOST_CHECK_EQUAL(check_block_response.getReason().cStr(), "reason");
+        BOOST_CHECK_EQUAL(check_block_response.getDebug().cStr(), "debug");
     }
     thread.join();
 }
@@ -319,7 +438,13 @@ void IpcSocketPairTest()
     std::unique_ptr<interfaces::Init> remote_init{protocol->connect(fds[1], "test-connect")};
     std::unique_ptr<interfaces::Echo> remote_echo{remote_init->makeEcho()};
     BOOST_CHECK_EQUAL(remote_echo->echo("echo test"), "echo test");
+    std::unique_ptr<interfaces::Mining> remote_mining{remote_init->makeMining()};
+    BOOST_CHECK(remote_mining->isTestChain());
+    std::optional<interfaces::BlockRef> tip{remote_mining->getTip()};
+    BOOST_REQUIRE(tip);
+    BOOST_CHECK_EQUAL(tip->height, 456);
     remote_echo.reset();
+    remote_mining.reset();
     remote_init.reset();
     thread.join();
 }
