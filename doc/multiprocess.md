@@ -33,11 +33,10 @@ The `cmake` build will pick up settings and library locations from the depends d
 
 ### Cross-compiling
 
-When cross-compiling and not using depends, native code generation tools from [libmultiprocess](https://github.com/bitcoin-core/libmultiprocess) and [Cap'n Proto](https://capnproto.org/) are required. They can be passed to the cmake build by specifying `-DMPGEN_EXECUTABLE=/path/to/mpgen -DCAPNP_EXECUTABLE=/path/to/capnp -DCAPNPC_CXX_EXECUTABLE=/path/to/capnpc-c++` options.
-
-### External libmultiprocess installation
-
-By default when `-DENABLE_IPC=ON` is enabled, the libmultiprocess sources at [../src/ipc/libmultiprocess/](../src/ipc/libmultiprocess/) are built as part of the bitcoin cmake build, but alternately an external [libmultiprocess](https://github.com/bitcoin-core/libmultiprocess/) cmake package can be used instead by following its [installation instructions](https://github.com/bitcoin-core/libmultiprocess/blob/master/doc/install.md) and specifying `-DWITH_EXTERNAL_LIBMULTIPROCESS=ON` to the bitcoin build, so it will use the external package instead of the sources. This can be useful when making changes to the upstream project. If libmultiprocess is not installed in a default system location it is possible to specify the [`CMAKE_PREFIX_PATH`](https://cmake.org/cmake/help/latest/envvar/CMAKE_PREFIX_PATH.html) environment variable to point to the installation prefix where libmultiprocess is installed.
+When cross-compiling and not using depends, native code generation tools from
+[Cap'n Proto](https://capnproto.org/) are required. They can be passed to the
+cmake build by specifying `-DCAPNP_EXECUTABLE=/path/to/capnp` and
+`-DCAPNPC_CXX_EXECUTABLE=/path/to/capnpc-c++` options.
 
 ## Usage
 
