@@ -176,7 +176,7 @@ endif
 
 ifneq ($(ipc_packages_),)
 packages += $(ipc_packages)
-native_packages += $(multiprocess_native_packages)
+native_packages += $(ipc_native_packages)
 endif
 
 all_packages = $(packages) $(native_packages)

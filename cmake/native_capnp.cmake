@@ -7,9 +7,8 @@
 target_native_capnp_sources
 ---------------------------
 
-This function adds standard Cap'n Proto C++ generated files to a target. Unlike
-libmultiprocess' target_capnp_sources() helper, this only generates native
-Cap'n Proto output:
+This function adds standard Cap'n Proto C++ generated files to a target. It only
+generates native Cap'n Proto output:
 
   - *.capnp.c++
   - *.capnp.h
