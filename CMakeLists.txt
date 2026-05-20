@@ -158,6 +158,18 @@ endif()
 cmake_dependent_option(WITH_DBUS "Enable DBus support." ON "NOT CMAKE_SYSTEM_NAME MATCHES \"(Windows|Darwin)\" AND BUILD_GUI" OFF)
 
 cmake_dependent_option(ENABLE_IPC "Build multiprocess bitcoin-node and bitcoin-gui executables in addition to monolithic bitcoind and bitcoin-qt executables." ON "NOT WIN32" OFF)
+if(ENABLE_IPC)
+  find_package(CapnProto 0.7 QUIET NO_MODULE)
+  if(NOT CapnProto_FOUND)
+    message(FATAL_ERROR
+      "Cap'n Proto is required but was not found.\n"
+      "To resolve, choose one of the following:\n"
+      "  - Install Cap'n Proto (version 1.0+ recommended)\n"
+      "  - Build with -DENABLE_IPC=OFF to disable multiprocess support\n"
+    )
+  endif()
+endif()
+
 cmake_dependent_option(WITH_EXTERNAL_LIBMULTIPROCESS "Build with external libmultiprocess library instead of with local git subtree when ENABLE_IPC is enabled. This is not normally recommended, but can be useful for developing libmultiprocess itself." OFF "ENABLE_IPC" OFF)
 if(ENABLE_IPC AND WITH_EXTERNAL_LIBMULTIPROCESS)
   find_package(Libmultiprocess REQUIRED COMPONENTS Lib)
