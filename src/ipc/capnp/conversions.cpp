@@ -59,6 +59,27 @@ void BuildBlockRef(messages::BlockRef::Builder output, const interfaces::BlockRe
     output.setHeight(value.height);
 }
 
+std::optional<interfaces::BlockRef> ReadOptionalBlockRef(messages::OptionalBlockRef::Reader input)
+{
+    switch (input.which()) {
+    case messages::OptionalBlockRef::NONE:
+        return std::nullopt;
+    case messages::OptionalBlockRef::VALUE:
+        return ReadBlockRef(input.getValue());
+    }
+    assert(false);
+    return std::nullopt;
+}
+
+void BuildOptionalBlockRef(messages::OptionalBlockRef::Builder output, const std::optional<interfaces::BlockRef>& value)
+{
+    if (value) {
+        BuildBlockRef(output.initValue(), *value);
+    } else {
+        output.setNone({});
+    }
+}
+
 node::BlockCreateOptions ReadBlockCreateOptions(messages::BlockCreateOptions::Reader input)
 {
     node::BlockCreateOptions options;

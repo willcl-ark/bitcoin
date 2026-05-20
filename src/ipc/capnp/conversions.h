@@ -19,6 +19,7 @@
 #include <capnp/blob.h>
 
 #include <cstring>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -70,6 +71,9 @@ CTransactionRef ReadTransaction(::capnp::Data::Reader input);
 
 interfaces::BlockRef ReadBlockRef(messages::BlockRef::Reader input);
 void BuildBlockRef(messages::BlockRef::Builder output, const interfaces::BlockRef& value);
+
+std::optional<interfaces::BlockRef> ReadOptionalBlockRef(messages::OptionalBlockRef::Reader input);
+void BuildOptionalBlockRef(messages::OptionalBlockRef::Builder output, const std::optional<interfaces::BlockRef>& value);
 
 node::BlockCreateOptions ReadBlockCreateOptions(messages::BlockCreateOptions::Reader input);
 void BuildBlockCreateOptions(messages::BlockCreateOptions::Builder output, const node::BlockCreateOptions& value);
