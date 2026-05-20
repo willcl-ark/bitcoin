@@ -3,13 +3,19 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <interfaces/init.h>
+#include <ipc/capnp/echo.capnp.h>
 #include <ipc/capnp/context.h>
 #include <ipc/capnp/init.capnp.h>
 #include <ipc/capnp/init.capnp.proxy.h>
 #include <ipc/capnp/protocol.h>
 #include <ipc/exception.h>
 #include <ipc/protocol.h>
+
+#include <capnp/rpc-twoparty.h>
+
+#include <kj/async-io.h>
 #include <kj/async.h>
+#include <kj/debug.h>
 #include <logging.h>
 #include <mp/proxy-io.h>
 #include <mp/proxy-types.h>
@@ -26,6 +32,7 @@
 #include <sys/socket.h>
 #include <system_error>
 #include <thread>
+#include <utility>
 
 namespace ipc {
 namespace capnp {
@@ -67,6 +74,56 @@ void IpcLogFn(mp::LogMessage message)
     // should only be shown at our most verbose level.
     LogTrace(BCLog::IPC, "%s", message.message);
 }
+
+struct NativeServerVatId
+{
+    ::capnp::word scratch[4]{};
+    ::capnp::MallocMessageBuilder message{scratch};
+    ::capnp::rpc::twoparty::VatId::Builder vat_id{message.getRoot<::capnp::rpc::twoparty::VatId>()};
+    NativeServerVatId() { vat_id.setSide(::capnp::rpc::twoparty::Side::SERVER); }
+};
+
+class EchoServer final : public messages::Echo::Server
+{
+public:
+    explicit EchoServer(std::unique_ptr<interfaces::Echo> echo) : m_echo{std::move(echo)} {}
+
+protected:
+    kj::Promise<void> destroy(DestroyContext) override
+    {
+        m_echo.reset();
+        return kj::READY_NOW;
+    }
+
+    kj::Promise<void> echo(EchoContext context) override
+    {
+        KJ_REQUIRE(m_echo != nullptr, "Echo interface was already destroyed.");
+        const std::string result{m_echo->echo(context.getParams().getEcho().cStr())};
+        context.getResults().setResult(result);
+        return kj::READY_NOW;
+    }
+
+private:
+    std::unique_ptr<interfaces::Echo> m_echo;
+};
+
+class InitServer final : public messages::Init::Server
+{
+public:
+    explicit InitServer(interfaces::Init& init) : m_init{init} {}
+
+protected:
+    kj::Promise<void> makeEcho(MakeEchoContext context) override
+    {
+        auto echo{m_init.makeEcho()};
+        KJ_REQUIRE(echo != nullptr, "Init::makeEcho returned null.");
+        context.getResults().setResult(messages::Echo::Client{kj::heap<EchoServer>(std::move(echo))});
+        return kj::READY_NOW;
+    }
+
+private:
+    interfaces::Init& m_init;
+};
 
 class CapnpProtocol : public Protocol
 {
@@ -150,6 +207,59 @@ public:
     mp::Connection* m_parent_connection{nullptr};
 };
 } // namespace
+
+class NativeConnection::Impl
+{
+public:
+    explicit Impl(int fd)
+        : m_io_context{kj::setupAsyncIo()},
+          m_stream{m_io_context.lowLevelProvider->wrapSocketFd(fd, kj::LowLevelAsyncIoProvider::TAKE_OWNERSHIP)},
+          m_network{*m_stream, ::capnp::rpc::twoparty::Side::CLIENT, ::capnp::ReaderOptions{}},
+          m_rpc_system{::capnp::makeRpcClient(m_network)},
+          m_init{m_rpc_system.bootstrap(NativeServerVatId().vat_id).castAs<messages::Init>()}
+    {
+    }
+
+    messages::Init::Client init() { return m_init; }
+    kj::WaitScope& waitScope() { return m_io_context.waitScope; }
+
+private:
+    kj::AsyncIoContext m_io_context;
+    kj::Own<kj::AsyncIoStream> m_stream;
+    ::capnp::TwoPartyVatNetwork m_network;
+    ::capnp::RpcSystem<::capnp::rpc::twoparty::VatId> m_rpc_system;
+    messages::Init::Client m_init;
+};
+
+NativeConnection::NativeConnection(int fd) : m_impl{std::make_unique<Impl>(fd)} {}
+NativeConnection::~NativeConnection() = default;
+
+messages::Init::Client NativeConnection::init()
+{
+    return m_impl->init();
+}
+
+kj::WaitScope& NativeConnection::waitScope()
+{
+    return m_impl->waitScope();
+}
+
+std::unique_ptr<NativeConnection> ConnectNative(int fd)
+{
+    return std::make_unique<NativeConnection>(fd);
+}
+
+void ServeNative(int fd, interfaces::Init& init, const std::function<void()>& ready_fn)
+{
+    auto io_context{kj::setupAsyncIo()};
+    auto stream{io_context.lowLevelProvider->wrapSocketFd(fd, kj::LowLevelAsyncIoProvider::TAKE_OWNERSHIP)};
+    ::capnp::TwoPartyVatNetwork network{*stream, ::capnp::rpc::twoparty::Side::SERVER, ::capnp::ReaderOptions{}};
+    ::capnp::Capability::Client bootstrap{kj::heap<InitServer>(init)};
+    auto rpc_system{::capnp::makeRpcServer(network, kj::mv(bootstrap))};
+    (void)rpc_system;
+    if (ready_fn) ready_fn();
+    network.onDisconnect().wait(io_context.waitScope);
+}
 
 std::unique_ptr<Protocol> MakeCapnpProtocol() { return std::make_unique<CapnpProtocol>(); }
 } // namespace capnp

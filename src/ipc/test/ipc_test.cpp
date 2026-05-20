@@ -233,6 +233,34 @@ public:
     std::unique_ptr<interfaces::Echo> makeEcho() override { return interfaces::MakeEcho(); }
 };
 
+//! Test native Cap'n Proto Init and Echo calls over a socketpair.
+void IpcNativeSocketPairTest()
+{
+    int fds[2];
+    BOOST_CHECK_EQUAL(socketpair(AF_UNIX, SOCK_STREAM, 0, fds), 0);
+    std::unique_ptr<interfaces::Init> init{std::make_unique<TestInit>()};
+    std::promise<void> promise;
+    std::thread thread([&]() {
+        ipc::capnp::ServeNative(fds[0], *init, [&] { promise.set_value(); });
+    });
+    promise.get_future().wait();
+
+    {
+        std::unique_ptr<ipc::capnp::NativeConnection> connection{ipc::capnp::ConnectNative(fds[1])};
+        auto remote_init{connection->init()};
+        auto make_echo_request{remote_init.makeEchoRequest()};
+        auto make_echo_response{make_echo_request.send().wait(connection->waitScope())};
+        BOOST_CHECK(make_echo_response.hasResult());
+
+        auto remote_echo{make_echo_response.getResult()};
+        auto echo_request{remote_echo.echoRequest()};
+        echo_request.setEcho("echo test");
+        auto echo_response{echo_request.send().wait(connection->waitScope())};
+        BOOST_CHECK_EQUAL(echo_response.getResult().cStr(), "echo test");
+    }
+    thread.join();
+}
+
 //! Generate a temporary path with temp_directory_path and mkstemp
 static std::string TempPath(std::string_view pattern)
 {

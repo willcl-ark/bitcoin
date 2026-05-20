@@ -24,6 +24,7 @@ public:
 };
 
 void IpcPipeTest();
+void IpcNativeSocketPairTest();
 void IpcSocketPairTest();
 void IpcSocketTest(const fs::path& datadir);
 void IpcConversionTest();
