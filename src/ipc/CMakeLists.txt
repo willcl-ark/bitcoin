@@ -14,13 +14,13 @@ add_library(bitcoin_ipc STATIC EXCLUDE_FROM_ALL
 target_capnp_sources(bitcoin_ipc ${CMAKE_CURRENT_SOURCE_DIR}
   capnp/common.capnp
   capnp/mining.capnp
-  capnp/rpc.capnp
 )
 
 get_property(mp_include_dir GLOBAL PROPERTY MP_INCLUDE_DIR)
 target_native_capnp_sources(bitcoin_ipc ${CMAKE_CURRENT_SOURCE_DIR}
   capnp/echo.capnp
   capnp/init.capnp
+  capnp/rpc.capnp
   IMPORT_PATHS ${mp_include_dir}
 )
 

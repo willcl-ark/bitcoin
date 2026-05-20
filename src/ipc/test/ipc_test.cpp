@@ -231,9 +231,25 @@ class TestInit : public interfaces::Init
 {
 public:
     std::unique_ptr<interfaces::Echo> makeEcho() override { return interfaces::MakeEcho(); }
+    std::unique_ptr<interfaces::Rpc> makeRpc() override
+    {
+        class Rpc final : public interfaces::Rpc
+        {
+        public:
+            UniValue executeRpc(UniValue request, std::string uri, std::string user) override
+            {
+                UniValue result{UniValue::VOBJ};
+                result.pushKV("request", request);
+                result.pushKV("uri", uri);
+                result.pushKV("user", user);
+                return result;
+            }
+        };
+        return std::make_unique<Rpc>();
+    }
 };
 
-//! Test native Cap'n Proto Init and Echo calls over a socketpair.
+//! Test native Cap'n Proto Init, Echo, and Rpc calls over a socketpair.
 void IpcNativeSocketPairTest()
 {
     int fds[2];
@@ -257,6 +273,25 @@ void IpcNativeSocketPairTest()
         echo_request.setEcho("echo test");
         auto echo_response{echo_request.send().wait(connection->waitScope())};
         BOOST_CHECK_EQUAL(echo_response.getResult().cStr(), "echo test");
+
+        UniValue rpc_input{UniValue::VOBJ};
+        rpc_input.pushKV("method", "test");
+        rpc_input.pushKV("params", UniValue{UniValue::VARR});
+
+        auto make_rpc_request{remote_init.makeRpcRequest()};
+        auto make_rpc_response{make_rpc_request.send().wait(connection->waitScope())};
+        BOOST_CHECK(make_rpc_response.hasResult());
+
+        auto remote_rpc{make_rpc_response.getResult()};
+        auto rpc_request{remote_rpc.executeRpcRequest()};
+        rpc_request.setRequest(ipc::capnp::WriteUniValue(rpc_input));
+        rpc_request.setUri("/test");
+        rpc_request.setUser("user");
+        auto rpc_response{rpc_request.send().wait(connection->waitScope())};
+        UniValue rpc_output{ipc::capnp::ReadUniValue(rpc_response.getResult().cStr())};
+        BOOST_CHECK_EQUAL(rpc_output["request"]["method"].get_str(), "test");
+        BOOST_CHECK_EQUAL(rpc_output["uri"].get_str(), "/test");
+        BOOST_CHECK_EQUAL(rpc_output["user"].get_str(), "user");
     }
     thread.join();
 }

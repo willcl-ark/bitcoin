@@ -7,11 +7,6 @@
 using Cxx = import "/capnp/c++.capnp";
 $Cxx.namespace("ipc::capnp::messages");
 
-using Common = import "common.capnp";
-using Proxy = import "/mp/proxy.capnp";
-$Proxy.include("interfaces/rpc.h");
-$Proxy.includeTypes("ipc/capnp/rpc-types.h");
-
-interface Rpc $Proxy.wrap("interfaces::Rpc") {
-    executeRpc @0 (context :Proxy.Context, request :Text, uri :Text, user :Text) -> (result :Text);
+interface Rpc {
+    executeRpc @0 (request :Text, uri :Text, user :Text) -> (result :Text);
 }

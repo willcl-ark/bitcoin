@@ -4,10 +4,14 @@
 
 #include <interfaces/echo.h>
 #include <interfaces/init.h>
+#include <interfaces/rpc.h>
+#include <ipc/capnp/conversions.h>
 #include <ipc/capnp/echo.capnp.h>
 #include <ipc/capnp/context.h>
 #include <ipc/capnp/init.capnp.h>
 #include <ipc/capnp/protocol.h>
+#include <ipc/capnp/rpc.capnp.h>
+#include <ipc/capnp/worker_queue.h>
 #include <ipc/protocol.h>
 
 #include <capnp/rpc-twoparty.h>
@@ -63,10 +67,40 @@ private:
     std::unique_ptr<interfaces::Echo> m_echo;
 };
 
+class RpcServer final : public messages::Rpc::Server
+{
+public:
+    RpcServer(std::unique_ptr<interfaces::Rpc> rpc, std::shared_ptr<WorkerQueue> worker_queue)
+        : m_rpc{std::move(rpc)}, m_worker_queue{std::move(worker_queue)}
+    {
+    }
+
+protected:
+    kj::Promise<void> executeRpc(ExecuteRpcContext context) override
+    {
+        auto params{context.getParams()};
+        std::string request{params.getRequest().cStr()};
+        std::string uri{params.getUri().cStr()};
+        std::string user{params.getUser().cStr()};
+        return m_worker_queue->post([rpc = m_rpc, request = std::move(request), uri = std::move(uri), user = std::move(user)] {
+            return WriteUniValue(rpc->executeRpc(ReadUniValue(request), uri, user));
+        }).then([context = kj::mv(context)](std::string result) mutable {
+            context.getResults().setResult(result);
+        });
+    }
+
+private:
+    std::shared_ptr<interfaces::Rpc> m_rpc;
+    std::shared_ptr<WorkerQueue> m_worker_queue;
+};
+
 class InitServer final : public messages::Init::Server
 {
 public:
-    explicit InitServer(interfaces::Init& init) : m_init{init} {}
+    InitServer(interfaces::Init& init, std::shared_ptr<WorkerQueue> worker_queue)
+        : m_init{init}, m_worker_queue{std::move(worker_queue)}
+    {
+    }
 
 protected:
     kj::Promise<void> makeEcho(MakeEchoContext context) override
@@ -77,8 +111,17 @@ protected:
         return kj::READY_NOW;
     }
 
+    kj::Promise<void> makeRpc(MakeRpcContext context) override
+    {
+        auto rpc{m_init.makeRpc()};
+        KJ_REQUIRE(rpc != nullptr, "Init::makeRpc returned null.");
+        context.getResults().setResult(messages::Rpc::Client{kj::heap<RpcServer>(std::move(rpc), m_worker_queue)});
+        return kj::READY_NOW;
+    }
+
 private:
     interfaces::Init& m_init;
+    std::shared_ptr<WorkerQueue> m_worker_queue;
 };
 
 struct ClientContext {
@@ -132,6 +175,31 @@ private:
     std::shared_ptr<ClientContext> m_context;
 };
 
+class RpcClient final : public interfaces::Rpc, public CleanupHandler
+{
+public:
+    RpcClient(messages::Rpc::Client rpc, std::shared_ptr<ClientContext> context)
+        : m_rpc{kj::mv(rpc)}, m_context{std::move(context)}
+    {
+    }
+    ~RpcClient() noexcept override = default;
+
+    UniValue executeRpc(UniValue request, std::string uri, std::string user) override
+    {
+        std::lock_guard<std::mutex> lock{m_context->mutex};
+        auto rpc_request{m_rpc.executeRpcRequest()};
+        rpc_request.setRequest(WriteUniValue(request));
+        rpc_request.setUri(uri);
+        rpc_request.setUser(user);
+        auto response{rpc_request.send().wait(m_context->connection->waitScope())};
+        return ReadUniValue(response.getResult().cStr());
+    }
+
+private:
+    messages::Rpc::Client m_rpc;
+    std::shared_ptr<ClientContext> m_context;
+};
+
 class InitClient final : public interfaces::Init, public CleanupHandler
 {
 public:
@@ -143,6 +211,13 @@ public:
         std::lock_guard<std::mutex> lock{m_context->mutex};
         auto response{m_context->connection->init().makeEchoRequest().send().wait(m_context->connection->waitScope())};
         return std::make_unique<EchoClient>(response.getResult(), m_context);
+    }
+
+    std::unique_ptr<interfaces::Rpc> makeRpc() override
+    {
+        std::lock_guard<std::mutex> lock{m_context->mutex};
+        auto response{m_context->connection->init().makeRpcRequest().send().wait(m_context->connection->waitScope())};
+        return std::make_unique<RpcClient>(response.getResult(), m_context);
     }
 
 private:
@@ -221,6 +296,8 @@ public:
             handler = dynamic_cast<CleanupHandler*>(static_cast<interfaces::Init*>(iface));
         } else if (type == typeid(interfaces::Echo)) {
             handler = dynamic_cast<CleanupHandler*>(static_cast<interfaces::Echo*>(iface));
+        } else if (type == typeid(interfaces::Rpc)) {
+            handler = dynamic_cast<CleanupHandler*>(static_cast<interfaces::Rpc*>(iface));
         }
         if (!handler) throw std::runtime_error("IPC cleanup can only be added to native IPC clients.");
         handler->addCleanup(std::move(cleanup));
@@ -365,7 +442,8 @@ void ServeNative(int fd, interfaces::Init& init, const std::function<void()>& re
     auto io_context{kj::setupAsyncIo()};
     auto stream{io_context.lowLevelProvider->wrapSocketFd(fd, kj::LowLevelAsyncIoProvider::TAKE_OWNERSHIP)};
     ::capnp::TwoPartyVatNetwork network{*stream, ::capnp::rpc::twoparty::Side::SERVER, ::capnp::ReaderOptions{}};
-    ::capnp::Capability::Client bootstrap{kj::heap<InitServer>(init)};
+    auto worker_queue{std::make_shared<WorkerQueue>("ipc-worker")};
+    ::capnp::Capability::Client bootstrap{kj::heap<InitServer>(init, worker_queue)};
     auto rpc_system{::capnp::makeRpcServer(network, kj::mv(bootstrap))};
     (void)rpc_system;
     if (ready_fn) ready_fn();
