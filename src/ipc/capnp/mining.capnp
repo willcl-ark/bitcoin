@@ -40,6 +40,20 @@ interface BlockTemplate $Proxy.wrap("interfaces::BlockTemplate") {
     interruptWait @9() -> ();
 }
 
+struct OptionalBlockRef {
+    union {
+        none @0 :Void;
+        value @1 :Common.BlockRef;
+    }
+}
+
+struct OptionalBlockTemplate {
+    union {
+        none @0 :Void;
+        value @1 :BlockTemplate;
+    }
+}
+
 struct BlockCreateOptions $Proxy.wrap("node::BlockCreateOptions") {
     useMempool @0 :Bool = true $Proxy.name("use_mempool");
     blockReservedWeight @1 :UInt64 = .defaultBlockReservedWeight $Proxy.name("block_reserved_weight");
