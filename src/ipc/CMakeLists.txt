@@ -4,6 +4,7 @@
 
 add_library(bitcoin_ipc STATIC EXCLUDE_FROM_ALL
   capnp/conversions.cpp
+  capnp/event_loop.cpp
   capnp/protocol.cpp
   capnp/worker_queue.cpp
   interfaces.cpp

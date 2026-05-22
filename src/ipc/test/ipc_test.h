@@ -12,5 +12,6 @@ void IpcSocketPairTest();
 void IpcSocketTest(const fs::path& datadir);
 void IpcConversionTest();
 void IpcWorkerQueueTest();
+void IpcEventLoopDispatcherTest();
 
 #endif // BITCOIN_IPC_TEST_IPC_TEST_H

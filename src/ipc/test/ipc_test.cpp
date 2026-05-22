@@ -5,6 +5,7 @@
 #include <interfaces/init.h>
 #include <interfaces/types.h>
 #include <ipc/capnp/conversions.h>
+#include <ipc/capnp/event_loop.h>
 #include <ipc/capnp/mining.capnp.h>
 #include <ipc/capnp/protocol.h>
 #include <ipc/capnp/worker_queue.h>
@@ -17,10 +18,13 @@
 #include <capnp/message.h>
 
 #include <atomic>
+#include <chrono>
 #include <future>
 #include <string>
 #include <thread>
+#include <kj/async-io.h>
 #include <kj/common.h>
+#include <kj/time.h>
 #include <kj/test.h>
 #include <stdexcept>
 
@@ -218,6 +222,46 @@ void IpcWorkerQueueTest()
         BOOST_CHECK_EXCEPTION(failed.wait(wait_scope), kj::Exception, [](const kj::Exception& e) {
             return std::string{e.getDescription().cStr()}.find("queue failure") != std::string::npos;
         });
+    }
+}
+
+void IpcEventLoopDispatcherTest()
+{
+    auto io_context{kj::setupAsyncIo()};
+    auto dispatcher{ipc::capnp::EventLoopDispatcher::CurrentThread()};
+    const std::thread::id event_loop_thread{std::this_thread::get_id()};
+
+    {
+        bool ran{false};
+        dispatcher->execute([&] {
+            BOOST_CHECK_EQUAL(std::this_thread::get_id(), event_loop_thread);
+            ran = true;
+        });
+        BOOST_CHECK(ran);
+    }
+
+    {
+        std::atomic<bool> ran{false};
+        std::thread::id callback_thread;
+        std::thread worker{[&] {
+            dispatcher->execute([&] {
+                callback_thread = std::this_thread::get_id();
+                ran.store(true, std::memory_order_release);
+            });
+        }};
+
+        const auto deadline{std::chrono::steady_clock::now() + std::chrono::seconds{5}};
+        bool timed_out{false};
+        while (!ran.load(std::memory_order_acquire)) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                timed_out = true;
+                break;
+            }
+            io_context.provider->getTimer().afterDelay(1 * kj::MILLISECONDS).wait(io_context.waitScope);
+        }
+        worker.join();
+        BOOST_REQUIRE(!timed_out);
+        BOOST_CHECK_EQUAL(callback_thread, event_loop_thread);
     }
 }
 

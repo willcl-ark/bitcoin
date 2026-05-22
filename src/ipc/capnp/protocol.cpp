@@ -8,6 +8,7 @@
 #include <interfaces/rpc.h>
 #include <ipc/capnp/conversions.h>
 #include <ipc/capnp/echo.capnp.h>
+#include <ipc/capnp/event_loop.h>
 #include <ipc/capnp/init.capnp.h>
 #include <ipc/capnp/protocol.h>
 #include <ipc/capnp/rpc.capnp.h>
@@ -295,8 +296,8 @@ private:
 class InitServer final : public messages::Init::Server
 {
 public:
-    InitServer(interfaces::Init& init, std::shared_ptr<WorkerQueue> worker_queue)
-        : m_init{init}, m_worker_queue{std::move(worker_queue)}
+    InitServer(interfaces::Init& init, std::shared_ptr<WorkerQueue> worker_queue, std::shared_ptr<EventLoopDispatcher> event_loop)
+        : m_init{init}, m_worker_queue{std::move(worker_queue)}, m_event_loop{std::move(event_loop)}
     {
     }
 
@@ -328,6 +329,7 @@ protected:
 private:
     interfaces::Init& m_init;
     std::shared_ptr<WorkerQueue> m_worker_queue;
+    std::shared_ptr<EventLoopDispatcher> m_event_loop;
 };
 
 class ServerConnection
@@ -547,7 +549,8 @@ void ServeNative(int fd, interfaces::Init& init, const std::function<void()>& re
     auto stream{io_context.lowLevelProvider->wrapSocketFd(fd, kj::LowLevelAsyncIoProvider::TAKE_OWNERSHIP)};
     ::capnp::TwoPartyVatNetwork network{*stream, ::capnp::rpc::twoparty::Side::SERVER, ::capnp::ReaderOptions{}};
     auto worker_queue{std::make_shared<WorkerQueue>("ipc-worker")};
-    ::capnp::Capability::Client bootstrap{kj::heap<InitServer>(init, worker_queue)};
+    auto event_loop{EventLoopDispatcher::CurrentThread()};
+    ::capnp::Capability::Client bootstrap{kj::heap<InitServer>(init, worker_queue, event_loop)};
     auto rpc_system{::capnp::makeRpcServer(network, kj::mv(bootstrap))};
     (void)rpc_system;
     if (ready_fn) ready_fn();
