@@ -211,9 +211,11 @@ if [[ ${BARE_METAL_RISCV} == "true" ]]; then
         test.o \
         start.o \
         syscalls.o \
+        -Wl,--whole-archive \
         "${BASE_BUILD_DIR}"/lib/libbitcoin_consensus.a \
         "${BASE_BUILD_DIR}"/lib/libbitcoin_crypto.a \
         "${BASE_BUILD_DIR}"/src/secp256k1/lib/libsecp256k1.a \
+        -Wl,--no-whole-archive \
         /opt/riscv-ilp32/riscv32-unknown-elf/lib/libstdc++.a \
         /opt/newlib/riscv32-unknown-elf/lib/libc.a \
         /opt/newlib/riscv32-unknown-elf/lib/libm.a \
