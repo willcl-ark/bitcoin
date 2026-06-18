@@ -90,7 +90,7 @@
       "name": "ci-common",
       "hidden": true,
       "errors": {"dev": true},
-      "installDir": "$env{BASE_OUTDIR}",
+      "binaryDir": "${sourceDir}/build-${presetName}",
       "cacheVariables": {
         "BUILD_BENCH": "ON",
         "BUILD_FUZZ_BINARY": "ON",
@@ -98,25 +98,13 @@
       }
     },
     {
-      "name": "ci-common-depends",
-      "hidden": true,
-      "inherits": "ci-common",
-      "toolchainFile": "$env{DEPENDS_DIR}/$env{HOST}/toolchain.cmake"
-    },
-    {
       "name": "ci-dev-mode",
       "hidden": true,
-      "inherits": ["dev-mode", "ci-common"]
-    },
-    {
-      "name": "ci-dev-mode-depends",
-      "hidden": true,
-      "inherits": "ci-dev-mode",
-      "toolchainFile": "$env{DEPENDS_DIR}/$env{HOST}/toolchain.cmake"
+      "inherits": ["ci-common", "dev-mode"]
     },
     {
       "name": "ci-arm-linux",
-      "inherits": "ci-dev-mode-depends",
+      "inherits": "ci-dev-mode",
       "cacheVariables": {
         "CMAKE_CXX_FLAGS": "-Wno-psabi -Wno-error=maybe-uninitialized",
         "REDUCE_EXPORTS": "ON"
@@ -124,7 +112,7 @@
     },
     {
       "name": "ci-freebsd-cross",
-      "inherits": "ci-dev-mode-depends",
+      "inherits": "ci-dev-mode",
       "cacheVariables": {
         "REDUCE_EXPORTS": "ON",
         "WITH_USDT": "OFF"
@@ -132,7 +120,7 @@
     },
     {
       "name": "ci-i686-no-ipc",
-      "inherits": "ci-dev-mode-depends",
+      "inherits": "ci-dev-mode",
       "cacheVariables": {
         "APPEND_CPPFLAGS": "-DBOOST_MULTI_INDEX_ENABLE_SAFE_MODE",
         "CMAKE_BUILD_TYPE": "Debug",
@@ -141,7 +129,7 @@
     },
     {
       "name": "ci-macos-cross",
-      "inherits": "ci-dev-mode-depends",
+      "inherits": "ci-dev-mode",
       "cacheVariables": {
         "REDUCE_EXPORTS": "ON",
         "WITH_USDT": "OFF"
@@ -169,7 +157,7 @@
     },
     {
       "name": "ci-native-alpine-musl",
-      "inherits": "ci-dev-mode-depends",
+      "inherits": "ci-dev-mode",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "REDUCE_EXPORTS": "ON"
@@ -191,7 +179,7 @@
     },
     {
       "name": "ci-native-chimera-lto",
-      "inherits": "ci-dev-mode-depends",
+      "inherits": "ci-dev-mode",
       "cacheVariables": {
         "BUILD_GUI": "OFF",
         "CMAKE_INTERPROCEDURAL_OPTIMIZATION": "ON",
@@ -212,7 +200,7 @@
     },
     {
       "name": "ci-native-fuzz-msan",
-      "inherits": "ci-common-depends",
+      "inherits": "ci-common",
       "cacheVariables": {
         "APPEND_CPPFLAGS": "-DBOOST_MULTI_INDEX_ENABLE_SAFE_MODE -U_FORTIFY_SOURCE",
         "BUILD_FOR_FUZZING": "ON",
@@ -236,14 +224,12 @@
       "inherits": "ci-dev-mode",
       "cacheVariables": {
         "BUILD_GUI": "OFF",
-        "CMAKE_C_COMPILER": "clang-$env{IWYU_LLVM_V}",
-        "CMAKE_CXX_COMPILER": "clang++-$env{IWYU_LLVM_V}",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
     },
     {
       "name": "ci-native-msan",
-      "inherits": "ci-dev-mode-depends",
+      "inherits": "ci-dev-mode",
       "cacheVariables": {
         "APPEND_CPPFLAGS": "-U_FORTIFY_SOURCE",
         "BUILD_GUI": "OFF",
@@ -255,7 +241,7 @@
     },
     {
       "name": "ci-native-nowallet",
-      "inherits": "ci-dev-mode-depends",
+      "inherits": "ci-dev-mode",
       "cacheVariables": {
         "ENABLE_WALLET": "OFF",
         "REDUCE_EXPORTS": "ON",
@@ -264,7 +250,7 @@
     },
     {
       "name": "ci-native-previous-releases",
-      "inherits": "ci-dev-mode-depends",
+      "inherits": "ci-dev-mode",
       "cacheVariables": {
         "APPEND_CPPFLAGS": "-DBOOST_MULTI_INDEX_ENABLE_SAFE_MODE",
         "CMAKE_BUILD_TYPE": "Debug",
@@ -279,8 +265,6 @@
       "name": "ci-native-tidy",
       "inherits": "ci-dev-mode",
       "cacheVariables": {
-        "CMAKE_C_COMPILER": "clang-$env{TIDY_LLVM_V}",
-        "CMAKE_CXX_COMPILER": "clang++-$env{TIDY_LLVM_V}",
         "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-O0 -g0",
         "CMAKE_C_FLAGS_RELWITHDEBINFO": "-O0 -g0",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
@@ -288,7 +272,7 @@
     },
     {
       "name": "ci-native-tsan",
-      "inherits": "ci-dev-mode-depends",
+      "inherits": "ci-dev-mode",
       "cacheVariables": {
         "APPEND_CPPFLAGS": "-DARENA_DEBUG -DDEBUG_LOCKCONTENTION -D_LIBCPP_REMOVE_TRANSITIVE_INCLUDES",
         "BUILD_GUI": "OFF",
@@ -307,14 +291,14 @@
     },
     {
       "name": "ci-s390x",
-      "inherits": "ci-dev-mode-depends",
+      "inherits": "ci-dev-mode",
       "cacheVariables": {
         "REDUCE_EXPORTS": "ON"
       }
     },
     {
       "name": "ci-win64",
-      "inherits": "ci-dev-mode-depends",
+      "inherits": "ci-dev-mode",
       "cacheVariables": {
         "CMAKE_CXX_FLAGS": "-Wno-error=maybe-uninitialized",
         "ENABLE_IPC": "OFF",
@@ -332,10 +316,6 @@
       },
       "execution": {
         "stopOnFailure": true
-      },
-      "environment": {
-        "DIR_UNIT_TEST_DATA": "$penv{DIR_UNIT_TEST_DATA}",
-        "LD_LIBRARY_PATH": "$penv{DEPENDS_DIR}/$penv{HOST}/lib"
       }
     },
     {

@@ -104,10 +104,32 @@ ccache --zero-stats
 # Folder where the build is done.
 BASE_BUILD_DIR=${BASE_BUILD_DIR:-$BASE_SCRATCH_DIR/build-$HOST}
 
-cmake \
-  -S "$BASE_ROOT_DIR" \
-  -B "$BASE_BUILD_DIR" \
-  --preset "$BITCOIN_CMAKE_PRESET" || (
+CMAKE_CONFIGURE_ARGS=(
+  -S "$BASE_ROOT_DIR"
+  -B "$BASE_BUILD_DIR"
+  --preset "$BITCOIN_CMAKE_PRESET"
+  -DCMAKE_INSTALL_PREFIX="$BASE_OUTDIR"
+)
+
+if [ -z "$NO_DEPENDS" ]; then
+  CMAKE_CONFIGURE_ARGS+=(--toolchain "$DEPENDS_DIR/$HOST/toolchain.cmake")
+fi
+
+if [ "$RUN_TIDY" = "true" ]; then
+  CMAKE_CONFIGURE_ARGS+=(
+    -DCMAKE_C_COMPILER="clang-$TIDY_LLVM_V"
+    -DCMAKE_CXX_COMPILER="clang++-$TIDY_LLVM_V"
+  )
+fi
+
+if [ "$RUN_IWYU" = "true" ]; then
+  CMAKE_CONFIGURE_ARGS+=(
+    -DCMAKE_C_COMPILER="clang-$IWYU_LLVM_V"
+    -DCMAKE_CXX_COMPILER="clang++-$IWYU_LLVM_V"
+  )
+fi
+
+cmake "${CMAKE_CONFIGURE_ARGS[@]}" || (
   cd "${BASE_BUILD_DIR}"
   # shellcheck disable=SC2046
   cat $(cmake -P "${BASE_ROOT_DIR}/ci/test/GetCMakeLogFiles.cmake")
@@ -175,6 +197,8 @@ if [[ "$CI_OS_NAME" == "macos" && "${GOAL}" = "install deploy" ]]; then
 fi
 
 if [ "$RUN_UNIT_TESTS" = "true" ]; then
+  DIR_UNIT_TEST_DATA="${DIR_UNIT_TEST_DATA}" \
+  LD_LIBRARY_PATH="${DEPENDS_DIR}/${HOST}/lib" \
   ctest \
     --preset "${BITCOIN_CMAKE_PRESET}-unit-tests" \
     --test-dir "${BASE_BUILD_DIR}" \
