@@ -30,7 +30,7 @@ function(bitcoin_depends_add_boost)
 
   add_library(bitcoin_depends_boost_headers INTERFACE)
   add_library(Boost::headers ALIAS bitcoin_depends_boost_headers)
-  target_include_directories(bitcoin_depends_boost_headers INTERFACE
+  target_include_directories(bitcoin_depends_boost_headers SYSTEM INTERFACE
     "${boost_include_dir}"
   )
   add_dependencies(bitcoin_depends_boost_headers bitcoin_depends_boost)

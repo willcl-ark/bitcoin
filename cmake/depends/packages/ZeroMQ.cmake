@@ -40,7 +40,7 @@ function(bitcoin_depends_add_zeromq)
 
   add_library(bitcoin_depends_zeromq_target INTERFACE)
   add_library(zeromq ALIAS bitcoin_depends_zeromq_target)
-  target_include_directories(bitcoin_depends_zeromq_target INTERFACE
+  target_include_directories(bitcoin_depends_zeromq_target SYSTEM INTERFACE
     "${zeromq_include_dir}"
   )
   target_link_libraries(bitcoin_depends_zeromq_target INTERFACE

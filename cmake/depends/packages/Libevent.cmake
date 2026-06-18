@@ -43,7 +43,7 @@ function(bitcoin_depends_add_libevent)
 
   add_library(bitcoin_depends_libevent_core INTERFACE)
   add_library(libevent::core ALIAS bitcoin_depends_libevent_core)
-  target_include_directories(bitcoin_depends_libevent_core INTERFACE
+  target_include_directories(bitcoin_depends_libevent_core SYSTEM INTERFACE
     "${libevent_include_dir}"
   )
   target_link_libraries(bitcoin_depends_libevent_core INTERFACE
@@ -53,7 +53,7 @@ function(bitcoin_depends_add_libevent)
 
   add_library(bitcoin_depends_libevent_extra INTERFACE)
   add_library(libevent::extra ALIAS bitcoin_depends_libevent_extra)
-  target_include_directories(bitcoin_depends_libevent_extra INTERFACE
+  target_include_directories(bitcoin_depends_libevent_extra SYSTEM INTERFACE
     "${libevent_include_dir}"
   )
   target_link_libraries(bitcoin_depends_libevent_extra INTERFACE
@@ -65,7 +65,7 @@ function(bitcoin_depends_add_libevent)
   if(NOT WIN32)
     add_library(bitcoin_depends_libevent_pthreads INTERFACE)
     add_library(libevent::pthreads ALIAS bitcoin_depends_libevent_pthreads)
-    target_include_directories(bitcoin_depends_libevent_pthreads INTERFACE
+    target_include_directories(bitcoin_depends_libevent_pthreads SYSTEM INTERFACE
       "${libevent_include_dir}"
     )
     target_link_libraries(bitcoin_depends_libevent_pthreads INTERFACE

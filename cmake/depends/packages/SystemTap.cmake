@@ -35,7 +35,7 @@ file(COPY \"${systemtap_source_dir}/includes/sys/sdt.h\" DESTINATION \"${systemt
 
   add_library(bitcoin_depends_usdt_headers INTERFACE)
   add_library(USDT::headers ALIAS bitcoin_depends_usdt_headers)
-  target_include_directories(bitcoin_depends_usdt_headers INTERFACE
+  target_include_directories(bitcoin_depends_usdt_headers SYSTEM INTERFACE
     "${systemtap_include_dir}"
   )
   add_dependencies(bitcoin_depends_usdt_headers bitcoin_depends_systemtap)
