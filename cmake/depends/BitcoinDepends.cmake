@@ -68,7 +68,7 @@ add_custom_target(bitcoin-depends-download)
 function(bitcoin_depends_external_cmake_project name)
   set(options)
   set(one_value_args URL SHA256 SOURCE_SUBDIR)
-  set(multi_value_args CMAKE_ARGS BUILD_BYPRODUCTS)
+  set(multi_value_args PATCH_COMMAND CMAKE_ARGS BUILD_BYPRODUCTS)
   cmake_parse_arguments(PKG "${options}" "${one_value_args}" "${multi_value_args}" ${ARGN})
 
   ExternalProject_Add(${name}
@@ -78,6 +78,7 @@ function(bitcoin_depends_external_cmake_project name)
     DOWNLOAD_DIR "${BITCOIN_DEPENDS_DOWNLOAD_DIR}"
     PREFIX "${BITCOIN_DEPENDS_BUILD_DIR}/${name}"
     SOURCE_SUBDIR "${PKG_SOURCE_SUBDIR}"
+    PATCH_COMMAND ${PKG_PATCH_COMMAND}
     CMAKE_ARGS
       "-DCMAKE_INSTALL_PREFIX=${BITCOIN_DEPENDS_PREFIX}"
       "-DCMAKE_INSTALL_LIBDIR=lib"
@@ -93,4 +94,5 @@ function(bitcoin_depends_external_cmake_project name)
 endfunction()
 
 include(cmake/depends/packages/Boost.cmake)
+include(cmake/depends/packages/Libevent.cmake)
 include(cmake/depends/packages/SystemTap.cmake)
