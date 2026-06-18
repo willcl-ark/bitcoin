@@ -8,18 +8,25 @@
 ARG CI_IMAGE_NAME_TAG=scratch
 FROM ${CI_IMAGE_NAME_TAG}
 
-ARG FILE_ENV
-ENV FILE_ENV=${FILE_ENV}
-
-ARG BASE_ROOT_DIR
-ENV BASE_ROOT_DIR=${BASE_ROOT_DIR}
+ENV BASE_ROOT_DIR=/ci_container_base
+WORKDIR /ci_container_base
 
 # Make retry available in PATH, needed for CI_RETRY_EXE
 COPY ./ci/retry/retry /usr/bin/retry
-COPY ./ci/test/00_setup_env.sh ./${FILE_ENV} ./ci/test/01_base_install.sh /ci_container_base/ci/test/
-COPY ./ci/test/*.patch /ci_container_base/ci/test/
+COPY ./ci/test/01_base_install.sh /ci_container_base/ci/test/
 
 # Bash is required, so install it when missing
 RUN sh -c "bash -c 'true' || ( apk update && apk add --no-cache bash )"
 
-RUN ["bash", "-c", "cd /ci_container_base/ && set -o errexit && source ./ci/test/00_setup_env.sh && DANGER_RUN_CI_ON_HOST=1 ./ci/test/01_base_install.sh"]
+COPY ./ci/test/cache-env/repository-setup.env /ci_container_base/ci/test/cache-env/
+RUN ["bash", "-c", "source ./ci/test/cache-env/repository-setup.env && DANGER_RUN_CI_ON_HOST=1 ./ci/test/01_base_install.sh repository-setup"]
+
+COPY ./ci/test/cache-env/system-packages.env /ci_container_base/ci/test/cache-env/
+RUN ["bash", "-c", "source ./ci/test/cache-env/system-packages.env && DANGER_RUN_CI_ON_HOST=1 ./ci/test/01_base_install.sh system-packages"]
+
+COPY ./ci/test/cache-env/python-packages.env /ci_container_base/ci/test/cache-env/
+RUN ["bash", "-c", "source ./ci/test/cache-env/python-packages.env && DANGER_RUN_CI_ON_HOST=1 ./ci/test/01_base_install.sh python-packages"]
+
+COPY ./ci/test/01_iwyu.patch ./ci/test/02_iwyu_hash.patch /ci_container_base/ci/test/
+COPY ./ci/test/cache-env/tool-builds.env /ci_container_base/ci/test/cache-env/
+RUN ["bash", "-c", "source ./ci/test/cache-env/tool-builds.env && DANGER_RUN_CI_ON_HOST=1 ./ci/test/01_base_install.sh tool-builds"]

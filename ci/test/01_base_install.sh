@@ -13,113 +13,166 @@ if [ "${DANGER_RUN_CI_ON_HOST}" != "1" ]; then
   exit 1
 fi
 
-CFG_DONE="${BASE_ROOT_DIR}/ci.base-install-done"  # Use a global setting to remember whether this script ran to avoid running it twice
-
-if [ "$( cat "${CFG_DONE}" || true )" == "done" ]; then
-  echo "Skip base install"
-  exit 0
-fi
-
 MAKEJOBS="-j$( nproc )"  # Use nproc, because MAKEJOBS is the default in docker image builds.
 
-if [ -n "$DPKG_ADD_ARCH" ]; then
-  dpkg --add-architecture "$DPKG_ADD_ARCH"
-fi
+CFG_DONE="${BASE_ROOT_DIR}/ci.base-install-done"  # Use a global setting to remember whether this script ran to avoid running it twice
 
-if [ -n "${APT_LLVM_V}" ]; then
-  ${CI_RETRY_EXE} apt-get update
-  ${CI_RETRY_EXE} apt-get install curl -y
-  curl "https://apt.llvm.org/llvm-snapshot.gpg.key" | tee "/etc/apt/trusted.gpg.d/apt.llvm.org.asc"
-  (
-    # shellcheck disable=SC2034
-    source /etc/os-release
-    echo "deb http://apt.llvm.org/${VERSION_CODENAME}/ llvm-toolchain-${VERSION_CODENAME}-${APT_LLVM_V} main" > "/etc/apt/sources.list.d/llvm-toolchain-${VERSION_CODENAME}-${APT_LLVM_V}.list"
-  )
-fi
-
-if command -v apk >/dev/null 2>&1; then
-  ${CI_RETRY_EXE} apk update
-  # shellcheck disable=SC2086
-  ${CI_RETRY_EXE} apk add --no-cache $CI_BASE_PACKAGES $PACKAGES
-elif [ "$CI_OS_NAME" != "macos" ]; then
-  if [[ -n "${APPEND_APT_SOURCES_LIST}" ]]; then
-    echo "${APPEND_APT_SOURCES_LIST}" >> /etc/apt/sources.list
+repository_setup() {
+  if [ -n "$DPKG_ADD_ARCH" ]; then
+    dpkg --add-architecture "$DPKG_ADD_ARCH"
   fi
-  ${CI_RETRY_EXE} apt-get update
-  # shellcheck disable=SC2086
-  ${CI_RETRY_EXE} apt-get install --no-install-recommends --no-upgrade -y $PACKAGES $CI_BASE_PACKAGES
-fi
 
-if [ -n "${APT_LLVM_V}" ]; then
-  update-alternatives --install /usr/bin/clang++ clang++ "/usr/bin/clang++-${APT_LLVM_V}" 100
-  update-alternatives --install /usr/bin/clang clang "/usr/bin/clang-${APT_LLVM_V}" 100
-  update-alternatives --install /usr/bin/llvm-symbolizer llvm-symbolizer "/usr/bin/llvm-symbolizer-${APT_LLVM_V}" 100
-fi
-
-if [ -n "$PIP_PACKAGES" ]; then
-  # shellcheck disable=SC2086
-  ${CI_RETRY_EXE} pip3 install --user $PIP_PACKAGES
-fi
-
-if [[ -n "${USE_INSTRUMENTED_LIBCPP}" ]]; then
-  ${CI_RETRY_EXE} git clone --depth=1 https://github.com/llvm/llvm-project -b "llvmorg-22.1.7" /llvm-project
-
-# LLVM is configured with LIBCXXABI_USE_LLVM_UNWINDER=OFF,
-# because libunwind doesn't handle exceptions under MSAN.
-# https://github.com/llvm/llvm-project/issues/84348
-  cmake -G Ninja -B /cxx_build/ \
-    -DLLVM_ENABLE_RUNTIMES="libcxx;libcxxabi" \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DLLVM_USE_SANITIZER="${USE_INSTRUMENTED_LIBCPP}" \
-    -DCMAKE_C_COMPILER=clang \
-    -DCMAKE_CXX_COMPILER=clang++ \
-    -DLLVM_TARGETS_TO_BUILD=Native \
-    -DLLVM_ENABLE_PER_TARGET_RUNTIME_DIR=OFF \
-    -DLIBCXXABI_USE_LLVM_UNWINDER=OFF \
-    -DLIBCXX_ABI_DEFINES="_LIBCPP_ABI_BOUNDED_ITERATORS;_LIBCPP_ABI_BOUNDED_ITERATORS_IN_STD_ARRAY;_LIBCPP_ABI_BOUNDED_ITERATORS_IN_STRING;_LIBCPP_ABI_BOUNDED_ITERATORS_IN_VECTOR;_LIBCPP_ABI_BOUNDED_UNIQUE_PTR" \
-    -DLIBCXX_HARDENING_MODE=debug \
-    -S /llvm-project/runtimes
-
-  ninja -C /cxx_build/ "$MAKEJOBS"
-
-  # Clear no longer needed source folder
-  du -sh /llvm-project
-  rm -rf /llvm-project
-fi
-
-if [[ "${RUN_IWYU}" == true ]]; then
-  ${CI_RETRY_EXE} git clone --depth=1 https://github.com/include-what-you-use/include-what-you-use -b clang_"${IWYU_LLVM_V}" /include-what-you-use
-  pushd /include-what-you-use
-  patch -p1 < /ci_container_base/ci/test/01_iwyu.patch
-  patch -p1 < /ci_container_base/ci/test/02_iwyu_hash.patch
-  popd
-  cmake -B /iwyu-build/ -G 'Unix Makefiles' -DCMAKE_PREFIX_PATH=/usr/lib/llvm-"${IWYU_LLVM_V}" -S /include-what-you-use
-  make -C /iwyu-build/ install "$MAKEJOBS"
-fi
-
-mkdir -p "${DEPENDS_DIR}/SDKs" "${DEPENDS_DIR}/sdk-sources"
-
-OSX_SDK_BASENAME="Xcode-${XCODE_VERSION}-${XCODE_BUILD_ID}-extracted-SDK-with-libcxx-headers"
-
-if [ -n "$XCODE_VERSION" ] && [ ! -d "${DEPENDS_DIR}/SDKs/${OSX_SDK_BASENAME}" ]; then
-  OSX_SDK_FILENAME="${OSX_SDK_BASENAME}.tar"
-  OSX_SDK_PATH="${DEPENDS_DIR}/sdk-sources/${OSX_SDK_FILENAME}"
-  if [ ! -f "$OSX_SDK_PATH" ]; then
-    ${CI_RETRY_EXE} curl --location --fail "${SDK_URL}/${OSX_SDK_FILENAME}" -o "$OSX_SDK_PATH"
+  if [ -n "${APT_LLVM_V}" ]; then
+    ${CI_RETRY_EXE} apt-get update
+    ${CI_RETRY_EXE} apt-get install curl -y
+    curl "https://apt.llvm.org/llvm-snapshot.gpg.key" | tee "/etc/apt/trusted.gpg.d/apt.llvm.org.asc"
+    (
+      # shellcheck disable=SC1091,SC2034
+      source /etc/os-release
+      echo "deb http://apt.llvm.org/${VERSION_CODENAME}/ llvm-toolchain-${VERSION_CODENAME}-${APT_LLVM_V} main" > "/etc/apt/sources.list.d/llvm-toolchain-${VERSION_CODENAME}-${APT_LLVM_V}.list"
+    )
   fi
-  tar -C "${DEPENDS_DIR}/SDKs" -xf "$OSX_SDK_PATH"
-fi
 
-FREEBSD_SDK_BASENAME="freebsd-${HOST}-${FREEBSD_VERSION}"
-
-if [ -n "$FREEBSD_VERSION" ] && [ ! -d "${DEPENDS_DIR}/SDKs/${FREEBSD_SDK_BASENAME}" ]; then
-  FREEBSD_SDK_FILENAME="base-${FREEBSD_VERSION}.txz"
-  FREEBSD_SDK_PATH="${DEPENDS_DIR}/sdk-sources/${FREEBSD_SDK_FILENAME}"
-  if [ ! -f "$FREEBSD_SDK_PATH" ]; then
-    ${CI_RETRY_EXE} curl --location --fail "https://download.freebsd.org/releases/amd64/${FREEBSD_VERSION}-RELEASE/base.txz" -o "$FREEBSD_SDK_PATH"
+  if command -v apk >/dev/null 2>&1; then
+    ${CI_RETRY_EXE} apk update
+  elif [ "$CI_OS_NAME" != "macos" ]; then
+    if [[ -n "${APPEND_APT_SOURCES_LIST}" ]]; then
+      echo "${APPEND_APT_SOURCES_LIST}" >> /etc/apt/sources.list
+    fi
+    ${CI_RETRY_EXE} apt-get update
   fi
-  mkdir -p "${DEPENDS_DIR}/SDKs/${FREEBSD_SDK_BASENAME}"
-  tar -C "${DEPENDS_DIR}/SDKs/${FREEBSD_SDK_BASENAME}" -xf "$FREEBSD_SDK_PATH"
-fi
+}
 
-echo -n "done" > "${CFG_DONE}"
+system_packages() {
+  if command -v apk >/dev/null 2>&1; then
+    # shellcheck disable=SC2086
+    ${CI_RETRY_EXE} apk add $CI_BASE_PACKAGES $PACKAGES
+  elif [ "$CI_OS_NAME" != "macos" ]; then
+    # shellcheck disable=SC2086
+    ${CI_RETRY_EXE} apt-get install --no-install-recommends --no-upgrade -y $PACKAGES $CI_BASE_PACKAGES
+  fi
+
+  if [ -n "${APT_LLVM_V}" ]; then
+    update-alternatives --install /usr/bin/clang++ clang++ "/usr/bin/clang++-${APT_LLVM_V}" 100
+    update-alternatives --install /usr/bin/clang clang "/usr/bin/clang-${APT_LLVM_V}" 100
+    update-alternatives --install /usr/bin/llvm-symbolizer llvm-symbolizer "/usr/bin/llvm-symbolizer-${APT_LLVM_V}" 100
+  fi
+}
+
+python_packages() {
+  if [ -n "$PIP_PACKAGES" ]; then
+    # shellcheck disable=SC2086
+    ${CI_RETRY_EXE} pip3 install --user $PIP_PACKAGES
+  fi
+}
+
+tool_builds() {
+  if [[ -n "${USE_INSTRUMENTED_LIBCPP}" ]]; then
+    ${CI_RETRY_EXE} git clone --depth=1 https://github.com/llvm/llvm-project -b "llvmorg-22.1.7" /llvm-project
+
+    # LLVM is configured with LIBCXXABI_USE_LLVM_UNWINDER=OFF,
+    # because libunwind doesn't handle exceptions under MSAN.
+    # https://github.com/llvm/llvm-project/issues/84348
+    cmake -G Ninja -B /cxx_build/ \
+      -DLLVM_ENABLE_RUNTIMES="libcxx;libcxxabi" \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DLLVM_USE_SANITIZER="${USE_INSTRUMENTED_LIBCPP}" \
+      -DCMAKE_C_COMPILER=clang \
+      -DCMAKE_CXX_COMPILER=clang++ \
+      -DLLVM_TARGETS_TO_BUILD=Native \
+      -DLLVM_ENABLE_PER_TARGET_RUNTIME_DIR=OFF \
+      -DLIBCXXABI_USE_LLVM_UNWINDER=OFF \
+      -DLIBCXX_ABI_DEFINES="_LIBCPP_ABI_BOUNDED_ITERATORS;_LIBCPP_ABI_BOUNDED_ITERATORS_IN_STD_ARRAY;_LIBCPP_ABI_BOUNDED_ITERATORS_IN_STRING;_LIBCPP_ABI_BOUNDED_ITERATORS_IN_VECTOR;_LIBCPP_ABI_BOUNDED_UNIQUE_PTR" \
+      -DLIBCXX_HARDENING_MODE=debug \
+      -S /llvm-project/runtimes
+
+    ninja -C /cxx_build/ "$MAKEJOBS"
+
+    # Clear no longer needed source folder
+    du -sh /llvm-project
+    rm -rf /llvm-project
+  fi
+
+  if [[ "${RUN_IWYU}" == true ]]; then
+    ${CI_RETRY_EXE} git clone --depth=1 https://github.com/include-what-you-use/include-what-you-use -b clang_"${IWYU_LLVM_V}" /include-what-you-use
+    pushd /include-what-you-use
+    patch -p1 < /ci_container_base/ci/test/01_iwyu.patch
+    patch -p1 < /ci_container_base/ci/test/02_iwyu_hash.patch
+    popd
+    cmake -B /iwyu-build/ -G 'Unix Makefiles' -DCMAKE_PREFIX_PATH=/usr/lib/llvm-"${IWYU_LLVM_V}" -S /include-what-you-use
+    make -C /iwyu-build/ install "$MAKEJOBS"
+  fi
+}
+
+runtime_paths() {
+  mkdir -p "${DEPENDS_DIR}/SDKs" "${DEPENDS_DIR}/sdk-sources"
+
+  OSX_SDK_BASENAME="Xcode-${XCODE_VERSION}-${XCODE_BUILD_ID}-extracted-SDK-with-libcxx-headers"
+
+  if [ -n "$XCODE_VERSION" ] && [ ! -d "${DEPENDS_DIR}/SDKs/${OSX_SDK_BASENAME}" ]; then
+    OSX_SDK_FILENAME="${OSX_SDK_BASENAME}.tar"
+    OSX_SDK_PATH="${DEPENDS_DIR}/sdk-sources/${OSX_SDK_FILENAME}"
+    if [ ! -f "$OSX_SDK_PATH" ]; then
+      ${CI_RETRY_EXE} curl --location --fail "${SDK_URL}/${OSX_SDK_FILENAME}" -o "$OSX_SDK_PATH"
+    fi
+    tar -C "${DEPENDS_DIR}/SDKs" -xf "$OSX_SDK_PATH"
+  fi
+
+  FREEBSD_SDK_BASENAME="freebsd-${HOST}-${FREEBSD_VERSION}"
+
+  if [ -n "$FREEBSD_VERSION" ] && [ ! -d "${DEPENDS_DIR}/SDKs/${FREEBSD_SDK_BASENAME}" ]; then
+    FREEBSD_SDK_FILENAME="base-${FREEBSD_VERSION}.txz"
+    FREEBSD_SDK_PATH="${DEPENDS_DIR}/sdk-sources/${FREEBSD_SDK_FILENAME}"
+    if [ ! -f "$FREEBSD_SDK_PATH" ]; then
+      ${CI_RETRY_EXE} curl --location --fail "https://download.freebsd.org/releases/amd64/${FREEBSD_VERSION}-RELEASE/base.txz" -o "$FREEBSD_SDK_PATH"
+    fi
+    mkdir -p "${DEPENDS_DIR}/SDKs/${FREEBSD_SDK_BASENAME}"
+    tar -C "${DEPENDS_DIR}/SDKs/${FREEBSD_SDK_BASENAME}" -xf "$FREEBSD_SDK_PATH"
+  fi
+}
+
+mark_done() {
+  echo -n "done" > "${CFG_DONE}"
+}
+
+full_install() {
+  if [ "$( cat "${CFG_DONE}" || true )" == "done" ]; then
+    echo "Skip base install"
+    exit 0
+  fi
+
+  repository_setup
+  system_packages
+  python_packages
+  tool_builds
+  runtime_paths
+  mark_done
+}
+
+case "${1:-}" in
+  "")
+    full_install
+    ;;
+  "repository-setup")
+    repository_setup
+    ;;
+  "system-packages")
+    system_packages
+    ;;
+  "python-packages")
+    python_packages
+    ;;
+  "tool-builds")
+    tool_builds
+    ;;
+  "runtime-paths")
+    runtime_paths
+    ;;
+  "mark-done")
+    mark_done
+    ;;
+  *)
+    echo "Unknown install group: $1"
+    exit 1
+    ;;
+esac

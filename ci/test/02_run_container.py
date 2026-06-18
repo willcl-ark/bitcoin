@@ -4,11 +4,44 @@
 # file COPYING or https://opensource.org/license/mit/.
 
 from pathlib import Path
+import argparse
 import os
 import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
+
+
+DOCKER_CACHE_GROUP_ENVS = {
+    "repository-setup": [
+        "APPEND_APT_SOURCES_LIST",
+        "APT_LLVM_V",
+        "CI_OS_NAME",
+        "CI_RETRY_EXE",
+        "DEBIAN_FRONTEND",
+        "DPKG_ADD_ARCH",
+    ],
+    "system-packages": [
+        "APT_LLVM_V",
+        "CI_BASE_PACKAGES",
+        "CI_OS_NAME",
+        "CI_RETRY_EXE",
+        "DEBIAN_FRONTEND",
+        "PACKAGES",
+    ],
+    "python-packages": [
+        "CI_RETRY_EXE",
+        "PIP_PACKAGES",
+    ],
+    "tool-builds": [
+        "CI_RETRY_EXE",
+        "IWYU_LLVM_V",
+        "RUN_IWYU",
+        "USE_INSTRUMENTED_LIBCPP",
+    ],
+}
 
 
 def run(cmd, **kwargs):
@@ -20,7 +53,43 @@ def run(cmd, **kwargs):
         sys.exit(str(e))
 
 
+def copy_context_file(source_root, context_dir, relative_path):
+    source_path = source_root / relative_path
+    destination_path = context_dir / relative_path
+    destination_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_path, destination_path)
+
+
+def write_cache_group_env(context_dir, group, variables):
+    env_path = context_dir / "ci" / "test" / "cache-env" / f"{group}.env"
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    with env_path.open("w", encoding="utf8") as file:
+        for key in variables:
+            file.write(f"export {key}={shlex.quote(os.environ.get(key, ''))}\n")
+
+
+def generate_docker_build_context(context_dir):
+    source_root = Path(os.environ["BASE_READ_ONLY_DIR"])
+    context_dir.mkdir(parents=True, exist_ok=True)
+
+    for relative_path in [
+        Path("ci/retry/retry"),
+        Path("ci/test/01_base_install.sh"),
+        Path("ci/test/01_iwyu.patch"),
+        Path("ci/test/02_iwyu_hash.patch"),
+        Path("ci/test_imagefile"),
+    ]:
+        copy_context_file(source_root, context_dir, relative_path)
+
+    for group, variables in DOCKER_CACHE_GROUP_ENVS.items():
+        write_cache_group_env(context_dir, group, variables)
+
+
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--generate-docker-context-only", type=Path)
+    args = parser.parse_args()
+
     print("Export only allowed settings:")
     settings = run(
         ["bash", "-c", "grep export ./ci/test/00_setup_env*.sh"],
@@ -47,6 +116,11 @@ def main():
                 file.write(f"{k}={v}\n")
     run(["cat", env_file])
 
+    if args.generate_docker_context_only:
+        generate_docker_build_context(args.generate_docker_context_only)
+        print(f"Generated Docker build context at {args.generate_docker_context_only}")
+        return
+
     if os.getenv("DANGER_RUN_CI_ON_HOST"):
         print("Running on host system without docker wrapper")
         print("Create missing folders")
@@ -60,21 +134,22 @@ def main():
         os.environ["PATH"] = f"{os.environ['BASE_ROOT_DIR']}/ci/retry:{os.environ['PATH']}"
     else:
         CI_IMAGE_LABEL = "bitcoin-ci-test"
+        docker_build_context = tempfile.TemporaryDirectory(prefix="bitcoin-ci-build-context-")
+        build_context_path = Path(docker_build_context.name)
+        generate_docker_build_context(build_context_path)
 
         # Use buildx unconditionally
         # Using buildx is required to properly load the correct driver, for use with registry caching. Neither build, nor BUILDKIT=1 currently do this properly
         cmd_build = ["docker", "buildx", "build"]
         cmd_build += [
-            f"--file={os.environ['BASE_READ_ONLY_DIR']}/ci/test_imagefile",
+            f"--file={build_context_path}/ci/test_imagefile",
             f"--build-arg=CI_IMAGE_NAME_TAG={os.environ['CI_IMAGE_NAME_TAG']}",
-            f"--build-arg=FILE_ENV={os.environ['FILE_ENV']}",
-            f"--build-arg=BASE_ROOT_DIR={os.environ['BASE_ROOT_DIR']}",
             f"--platform={os.environ['CI_IMAGE_PLATFORM']}",
             f"--label={CI_IMAGE_LABEL}",
             f"--tag={os.environ['CONTAINER_NAME']}",
         ]
         cmd_build += shlex.split(os.getenv("DOCKER_BUILD_CACHE_ARG", ""))
-        cmd_build += [os.environ["BASE_READ_ONLY_DIR"]]
+        cmd_build += [str(build_context_path)]
 
         print(f"Building {os.environ['CONTAINER_NAME']} image tag to run in")
         if run(cmd_build, check=False).returncode != 0:
@@ -182,12 +257,17 @@ def main():
         f"{os.environ['BASE_READ_ONLY_DIR']}/",
         f"{os.environ['BASE_ROOT_DIR']}",
     ])
-    ci_exec([f"{os.environ['BASE_ROOT_DIR']}/ci/test/01_base_install.sh"])
+    if os.getenv("DANGER_RUN_CI_ON_HOST"):
+        ci_exec([f"{os.environ['BASE_ROOT_DIR']}/ci/test/01_base_install.sh"])
+    else:
+        ci_exec([f"{os.environ['BASE_ROOT_DIR']}/ci/test/01_base_install.sh", "runtime-paths"])
+        ci_exec([f"{os.environ['BASE_ROOT_DIR']}/ci/test/01_base_install.sh", "mark-done"])
     ci_exec([f"{os.environ['BASE_ROOT_DIR']}/ci/test/03_test_script.sh"])
 
     if not os.getenv("DANGER_RUN_CI_ON_HOST"):
         print("Stop and remove CI container by ID")
         run(["docker", "container", "kill", container_id])
+        docker_build_context.cleanup()
 
 
 if __name__ == "__main__":
