@@ -7,6 +7,11 @@ include(ExternalProject)
 find_program(BITCOIN_DEPENDS_MAKE_PROGRAM NAMES gmake make REQUIRED)
 
 set(BITCOIN_DEPENDS_BUILD_CC "${CMAKE_C_COMPILER}" CACHE STRING "Native C compiler for CMake-built bundled dependency build tools.")
+set(BITCOIN_DEPENDS_NATIVE_C_COMPILER "${CMAKE_C_COMPILER}" CACHE FILEPATH "Native C compiler for CMake-built bundled native dependencies.")
+set(BITCOIN_DEPENDS_NATIVE_CXX_COMPILER "${CMAKE_CXX_COMPILER}" CACHE FILEPATH "Native C++ compiler for CMake-built bundled native dependencies.")
+set(BITCOIN_DEPENDS_NATIVE_C_FLAGS "" CACHE STRING "C compiler flags for CMake-built bundled native dependencies.")
+set(BITCOIN_DEPENDS_NATIVE_CXX_FLAGS "" CACHE STRING "C++ compiler flags for CMake-built bundled native dependencies.")
+set(BITCOIN_DEPENDS_NATIVE_CMAKE_ARGS "" CACHE STRING "Additional CMake arguments for CMake-built bundled native dependencies.")
 set(BITCOIN_DEPENDS_CACHE_DIR "${PROJECT_SOURCE_DIR}/build-deps" CACHE PATH "Cache directory for CMake-built bundled dependencies.")
 set(BITCOIN_DEPENDS_CACHE_KEY "" CACHE STRING "Cache key for CMake-built bundled dependencies. If empty, a key is generated from the configured target.")
 set(BITCOIN_DEPENDS_CACHE_VERSION "1" CACHE STRING "Cache layout version for CMake-built bundled dependencies.")
@@ -46,6 +51,11 @@ if(BITCOIN_DEPENDS_CACHE_KEY STREQUAL "")
       BITCOIN_DEPENDS_CMAKE_ARGS
       BITCOIN_DEPENDS_BUILD_CC
       BITCOIN_DEPENDS_MAKE_PROGRAM
+      BITCOIN_DEPENDS_NATIVE_C_COMPILER
+      BITCOIN_DEPENDS_NATIVE_CXX_COMPILER
+      BITCOIN_DEPENDS_NATIVE_C_FLAGS
+      BITCOIN_DEPENDS_NATIVE_CXX_FLAGS
+      BITCOIN_DEPENDS_NATIVE_CMAKE_ARGS
   )
     if(DEFINED ${var})
       string(APPEND bitcoin_depends_cache_data "${var}=${${var}}\n")
@@ -125,14 +135,42 @@ foreach(var
 endforeach()
 list(APPEND BITCOIN_DEPENDS_TARGET_CMAKE_ARGS ${BITCOIN_DEPENDS_CMAKE_ARGS})
 
+set(BITCOIN_DEPENDS_NATIVE_CMAKE_ARG_LIST)
+foreach(var
+    CMAKE_BUILD_TYPE
+)
+  if(DEFINED ${var} AND NOT "${${var}}" STREQUAL "")
+    list(APPEND BITCOIN_DEPENDS_NATIVE_CMAKE_ARG_LIST "-D${var}=${${var}}")
+  endif()
+endforeach()
+if(NOT "${BITCOIN_DEPENDS_NATIVE_C_COMPILER}" STREQUAL "")
+  list(APPEND BITCOIN_DEPENDS_NATIVE_CMAKE_ARG_LIST "-DCMAKE_C_COMPILER=${BITCOIN_DEPENDS_NATIVE_C_COMPILER}")
+endif()
+if(NOT "${BITCOIN_DEPENDS_NATIVE_CXX_COMPILER}" STREQUAL "")
+  list(APPEND BITCOIN_DEPENDS_NATIVE_CMAKE_ARG_LIST "-DCMAKE_CXX_COMPILER=${BITCOIN_DEPENDS_NATIVE_CXX_COMPILER}")
+endif()
+if(NOT "${BITCOIN_DEPENDS_NATIVE_C_FLAGS}" STREQUAL "")
+  list(APPEND BITCOIN_DEPENDS_NATIVE_CMAKE_ARG_LIST "-DCMAKE_C_FLAGS=${BITCOIN_DEPENDS_NATIVE_C_FLAGS}")
+endif()
+if(NOT "${BITCOIN_DEPENDS_NATIVE_CXX_FLAGS}" STREQUAL "")
+  list(APPEND BITCOIN_DEPENDS_NATIVE_CMAKE_ARG_LIST "-DCMAKE_CXX_FLAGS=${BITCOIN_DEPENDS_NATIVE_CXX_FLAGS}")
+endif()
+list(APPEND BITCOIN_DEPENDS_NATIVE_CMAKE_ARG_LIST ${BITCOIN_DEPENDS_NATIVE_CMAKE_ARGS})
+
 add_custom_target(bitcoin-depends)
 add_custom_target(bitcoin-depends-download)
 
 function(bitcoin_depends_external_cmake_project name)
   set(options)
   set(one_value_args URL SHA256 SOURCE_SUBDIR)
-  set(multi_value_args PATCH_COMMAND CMAKE_ARGS BUILD_BYPRODUCTS)
+  set(multi_value_args DEPENDS PATCH_COMMAND CMAKE_ARGS INSTALL_COMMAND BUILD_BYPRODUCTS)
   cmake_parse_arguments(PKG "${options}" "${one_value_args}" "${multi_value_args}" ${ARGN})
+
+  if(PKG_INSTALL_COMMAND)
+    set(install_command INSTALL_COMMAND ${PKG_INSTALL_COMMAND})
+  else()
+    set(install_command)
+  endif()
 
   ExternalProject_Add(${name}
     URL "${PKG_URL}"
@@ -140,6 +178,7 @@ function(bitcoin_depends_external_cmake_project name)
     DOWNLOAD_EXTRACT_TIMESTAMP FALSE
     DOWNLOAD_DIR "${BITCOIN_DEPENDS_DOWNLOAD_DIR}"
     PREFIX "${BITCOIN_DEPENDS_BUILD_DIR}/${name}"
+    DEPENDS ${PKG_DEPENDS}
     SOURCE_SUBDIR "${PKG_SOURCE_SUBDIR}"
     PATCH_COMMAND ${PKG_PATCH_COMMAND}
     CMAKE_ARGS
@@ -148,6 +187,49 @@ function(bitcoin_depends_external_cmake_project name)
       "-DCMAKE_POSITION_INDEPENDENT_CODE=${CMAKE_POSITION_INDEPENDENT_CODE}"
       ${BITCOIN_DEPENDS_TARGET_CMAKE_ARGS}
       ${PKG_CMAKE_ARGS}
+    ${install_command}
+    BUILD_BYPRODUCTS ${PKG_BUILD_BYPRODUCTS}
+  )
+  ExternalProject_Add_StepTargets(${name} download)
+
+  add_dependencies(bitcoin-depends ${name})
+  add_dependencies(bitcoin-depends-download ${name}-download)
+endfunction()
+
+function(bitcoin_depends_external_native_cmake_project name)
+  set(options)
+  set(one_value_args URL SHA256 SOURCE_DIR)
+  set(multi_value_args DEPENDS PATCH_COMMAND CMAKE_ARGS INSTALL_COMMAND BUILD_BYPRODUCTS)
+  cmake_parse_arguments(PKG "${options}" "${one_value_args}" "${multi_value_args}" ${ARGN})
+
+  if(PKG_SOURCE_DIR)
+    set(source SOURCE_DIR "${PKG_SOURCE_DIR}")
+  else()
+    set(source
+      URL "${PKG_URL}"
+      URL_HASH "SHA256=${PKG_SHA256}"
+      DOWNLOAD_EXTRACT_TIMESTAMP FALSE
+      DOWNLOAD_DIR "${BITCOIN_DEPENDS_DOWNLOAD_DIR}"
+    )
+  endif()
+  if(PKG_INSTALL_COMMAND)
+    set(install_command INSTALL_COMMAND ${PKG_INSTALL_COMMAND})
+  else()
+    set(install_command)
+  endif()
+
+  ExternalProject_Add(${name}
+    ${source}
+    PREFIX "${BITCOIN_DEPENDS_BUILD_DIR}/${name}"
+    DEPENDS ${PKG_DEPENDS}
+    PATCH_COMMAND ${PKG_PATCH_COMMAND}
+    CMAKE_ARGS
+      "-DCMAKE_INSTALL_PREFIX=${BITCOIN_DEPENDS_NATIVE_PREFIX}"
+      "-DCMAKE_INSTALL_LIBDIR=lib"
+      "-DCMAKE_POSITION_INDEPENDENT_CODE=${CMAKE_POSITION_INDEPENDENT_CODE}"
+      ${BITCOIN_DEPENDS_NATIVE_CMAKE_ARG_LIST}
+      ${PKG_CMAKE_ARGS}
+    ${install_command}
     BUILD_BYPRODUCTS ${PKG_BUILD_BYPRODUCTS}
   )
   ExternalProject_Add_StepTargets(${name} download)
@@ -219,6 +301,7 @@ function(bitcoin_depends_external_autoconf_project name)
 endfunction()
 
 include(cmake/depends/packages/Boost.cmake)
+include(cmake/depends/packages/CapnProto.cmake)
 include(cmake/depends/packages/Libevent.cmake)
 include(cmake/depends/packages/SQLite.cmake)
 include(cmake/depends/packages/SystemTap.cmake)

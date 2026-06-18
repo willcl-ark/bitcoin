@@ -61,13 +61,18 @@ function(target_capnp_sources target include_prefix)
   )
 
   set(MPGEN_BINARY "")
+  set(mpgen_depends)
   if(MPGEN_EXECUTABLE)
     set(MPGEN_BINARY "${MPGEN_EXECUTABLE}")
-    if(NOT EXISTS "${MPGEN_BINARY}")
+    if(MPGEN_EXECUTABLE_DEPENDS)
+      list(APPEND mpgen_depends ${MPGEN_EXECUTABLE_DEPENDS})
+    endif()
+    if(NOT EXISTS "${MPGEN_BINARY}" AND NOT mpgen_depends)
       message(FATAL_ERROR "MPGEN_EXECUTABLE: \"${MPGEN_BINARY}\" does not exist.")
     endif()
   elseif(TARGET Libmultiprocess::multiprocess)
     set(MPGEN_BINARY Libmultiprocess::mpgen)
+    list(APPEND mpgen_depends Libmultiprocess::mpgen)
   else()
     message(FATAL_ERROR "No usable mpgen. Set MPGEN_EXECUTABLE or enable the internal target.")
   endif()
@@ -78,7 +83,7 @@ function(target_capnp_sources target include_prefix)
     add_custom_command(
       OUTPUT ${capnp_file}.c++ ${capnp_file}.h ${capnp_file}.proxy-client.c++ ${capnp_file}.proxy-types.h ${capnp_file}.proxy-server.c++ ${capnp_file}.proxy-types.c++ ${capnp_file}.proxy.h
       COMMAND ${MPGEN_BINARY} ${CMAKE_CURRENT_SOURCE_DIR} ${include_prefix} ${CMAKE_CURRENT_SOURCE_DIR}/${capnp_file} ${TCS_IMPORT_PATHS} ${mp_include_dir}
-      DEPENDS ${capnp_file}
+      DEPENDS ${capnp_file} ${mpgen_depends}
       VERBATIM
     )
     # Skip linting for capnp-generated files but keep it for mpgen-generated ones

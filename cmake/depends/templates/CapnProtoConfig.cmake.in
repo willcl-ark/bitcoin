@@ -1,0 +1,142 @@
+# Copyright (c) 2026-present The Bitcoin Core developers
+# Distributed under the MIT software license, see the accompanying
+# file COPYING or https://opensource.org/license/mit/.
+
+set(CapnProto_VERSION "@capnp_version@")
+set(CapnProto_FOUND TRUE)
+set(CAPNP_FOUND TRUE)
+
+set(CAPNP_EXECUTABLE "@capnp_executable@" CACHE FILEPATH "Location of capnp executable")
+set(CAPNPC_CXX_EXECUTABLE "@capnpc_cxx_executable@" CACHE FILEPATH "Location of capnpc-c++ executable")
+set(CAPNP_INCLUDE_DIRECTORY "@capnp_include_dir@")
+set(CAPNP_INCLUDE_DIRS "${CAPNP_INCLUDE_DIRECTORY}")
+
+if(NOT TARGET Threads::Threads)
+  find_package(Threads REQUIRED)
+endif()
+
+function(_bitcoin_depends_add_capnproto_library target_name library_path)
+  add_library("${target_name}" STATIC IMPORTED GLOBAL)
+  set_target_properties("${target_name}" PROPERTIES
+    IMPORTED_LOCATION "${library_path}"
+    INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${CAPNP_INCLUDE_DIRECTORY}"
+  )
+  if(TARGET bitcoin_depends_capnp)
+    add_dependencies("${target_name}" bitcoin_depends_capnp)
+  endif()
+endfunction()
+
+if(NOT TARGET CapnProto::kj)
+  _bitcoin_depends_add_capnproto_library(CapnProto::kj "@capnp_kj_library@")
+  target_compile_features(CapnProto::kj INTERFACE cxx_std_17)
+  target_link_libraries(CapnProto::kj INTERFACE Threads::Threads)
+
+  _bitcoin_depends_add_capnproto_library(CapnProto::capnp "@capnp_capnp_library@")
+  target_link_libraries(CapnProto::capnp INTERFACE CapnProto::kj)
+
+  _bitcoin_depends_add_capnproto_library(CapnProto::kj-async "@capnp_kj_async_library@")
+  target_compile_definitions(CapnProto::kj-async INTERFACE KJ_USE_FIBERS)
+  target_compile_options(CapnProto::kj-async INTERFACE "-pthread")
+  target_link_libraries(CapnProto::kj-async INTERFACE CapnProto::kj Threads::Threads)
+
+  _bitcoin_depends_add_capnproto_library(CapnProto::capnp-rpc "@capnp_capnp_rpc_library@")
+  target_link_libraries(CapnProto::capnp-rpc INTERFACE
+    CapnProto::capnp
+    CapnProto::kj-async
+    CapnProto::kj
+  )
+
+  _bitcoin_depends_add_capnproto_library(CapnProto::capnpc "@capnp_capnpc_library@")
+  target_link_libraries(CapnProto::capnpc INTERFACE
+    CapnProto::capnp
+    CapnProto::kj
+  )
+endif()
+
+set(CAPNP_LIBRARIES_LITE CapnProto::capnp)
+set(CAPNP_LIBRARIES CapnProto::capnp-rpc)
+set(CAPNP_DEFINITIONS)
+
+function(CAPNP_GENERATE_CPP sources headers)
+  if(NOT ARGN)
+    message(SEND_ERROR "capnp_generate_cpp() called without any source files.")
+  endif()
+  if(NOT CAPNP_EXECUTABLE)
+    message(SEND_ERROR "Could not locate capnp executable (CAPNP_EXECUTABLE).")
+  endif()
+  if(NOT CAPNPC_CXX_EXECUTABLE)
+    message(SEND_ERROR "Could not locate capnpc-c++ executable (CAPNPC_CXX_EXECUTABLE).")
+  endif()
+  if(NOT CAPNP_INCLUDE_DIRECTORY)
+    message(SEND_ERROR "Could not locate capnp header files (CAPNP_INCLUDE_DIRECTORY).")
+  endif()
+
+  set(tool_depends)
+  if(TARGET bitcoin_depends_native_capnp)
+    list(APPEND tool_depends bitcoin_depends_native_capnp)
+  endif()
+  if(TARGET bitcoin_depends_capnp)
+    list(APPEND tool_depends bitcoin_depends_capnp)
+  endif()
+
+  if(DEFINED CAPNPC_OUTPUT_DIR)
+    set(output_dir ":${CAPNPC_OUTPUT_DIR}")
+  else()
+    set(output_dir ":.")
+  endif()
+
+  if(NOT DEFINED CAPNPC_SRC_PREFIX)
+    set(CAPNPC_SRC_PREFIX "${CMAKE_CURRENT_SOURCE_DIR}")
+  endif()
+  get_filename_component(CAPNPC_SRC_PREFIX "${CAPNPC_SRC_PREFIX}" ABSOLUTE)
+
+  set(include_path -I "${CAPNPC_SRC_PREFIX}" -I "${CAPNP_INCLUDE_DIRECTORY}")
+  if(DEFINED CAPNPC_IMPORT_DIRS)
+    foreach(directory ${CAPNPC_IMPORT_DIRS})
+      get_filename_component(absolute_path "${directory}" ABSOLUTE)
+      list(APPEND include_path -I "${absolute_path}")
+    endforeach()
+  endif()
+
+  set(${sources})
+  set(${headers})
+  foreach(schema_file ${ARGN})
+    get_filename_component(file_path "${schema_file}" ABSOLUTE)
+    if(NOT EXISTS "${file_path}")
+      message(FATAL_ERROR "Cap'n Proto schema file '${file_path}' does not exist!")
+    endif()
+
+    if(NOT DEFINED CAPNPC_OUTPUT_DIR)
+      set(CAPNPC_OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/")
+    endif()
+    string(LENGTH "${CAPNPC_SRC_PREFIX}" prefix_len)
+    string(SUBSTRING "${file_path}" 0 ${prefix_len} output_prefix)
+    if(NOT "${CAPNPC_SRC_PREFIX}" STREQUAL "${output_prefix}")
+      message(SEND_ERROR "Could not determine output path for '${schema_file}' ('${file_path}') with source prefix '${CAPNPC_SRC_PREFIX}' into '${CAPNPC_OUTPUT_DIR}'.")
+    endif()
+
+    string(SUBSTRING "${file_path}" ${prefix_len} -1 output_path)
+    set(output_base "${CAPNPC_OUTPUT_DIR}${output_path}")
+
+    add_custom_command(
+      OUTPUT "${output_base}.c++" "${output_base}.h"
+      COMMAND "${CAPNP_EXECUTABLE}"
+      ARGS compile
+        -o ${CAPNPC_CXX_EXECUTABLE}${output_dir}
+        --src-prefix ${CAPNPC_SRC_PREFIX}
+        ${include_path}
+        ${CAPNPC_FLAGS}
+        ${file_path}
+      DEPENDS "${schema_file}" ${tool_depends}
+      COMMENT "Compiling Cap'n Proto schema ${schema_file}"
+      VERBATIM
+    )
+
+    list(APPEND ${sources} "${output_base}.c++")
+    list(APPEND ${headers} "${output_base}.h")
+  endforeach()
+
+  set_source_files_properties(${${sources}} ${${headers}} PROPERTIES GENERATED TRUE)
+  set(${sources} ${${sources}} PARENT_SCOPE)
+  set(${headers} ${${headers}} PARENT_SCOPE)
+endfunction()
