@@ -4,10 +4,66 @@
 
 include(ExternalProject)
 
-set(BITCOIN_DEPENDS_PREFIX "${PROJECT_BINARY_DIR}/_depends/prefix" CACHE PATH "Install prefix for CMake-built bundled target dependencies.")
-set(BITCOIN_DEPENDS_NATIVE_PREFIX "${PROJECT_BINARY_DIR}/_depends/native" CACHE PATH "Install prefix for CMake-built bundled native tools.")
-set(BITCOIN_DEPENDS_DOWNLOAD_DIR "${PROJECT_BINARY_DIR}/_depends/src" CACHE PATH "Download directory for CMake-built bundled dependencies.")
-set(BITCOIN_DEPENDS_BUILD_DIR "${PROJECT_BINARY_DIR}/_depends/build" CACHE PATH "Build directory for CMake-built bundled dependencies.")
+set(BITCOIN_DEPENDS_CACHE_DIR "${PROJECT_SOURCE_DIR}/build-deps" CACHE PATH "Cache directory for CMake-built bundled dependencies.")
+set(BITCOIN_DEPENDS_CACHE_KEY "" CACHE STRING "Cache key for CMake-built bundled dependencies. If empty, a key is generated from the configured target.")
+set(BITCOIN_DEPENDS_CACHE_VERSION "1" CACHE STRING "Cache layout version for CMake-built bundled dependencies.")
+if(BITCOIN_DEPENDS_CACHE_KEY STREQUAL "")
+  set(bitcoin_depends_cache_data "CACHE_VERSION=${BITCOIN_DEPENDS_CACHE_VERSION}\n")
+  foreach(var
+      CMAKE_GENERATOR
+      CMAKE_TOOLCHAIN_FILE
+      CMAKE_C_COMPILER
+      CMAKE_C_COMPILER_ID
+      CMAKE_C_COMPILER_VERSION
+      CMAKE_C_COMPILER_TARGET
+      CMAKE_CXX_COMPILER
+      CMAKE_CXX_COMPILER_ID
+      CMAKE_CXX_COMPILER_VERSION
+      CMAKE_CXX_COMPILER_TARGET
+      CMAKE_SYSROOT
+      CMAKE_FIND_ROOT_PATH
+      CMAKE_FIND_ROOT_PATH_MODE_PROGRAM
+      CMAKE_FIND_ROOT_PATH_MODE_LIBRARY
+      CMAKE_FIND_ROOT_PATH_MODE_INCLUDE
+      CMAKE_FIND_ROOT_PATH_MODE_PACKAGE
+      CMAKE_OSX_ARCHITECTURES
+      CMAKE_OSX_DEPLOYMENT_TARGET
+      CMAKE_OSX_SYSROOT
+      CMAKE_SYSTEM_NAME
+      CMAKE_SYSTEM_PROCESSOR
+      CMAKE_BUILD_TYPE
+      CMAKE_POSITION_INDEPENDENT_CODE
+      BITCOIN_DEPENDS_C_FLAGS
+      BITCOIN_DEPENDS_CXX_FLAGS
+      BITCOIN_DEPENDS_EXE_LINKER_FLAGS
+      BITCOIN_DEPENDS_SHARED_LINKER_FLAGS
+      BITCOIN_DEPENDS_MODULE_LINKER_FLAGS
+      BITCOIN_DEPENDS_STATIC_LINKER_FLAGS
+      BITCOIN_DEPENDS_CMAKE_ARGS
+  )
+    if(DEFINED ${var})
+      string(APPEND bitcoin_depends_cache_data "${var}=${${var}}\n")
+    endif()
+  endforeach()
+  string(SHA256 bitcoin_depends_cache_hash "${bitcoin_depends_cache_data}")
+  string(SUBSTRING "${bitcoin_depends_cache_hash}" 0 16 bitcoin_depends_cache_hash)
+  set(bitcoin_depends_effective_cache_key "${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}-${CMAKE_CXX_COMPILER_ID}-${CMAKE_CXX_COMPILER_VERSION}-${bitcoin_depends_cache_hash}")
+else()
+  set(bitcoin_depends_effective_cache_key "${BITCOIN_DEPENDS_CACHE_KEY}")
+endif()
+string(REGEX REPLACE "[^A-Za-z0-9_.+-]" "_" bitcoin_depends_effective_cache_key "${bitcoin_depends_effective_cache_key}")
+set(BITCOIN_DEPENDS_EFFECTIVE_CACHE_KEY "${bitcoin_depends_effective_cache_key}" CACHE INTERNAL "Effective cache key for CMake-built bundled dependencies.")
+
+if(NOT DEFINED CACHE{BITCOIN_DEPENDS_PREFIX})
+  set(BITCOIN_DEPENDS_PREFIX "${BITCOIN_DEPENDS_CACHE_DIR}/${bitcoin_depends_effective_cache_key}/prefix" CACHE PATH "Install prefix for CMake-built bundled target dependencies.")
+endif()
+if(NOT DEFINED CACHE{BITCOIN_DEPENDS_NATIVE_PREFIX})
+  set(BITCOIN_DEPENDS_NATIVE_PREFIX "${BITCOIN_DEPENDS_PREFIX}/native" CACHE PATH "Install prefix for CMake-built bundled native tools.")
+endif()
+set(BITCOIN_DEPENDS_DOWNLOAD_DIR "${BITCOIN_DEPENDS_CACHE_DIR}/Download" CACHE PATH "Download directory for CMake-built bundled dependencies.")
+if(NOT DEFINED CACHE{BITCOIN_DEPENDS_BUILD_DIR})
+  set(BITCOIN_DEPENDS_BUILD_DIR "${BITCOIN_DEPENDS_CACHE_DIR}/${bitcoin_depends_effective_cache_key}/Build" CACHE PATH "Build directory for CMake-built bundled dependencies.")
+endif()
 set(BITCOIN_DEPENDS_C_FLAGS "" CACHE STRING "C compiler flags for CMake-built bundled target dependencies.")
 set(BITCOIN_DEPENDS_CXX_FLAGS "" CACHE STRING "C++ compiler flags for CMake-built bundled target dependencies.")
 set(BITCOIN_DEPENDS_EXE_LINKER_FLAGS "" CACHE STRING "Executable linker flags for CMake-built bundled target dependencies.")
