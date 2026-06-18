@@ -107,8 +107,7 @@ BASE_BUILD_DIR=${BASE_BUILD_DIR:-$BASE_SCRATCH_DIR/build-$HOST}
 cmake \
   -S "$BASE_ROOT_DIR" \
   -B "$BASE_BUILD_DIR" \
-  --preset "$BITCOIN_CMAKE_PRESET" \
-  -DCMAKE_INSTALL_PREFIX="$BASE_OUTDIR" || (
+  --preset "$BITCOIN_CMAKE_PRESET" || (
   cd "${BASE_BUILD_DIR}"
   # shellcheck disable=SC2046
   cat $(cmake -P "${BASE_ROOT_DIR}/ci/test/GetCMakeLogFiles.cmake")
@@ -176,11 +175,9 @@ if [[ "$CI_OS_NAME" == "macos" && "${GOAL}" = "install deploy" ]]; then
 fi
 
 if [ "$RUN_UNIT_TESTS" = "true" ]; then
-  DIR_UNIT_TEST_DATA="${DIR_UNIT_TEST_DATA}" \
-  LD_LIBRARY_PATH="${DEPENDS_DIR}/${HOST}/lib" \
-  CTEST_OUTPUT_ON_FAILURE=ON \
-  ctest --test-dir "${BASE_BUILD_DIR}" \
-    --stop-on-failure \
+  ctest \
+    --preset "${BITCOIN_CMAKE_PRESET}-unit-tests" \
+    --test-dir "${BASE_BUILD_DIR}" \
     "${MAKEJOBS}" \
     --timeout $(( TEST_RUNNER_TIMEOUT_FACTOR * 60 ))
 fi
