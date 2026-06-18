@@ -134,6 +134,7 @@ option(BUILD_FOR_FUZZING "Build for fuzzing. Enabling this will disable all othe
 option(REDUCE_EXPORTS "Attempt to reduce exported symbols in the resulting executables." OFF)
 option(CMAKE_COMPILE_WARNING_AS_ERROR "Treat compiler warnings as errors." OFF)
 option(WITH_CCACHE "Attempt to use ccache for compiling." ON)
+option(BITCOIN_BUILD_DEPENDS "Build bundled dependencies with CMake." OFF)
 
 option(INSTALL_MAN "Install man pages." ON)
 
@@ -217,6 +218,11 @@ find_package(Threads REQUIRED)
 target_link_libraries(core_interface INTERFACE
   Threads::Threads
 )
+
+if(BITCOIN_BUILD_DEPENDS)
+  include(cmake/depends/BitcoinDepends.cmake)
+  bitcoin_depends_add_boost()
+endif()
 
 include(AddBoostIfNeeded)
 add_boost_if_needed()

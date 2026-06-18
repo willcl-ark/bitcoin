@@ -17,54 +17,65 @@ function(add_boost_if_needed)
   directory and other added INTERFACE properties.
   ]=]
 
-  if(CMAKE_HOST_APPLE)
-    find_program(HOMEBREW_EXECUTABLE brew)
-    if(HOMEBREW_EXECUTABLE)
-      execute_process(
-        COMMAND ${HOMEBREW_EXECUTABLE} --prefix boost
-        OUTPUT_VARIABLE Boost_ROOT
-        ERROR_QUIET
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-      )
+  if(NOT TARGET Boost::headers)
+    if(CMAKE_HOST_APPLE)
+      find_program(HOMEBREW_EXECUTABLE brew)
+      if(HOMEBREW_EXECUTABLE)
+        execute_process(
+          COMMAND ${HOMEBREW_EXECUTABLE} --prefix boost
+          OUTPUT_VARIABLE Boost_ROOT
+          ERROR_QUIET
+          OUTPUT_STRIP_TRAILING_WHITESPACE
+        )
+      endif()
     endif()
+
+    find_package(Boost 1.74.0 REQUIRED CONFIG)
+    mark_as_advanced(Boost_INCLUDE_DIR boost_headers_DIR)
+    set_target_properties(Boost::headers PROPERTIES IMPORTED_GLOBAL TRUE)
   endif()
 
-  find_package(Boost 1.74.0 REQUIRED CONFIG)
-  mark_as_advanced(Boost_INCLUDE_DIR boost_headers_DIR)
-  set_target_properties(Boost::headers PROPERTIES IMPORTED_GLOBAL TRUE)
-  target_compile_definitions(Boost::headers INTERFACE
+  set(boost_headers_target Boost::headers)
+  get_target_property(boost_headers_aliased_target Boost::headers ALIASED_TARGET)
+  if(boost_headers_aliased_target)
+    set(boost_headers_target ${boost_headers_aliased_target})
+  endif()
+
+  target_compile_definitions(${boost_headers_target} INTERFACE
     # We don't use multi_index serialization.
     BOOST_MULTI_INDEX_DISABLE_SERIALIZATION
   )
   if(DEFINED VCPKG_TARGET_TRIPLET)
     # Workaround for https://github.com/microsoft/vcpkg/issues/36955.
-    target_compile_definitions(Boost::headers INTERFACE
+    target_compile_definitions(${boost_headers_target} INTERFACE
       BOOST_NO_USER_CONFIG
     )
   endif()
 
-  # Prevent use of std::unary_function, which was removed in C++17,
-  # and will generate warnings with newer compilers for Boost
-  # older than 1.80.
-  # See: https://github.com/boostorg/config/pull/430.
-  set(CMAKE_REQUIRED_DEFINITIONS -DBOOST_NO_CXX98_FUNCTION_BASE)
-  get_target_property(CMAKE_REQUIRED_INCLUDES Boost::headers INTERFACE_INCLUDE_DIRECTORIES)
-  set(CMAKE_REQUIRED_FLAGS ${working_compiler_werror_flag})
-  set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
-  include(CheckCXXSourceCompiles)
-  check_cxx_source_compiles("
-    #include <boost/config.hpp>
-    " NO_DIAGNOSTICS_BOOST_NO_CXX98_FUNCTION_BASE
-  )
-  if(NO_DIAGNOSTICS_BOOST_NO_CXX98_FUNCTION_BASE)
-    target_compile_definitions(Boost::headers INTERFACE
-      BOOST_NO_CXX98_FUNCTION_BASE
+  if(NOT BITCOIN_BUILD_DEPENDS)
+    # Prevent use of std::unary_function, which was removed in C++17,
+    # and will generate warnings with newer compilers for Boost
+    # older than 1.80.
+    # See: https://github.com/boostorg/config/pull/430.
+    set(CMAKE_REQUIRED_DEFINITIONS -DBOOST_NO_CXX98_FUNCTION_BASE)
+    get_target_property(CMAKE_REQUIRED_INCLUDES ${boost_headers_target} INTERFACE_INCLUDE_DIRECTORIES)
+    set(CMAKE_REQUIRED_FLAGS ${working_compiler_werror_flag})
+    set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+    include(CheckCXXSourceCompiles)
+    check_cxx_source_compiles("
+      #include <boost/config.hpp>
+      " NO_DIAGNOSTICS_BOOST_NO_CXX98_FUNCTION_BASE
     )
+    if(NO_DIAGNOSTICS_BOOST_NO_CXX98_FUNCTION_BASE)
+      target_compile_definitions(${boost_headers_target} INTERFACE
+        BOOST_NO_CXX98_FUNCTION_BASE
+      )
+    endif()
   endif()
 
   # Some package managers, such as vcpkg, vendor Boost.Test separately
   # from the rest of the headers, so we have to check for it individually.
-  if(BUILD_TESTS AND DEFINED VCPKG_TARGET_TRIPLET)
+  if(BUILD_TESTS AND DEFINED VCPKG_TARGET_TRIPLET AND NOT BITCOIN_BUILD_DEPENDS)
     find_package(boost_included_unit_test_framework ${Boost_VERSION} EXACT REQUIRED CONFIG)
   endif()
 
