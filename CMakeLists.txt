@@ -232,6 +232,9 @@ if(BITCOIN_BUILD_DEPENDS)
   if(WITH_ZMQ)
     bitcoin_depends_add_zeromq()
   endif()
+  if(ENABLE_WALLET)
+    bitcoin_depends_add_sqlite()
+  endif()
 endif()
 
 include(AddBoostIfNeeded)
@@ -244,14 +247,16 @@ if(BUILD_DAEMON OR BUILD_GUI OR BUILD_CLI OR BUILD_TESTS OR BUILD_BENCH OR BUILD
 endif()
 
 if(ENABLE_WALLET)
-  if(VCPKG_TARGET_TRIPLET)
-    # Use of the `unofficial::` namespace is a vcpkg package manager convention.
-    find_package(unofficial-sqlite3 CONFIG REQUIRED)
-    add_library(SQLite3::SQLite3 ALIAS unofficial::sqlite3::sqlite3)
-  else()
-    find_package(SQLite3 3.7.17 REQUIRED)
-    if(NOT TARGET SQLite3::SQLite3) # CMake < 4.3
-      add_library(SQLite3::SQLite3 ALIAS SQLite::SQLite3)
+  if(NOT BITCOIN_BUILD_DEPENDS)
+    if(VCPKG_TARGET_TRIPLET)
+      # Use of the `unofficial::` namespace is a vcpkg package manager convention.
+      find_package(unofficial-sqlite3 CONFIG REQUIRED)
+      add_library(SQLite3::SQLite3 ALIAS unofficial::sqlite3::sqlite3)
+    else()
+      find_package(SQLite3 3.7.17 REQUIRED)
+      if(NOT TARGET SQLite3::SQLite3) # CMake < 4.3
+        add_library(SQLite3::SQLite3 ALIAS SQLite::SQLite3)
+      endif()
     endif()
   endif()
 endif()
