@@ -25,7 +25,7 @@ function(add_libmultiprocess subdir)
   mark_as_advanced(CapnProto_kj_IMPORTED_LOCATION)
   mark_as_advanced(CapnProto_kj-test_IMPORTED_LOCATION)
   mark_as_advanced(CapnProto_kj-tls_IMPORTED_LOCATION)
-  if(BUILD_TESTS)
+  if(BUILD_TESTS AND TARGET mptest)
     # Add tests to "all" target so ctest can run them
     set_target_properties(mptest PROPERTIES EXCLUDE_FROM_ALL OFF)
   endif()
