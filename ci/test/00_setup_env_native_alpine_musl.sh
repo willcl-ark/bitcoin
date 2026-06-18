@@ -12,10 +12,6 @@ export CI_BASE_PACKAGES="build-base musl-dev pkgconf curl ccache make ninja git 
 export PIP_PACKAGES="--break-system-packages pyzmq pycapnp"
 export DEP_OPTS="DEBUG=1"
 export GOAL="install"
-export BITCOIN_CONFIG="\
- --preset=dev-mode \
- -DREDUCE_EXPORTS=ON \
- -DCMAKE_BUILD_TYPE=Debug \
-"
+export BITCOIN_CMAKE_PRESET=ci-native-alpine-musl
 export TEST_RUNNER_EXTRA="--v2transport --usecli --extended --exclude feature_dbcrash"  # Run extended tests under --usecli and --v2transport, but exclude the very slow dbcrash
 export BITCOIN_CMD="bitcoin -m" # Used in functional tests

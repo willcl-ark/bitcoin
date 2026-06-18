@@ -25,14 +25,4 @@ export PIP_PACKAGES="--break-system-packages pycapnp"
 export NO_DEPENDS=1
 export GOAL="install"
 export CI_LIMIT_STACK_SIZE=1
-export BITCOIN_CONFIG="\
- --preset=dev-mode \
- -DSANITIZERS=address,float-divide-by-zero,integer,undefined \
- -DCMAKE_C_COMPILER=clang \
- -DCMAKE_CXX_COMPILER=clang++ \
- -DCMAKE_C_FLAGS='-ftrivial-auto-var-init=pattern' \
- -DCMAKE_CXX_FLAGS='-ftrivial-auto-var-init=pattern' \
- -DCMAKE_EXE_LINKER_FLAGS='-fuse-ld=mold' \
- -DAPPEND_CXXFLAGS='-std=c++23' \
- -DAPPEND_CPPFLAGS='-DARENA_DEBUG -DDEBUG_LOCKORDER' \
-"
+export BITCOIN_CMAKE_PRESET=ci-native-asan

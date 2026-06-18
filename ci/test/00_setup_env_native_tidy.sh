@@ -18,10 +18,4 @@ export RUN_FUZZ_TESTS=false
 export RUN_CHECK_DEPS=true
 export RUN_TIDY=true
 export GOAL="install"
-export BITCOIN_CONFIG="\
- --preset dev-mode \
- -DCMAKE_C_COMPILER=clang-${TIDY_LLVM_V} \
- -DCMAKE_CXX_COMPILER=clang++-${TIDY_LLVM_V} \
- -DCMAKE_C_FLAGS_RELWITHDEBINFO='-O0 -g0' \
- -DCMAKE_CXX_FLAGS_RELWITHDEBINFO='-O0 -g0' \
-"
+export BITCOIN_CMAKE_PRESET=ci-native-tidy

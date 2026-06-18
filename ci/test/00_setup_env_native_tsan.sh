@@ -16,10 +16,5 @@ export PIP_PACKAGES="--break-system-packages pycapnp"
 export DEP_OPTS="CC=clang CXX=clang++ CXXFLAGS='${LIBCXX_FLAGS}' NO_QT=1"
 export GOAL="install"
 export CI_LIMIT_STACK_SIZE=1
-export BITCOIN_CONFIG="\
-  --preset=dev-mode \
-  -DBUILD_GUI=OFF \
-  -DSANITIZERS=thread \
-  -DAPPEND_CPPFLAGS='-DARENA_DEBUG -DDEBUG_LOCKCONTENTION -D_LIBCPP_REMOVE_TRANSITIVE_INCLUDES' \
-"
+export BITCOIN_CMAKE_PRESET=ci-native-tsan
 export USE_INSTRUMENTED_LIBCPP="Thread"

@@ -13,10 +13,4 @@ export PACKAGES="g++-mingw-w64-ucrt64 nsis"
 export RUN_UNIT_TESTS=false
 export RUN_FUNCTIONAL_TESTS=false
 export GOAL="deploy"
-export BITCOIN_CONFIG="\
-  --preset=dev-mode \
-  -DENABLE_IPC=OFF \
-  -DWITH_USDT=OFF \
-  -DREDUCE_EXPORTS=ON \
-  -DCMAKE_CXX_FLAGS='-Wno-error=maybe-uninitialized' \
-"
+export BITCOIN_CMAKE_PRESET=ci-win64

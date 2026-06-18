@@ -15,7 +15,4 @@ export CI_IMAGE_PLATFORM="linux/s390x"
 export TEST_RUNNER_EXTRA="--exclude rpc_bind --exclude feature_bind_extra"
 export RUN_FUNCTIONAL_TESTS=true
 export GOAL="install"
-export BITCOIN_CONFIG="\
-  --preset=dev-mode \
-  -DREDUCE_EXPORTS=ON \
-"
+export BITCOIN_CMAKE_PRESET=ci-s390x
