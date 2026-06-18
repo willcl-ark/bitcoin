@@ -222,6 +222,9 @@ target_link_libraries(core_interface INTERFACE
 if(BITCOIN_BUILD_DEPENDS)
   include(cmake/depends/BitcoinDepends.cmake)
   bitcoin_depends_add_boost()
+  if(WITH_USDT)
+    bitcoin_depends_add_systemtap()
+  endif()
 endif()
 
 include(AddBoostIfNeeded)
@@ -256,7 +259,9 @@ if(ENABLE_IPC AND WITH_EXTERNAL_LIBMULTIPROCESS)
 endif()
 
 if(WITH_USDT)
-  find_package(USDT MODULE REQUIRED)
+  if(NOT BITCOIN_BUILD_DEPENDS)
+    find_package(USDT MODULE REQUIRED)
+  endif()
 endif()
 
 if(BUILD_GUI)

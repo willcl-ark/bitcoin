@@ -93,3 +93,4 @@ function(bitcoin_depends_external_cmake_project name)
 endfunction()
 
 include(cmake/depends/packages/Boost.cmake)
+include(cmake/depends/packages/SystemTap.cmake)
