@@ -307,6 +307,92 @@
       }
     }
   ],
+  "buildPresets": [
+    {
+      "name": "ci-arm-linux",
+      "configurePreset": "ci-arm-linux"
+    },
+    {
+      "name": "ci-freebsd-cross",
+      "configurePreset": "ci-freebsd-cross"
+    },
+    {
+      "name": "ci-i686-no-ipc",
+      "configurePreset": "ci-i686-no-ipc"
+    },
+    {
+      "name": "ci-macos-cross",
+      "configurePreset": "ci-macos-cross"
+    },
+    {
+      "name": "ci-macos-native",
+      "configurePreset": "ci-macos-native"
+    },
+    {
+      "name": "ci-macos-native-fuzz",
+      "configurePreset": "ci-macos-native-fuzz"
+    },
+    {
+      "name": "ci-native-alpine-musl",
+      "configurePreset": "ci-native-alpine-musl"
+    },
+    {
+      "name": "ci-native-asan",
+      "configurePreset": "ci-native-asan"
+    },
+    {
+      "name": "ci-native-chimera-lto",
+      "configurePreset": "ci-native-chimera-lto"
+    },
+    {
+      "name": "ci-native-fuzz",
+      "configurePreset": "ci-native-fuzz"
+    },
+    {
+      "name": "ci-native-fuzz-msan",
+      "configurePreset": "ci-native-fuzz-msan"
+    },
+    {
+      "name": "ci-native-fuzz-valgrind",
+      "configurePreset": "ci-native-fuzz-valgrind"
+    },
+    {
+      "name": "ci-native-iwyu",
+      "configurePreset": "ci-native-iwyu"
+    },
+    {
+      "name": "ci-native-msan",
+      "configurePreset": "ci-native-msan"
+    },
+    {
+      "name": "ci-native-nowallet",
+      "configurePreset": "ci-native-nowallet"
+    },
+    {
+      "name": "ci-native-previous-releases",
+      "configurePreset": "ci-native-previous-releases"
+    },
+    {
+      "name": "ci-native-tidy",
+      "configurePreset": "ci-native-tidy"
+    },
+    {
+      "name": "ci-native-tsan",
+      "configurePreset": "ci-native-tsan"
+    },
+    {
+      "name": "ci-native-valgrind",
+      "configurePreset": "ci-native-valgrind"
+    },
+    {
+      "name": "ci-s390x",
+      "configurePreset": "ci-s390x"
+    },
+    {
+      "name": "ci-win64",
+      "configurePreset": "ci-win64"
+    }
+  ],
   "testPresets": [
     {
       "name": "ci-unit-tests",
