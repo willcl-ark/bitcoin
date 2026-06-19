@@ -34,15 +34,8 @@ SOURCES_PATH ?= $(BASEDIR)/sources
 WORK_PATH = $(BASEDIR)/work
 BASE_CACHE ?= $(BASEDIR)/built
 SDK_PATH ?= $(BASEDIR)/SDKs
-NO_BOOST ?=
-NO_LIBEVENT ?=
 NO_QT ?=
 NO_QR ?=
-NO_WALLET ?=
-NO_ZMQ ?=
-NO_USDT ?=
-# Default NO_IPC value is 1 on Windows
-NO_IPC ?= $(if $(findstring mingw32,$(HOST)),1,)
 LTO ?=
 FALLBACK_DOWNLOAD_PATH ?= https://bitcoincore.org/depends-sources
 
@@ -152,32 +145,13 @@ $(host_arch)_$(host_os)_id:=$(shell env CC='$(host_CC)' C_STANDARD='$(C_STANDARD
                                         DEBUG='$(DEBUG)' LTO='$(LTO)' \
                                         ./gen_id '$(HOST_ID_SALT)' 'GUIX_ENVIRONMENT=$(realpath $(GUIX_ENVIRONMENT))')
 
-boost_packages_$(NO_BOOST) = $(boost_packages)
-
-libevent_packages_$(NO_LIBEVENT) = $(libevent_packages)
-
-qrencode_packages_$(NO_QR) = $(qrencode_$(host_os)_packages)
+qrencode_packages_$(NO_QR) = $(if $(NO_QT),,$(qrencode_$(host_os)_packages))
 
 qt_packages_$(NO_QT) = $(qt_packages) $(qt_$(host_os)_packages) $(qt_$(host_arch)_$(host_os)_packages) $(qrencode_packages_)
 qt_native_packages_$(NO_QT) = $(qt_native_packages)
 
-wallet_packages_$(NO_WALLET) = $(sqlite_packages)
-
-zmq_packages_$(NO_ZMQ) = $(zmq_packages)
-ipc_packages_$(NO_IPC) = $(ipc_packages)
-usdt_packages_$(NO_USDT) = $(usdt_$(host_os)_packages)
-
-packages += $($(host_arch)_$(host_os)_packages) $($(host_os)_packages) $(boost_packages_) $(libevent_packages_) $(qt_packages_) $(wallet_packages_) $(usdt_packages_)
+packages += $($(host_arch)_$(host_os)_packages) $($(host_os)_packages) $(qt_packages_)
 native_packages += $($(host_arch)_$(host_os)_native_packages) $($(host_os)_native_packages) $(qt_native_packages_)
-
-ifneq ($(zmq_packages_),)
-packages += $(zmq_packages)
-endif
-
-ifneq ($(ipc_packages_),)
-packages += $(ipc_packages)
-native_packages += $(multiprocess_native_packages)
-endif
 
 all_packages = $(packages) $(native_packages)
 
@@ -231,10 +205,6 @@ $(host_prefix)/toolchain.cmake : toolchain.cmake.in $(host_prefix)/.stamp_$(fina
             -e 's|@LDFLAGS_DEBUG@|$(strip $(host_debug_LDFLAGS))|' \
             -e 's|@qt_packages@|$(qt_packages_)|' \
             -e 's|@qrencode_packages@|$(qrencode_packages_)|' \
-            -e 's|@zmq_packages@|$(zmq_packages_)|' \
-            -e 's|@wallet_packages@|$(wallet_packages_)|' \
-            -e 's|@usdt_packages@|$(usdt_packages_)|' \
-            -e 's|@ipc_packages@|$(ipc_packages_)|' \
             $< > $@
 	touch $@
 
