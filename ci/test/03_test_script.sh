@@ -112,7 +112,10 @@ CMAKE_CONFIGURE_ARGS=(
 )
 
 if [ -z "$NO_DEPENDS" ]; then
-  CMAKE_CONFIGURE_ARGS+=(--toolchain "$DEPENDS_DIR/$HOST/toolchain.cmake")
+  CMAKE_CONFIGURE_ARGS+=(
+    --toolchain "$DEPENDS_DIR/$HOST/toolchain.cmake"
+    -DBITCOIN_BUILD_DEPENDS=ON
+  )
 fi
 
 if [ "$RUN_TIDY" = "true" ]; then
