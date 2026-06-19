@@ -116,7 +116,7 @@ case "$HOST" in
         unset LIBRARY_PATH
         ;;
 esac
-BITCOIN_DEPENDS_DOWNLOAD_DIR="${BITCOIN_DEPENDS_DOWNLOAD_DIR:-${SOURCES_PATH:-${PWD}/depends/sources}/cmake-depends}"
+BITCOIN_DEPENDS_CACHE_DIR="${BITCOIN_DEPENDS_CACHE_DIR:-${BASE_CACHE:-${PWD}/depends/built}/cmake-depends}"
 
 ###########################
 # Binary Tarball Building #
@@ -168,7 +168,7 @@ mkdir -p "$DISTSRC"
     cmake -S . -B build \
           --toolchain "${BASEPREFIX}/${HOST}/toolchain.cmake" \
           -DWITH_CCACHE=OFF \
-          -DBITCOIN_DEPENDS_DOWNLOAD_DIR="${BITCOIN_DEPENDS_DOWNLOAD_DIR}" \
+          -DBITCOIN_DEPENDS_CACHE_DIR="${BITCOIN_DEPENDS_CACHE_DIR}" \
           -Werror=dev \
           ${CONFIGFLAGS} \
           ${CMAKE_EXE_LINKER_FLAGS+"$CMAKE_EXE_LINKER_FLAGS"}
