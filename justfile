@@ -16,6 +16,11 @@ make:
 build: configure make
     cmake --build build --parallel
 
+build-all-depends:
+    make -C depends -j{{num_cpus()}}
+    cmake -B build -DBITCOIN_BUILD_DEPENDS=ON --toolchain=depends/x86_64-pc-linux-gnu/toolchain.cmake
+    cmake --build build --parallel
+
 # Remove ./build
 clean:
     rm -Rf ./build
