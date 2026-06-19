@@ -61,12 +61,12 @@ function(bitcoin_depends_add_capnproto)
   set(capnp_config_dir "${PROJECT_BINARY_DIR}/_depends/CapnProto")
   file(MAKE_DIRECTORY "${capnp_config_dir}")
   configure_file(
-    "${PROJECT_SOURCE_DIR}/cmake/depends/templates/CapnProtoConfig.cmake.in"
+    "${BITCOIN_DEPENDS_SOURCE_DIR}/cmake/depends/templates/CapnProtoConfig.cmake.in"
     "${capnp_config_dir}/CapnProtoConfig.cmake"
     @ONLY
   )
   configure_file(
-    "${PROJECT_SOURCE_DIR}/cmake/depends/templates/CapnProtoConfigVersion.cmake.in"
+    "${BITCOIN_DEPENDS_SOURCE_DIR}/cmake/depends/templates/CapnProtoConfigVersion.cmake.in"
     "${capnp_config_dir}/CapnProtoConfigVersion.cmake"
     @ONLY
   )
@@ -86,7 +86,7 @@ function(bitcoin_depends_add_libmultiprocess)
   set(mpgen_executable "${BITCOIN_DEPENDS_NATIVE_PREFIX}/bin/mpgen${native_executable_suffix}")
 
   bitcoin_depends_external_native_cmake_project(bitcoin_depends_native_libmultiprocess
-    SOURCE_DIR "${PROJECT_SOURCE_DIR}/src/ipc/libmultiprocess"
+    SOURCE_DIR "${BITCOIN_DEPENDS_SOURCE_DIR}/src/ipc/libmultiprocess"
     DEPENDS bitcoin_depends_native_capnp
     CMAKE_ARGS
       "-DCMAKE_PREFIX_PATH=${BITCOIN_DEPENDS_NATIVE_PREFIX}"

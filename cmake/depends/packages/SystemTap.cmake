@@ -22,7 +22,7 @@ file(COPY \"${systemtap_source_dir}/includes/sys/sdt.h\" DESTINATION \"${systemt
     DOWNLOAD_EXTRACT_TIMESTAMP FALSE
     DOWNLOAD_DIR "${BITCOIN_DEPENDS_DOWNLOAD_DIR}"
     PREFIX "${BITCOIN_DEPENDS_BUILD_DIR}/bitcoin_depends_systemtap"
-    PATCH_COMMAND patch -p1 -i "${PROJECT_SOURCE_DIR}/depends/patches/systemtap/remove_SDT_ASM_SECTION_AUTOGROUP_SUPPORT_check.patch"
+    PATCH_COMMAND patch -p1 -i "${BITCOIN_DEPENDS_SOURCE_DIR}/cmake/depends/patches/systemtap/remove_SDT_ASM_SECTION_AUTOGROUP_SUPPORT_check.patch"
     CONFIGURE_COMMAND ""
     BUILD_COMMAND ""
     INSTALL_COMMAND "${CMAKE_COMMAND}" -P "${systemtap_install_script}"

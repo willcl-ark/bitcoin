@@ -40,7 +40,7 @@ function(bitcoin_depends_add_sqlite)
     list(APPEND sqlite_configure_args "--debug")
   endif()
 
-  set(sqlite_patch_dir "${PROJECT_SOURCE_DIR}/depends/patches/sqlite")
+  set(sqlite_patch_dir "${BITCOIN_DEPENDS_SOURCE_DIR}/cmake/depends/patches/sqlite")
   set(sqlite_build_env
     "CPPFLAGS=${sqlite_cppflags}"
   )

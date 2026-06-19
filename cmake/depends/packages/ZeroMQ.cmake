@@ -12,7 +12,7 @@ function(bitcoin_depends_add_zeromq)
   file(MAKE_DIRECTORY "${zeromq_include_dir}" "${zeromq_lib_dir}")
 
   set(zeromq_library "${zeromq_lib_dir}/${CMAKE_STATIC_LIBRARY_PREFIX}zmq${CMAKE_STATIC_LIBRARY_SUFFIX}")
-  set(zeromq_patch_dir "${PROJECT_SOURCE_DIR}/depends/patches/zeromq")
+  set(zeromq_patch_dir "${BITCOIN_DEPENDS_SOURCE_DIR}/cmake/depends/patches/zeromq")
   bitcoin_depends_external_cmake_project(bitcoin_depends_zeromq
     URL "https://github.com/zeromq/libzmq/releases/download/v4.3.5/zeromq-4.3.5.tar.gz"
     SHA256 "6653ef5910f17954861fe72332e68b03ca6e4d9c7160eb3a8de5a5a913bfab43"

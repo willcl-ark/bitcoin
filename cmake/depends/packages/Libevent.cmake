@@ -22,7 +22,7 @@ function(bitcoin_depends_add_libevent)
     list(APPEND libevent_byproducts "${libevent_pthreads_library}")
   endif()
 
-  set(libevent_patch_dir "${PROJECT_SOURCE_DIR}/depends/patches/libevent")
+  set(libevent_patch_dir "${BITCOIN_DEPENDS_SOURCE_DIR}/cmake/depends/patches/libevent")
   bitcoin_depends_external_cmake_project(bitcoin_depends_libevent
     URL "https://github.com/libevent/libevent/releases/download/release-2.1.12-stable/libevent-2.1.12-stable.tar.gz"
     SHA256 "92e6de1be9ec176428fd2367677e61ceffc2ee1cb119035037a27d346b0403bb"
