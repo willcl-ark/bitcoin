@@ -282,9 +282,17 @@ mkdir -p "$OUTDIR_BASE"
 
 # Download the depends sources now as we won't have internet access in the build
 # container
+cmake_depends_download_dir="${SOURCES_PATH:-${PWD}/depends/sources}/cmake-depends"
+cmake_depends_container_download_dir="${SOURCES_PATH:-/bitcoin/depends/sources}/cmake-depends"
 for host in $HOSTS; do
     make -C "${PWD}/depends" -j"$JOBS" download-"$(host_to_commonname "$host")" ${V:+V=1} ${SOURCES_PATH:+SOURCES_PATH="$SOURCES_PATH"}
 done
+cmake -S "${PWD}/cmake/depends/sources" \
+      -B "${VAR_BASE}/cmake-depends-source-driver" \
+      -DBITCOIN_DEPENDS_DOWNLOAD_DIR="$cmake_depends_download_dir"
+cmake --build "${VAR_BASE}/cmake-depends-source-driver" \
+      -j"$JOBS" \
+      --target bitcoin-depends-download
 
 
 #########
@@ -431,6 +439,7 @@ EOF
                                         ${V:+V=1} \
                                         ${SOURCES_PATH:+SOURCES_PATH="$SOURCES_PATH"} \
                                         ${BASE_CACHE:+BASE_CACHE="$BASE_CACHE"} \
+                                        BITCOIN_DEPENDS_DOWNLOAD_DIR="$cmake_depends_container_download_dir" \
                                         ${SDK_PATH:+SDK_PATH="$SDK_PATH"} \
                                         DISTSRC="$(distsrc_for_host "$HOST" "" /distsrc-base)" \
                                         OUTDIR="$(outdir_for_host "$HOST" "" /outdir-base)" \
