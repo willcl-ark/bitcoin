@@ -511,10 +511,10 @@ UniValue OpenRPCResultSchema(const RPCResult& result)
 }
 } // namespace
 
-static RPCMethod getopenrpcinfo()
+static RPCMethod openrpcinfo(std::string name)
 {
     return RPCMethod{
-        "getopenrpcinfo",
+        name,
         "Returns an OpenRPC document for currently available RPC commands.\n",
         {
             {"show_hidden", RPCArg::Type::BOOL, RPCArg::Default{false}, "Also include hidden RPC commands and arguments."},
@@ -556,8 +556,8 @@ static RPCMethod getopenrpcinfo()
             },
             {.skip_type_check = true}},
         RPCExamples{
-            HelpExampleCli("getopenrpcinfo", "")
-            + HelpExampleRpc("getopenrpcinfo", "")
+            HelpExampleCli(name, "")
+            + HelpExampleRpc(name, "")
         },
         [](const RPCMethod& self, const JSONRPCRequest& request) -> UniValue
 {
@@ -567,9 +567,20 @@ static RPCMethod getopenrpcinfo()
     };
 }
 
+static RPCMethod getopenrpcinfo()
+{
+    return openrpcinfo("getopenrpcinfo");
+}
+
+static RPCMethod rpc_discover()
+{
+    return openrpcinfo("rpc.discover");
+}
+
 static const CRPCCommand vRPCCommands[]{
     /* Overall control/query calls */
     {"control", &getopenrpcinfo},
+    {"control", &rpc_discover},
     {"control", &getrpcinfo},
     {"control", &help},
     {"control", &stop},

@@ -31,6 +31,8 @@ class OpenRPCDocTest(BitcoinTestFramework):
         assert_equal(type(openrpc["info"]).__name__, "dict")
         assert_equal(type(openrpc["methods"]).__name__, "list")
 
+        assert "rpc.discover" in [method["name"] for method in openrpc["methods"]]
+
         stop = find_method(openrpc, "stop")
         assert "wait" not in [param["name"] for param in stop["params"]]
 
