@@ -44,13 +44,13 @@ inline constexpr uint32_t HEADER_FILE_VERSION{1};
 inline constexpr int64_t HEADER_FILE_DATA_START_POSITION{8}; // after magic (4bytes), version (4bytes)
 inline constexpr const char* HEADER_FILE_NAME{"headers.dat"};
 
-//! The flag is persisted by presence or absence of this file.
+//! The flag is persisted in a checksummed file.
 inline constexpr const char* REINDEX_FLAG_FILE_NAME{"reindex.dat"};
 
-//! The flag is persisted by presence or absence of this file.
+//! The flag is persisted in a checksummed file.
 inline constexpr const char* PRUNE_FLAG_FILE_NAME{"prune.dat"};
 
-//! The flag is persisted by presence or absence of this file.
+//! The flag is persisted in a checksummed file.
 //! This file is used to indicate a completed log write.
 inline constexpr const char* LOG_FLAG_FILE_NAME{"log_flag.dat"};
 
@@ -82,10 +82,18 @@ public:
     explicit BlockTreeStoreError(const std::string& msg) : std::runtime_error(msg) {}
 };
 
+//! A write waiting for store access was interrupted before acquiring the lock.
+class BlockTreeStoreInterrupted : public BlockTreeStoreError
+{
+public:
+    using BlockTreeStoreError::BlockTreeStoreError;
+};
+
 //! Excludes other processes writing to the block tree store.
 class WriterLock
 {
     fs::path m_dir;
+    std::string m_lock_key;
 
 public:
     explicit WriterLock(const fs::path& dir);
@@ -97,6 +105,13 @@ public:
 
 class BlockTreeStore
 {
+public:
+    enum class OpenMode {
+        WRITE,
+        WIPE,
+        READ
+    };
+
 private:
     fs::path m_header_file_path;
     fs::path m_log_file_path;
@@ -108,42 +123,49 @@ private:
     // TEST ONLY
     bool m_incomplete_log_write{false};
     bool m_incomplete_log_apply{false};
+    bool m_incomplete_log_flag_commit{false};
+    bool m_incomplete_flag_write{false};
 
     std::optional<WriterLock> m_writer_lock;
     mutable Mutex m_mutex;
+    OpenMode m_mode;
+    const util::SignalInterrupt* m_interrupt;
+
+    void CheckWriteAccess() const;
 
     void WriteFlag(const fs::path& path, bool value, bool directory_commit) const;
 
     /**
      * Apply a pending write-ahead log to the data files.
      *
-     * @return true if a complete log was found and applied; false if there was
-     * nothing to apply, either by no log file existing, or it not being
-     * complete.
+     * Caller must hold the store access lock for the block tree store directory.
+     * log_flag_committed may be set only after this caller has durably
+     * published the TRUE completion flag for the same log.
+     *
+     * @return true if a complete log was found and applied; false if no log was
+     * pending.
      */
-    [[nodiscard]] bool ApplyLog() const EXCLUSIVE_LOCKS_REQUIRED(m_mutex);
+    [[nodiscard]] bool ApplyLog(bool force_recovery = false, bool log_flag_committed = false) const EXCLUSIVE_LOCKS_REQUIRED(m_mutex);
 
 public:
-    enum class OpenMode {
-        WRITE,
-        WIPE
-    };
-    BlockTreeStore(const fs::path& path, OpenMode open_mode = OpenMode::WRITE);
+    BlockTreeStore(const fs::path& path, OpenMode open_mode = OpenMode::WRITE, const util::SignalInterrupt* interrupt = nullptr);
 
-    void ReadReindexing(bool& reindexing) const;
-    void WriteReindexing(bool reindexing) const;
+    void ReadReindexing(bool& reindexing) const EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
+    void WriteReindexing(bool reindexing) const EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
 
     //! Block files are zero indexed. Returns 0 when there are no block files indexed yet.
     void ReadLastBlockFile(int32_t& last_block_file) const EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
 
-    void ReadPruned(bool& pruned) const;
-    void WritePruned(bool pruned) const;
+    void ReadPruned(bool& pruned) const EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
+    void WritePruned(bool pruned) const EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
 
     const fs::path& GetDataFilePath(ValueType value_type) const;
 
     // TEST ONLY
     void SetSimulateIncompleteLogWrite(bool val) { m_incomplete_log_write = val; }
     void SetSimulateIncompleteLogApply(bool val) { m_incomplete_log_apply = val; }
+    void SetSimulateIncompleteLogFlagCommit(bool val) { m_incomplete_log_flag_commit = val; }
+    void SetSimulateIncompleteFlagWrite(bool val) { m_incomplete_flag_write = val; }
 
     void WriteBatchSync(const std::vector<std::pair<int, const CBlockFileInfo*>>& file_infos_to_write, const std::vector<CBlockIndex*>& block_indexes_to_write)
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main, !m_mutex);

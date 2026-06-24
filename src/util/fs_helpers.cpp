@@ -50,7 +50,7 @@ static GlobalMutex cs_dir_locks;
  */
 static std::map<std::string, std::unique_ptr<fsbridge::FileLock>> dir_locks GUARDED_BY(cs_dir_locks);
 namespace util {
-LockResult LockDirectory(const fs::path& directory, const fs::path& lockfile_name, bool probe_only)
+LockResult LockDirectory(const fs::path& directory, const fs::path& lockfile_name, bool probe_only, bool log_error)
 {
     LOCK(cs_dir_locks);
     fs::path pathLockFile = directory / lockfile_name;
@@ -68,7 +68,7 @@ LockResult LockDirectory(const fs::path& directory, const fs::path& lockfile_nam
     }
     auto lock = std::make_unique<fsbridge::FileLock>(pathLockFile);
     if (!lock->TryLock()) {
-        LogError("Error while attempting to lock directory %s: %s\n", fs::PathToString(directory), lock->GetReason());
+        if (log_error) LogError("Error while attempting to lock directory %s: %s\n", fs::PathToString(directory), lock->GetReason());
         return LockResult::ErrorLock;
     }
     if (!probe_only) {
@@ -136,14 +136,15 @@ bool FileCommit(FILE* file)
     return true;
 }
 
-void DirectoryCommit(const fs::path& dirname)
+bool DirectoryCommit(const fs::path& dirname)
 {
 #ifndef WIN32
     FILE* file = fsbridge::fopen(dirname, "r");
-    if (file) {
-        fsync(fileno(file));
-        fclose(file);
-    }
+    if (!file) return false;
+    const bool synced{fsync(fileno(file)) == 0};
+    return fclose(file) == 0 && synced;
+#else
+    return true;
 #endif
 }
 

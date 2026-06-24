@@ -42,7 +42,7 @@ bool FileCommit(FILE* file);
  * Sync directory contents. This is required on some environments to ensure that
  * newly created files are committed to disk.
  */
-void DirectoryCommit(const fs::path& dirname);
+bool DirectoryCommit(const fs::path& dirname);
 
 bool TruncateFile(FILE* file, unsigned int length);
 
@@ -71,7 +71,7 @@ enum class LockResult {
     ErrorWrite,
     ErrorLock,
 };
-[[nodiscard]] LockResult LockDirectory(const fs::path& directory, const fs::path& lockfile_name, bool probe_only = false);
+[[nodiscard]] LockResult LockDirectory(const fs::path& directory, const fs::path& lockfile_name, bool probe_only = false, bool log_error = true);
 } // namespace util
 void UnlockDirectory(const fs::path& directory, const fs::path& lockfile_name);
 bool CheckDiskSpace(const fs::path& dir, uint64_t additional_bytes = 0);

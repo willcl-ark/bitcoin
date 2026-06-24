@@ -3,6 +3,8 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <chainparams.h>
+#include <crc32c/include/crc32c/crc32c.h>
+#include <crypto/common.h>
 #include <kernel/blocktreestorage.h>
 #include <logging.h>
 #include <node/blockstorage.h>
@@ -15,6 +17,10 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <array>
+#include <span>
+#include <type_traits>
+
 using kernel::BLOCK_FILES_FILE_DATA_START_POSITION;
 using kernel::BLOCK_FILES_FILE_MAGIC;
 using kernel::BLOCK_FILES_FILE_NAME;
@@ -26,10 +32,18 @@ using kernel::HEADER_FILE_DATA_START_POSITION;
 using kernel::HEADER_FILE_MAGIC;
 using kernel::HEADER_FILE_NAME;
 using kernel::HEADER_FILE_VERSION;
+using kernel::LOG_FILE_DATA_START_POSITION;
+using kernel::LOG_FILE_MAGIC;
 using kernel::LOG_FILE_NAME;
+using kernel::LOG_FILE_VERSION;
 using kernel::LOG_FLAG_FILE_NAME;
+using kernel::PRUNE_FLAG_FILE_NAME;
+using kernel::REINDEX_FLAG_FILE_NAME;
+using kernel::ValueType;
 
 BOOST_FIXTURE_TEST_SUITE(blocktreestorage_tests, BasicTestingSetup)
+
+static constexpr int64_t BLOCK_FILE_INFO_RECORD_SIZE{36 + sizeof(uint32_t)};
 
 CBlockIndex* InsertBlockIndex(node::BlockMap& block_map, const uint256& hash)
 {
@@ -179,11 +193,105 @@ std::vector<std::pair<int, const CBlockFileInfo*>> FileInfosToPairs(const std::m
     return pairs;
 }
 
+void WriteDataFileHeader(const fs::path& path, uint32_t magic, uint32_t version)
+{
+    fs::create_directories(path.parent_path());
+    AutoFile file{fsbridge::fopen(path, "wb")};
+    file << magic;
+    file << version;
+    BOOST_REQUIRE(file.Commit());
+    BOOST_REQUIRE_EQUAL(file.fclose(), 0);
+}
+
+void CorruptFirstBlockFileInfoValue(const fs::path& path)
+{
+    AutoFile file{fsbridge::fopen(path, "rb+")};
+    file.seek(BLOCK_FILES_FILE_DATA_START_POSITION, SEEK_SET);
+    uint32_t raw;
+    file >> raw;
+    file.seek(BLOCK_FILES_FILE_DATA_START_POSITION, SEEK_SET);
+    file << (raw + 1);
+    BOOST_REQUIRE_EQUAL(file.fclose(), 0);
+}
+
+uint32_t FlagChecksum(uint8_t value)
+{
+    return crc32c::Crc32c(&value, sizeof(value));
+}
+
+void WriteFlagValue(const fs::path& path, bool value)
+{
+    AutoFile file{fsbridge::fopen(path, "rb+")};
+    file.seek(/*magic + version=*/8, SEEK_SET);
+    const uint8_t raw_value{static_cast<uint8_t>(value ? 1 : 0)};
+    file << raw_value;
+    file << FlagChecksum(raw_value);
+    BOOST_REQUIRE(file.Commit());
+    BOOST_REQUIRE_EQUAL(file.fclose(), 0);
+}
+
+void CorruptFlagValue(const fs::path& path)
+{
+    AutoFile file{fsbridge::fopen(path, "rb+")};
+    file.seek(/*magic + version=*/8, SEEK_SET);
+    uint8_t invalid_value{2};
+    file << invalid_value;
+    BOOST_REQUIRE(file.Commit());
+    BOOST_REQUIRE_EQUAL(file.fclose(), 0);
+}
+
+uint32_t ExtendLogChecksum(uint32_t checksum, std::span<const std::byte> value_data, int64_t position)
+{
+    checksum = crc32c::Extend(checksum, UCharCast(value_data.data()), value_data.size());
+    std::array<std::byte, sizeof(int64_t)> position_bytes;
+    WriteLE64(UCharCast(position_bytes.data()), static_cast<uint64_t>(position));
+    return crc32c::Extend(checksum, UCharCast(position_bytes.data()), position_bytes.size());
+}
+
+void WriteCompleteBlockFileInfoLog(const fs::path& path, const CBlockFileInfo& info, int64_t position)
+{
+    AutoFile log_file{fsbridge::fopen(path, "wb")};
+    log_file << LOG_FILE_MAGIC;
+    log_file << LOG_FILE_VERSION;
+    log_file << uint32_t{1};
+    log_file << static_cast<std::underlying_type_t<ValueType>>(ValueType::BLOCK_FILE_INFO);
+    log_file << uint64_t{1};
+
+    std::array<std::byte, 36> value_buffer;
+    SpanWriter{value_buffer}
+        << info.nBlocks
+        << info.nSize
+        << info.nUndoSize
+        << info.nHeightFirst
+        << info.nHeightLast
+        << info.nTimeFirst
+        << info.nTimeLast;
+    uint32_t rolling_checksum{0};
+    const uint32_t checksum{ExtendLogChecksum(0, value_buffer, position)};
+    rolling_checksum = ExtendLogChecksum(rolling_checksum, value_buffer, position);
+
+    log_file.write(value_buffer);
+    log_file << position;
+    log_file << checksum;
+    log_file << rolling_checksum;
+    BOOST_REQUIRE(log_file.Commit());
+    BOOST_REQUIRE_EQUAL(log_file.fclose(), 0);
+}
+
+void AppendByte(const fs::path& path)
+{
+    AutoFile file{fsbridge::fopen(path, "ab")};
+    file << uint8_t{0};
+    BOOST_REQUIRE(file.Commit());
+    BOOST_REQUIRE_EQUAL(file.fclose(), 0);
+}
+
 BOOST_AUTO_TEST_CASE(HeaderFilesFormat)
 {
     fs::path block_tree_store_dir{m_args.GetDataDirBase()};
     auto header_file_path{block_tree_store_dir / HEADER_FILE_NAME};
     auto block_files_file_path{block_tree_store_dir / BLOCK_FILES_FILE_NAME};
+    auto log_file_path{block_tree_store_dir / LOG_FILE_NAME};
     BlockTreeStore store{block_tree_store_dir};
 
     AutoFile header_file{fsbridge::fopen(header_file_path, "rb")};
@@ -207,6 +315,16 @@ BOOST_AUTO_TEST_CASE(HeaderFilesFormat)
     filesize = block_files_file.tell();
     BOOST_CHECK_EQUAL(filesize, BLOCK_FILES_FILE_DATA_START_POSITION);
     (void)block_files_file.fclose();
+
+    AutoFile log_file{fsbridge::fopen(log_file_path, "rb")};
+    log_file >> magic;
+    BOOST_CHECK_EQUAL(magic, LOG_FILE_MAGIC);
+    log_file >> version;
+    BOOST_CHECK_EQUAL(version, LOG_FILE_VERSION);
+    log_file.seek(0, SEEK_END);
+    filesize = log_file.tell();
+    BOOST_CHECK_EQUAL(filesize, LOG_FILE_DATA_START_POSITION);
+    (void)log_file.fclose();
 }
 
 BOOST_AUTO_TEST_CASE(BlockTreeStoreInvalidFiles)
@@ -218,17 +336,36 @@ BOOST_AUTO_TEST_CASE(BlockTreeStoreInvalidFiles)
 
     BlockTreeStore{block_tree_store_dir};
     fs::remove(header_file_path);
-    BOOST_CHECK_THROW(BlockTreeStore{block_tree_store_dir}, BlockTreeStoreError);
+    BlockTreeStore{block_tree_store_dir};
+    BOOST_CHECK(fs::exists(header_file_path));
 
     // If both files are gone, a new store may be created
+    fs::remove(header_file_path);
     fs::remove(block_files_file_path);
     BlockTreeStore{block_tree_store_dir};
     BOOST_CHECK(fs::exists(header_file_path));
     BOOST_CHECK(fs::exists(block_files_file_path));
 
+    // If initialization was interrupted after one empty data file was
+    // created, the missing empty peer may be recovered.
     fs::remove(block_files_file_path);
-    BOOST_CHECK_THROW(BlockTreeStore{block_tree_store_dir}, BlockTreeStoreError);
+    BlockTreeStore{block_tree_store_dir};
+    BOOST_CHECK(fs::exists(block_files_file_path));
+
     fs::remove(header_file_path);
+    BlockTreeStore{block_tree_store_dir};
+    BOOST_CHECK(fs::exists(header_file_path));
+
+    // But a missing peer is unsafe once the existing file has records.
+    {
+        BlockTreeStore store{block_tree_store_dir};
+        CBlockFileInfo info{CreateFileInfo(0)};
+        LOCK(::cs_main);
+        store.WriteBatchSync({{0, &info}}, {});
+    }
+    fs::remove(header_file_path);
+    BOOST_CHECK_THROW(BlockTreeStore{block_tree_store_dir}, BlockTreeStoreError);
+    fs::remove(block_files_file_path);
 
     auto write_magic_and_version{[](const fs::path& path, uint32_t magic, uint32_t version) {
         AutoFile file{fsbridge::fopen(path, "rb+")};
@@ -246,12 +383,85 @@ BOOST_AUTO_TEST_CASE(BlockTreeStoreInvalidFiles)
     BlockTreeStore{block_tree_store_dir};
 }
 
+BOOST_AUTO_TEST_CASE(BlockTreeStoreInterruptedInitialization)
+{
+    fs::path header_only_dir{m_args.GetDataDirBase() / "header_only"};
+    WriteDataFileHeader(header_only_dir / HEADER_FILE_NAME, HEADER_FILE_MAGIC, HEADER_FILE_VERSION);
+    BlockTreeStore{header_only_dir};
+    BOOST_CHECK(fs::exists(header_only_dir / BLOCK_FILES_FILE_NAME));
+
+    fs::path block_files_only_dir{m_args.GetDataDirBase() / "block_files_only"};
+    WriteDataFileHeader(block_files_only_dir / BLOCK_FILES_FILE_NAME, BLOCK_FILES_FILE_MAGIC, BLOCK_FILES_FILE_VERSION);
+    BlockTreeStore{block_files_only_dir};
+    BOOST_CHECK(fs::exists(block_files_only_dir / HEADER_FILE_NAME));
+
+    fs::path invalid_peer_dir{m_args.GetDataDirBase() / "invalid_peer"};
+    WriteDataFileHeader(invalid_peer_dir / HEADER_FILE_NAME, 0, HEADER_FILE_VERSION);
+    BOOST_CHECK_THROW(BlockTreeStore{invalid_peer_dir}, BlockTreeStoreError);
+
+    fs::path corrupt_empty_flag_dir{m_args.GetDataDirBase() / "corrupt_empty_flag"};
+    WriteDataFileHeader(corrupt_empty_flag_dir / HEADER_FILE_NAME, HEADER_FILE_MAGIC, HEADER_FILE_VERSION);
+    WriteDataFileHeader(corrupt_empty_flag_dir / BLOCK_FILES_FILE_NAME, BLOCK_FILES_FILE_MAGIC, BLOCK_FILES_FILE_VERSION);
+    WriteDataFileHeader(corrupt_empty_flag_dir / LOG_FLAG_FILE_NAME, 0, 0);
+    BlockTreeStore{corrupt_empty_flag_dir};
+
+    fs::path corrupt_flag_with_log_dir{m_args.GetDataDirBase() / "corrupt_flag_with_log"};
+    WriteDataFileHeader(corrupt_flag_with_log_dir / HEADER_FILE_NAME, HEADER_FILE_MAGIC, HEADER_FILE_VERSION);
+    WriteDataFileHeader(corrupt_flag_with_log_dir / BLOCK_FILES_FILE_NAME, BLOCK_FILES_FILE_MAGIC, BLOCK_FILES_FILE_VERSION);
+    WriteDataFileHeader(corrupt_flag_with_log_dir / LOG_FLAG_FILE_NAME, 0, 0);
+    WriteDataFileHeader(corrupt_flag_with_log_dir / LOG_FILE_NAME, 0, 0);
+    BOOST_CHECK_THROW(BlockTreeStore{corrupt_flag_with_log_dir}, BlockTreeStoreError);
+
+    fs::path corrupt_nonempty_flag_dir{m_args.GetDataDirBase() / "corrupt_nonempty_flag"};
+    {
+        BlockTreeStore store{corrupt_nonempty_flag_dir};
+        CBlockFileInfo info{CreateFileInfo(0)};
+        LOCK(::cs_main);
+        store.WriteBatchSync({{0, &info}}, {});
+    }
+    WriteDataFileHeader(corrupt_nonempty_flag_dir / REINDEX_FLAG_FILE_NAME, 0, 0);
+    BOOST_CHECK_THROW(BlockTreeStore{corrupt_nonempty_flag_dir}, BlockTreeStoreError);
+
+    const auto check_corrupt_initial_flag_with_wal{[&](const char* dirname, const char* flag_name) {
+        fs::path dir{m_args.GetDataDirBase() / dirname};
+        {
+            BlockTreeStore store{dir};
+        }
+        CBlockFileInfo info{CreateFileInfo(0)};
+        WriteCompleteBlockFileInfoLog(dir / LOG_FILE_NAME, info, BLOCK_FILES_FILE_DATA_START_POSITION);
+        WriteFlagValue(dir / LOG_FLAG_FILE_NAME, /*value=*/true);
+        CorruptFlagValue(dir / flag_name);
+        BOOST_CHECK_THROW(BlockTreeStore{dir}, BlockTreeStoreError);
+    }};
+    check_corrupt_initial_flag_with_wal("corrupt_empty_reindex_with_wal", REINDEX_FLAG_FILE_NAME);
+    check_corrupt_initial_flag_with_wal("corrupt_empty_prune_with_wal", PRUNE_FLAG_FILE_NAME);
+
+    fs::path valid_flags_truncated_log_dir{m_args.GetDataDirBase() / "valid_flags_truncated_log"};
+    {
+        BlockTreeStore store{valid_flags_truncated_log_dir};
+        fs::resize_file(valid_flags_truncated_log_dir / LOG_FILE_NAME, 1);
+        WriteFlagValue(valid_flags_truncated_log_dir / LOG_FLAG_FILE_NAME, /*value=*/false);
+    }
+    BlockTreeStore{valid_flags_truncated_log_dir};
+}
+
+BOOST_AUTO_TEST_CASE(BlockTreeStoreIsWriteExclusive)
+{
+    fs::path block_tree_store_dir{m_args.GetDataDirBase()};
+    BlockTreeStore store_write{block_tree_store_dir};
+    BOOST_CHECK_THROW(BlockTreeStore{block_tree_store_dir}, BlockTreeStoreError);
+    BlockTreeStore store_read{block_tree_store_dir, BlockTreeStore::OpenMode::READ};
+    LOCK(cs_main);
+    BOOST_CHECK_THROW(store_read.WriteBatchSync({}, {}), std::logic_error);
+    BOOST_CHECK_THROW(store_read.WriteReindexing(true), std::logic_error);
+    BOOST_CHECK_THROW(store_read.WritePruned(true), std::logic_error);
+}
+
 BOOST_AUTO_TEST_CASE(BlockTreeStoreIncompleteWrites)
 {
     LOCK(::cs_main);
     fs::path block_tree_store_dir{m_args.GetDataDirBase()};
     auto log_file{block_tree_store_dir / LOG_FILE_NAME};
-    auto log_flag_file{block_tree_store_dir / LOG_FLAG_FILE_NAME};
     auto params{CreateChainParams(gArgs, ChainType::REGTEST)};
     auto store{std::make_unique<BlockTreeStore>(block_tree_store_dir)};
 
@@ -279,8 +489,8 @@ BOOST_AUTO_TEST_CASE(BlockTreeStoreIncompleteWrites)
 
     // The constructor should ignore the log file and not apply any pending state
     block_map.clear();
+    store.reset();
     store = std::make_unique<BlockTreeStore>(block_tree_store_dir);
-    BOOST_CHECK(!fs::exists(log_flag_file));
     BOOST_CHECK(store->LoadBlockIndexGuts(
         params->GetConsensus(),
         [&](const uint256& hash) { return InsertBlockIndex(block_map, hash); },
@@ -292,18 +502,22 @@ BOOST_AUTO_TEST_CASE(BlockTreeStoreIncompleteWrites)
     store->SetSimulateIncompleteLogApply(true);
     BOOST_CHECK_THROW(store->WriteBatchSync(file_infos_to_write, block_indexes_to_write), std::runtime_error);
     BOOST_CHECK(fs::exists(log_file));
-    BOOST_CHECK(fs::exists(log_flag_file));
-    BOOST_CHECK(store->LoadBlockIndexGuts(
-        params->GetConsensus(),
-        [&](const uint256& hash) { return InsertBlockIndex(block_map, hash); },
-        m_interrupt));
-    BOOST_CHECK(block_map.empty());
+    BOOST_CHECK_THROW(static_cast<void>(store->LoadBlockIndexGuts(
+                          params->GetConsensus(),
+                          [&](const uint256& hash) { return InsertBlockIndex(block_map, hash); },
+                          m_interrupt)),
+                      BlockTreeStoreError);
+    CBlockFileInfo info;
+    BOOST_CHECK_THROW(static_cast<void>(store->ReadBlockFileInfo(0, info)), BlockTreeStoreError);
+    int32_t last_block;
+    BOOST_CHECK_THROW(store->ReadLastBlockFile(last_block), BlockTreeStoreError);
+    BlockTreeStore read_store{block_tree_store_dir, BlockTreeStore::OpenMode::READ};
+    BOOST_CHECK_THROW(read_store.ReadLastBlockFile(last_block), BlockTreeStoreError);
 
     // The constructor should now apply the log file and remove the flag
     block_map.clear();
-    BOOST_CHECK(fs::exists(log_flag_file));
+    store.reset();
     store = std::make_unique<BlockTreeStore>(block_tree_store_dir);
-    BOOST_CHECK(!fs::exists(log_flag_file));
     CheckStoreContents(*store, expected_state, "constructor applies log file");
     BOOST_CHECK_EQUAL(block_index->header_pos, HEADER_FILE_DATA_START_POSITION);
 
@@ -313,11 +527,185 @@ BOOST_AUTO_TEST_CASE(BlockTreeStoreIncompleteWrites)
     expected_state.file_infos.insert({1, CreateFileInfo(seed)});
     file_infos_to_write = FileInfosToPairs(expected_state.file_infos);
     BOOST_CHECK_THROW(store->WriteBatchSync(file_infos_to_write, block_indexes_to_write), std::runtime_error);
-    BOOST_CHECK(fs::exists(log_flag_file));
     store->SetSimulateIncompleteLogApply(false);
     store->WriteBatchSync({}, {});
-    BOOST_CHECK(!fs::exists(log_flag_file));
     CheckStoreContents(*store, expected_state, "subsequent write applies log file");
+}
+
+BOOST_AUTO_TEST_CASE(BlockTreeStorePendingLogTruncation)
+{
+    LOCK(::cs_main);
+    fs::path block_tree_store_dir{m_args.GetDataDirBase()};
+    auto log_file{block_tree_store_dir / LOG_FILE_NAME};
+    auto store{std::make_unique<BlockTreeStore>(block_tree_store_dir)};
+    std::map<int, CBlockFileInfo> file_infos{{0, CreateFileInfo(0)}};
+    auto file_infos_to_write{FileInfosToPairs(file_infos)};
+
+    store->SetSimulateIncompleteLogApply(true);
+    BOOST_CHECK_THROW(store->WriteBatchSync(file_infos_to_write, {}), std::runtime_error);
+    fs::resize_file(log_file, fs::file_size(log_file) - 1);
+    store.reset();
+    BOOST_CHECK_THROW(BlockTreeStore{block_tree_store_dir}, BlockTreeStoreError);
+}
+
+BOOST_AUTO_TEST_CASE(BlockTreeStoreLogFlagCommitFailure)
+{
+    LOCK(::cs_main);
+    fs::path block_tree_store_dir{m_args.GetDataDirBase()};
+    auto block_files_file{block_tree_store_dir / BLOCK_FILES_FILE_NAME};
+    auto header_file{block_tree_store_dir / HEADER_FILE_NAME};
+    auto params{CreateChainParams(gArgs, ChainType::REGTEST)};
+    auto store{std::make_unique<BlockTreeStore>(block_tree_store_dir)};
+    ExpectedStoreState expected_state{.interrupt = m_interrupt, .params = *params};
+    expected_state.file_infos.insert({0, CreateFileInfo(0)});
+
+    store->SetSimulateIncompleteLogFlagCommit(true);
+    BOOST_CHECK_THROW(store->WriteBatchSync(FileInfosToPairs(expected_state.file_infos), {}), std::runtime_error);
+    BOOST_CHECK_EQUAL(fs::file_size(block_files_file), BLOCK_FILES_FILE_DATA_START_POSITION);
+    BOOST_CHECK_EQUAL(fs::file_size(header_file), HEADER_FILE_DATA_START_POSITION);
+
+    BOOST_CHECK_THROW(store->WriteBatchSync({}, {}), std::runtime_error);
+    BOOST_CHECK_EQUAL(fs::file_size(block_files_file), BLOCK_FILES_FILE_DATA_START_POSITION);
+    BOOST_CHECK_EQUAL(fs::file_size(header_file), HEADER_FILE_DATA_START_POSITION);
+
+    store->SetSimulateIncompleteLogFlagCommit(false);
+    store->WriteBatchSync({}, {});
+    CheckStoreContents(*store, expected_state, "retry applies log after log flag commit succeeds");
+}
+
+BOOST_AUTO_TEST_CASE(BlockTreeStorePendingLogRepairsPartialAppend)
+{
+    LOCK(::cs_main);
+    fs::path block_tree_store_dir{m_args.GetDataDirBase()};
+    auto block_files_file{block_tree_store_dir / BLOCK_FILES_FILE_NAME};
+    auto params{CreateChainParams(gArgs, ChainType::REGTEST)};
+    auto store{std::make_unique<BlockTreeStore>(block_tree_store_dir)};
+    ExpectedStoreState expected_state{.interrupt = m_interrupt, .params = *params};
+    expected_state.file_infos.insert({0, CreateFileInfo(0)});
+
+    store->SetSimulateIncompleteLogApply(true);
+    BOOST_CHECK_THROW(store->WriteBatchSync(FileInfosToPairs(expected_state.file_infos), {}), std::runtime_error);
+    fs::resize_file(block_files_file, BLOCK_FILES_FILE_DATA_START_POSITION + 1);
+
+    BlockTreeStore read_store{block_tree_store_dir, BlockTreeStore::OpenMode::READ};
+    int32_t last_block;
+    BOOST_CHECK_THROW(read_store.ReadLastBlockFile(last_block), BlockTreeStoreError);
+
+    store.reset();
+    store = std::make_unique<BlockTreeStore>(block_tree_store_dir);
+    CheckStoreContents(*store, expected_state, "pending WAL repairs partial block file info append");
+}
+
+BOOST_AUTO_TEST_CASE(BlockTreeStoreWALFlagRecovery)
+{
+    fs::path block_tree_store_dir{m_args.GetDataDirBase()};
+    auto params{CreateChainParams(gArgs, ChainType::REGTEST)};
+
+    const auto check_read_only_rejects{[](const fs::path& dir) {
+        BlockTreeStore read_store{dir, BlockTreeStore::OpenMode::READ};
+        int32_t last_block;
+        BOOST_CHECK_THROW(read_store.ReadLastBlockFile(last_block), BlockTreeStoreError);
+    }};
+
+    const auto check_recovery_after_completed_write{[&](const fs::path& dir, bool remove_flag) {
+        auto store{std::make_unique<BlockTreeStore>(dir)};
+        ExpectedStoreState expected_state{.interrupt = m_interrupt, .params = *params};
+        expected_state.file_infos.insert({0, CreateFileInfo(0)});
+        {
+            LOCK(::cs_main);
+            store->WriteBatchSync(FileInfosToPairs(expected_state.file_infos), {});
+        }
+
+        if (remove_flag) {
+            BOOST_REQUIRE(fs::remove(dir / LOG_FLAG_FILE_NAME));
+        } else {
+            CorruptFlagValue(dir / LOG_FLAG_FILE_NAME);
+        }
+        check_read_only_rejects(dir);
+
+        store.reset();
+        store = std::make_unique<BlockTreeStore>(dir);
+        CheckStoreContents(*store, expected_state, remove_flag ? "missing WAL flag recovered" : "corrupt WAL flag recovered");
+    }};
+
+    check_recovery_after_completed_write(block_tree_store_dir / "completed_corrupt", /*remove_flag=*/false);
+    check_recovery_after_completed_write(block_tree_store_dir / "completed_missing", /*remove_flag=*/true);
+
+    fs::path interrupted_dir{block_tree_store_dir / "interrupted_apply"};
+    auto store{std::make_unique<BlockTreeStore>(interrupted_dir)};
+    ExpectedStoreState expected_state{.interrupt = m_interrupt, .params = *params};
+    expected_state.file_infos.insert({0, CreateFileInfo(1)});
+    store->SetSimulateIncompleteLogApply(true);
+    {
+        LOCK(::cs_main);
+        BOOST_CHECK_THROW(store->WriteBatchSync(FileInfosToPairs(expected_state.file_infos), {}), std::runtime_error);
+    }
+    CorruptFlagValue(interrupted_dir / LOG_FLAG_FILE_NAME);
+    check_read_only_rejects(interrupted_dir);
+
+    store.reset();
+    store = std::make_unique<BlockTreeStore>(interrupted_dir);
+    CheckStoreContents(*store, expected_state, "corrupt WAL flag recovered after interrupted apply");
+}
+
+BOOST_AUTO_TEST_CASE(BlockTreeStoreInvalidWALFlagIncompleteLog)
+{
+    LOCK(::cs_main);
+    fs::path block_tree_store_dir{m_args.GetDataDirBase()};
+    auto store{std::make_unique<BlockTreeStore>(block_tree_store_dir)};
+    std::map<int, CBlockFileInfo> file_infos{{0, CreateFileInfo(0)}};
+
+    store->SetSimulateIncompleteLogWrite(true);
+    BOOST_CHECK_THROW(store->WriteBatchSync(FileInfosToPairs(file_infos), {}), std::runtime_error);
+    CorruptFlagValue(block_tree_store_dir / LOG_FLAG_FILE_NAME);
+    store.reset();
+    BOOST_CHECK_THROW(BlockTreeStore{block_tree_store_dir}, BlockTreeStoreError);
+}
+
+BOOST_AUTO_TEST_CASE(BlockTreeStoreWALBounds)
+{
+    LOCK(::cs_main);
+    fs::path block_tree_store_dir{m_args.GetDataDirBase()};
+    CBlockFileInfo info{CreateFileInfo(0)};
+
+    {
+        auto store{std::make_unique<BlockTreeStore>(block_tree_store_dir / "negative_file")};
+        BOOST_CHECK_THROW(store->WriteBatchSync({{-1, &info}}, {}), BlockTreeStoreError);
+    }
+
+    fs::path header_target_dir{block_tree_store_dir / "header_target"};
+    {
+        auto store{std::make_unique<BlockTreeStore>(header_target_dir)};
+        WriteCompleteBlockFileInfoLog(header_target_dir / LOG_FILE_NAME, info, /*position=*/0);
+        WriteFlagValue(header_target_dir / LOG_FLAG_FILE_NAME, /*value=*/true);
+        store.reset();
+    }
+    BOOST_CHECK_THROW(BlockTreeStore{header_target_dir}, BlockTreeStoreError);
+
+    AutoFile block_files_file{fsbridge::fopen(header_target_dir / BLOCK_FILES_FILE_NAME, "rb")};
+    uint32_t magic;
+    block_files_file >> magic;
+    BOOST_CHECK_EQUAL(magic, BLOCK_FILES_FILE_MAGIC);
+    BOOST_REQUIRE_EQUAL(block_files_file.fclose(), 0);
+
+    fs::path sparse_target_dir{block_tree_store_dir / "sparse_target"};
+    {
+        auto store{std::make_unique<BlockTreeStore>(sparse_target_dir)};
+        WriteCompleteBlockFileInfoLog(sparse_target_dir / LOG_FILE_NAME, info, BLOCK_FILES_FILE_DATA_START_POSITION + 2 * BLOCK_FILE_INFO_RECORD_SIZE);
+        WriteFlagValue(sparse_target_dir / LOG_FLAG_FILE_NAME, /*value=*/true);
+        store.reset();
+    }
+    BOOST_CHECK_THROW(BlockTreeStore{sparse_target_dir}, BlockTreeStoreError);
+
+    fs::path trailing_log_dir{block_tree_store_dir / "trailing_log"};
+    {
+        auto store{std::make_unique<BlockTreeStore>(trailing_log_dir)};
+        WriteCompleteBlockFileInfoLog(trailing_log_dir / LOG_FILE_NAME, info, BLOCK_FILES_FILE_DATA_START_POSITION);
+        AppendByte(trailing_log_dir / LOG_FILE_NAME);
+        WriteFlagValue(trailing_log_dir / LOG_FLAG_FILE_NAME, /*value=*/true);
+        store.reset();
+    }
+    BOOST_CHECK_THROW(BlockTreeStore{trailing_log_dir}, BlockTreeStoreError);
 }
 
 BOOST_AUTO_TEST_CASE(BlockTreeStoreFlags)
@@ -350,11 +738,108 @@ BOOST_AUTO_TEST_CASE(BlockTreeStoreFlags)
     // Re-create the store and check that the data was persisted
     store->WritePruned(true);
     store->WriteReindexing(true);
+    store.reset();
     store = std::make_unique<BlockTreeStore>(m_args.GetDataDirBase());
     store->ReadPruned(pruned);
     store->ReadReindexing(reindexing);
     BOOST_CHECK(pruned);
     BOOST_CHECK(reindexing);
+}
+
+BOOST_AUTO_TEST_CASE(BlockTreeStoreFlagIntegrity)
+{
+    fs::path block_tree_store_dir{m_args.GetDataDirBase()};
+    auto store{std::make_unique<BlockTreeStore>(block_tree_store_dir)};
+    CBlockFileInfo info{CreateFileInfo(0)};
+    {
+        LOCK(::cs_main);
+        store->WriteBatchSync({{0, &info}}, {});
+    }
+    bool reindexing{false};
+    store->WriteReindexing(true);
+    store->ReadReindexing(reindexing);
+    BOOST_CHECK(reindexing);
+
+    CorruptFlagValue(block_tree_store_dir / REINDEX_FLAG_FILE_NAME);
+    BOOST_CHECK_THROW(store->ReadReindexing(reindexing), BlockTreeStoreError);
+    store.reset();
+    BOOST_CHECK_THROW(BlockTreeStore{block_tree_store_dir}, BlockTreeStoreError);
+}
+
+BOOST_AUTO_TEST_CASE(BlockTreeStoreInterruptedFlagReplacement)
+{
+    fs::path block_tree_store_dir{m_args.GetDataDirBase()};
+    auto store{std::make_unique<BlockTreeStore>(block_tree_store_dir)};
+    CBlockFileInfo info{CreateFileInfo(0)};
+    {
+        LOCK(::cs_main);
+        store->WriteBatchSync({{0, &info}}, {});
+    }
+    store->WriteReindexing(true);
+
+    fs::path reindex_tmp{block_tree_store_dir / REINDEX_FLAG_FILE_NAME};
+    reindex_tmp += ".tmp";
+    fs::path prune_tmp{block_tree_store_dir / PRUNE_FLAG_FILE_NAME};
+    prune_tmp += ".tmp";
+
+    store->SetSimulateIncompleteFlagWrite(true);
+    BOOST_CHECK_THROW(store->WriteReindexing(false), std::runtime_error);
+    BOOST_CHECK_THROW(store->WritePruned(true), std::runtime_error);
+    BOOST_CHECK(fs::exists(reindex_tmp));
+    BOOST_CHECK(fs::exists(prune_tmp));
+
+    store.reset();
+    store = std::make_unique<BlockTreeStore>(block_tree_store_dir);
+    bool reindexing{false};
+    store->ReadReindexing(reindexing);
+    BOOST_CHECK(reindexing);
+    bool pruned{false};
+    store->ReadPruned(pruned);
+    BOOST_CHECK(!pruned);
+
+    store->WriteReindexing(false);
+    store->WritePruned(true);
+    store->ReadReindexing(reindexing);
+    BOOST_CHECK(!reindexing);
+    store->ReadPruned(pruned);
+    BOOST_CHECK(pruned);
+    BOOST_CHECK(!fs::exists(reindex_tmp));
+    BOOST_CHECK(!fs::exists(prune_tmp));
+}
+
+BOOST_AUTO_TEST_CASE(BlockTreeStoreReadBlockFileInfoIntegrity)
+{
+    fs::path block_tree_store_dir{m_args.GetDataDirBase()};
+    auto block_files_file_path{block_tree_store_dir / BLOCK_FILES_FILE_NAME};
+    CBlockFileInfo info{CreateFileInfo(0)};
+    {
+        BlockTreeStore store{block_tree_store_dir};
+        CBlockFileInfo retrieved_info;
+        BOOST_CHECK(!store.ReadBlockFileInfo(-1, retrieved_info));
+        BOOST_CHECK(!store.ReadBlockFileInfo(0, retrieved_info));
+        LOCK(::cs_main);
+        store.WriteBatchSync({{0, &info}}, {});
+        BOOST_CHECK(store.ReadBlockFileInfo(0, retrieved_info));
+        BOOST_CHECK(!store.ReadBlockFileInfo(1, retrieved_info));
+    }
+    CorruptFirstBlockFileInfoValue(block_files_file_path);
+    {
+        BlockTreeStore store{block_tree_store_dir, BlockTreeStore::OpenMode::READ};
+        CBlockFileInfo retrieved_info;
+        BOOST_CHECK_THROW(static_cast<void>(store.ReadBlockFileInfo(0, retrieved_info)), BlockTreeStoreError);
+    }
+
+    fs::path truncated_dir{m_args.GetDataDirBase() / "truncated"};
+    auto truncated_block_files_file_path{truncated_dir / BLOCK_FILES_FILE_NAME};
+    {
+        BlockTreeStore store{truncated_dir};
+        LOCK(::cs_main);
+        store.WriteBatchSync({{0, &info}}, {});
+    }
+    fs::resize_file(truncated_block_files_file_path, fs::file_size(truncated_block_files_file_path) - 1);
+    BlockTreeStore store{truncated_dir, BlockTreeStore::OpenMode::READ};
+    CBlockFileInfo retrieved_info;
+    BOOST_CHECK_THROW(static_cast<void>(store.ReadBlockFileInfo(0, retrieved_info)), BlockTreeStoreError);
 }
 
 CBlockIndex* AddTestBlockIndex(node::BlockMap& test_block_map, const CBlockHeader& header, CBlockIndex* prev)
