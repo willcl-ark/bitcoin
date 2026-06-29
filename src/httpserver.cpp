@@ -1117,18 +1117,23 @@ bool HTTPRemoteClient::MaybeSendBytesFromBuffer()
 {
     // Send as much data from this client's buffer as we can
     LOCK(m_send_mutex);
-    if (!m_send_buffer.empty()) {
-        // Socket flags (See kernel docs for send(2) and tcp(7) for more details).
-        // MSG_NOSIGNAL: If the remote end of the connection is closed,
-        //               fail with EPIPE (an error) as opposed to triggering
-        //               SIGPIPE which terminates the process.
-        // MSG_DONTWAIT: Makes the send operation non-blocking regardless of socket blocking mode.
-        // MSG_MORE:     We do not set this flag here because http responses are usually
-        //               small and we want the kernel to send them right away. Setting MSG_MORE
-        //               would "cork" the socket to prevent sending out partial frames.
-        int flags{MSG_NOSIGNAL | MSG_DONTWAIT};
+    if (m_send_buffer.empty()) return true;
 
-        // Try to send bytes through socket
+    // Socket flags (See kernel docs for send(2) and tcp(7) for more details).
+    // MSG_NOSIGNAL: If the remote end of the connection is closed,
+    //               fail with EPIPE (an error) as opposed to triggering
+    //               SIGPIPE which terminates the process.
+    // MSG_DONTWAIT: Makes the send operation non-blocking regardless of socket blocking mode.
+    // MSG_MORE:     We do not set this flag here because http responses are usually
+    //               small and we want the kernel to send them right away. Setting MSG_MORE
+    //               would "cork" the socket to prevent sending out partial frames.
+    int flags{MSG_NOSIGNAL | MSG_DONTWAIT};
+
+    // Drain the buffer in a loop rather than sending once per call, so a single
+    // I/O loop iteration can flush as much as the socket will accept before
+    // yielding. A non-blocking send returns EAGAIN once the socket is full,
+    // which bounds the work done here to roughly one socket buffer's worth.
+    while (!m_send_buffer.empty()) {
         ssize_t bytes_sent;
         {
             LOCK(m_sock_mutex);
@@ -1161,6 +1166,13 @@ bool HTTPRemoteClient::MaybeSendBytesFromBuffer()
             }
         }
 
+        if (bytes_sent == 0) {
+            // send() reported success but accepted nothing. With a non-empty
+            // buffer this should not happen; break instead of looping so we
+            // never spin without making progress, and retry on the next I/O loop.
+            break;
+        }
+
         // Successful send, remove sent bytes from our local buffer.
         Assume(static_cast<size_t>(bytes_sent) <= m_send_buffer.size());
         m_send_buffer.erase(m_send_buffer.begin(),
@@ -1173,27 +1185,24 @@ bool HTTPRemoteClient::MaybeSendBytesFromBuffer()
             m_origin,
             m_id);
 
-        // This check is inside the if(!empty) block meaning "there was data but now its gone".
-        // We wouldn't want to change the flags if MaybeSendBytesFromBuffer() was called
-        // on an already-empty m_send_buffer because the connection might have just been opened.
-        if (m_send_buffer.empty()) {
-            m_send_ready = false;
-            m_connection_busy = false;
-
-            // Our work is done here
-            if (!m_keep_alive) {
-                m_disconnect = true;
-                // Do not attempt to read from this client.
-                return false;
-            }
-        } else {
-            // The send buffer isn't flushed yet, try to push more on the next loop.
-            m_send_ready = true;
-            m_connection_busy = true;
-        }
-
-        // Finally, reset idle timeout
+        // Reset idle timeout
         m_idle_since = Now<SteadySeconds>();
+    }
+
+    if (m_send_buffer.empty()) {
+        m_send_ready = false;
+        m_connection_busy = false;
+
+        // Our work is done here
+        if (!m_keep_alive) {
+            m_disconnect = true;
+            // Do not attempt to read from this client.
+            return false;
+        }
+    } else {
+        // The send buffer isn't flushed yet, try to push more on the next loop.
+        m_send_ready = true;
+        m_connection_busy = true;
     }
 
     return true;
