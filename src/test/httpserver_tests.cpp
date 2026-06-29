@@ -16,6 +16,7 @@ using http_bitcoin::HTTPRemoteClient;
 using http_bitcoin::HTTPRequest;
 using http_bitcoin::HTTPResponse;
 using http_bitcoin::HTTPServer;
+using http_bitcoin::LARGE_RESPONSE_BODY_CHUNK_THRESHOLD;
 using http_bitcoin::MAX_BODY_SIZE;
 using http_bitcoin::MAX_HEADERS_SIZE;
 using util::LineReader;
@@ -626,6 +627,50 @@ BOOST_AUTO_TEST_CASE(http_server_socket_tests)
     server.JoinSocketsThreads();
     // Close all listening sockets
     server.StopListening();
+}
+
+BOOST_AUTO_TEST_CASE(http_large_response_chunking_tests)
+{
+    // A body at or above LARGE_RESPONSE_BODY_CHUNK_THRESHOLD is queued as its own
+    // send-buffer chunk (moved, not copied) and flushed after the header chunk,
+    // while a smaller body is merged with the headers into a single chunk. Both
+    // paths must put identical bytes on the wire, so drive WriteReply() over a
+    // mock socket and check the body is delivered intact on either side of the
+    // threshold.
+    auto check_reply_body_delivered = [](size_t body_size) {
+        auto pipes{std::make_shared<DynSock::Pipes>()};
+        auto client{std::make_shared<HTTPRemoteClient>(
+            /*id=*/0, CService{}, std::make_unique<DynSock>(pipes))};
+
+        // WriteReply() moves an rvalue body in; keep a copy to compare against.
+        const std::string body(body_size, 'x');
+        HTTPRequest{client}.WriteReply(HTTP_OK, std::string{body});
+
+        // The optimistic send in WriteReply() drains the buffer synchronously
+        // through the mock socket, so the full response is already in the pipe.
+        std::string actual;
+        char buf[0x10000];
+        size_t header_len{0};
+        while (true) {
+            const ssize_t bytes_read{pipes->send.GetBytes(buf, sizeof(buf), 0)};
+            BOOST_REQUIRE(bytes_read > 0);
+            actual.append(buf, bytes_read);
+            if (!header_len) {
+                const size_t end{actual.find("\r\n\r\n")};
+                if (end == std::string::npos) continue;
+                header_len = end + 4;
+            }
+            if (actual.size() >= header_len + body_size) break;
+        }
+
+        BOOST_CHECK(actual.starts_with("HTTP/1.1 200 OK\r\n"));
+        BOOST_CHECK(actual.find("Content-Length: " + std::to_string(body_size) + "\r\n") != std::string::npos);
+        BOOST_CHECK_EQUAL(actual.size(), header_len + body_size);
+        BOOST_CHECK(actual.substr(header_len) == body);
+    };
+
+    check_reply_body_delivered(LARGE_RESPONSE_BODY_CHUNK_THRESHOLD - 1); // merged with headers
+    check_reply_body_delivered(LARGE_RESPONSE_BODY_CHUNK_THRESHOLD);     // separate moved chunk
 }
 
 BOOST_AUTO_TEST_SUITE_END()

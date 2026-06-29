@@ -514,6 +514,17 @@ bool HTTPRequest::LoadBody(LineReader& reader)
 
 void HTTPRequest::WriteReply(HTTPStatusCode status, std::span<const std::byte> reply_body)
 {
+    std::string reply_body_copy;
+    if (!reply_body.empty()) {
+        // Spans do not own their bytes, so callers using this overload still
+        // need their response copied into storage owned by the HTTP client.
+        reply_body_copy.assign(reinterpret_cast<const char*>(reply_body.data()), reply_body.size());
+    }
+    WriteReply(status, std::move(reply_body_copy));
+}
+
+void HTTPRequest::WriteReply(HTTPStatusCode status, std::string&& reply_body)
+{
     HTTPResponse res;
 
     // Some response headers are determined in advance and stored in the request
@@ -581,27 +592,34 @@ void HTTPRequest::WriteReply(HTTPStatusCode status, std::span<const std::byte> r
     m_client->m_keep_alive = keep_alive;
 
     // Serialize the response headers
-    const std::string headers{res.StringifyHeaders()};
-    const auto headers_bytes{std::as_bytes(std::span{headers})};
-
+    std::string headers{res.StringifyHeaders()};
+    const size_t response_size{headers.size() + reply_body.size()};
     bool send_buffer_was_empty{false};
     // Fill the send buffer with the complete serialized response headers + body
     {
         LOCK(m_client->m_send_mutex);
         send_buffer_was_empty = m_client->m_send_buffer.empty();
-        m_client->m_send_buffer.insert(m_client->m_send_buffer.end(), headers_bytes.begin(), headers_bytes.end());
-
-        // We've been using std::span up until now but it is finally time to copy
-        // data. The original data will go out of scope when WriteReply() returns.
-        // This is analogous to the memcpy() in libevent's evbuffer_add()
-        m_client->m_send_buffer.insert(m_client->m_send_buffer.end(), reply_body.begin(), reply_body.end());
+        if (reply_body.size() < LARGE_RESPONSE_BODY_CHUNK_THRESHOLD) {
+            // Small responses are merged into one chunk so they go out in a
+            // single send. This copies the body alongside the headers, which is
+            // analogous to the memcpy() in libevent's evbuffer_add().
+            headers += reply_body;
+            m_client->m_send_buffer.push_back(std::move(headers));
+        } else {
+            // Queue the owned body string separately instead of appending it to
+            // the header string. Large JSON-RPC replies already exist as strings
+            // here, so moving the string avoids a second full response copy
+            // while keeping the bytes alive until the I/O thread has sent them.
+            m_client->m_send_buffer.push_back(std::move(headers));
+            m_client->m_send_buffer.push_back(std::move(reply_body));
+        }
     }
 
     LogDebug(
         BCLog::HTTP,
         "HTTPResponse (status code: %d size: %lld) added to send buffer for client %s (id=%llu)",
         status,
-        headers_bytes.size() + reply_body.size(),
+        response_size,
         m_client->m_origin,
         m_client->m_id);
 
@@ -1136,9 +1154,14 @@ bool HTTPRemoteClient::MaybeSendBytesFromBuffer()
     while (!m_send_buffer.empty()) {
         ssize_t bytes_sent;
         {
+            // Send one queued chunk at a time instead of flattening the queue;
+            // flattening here would reintroduce the large response copy that the
+            // queue is meant to avoid.
+            const std::string& front_buffer{m_send_buffer.front()};
+            Assume(m_send_buffer_offset < front_buffer.size());
             LOCK(m_sock_mutex);
-            bytes_sent = m_sock->Send(m_send_buffer.data(),
-                                      m_send_buffer.size(),
+            bytes_sent = m_sock->Send(front_buffer.data() + m_send_buffer_offset,
+                                      front_buffer.size() - m_send_buffer_offset,
                                       flags);
         }
 
@@ -1173,10 +1196,14 @@ bool HTTPRemoteClient::MaybeSendBytesFromBuffer()
             break;
         }
 
-        // Successful send, remove sent bytes from our local buffer.
-        Assume(static_cast<size_t>(bytes_sent) <= m_send_buffer.size());
-        m_send_buffer.erase(m_send_buffer.begin(),
-                            m_send_buffer.begin() + bytes_sent);
+        // Successful send, advance past the sent bytes and drop fully-sent chunks.
+        const auto bytes_sent_size{static_cast<size_t>(bytes_sent)};
+        Assume(bytes_sent_size <= m_send_buffer.front().size() - m_send_buffer_offset);
+        m_send_buffer_offset += bytes_sent_size;
+        if (m_send_buffer_offset == m_send_buffer.front().size()) {
+            m_send_buffer.pop_front();
+            m_send_buffer_offset = 0;
+        }
 
         LogDebug(
             BCLog::HTTP,

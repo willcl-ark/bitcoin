@@ -79,6 +79,15 @@ constexpr size_t MAX_HEADERS_SIZE{8192};
 //! Maximum size of an HTTP request body
 constexpr uint64_t MAX_BODY_SIZE{32_MiB};
 
+//! Response bodies at or above this size are queued as their own send-buffer
+//! chunk and moved into place instead of being copied in alongside the headers.
+//! Below it, body and headers are merged into a single contiguous chunk: the
+//! extra copy is cheap and a small response is sent in one segment. The exact
+//! value is a heuristic, not a hard limit; it only needs to sit comfortably
+//! above normal response sizes so the move path is reserved for the large
+//! replies whose transient second copy is what actually threatens memory.
+constexpr size_t LARGE_RESPONSE_BODY_CHUNK_THRESHOLD{16_MiB};
+
 //! Thrown when a request body exceeds MAX_BODY_SIZE (or *will* exceed, in chunked transfer)
 //! so the server can reply with more specific code 413 (content too large) vs general 400 (bad request)
 struct ContentTooLargeError : std::runtime_error {
@@ -183,8 +192,13 @@ public:
     void WriteReply(HTTPStatusCode status, std::span<const std::byte> reply_body = {});
     void WriteReply(HTTPStatusCode status, std::string_view reply_body_view)
     {
-        WriteReply(status, std::as_bytes(std::span{reply_body_view}));
+        WriteReply(status, std::string{reply_body_view});
     }
+    void WriteReply(HTTPStatusCode status, const char* reply_body)
+    {
+        WriteReply(status, std::string{reply_body});
+    }
+    void WriteReply(HTTPStatusCode status, std::string&& reply_body);
 
     // These methods reimplement the API from http_libevent::HTTPRequest
     // for downstream JSONRPC and REST modules.
@@ -479,7 +493,8 @@ public:
      */
     /// @{
     Mutex m_send_mutex;
-    std::vector<std::byte> m_send_buffer GUARDED_BY(m_send_mutex);
+    std::deque<std::string> m_send_buffer GUARDED_BY(m_send_mutex);
+    size_t m_send_buffer_offset GUARDED_BY(m_send_mutex){0};
     /// @}
 
     /**
