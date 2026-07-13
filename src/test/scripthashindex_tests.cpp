@@ -273,6 +273,36 @@ BOOST_FIXTURE_TEST_CASE(scripthashindex_txospender_shared_spends, TestChain100Se
     txospender_index.Stop();
 }
 
+BOOST_FIXTURE_TEST_CASE(scripthashindex_shared_disk_requires_txospender, TestChain100Setup)
+{
+    const CScript coinbase_spk = m_coinbase_txns[0]->vout[0].scriptPubKey;
+    const CScript dest_spk = CScript() << OP_TRUE;
+    CMutableTransaction spend_tx{CreateSpendTx(m_coinbase_txns[0], coinbase_spk, dest_spk, coinbaseKey)};
+
+    CreateAndProcessBlock({spend_tx}, coinbase_spk);
+
+    {
+        TxoSpenderIndex txospender_index(interfaces::MakeChain(m_node), 1 << 20, /*f_memory=*/true);
+        BOOST_REQUIRE(txospender_index.Init());
+        txospender_index.Sync();
+
+        ScriptHashIndex shared_index(
+            interfaces::MakeChain(m_node),
+            1 << 20,
+            txospender_index,
+            /*f_memory=*/false,
+            /*f_wipe=*/true);
+        BOOST_REQUIRE(shared_index.Init());
+        shared_index.Sync();
+
+        shared_index.Stop();
+        txospender_index.Stop();
+    }
+
+    ScriptHashIndex standalone_index(interfaces::MakeChain(m_node), 1 << 20, /*f_memory=*/false);
+    BOOST_CHECK(!standalone_index.Init());
+}
+
 BOOST_FIXTURE_TEST_CASE(scripthashindex_disk_restart_reads, TestChain100Setup)
 {
     const CScript coinbase_spk = m_coinbase_txns[0]->vout[0].scriptPubKey;

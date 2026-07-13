@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <vector>
 
 class CScript;
@@ -61,6 +62,7 @@ private:
 
 protected:
     interfaces::Chain::NotifyOptions CustomOptions() override;
+    bool CustomInit(const std::optional<interfaces::BlockRef>& block) override;
     bool CustomAppend(const interfaces::BlockInfo& block) override EXCLUSIVE_LOCKS_REQUIRED(!m_scan_mutex);
     bool CustomRemove(const interfaces::BlockInfo& block) override EXCLUSIVE_LOCKS_REQUIRED(!m_scan_mutex);
     BaseIndex::DB& GetDB() const override;

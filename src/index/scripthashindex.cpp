@@ -12,8 +12,10 @@
 #include <index/base.h>
 #include <index/txospenderindex.h>
 #include <interfaces/chain.h>
+#include <interfaces/types.h>
 #include <kernel/cs_main.h>
 #include <node/blockstorage.h>
+#include <node/interface_ui.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <script/script.h>
@@ -22,6 +24,7 @@
 #include <util/check.h>
 #include <util/fs.h>
 #include <util/hasher.h>
+#include <util/translation.h>
 #include <validation.h>
 
 #include <algorithm>
@@ -56,6 +59,8 @@ constexpr size_t DB_PREFIX_SIZE{6};
 // Three-byte heights cover blocks up to 16,777,215 while saving a byte in every
 // marker row.
 constexpr uint32_t DB_MAX_HEIGHT{0x00ffffff};
+// Set once shared mode skips local spend markers for non-coinbase transactions.
+const std::string DB_REQUIRES_TXOSPENDER_SPENDS{"requires_txospender_spends"};
 
 std::unique_ptr<ScriptHashIndex> g_scripthashindex;
 
@@ -417,12 +422,26 @@ interfaces::Chain::NotifyOptions ScriptHashIndex::CustomOptions()
     return options;
 }
 
+bool ScriptHashIndex::CustomInit(const std::optional<interfaces::BlockRef>&)
+{
+    bool requires_txospender_spends{false};
+    if (m_db->Read(DB_REQUIRES_TXOSPENDER_SPENDS, requires_txospender_spends) &&
+        requires_txospender_spends && !m_txospender_index) {
+        return InitError(Untranslated(
+            "scripthashindex was previously synced without local spend markers "
+            "because -txospenderindex was enabled. Restart with "
+            "-txospenderindex=1 or rebuild the index with -reindex."));
+    }
+    return true;
+}
+
 bool ScriptHashIndex::CustomAppend(const interfaces::BlockInfo& block)
 {
     if (block.height == 0) return true;
 
     CDBBatch batch(*m_db);
     const auto& txs = block.data->vtx;
+    bool requires_txospender_spends{false};
 
     for (const auto& tx : txs) {
         const uint32_t height{static_cast<uint32_t>(block.height)};
@@ -435,10 +454,16 @@ bool ScriptHashIndex::CustomAppend(const interfaces::BlockInfo& block)
         }
 
         if (tx->IsCoinBase()) continue;
-        if (m_txospender_index) continue;
+        if (m_txospender_index) {
+            requires_txospender_spends = true;
+            continue;
+        }
         for (const CTxIn& txin : tx->vin) {
             batch.Write(SpendingKey{OutpointPrefix(txin.prevout), height}, EMPTY_VALUE);
         }
+    }
+    if (requires_txospender_spends) {
+        batch.Write(DB_REQUIRES_TXOSPENDER_SPENDS, true);
     }
 
     {
