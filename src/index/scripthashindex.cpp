@@ -186,12 +186,12 @@ struct SpendingKeyPrefix {
 
 struct TxPosition {
     uint32_t height;
-    uint32_t tx_pos;
+    uint32_t tx_order;
 
     friend bool operator<(const TxPosition& a, const TxPosition& b)
     {
         if (a.height != b.height) return a.height < b.height;
-        if (a.tx_pos != b.tx_pos) return a.tx_pos < b.tx_pos;
+        if (a.tx_order != b.tx_order) return a.tx_order < b.tx_order;
         return false;
     }
 };
@@ -246,8 +246,11 @@ static ScriptHashColdScan ScanScriptHash(const Chainstate& chainstate, CDBWrappe
             continue;
         }
         const bool bip30_unspendable{IsBIP30Unspendable(block->GetHash(), funding_key.height)};
+        uint32_t tx_order{static_cast<uint32_t>(GetSizeOfCompactSize(block->vtx.size()))};
         for (size_t tx_pos{0}; tx_pos < block->vtx.size(); ++tx_pos) {
             const CTransactionRef& tx{block->vtx[tx_pos]};
+            const uint32_t this_tx_order{tx_order};
+            tx_order += static_cast<uint32_t>(::GetSerializeSize(TX_WITH_WITNESS(*tx)));
             if (bip30_unspendable && tx->IsCoinBase()) continue;
             const Txid txid{tx->GetHash()};
             bool matched{false};
@@ -256,10 +259,10 @@ static ScriptHashColdScan ScanScriptHash(const Chainstate& chainstate, CDBWrappe
                 if (tx_out.scriptPubKey.IsUnspendable()) continue;
                 if (ComputeScriptHashIndexHash(tx_out.scriptPubKey) != scripthash) continue;
                 const COutPoint outpoint{txid, i};
-                result.funded_utxos.emplace(outpoint, ScriptHashUtxo{outpoint, static_cast<int>(funding_key.height), static_cast<uint32_t>(tx_pos), tx_out.nValue});
+                result.funded_utxos.emplace(outpoint, ScriptHashUtxo{outpoint, static_cast<int>(funding_key.height), this_tx_order, tx_out.nValue});
                 matched = true;
             }
-            if (matched) result.history.try_emplace(TxPosition{funding_key.height, static_cast<uint32_t>(tx_pos)}, txid);
+            if (matched) result.history.try_emplace(TxPosition{funding_key.height, this_tx_order}, txid);
         }
         funding_it->Next();
     }
@@ -271,11 +274,14 @@ static ScriptHashColdScan ScanScriptHash(const Chainstate& chainstate, CDBWrappe
         while (funding_it->Valid() && funding_it->GetKey(spending_key) && spending_key.outpoint_prefix == outpoint_prefix) {
             const CBlock* block{GetBlockAtHeight(chainstate, scan_tip, spending_key.height, block_cache)};
             if (block) {
+                uint32_t tx_order{static_cast<uint32_t>(GetSizeOfCompactSize(block->vtx.size()))};
                 for (size_t tx_pos{0}; tx_pos < block->vtx.size(); ++tx_pos) {
                     const CTransactionRef& tx{block->vtx[tx_pos]};
+                    const uint32_t this_tx_order{tx_order};
+                    tx_order += static_cast<uint32_t>(::GetSerializeSize(TX_WITH_WITNESS(*tx)));
                     for (const auto& txin : tx->vin) {
                         if (txin.prevout != outpoint) continue;
-                        result.history.try_emplace(TxPosition{spending_key.height, static_cast<uint32_t>(tx_pos)}, tx->GetHash());
+                        result.history.try_emplace(TxPosition{spending_key.height, this_tx_order}, tx->GetHash());
                         result.spent_outpoints.insert(outpoint);
                         break;
                     }
@@ -309,7 +315,7 @@ static ScriptHashUtxoScanResult BuildScriptHashUtxos(const ScriptHashColdScan& s
     }
     std::sort(result.utxos.begin(), result.utxos.end(), [](const ScriptHashUtxo& a, const ScriptHashUtxo& b) {
         if (a.height != b.height) return a.height < b.height;
-        if (a.tx_pos != b.tx_pos) return a.tx_pos < b.tx_pos;
+        if (a.tx_order != b.tx_order) return a.tx_order < b.tx_order;
         if (a.outpoint.n != b.outpoint.n) return a.outpoint.n < b.outpoint.n;
         return a.outpoint.hash < b.outpoint.hash;
     });

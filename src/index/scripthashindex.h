@@ -35,7 +35,7 @@ struct ScriptHashHistory {
 struct ScriptHashUtxo {
     COutPoint outpoint;
     int height;
-    uint32_t tx_pos;
+    uint32_t tx_order;
     CAmount value;
 };
 
