@@ -7,6 +7,8 @@
 #include <test/util/setup_common.h>
 #include <validation.h>
 
+#include <span>
+
 #include <boost/test/unit_test.hpp>
 
 BOOST_AUTO_TEST_SUITE(txospenderindex_tests)
@@ -62,13 +64,26 @@ BOOST_FIXTURE_TEST_CASE(txospenderindex_initial_sync, TestChain100Setup)
     txospenderindex.Sync();
     BOOST_CHECK_EQUAL(txospenderindex.GetSummary().best_block_hash, tip_hash);
 
+    uint32_t last_tx_order{0};
     for (size_t i = 0; i < spent.size(); i++) {
         const auto tx_spender{txospenderindex.FindSpender(spent[i])};
         BOOST_REQUIRE(tx_spender.has_value());
         BOOST_REQUIRE(tx_spender->has_value());
         BOOST_CHECK_EQUAL((*tx_spender)->tx->GetHash(), spender[i].GetHash());
         BOOST_CHECK_EQUAL((*tx_spender)->block_hash, tip_hash);
+        BOOST_CHECK_GT((*tx_spender)->tx_order, last_tx_order);
+        last_tx_order = (*tx_spender)->tx_order;
     }
+
+    const std::vector<COutPoint> batch_lookup{spent[3], COutPoint{m_coinbase_txns[20]->GetHash(), 0}, spent[1]};
+    const auto batch_spenders{txospenderindex.FindSpenders(std::span{batch_lookup})};
+    BOOST_REQUIRE(batch_spenders.has_value());
+    BOOST_REQUIRE_EQUAL(batch_spenders->size(), batch_lookup.size());
+    BOOST_REQUIRE(batch_spenders->at(0).has_value());
+    BOOST_CHECK_EQUAL(batch_spenders->at(0)->tx->GetHash(), spender[3].GetHash());
+    BOOST_CHECK(!batch_spenders->at(1).has_value());
+    BOOST_REQUIRE(batch_spenders->at(2).has_value());
+    BOOST_CHECK_EQUAL(batch_spenders->at(2)->tx->GetHash(), spender[1].GetHash());
 
     // Shutdown sequence (c.f. Shutdown() in init.cpp)
     txospenderindex.Stop();

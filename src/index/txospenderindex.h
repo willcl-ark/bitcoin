@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -26,6 +27,7 @@ static constexpr bool DEFAULT_TXOSPENDERINDEX{false};
 struct TxoSpender {
     CTransactionRef tx;
     uint256 block_hash;
+    uint32_t tx_order{0};
 };
 
 /**
@@ -66,6 +68,13 @@ public:
      *          util::Unexpected{error}    if something unexpected happened (i.e. disk or deserialization error).
      */
     util::Expected<std::optional<TxoSpender>, std::string> FindSpender(const COutPoint& txo) const;
+
+    /**
+     * Search the index for transactions that spend the given outpoints.
+     *
+     * Results are returned in the same order as the input outpoints.
+     */
+    util::Expected<std::vector<std::optional<TxoSpender>>, std::string> FindSpenders(std::span<const COutPoint> txos) const;
 };
 
 /// The global txo spender index. May be null.
