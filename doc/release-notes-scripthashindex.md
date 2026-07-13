@@ -23,4 +23,6 @@ New RPCs
 
   When both `-scripthashindex=1` and `-txospenderindex=1` are enabled, the
   script hash index reuses the transaction output spender index for confirmed
-  spend lookups instead of storing duplicate spend rows.
+  spend lookups instead of storing duplicate spend rows. If the script hash
+  index has synced spend-containing blocks this way, it must continue to be
+  started with `-txospenderindex=1` or be rebuilt with `-reindex`.
