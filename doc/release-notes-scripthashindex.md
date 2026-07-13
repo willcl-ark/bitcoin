@@ -20,3 +20,7 @@ New RPCs
   confirmed chain state. History and UTXO results are returned in full and are
   not paginated by Bitcoin Core, so callers should avoid exposing these RPCs to
   untrusted clients without their own result limiting.
+
+  When both `-scripthashindex=1` and `-txospenderindex=1` are enabled, the
+  script hash index reuses the transaction output spender index for confirmed
+  spend lookups instead of storing duplicate spend rows.
