@@ -10,6 +10,7 @@
 #include <crypto/sha256.h>
 #include <dbwrapper.h>
 #include <index/base.h>
+#include <index/txospenderindex.h>
 #include <interfaces/chain.h>
 #include <kernel/cs_main.h>
 #include <node/blockstorage.h>
@@ -226,12 +227,98 @@ struct ScriptHashUtxoScanResult {
     CAmount balance{0};
 };
 
-static ScriptHashColdScan ScanScriptHash(const Chainstate& chainstate, CDBWrapper& db, const uint256& scripthash, const CBlockIndex* scan_tip)
+static bool SpenderInActiveChain(const TxoSpender& spender, int height, const CBlockIndex* scan_tip)
+{
+    if (!scan_tip || height < 0 || height > scan_tip->nHeight) return false;
+    const CBlockIndex* spender_block{scan_tip->GetAncestor(height)};
+    return spender_block && spender_block->GetBlockHash() == spender.block_hash;
+}
+
+static void ResolveSpendsWithTxoSpender(const TxoSpenderIndex& txospender_index,
+                                        const Chainstate& chainstate,
+                                        const CBlockIndex* scan_tip,
+                                        ScriptHashColdScan& result)
+{
+    std::vector<COutPoint> outpoints;
+    outpoints.reserve(result.funded_utxos.size());
+    for (const auto& [outpoint, _] : result.funded_utxos) {
+        outpoints.push_back(outpoint);
+    }
+
+    const std::span<const COutPoint> outpoint_span{outpoints.data(), outpoints.size()};
+    const auto spenders{txospender_index.FindSpenders(outpoint_span)};
+    if (!spenders) {
+        throw std::runtime_error(spenders.error());
+    }
+    if (spenders->size() != outpoints.size()) {
+        throw std::runtime_error("txospender result size mismatch");
+    }
+
+    std::unordered_map<uint256, std::optional<int>, BlockHasher> spender_heights;
+    {
+        LOCK(::cs_main);
+        for (const auto& spender : *spenders) {
+            if (!spender) continue;
+            const auto [it, inserted]{spender_heights.try_emplace(spender->block_hash)};
+            if (!inserted) continue;
+            if (const CBlockIndex* block_index{chainstate.m_blockman.LookupBlockIndex(spender->block_hash)}) {
+                it->second = block_index->nHeight;
+            }
+        }
+    }
+
+    for (size_t i{0}; i < spenders->size(); ++i) {
+        const auto& spender{spenders->at(i)};
+        if (!spender) continue;
+        const auto height{spender_heights.at(spender->block_hash)};
+        if (!height || !SpenderInActiveChain(*spender, *height, scan_tip)) continue;
+        result.history.try_emplace(TxPosition{static_cast<uint32_t>(*height), spender->tx_order},
+                                   spender->tx->GetHash());
+        result.spent_outpoints.insert(outpoints.at(i));
+    }
+}
+
+static void ResolveSpendsWithLocalMarkers(const Chainstate& chainstate,
+                                          CDBWrapper& db,
+                                          const CBlockIndex* scan_tip,
+                                          ScriptHashColdScan& result,
+                                          BlockCache& block_cache)
+{
+    std::unique_ptr<CDBIterator> spending_it(db.NewIterator());
+    SpendingKey spending_key{};
+    for (const auto& [outpoint, _] : result.funded_utxos) {
+        const DBPrefix outpoint_prefix{OutpointPrefix(outpoint)};
+        spending_it->Seek(SpendingKeyPrefix{outpoint_prefix});
+        while (spending_it->Valid() && spending_it->GetKey(spending_key) && spending_key.outpoint_prefix == outpoint_prefix) {
+            const CBlock* block{GetBlockAtHeight(chainstate, scan_tip, spending_key.height, block_cache)};
+            if (block) {
+                uint32_t tx_order{static_cast<uint32_t>(GetSizeOfCompactSize(block->vtx.size()))};
+                for (size_t tx_pos{0}; tx_pos < block->vtx.size(); ++tx_pos) {
+                    const CTransactionRef& tx{block->vtx[tx_pos]};
+                    const uint32_t this_tx_order{tx_order};
+                    tx_order += static_cast<uint32_t>(::GetSerializeSize(TX_WITH_WITNESS(*tx)));
+                    for (const auto& txin : tx->vin) {
+                        if (txin.prevout != outpoint) continue;
+                        result.history.try_emplace(TxPosition{spending_key.height, this_tx_order}, tx->GetHash());
+                        result.spent_outpoints.insert(outpoint);
+                        break;
+                    }
+                }
+            }
+            spending_it->Next();
+        }
+    }
+}
+
+static ScriptHashColdScan ScanScriptHash(const Chainstate& chainstate,
+                                         CDBWrapper& db,
+                                         const uint256& scripthash,
+                                         const CBlockIndex* scan_tip,
+                                         const TxoSpenderIndex* txospender_index)
 {
     BlockCache block_cache;
     ScriptHashColdScan result;
 
-    // One LevelDB iterator gives the whole cold query a stable DB snapshot.
     // Candidate rows are verified against active-chain block data, so stale rows
     // left behind after an unclean restart cannot create false positives.
     std::unique_ptr<CDBIterator> funding_it(db.NewIterator());
@@ -267,28 +354,10 @@ static ScriptHashColdScan ScanScriptHash(const Chainstate& chainstate, CDBWrappe
         funding_it->Next();
     }
 
-    SpendingKey spending_key{};
-    for (const auto& [outpoint, _] : result.funded_utxos) {
-        const DBPrefix outpoint_prefix{OutpointPrefix(outpoint)};
-        funding_it->Seek(SpendingKeyPrefix{outpoint_prefix});
-        while (funding_it->Valid() && funding_it->GetKey(spending_key) && spending_key.outpoint_prefix == outpoint_prefix) {
-            const CBlock* block{GetBlockAtHeight(chainstate, scan_tip, spending_key.height, block_cache)};
-            if (block) {
-                uint32_t tx_order{static_cast<uint32_t>(GetSizeOfCompactSize(block->vtx.size()))};
-                for (size_t tx_pos{0}; tx_pos < block->vtx.size(); ++tx_pos) {
-                    const CTransactionRef& tx{block->vtx[tx_pos]};
-                    const uint32_t this_tx_order{tx_order};
-                    tx_order += static_cast<uint32_t>(::GetSerializeSize(TX_WITH_WITNESS(*tx)));
-                    for (const auto& txin : tx->vin) {
-                        if (txin.prevout != outpoint) continue;
-                        result.history.try_emplace(TxPosition{spending_key.height, this_tx_order}, tx->GetHash());
-                        result.spent_outpoints.insert(outpoint);
-                        break;
-                    }
-                }
-            }
-            funding_it->Next();
-        }
+    if (txospender_index) {
+        ResolveSpendsWithTxoSpender(*txospender_index, chainstate, scan_tip, result);
+    } else {
+        ResolveSpendsWithLocalMarkers(chainstate, db, scan_tip, result, block_cache);
     }
 
     return result;
@@ -330,6 +399,17 @@ ScriptHashIndex::ScriptHashIndex(std::unique_ptr<interfaces::Chain> chain, size_
 {
 }
 
+ScriptHashIndex::ScriptHashIndex(std::unique_ptr<interfaces::Chain> chain,
+                                 size_t n_cache_size,
+                                 const TxoSpenderIndex& txospender_index,
+                                 bool f_memory,
+                                 bool f_wipe)
+    : BaseIndex(std::move(chain), "scripthashindex"),
+      m_db{std::make_unique<DB>(gArgs.GetDataDirNet() / "indexes" / "scripthashindex" / "db", n_cache_size, f_memory, f_wipe)},
+      m_txospender_index{&txospender_index}
+{
+}
+
 interfaces::Chain::NotifyOptions ScriptHashIndex::CustomOptions()
 {
     interfaces::Chain::NotifyOptions options;
@@ -355,6 +435,7 @@ bool ScriptHashIndex::CustomAppend(const interfaces::BlockInfo& block)
         }
 
         if (tx->IsCoinBase()) continue;
+        if (m_txospender_index) continue;
         for (const CTxIn& txin : tx->vin) {
             batch.Write(SpendingKey{OutpointPrefix(txin.prevout), height}, EMPTY_VALUE);
         }
@@ -386,6 +467,7 @@ bool ScriptHashIndex::CustomRemove(const interfaces::BlockInfo& block)
         }
 
         if (tx->IsCoinBase()) continue;
+        if (m_txospender_index) continue;
         for (const CTxIn& txin : tx->vin) {
             batch.Erase(SpendingKey{OutpointPrefix(txin.prevout), height});
         }
@@ -403,9 +485,16 @@ BaseIndex::DB& ScriptHashIndex::GetDB() const { return *m_db; }
 bool ScriptHashIndex::BlockUntilSyncedToActiveChain() const
 {
     if (!BaseIndex::BlockUntilSyncedToCurrentChain()) return false;
+    if (m_txospender_index && !m_txospender_index->BlockUntilSyncedToCurrentChain()) return false;
 
     LOCK(::cs_main);
-    return GetBestBlockIndex() == m_chainstate->m_chain.Tip();
+    const CBlockIndex* tip{m_chainstate->m_chain.Tip()};
+    if (GetBestBlockIndex() != tip) return false;
+    if (!m_txospender_index) return true;
+
+    const IndexSummary txospender_summary{m_txospender_index->GetSummary()};
+    return txospender_summary.best_block_height == tip->nHeight &&
+           txospender_summary.best_block_hash == tip->GetBlockHash();
 }
 
 std::vector<ScriptHashHistory> ScriptHashIndex::GetHistory(const uint256& scripthash) const
@@ -414,7 +503,7 @@ std::vector<ScriptHashHistory> ScriptHashIndex::GetHistory(const uint256& script
         {
             LOCK(m_scan_mutex);
             const CBlockIndex* scan_tip{GetBestBlockIndex()};
-            const auto scan{ScanScriptHash(*m_chainstate, *m_db, scripthash, scan_tip)};
+            const auto scan{ScanScriptHash(*m_chainstate, *m_db, scripthash, scan_tip, m_txospender_index)};
             auto history{BuildScriptHashHistory(scan)};
 
             if (GetBestBlockIndex() != scan_tip) {
@@ -434,7 +523,7 @@ std::vector<ScriptHashUtxo> ScriptHashIndex::GetUtxos(const uint256& scripthash)
         {
             LOCK(m_scan_mutex);
             const CBlockIndex* scan_tip{GetBestBlockIndex()};
-            const auto scan{ScanScriptHash(*m_chainstate, *m_db, scripthash, scan_tip)};
+            const auto scan{ScanScriptHash(*m_chainstate, *m_db, scripthash, scan_tip, m_txospender_index)};
             auto scan_result{BuildScriptHashUtxos(scan)};
 
             if (GetBestBlockIndex() != scan_tip) {
@@ -454,7 +543,7 @@ CAmount ScriptHashIndex::GetBalance(const uint256& scripthash) const
         {
             LOCK(m_scan_mutex);
             const CBlockIndex* scan_tip{GetBestBlockIndex()};
-            const auto scan{ScanScriptHash(*m_chainstate, *m_db, scripthash, scan_tip)};
+            const auto scan{ScanScriptHash(*m_chainstate, *m_db, scripthash, scan_tip, m_txospender_index)};
             auto scan_result{BuildScriptHashUtxos(scan)};
 
             if (GetBestBlockIndex() != scan_tip) {
@@ -474,7 +563,7 @@ ScriptHashActivity ScriptHashIndex::GetActivity(const uint256& scripthash) const
         {
             LOCK(m_scan_mutex);
             const CBlockIndex* scan_tip{GetBestBlockIndex()};
-            const auto scan{ScanScriptHash(*m_chainstate, *m_db, scripthash, scan_tip)};
+            const auto scan{ScanScriptHash(*m_chainstate, *m_db, scripthash, scan_tip, m_txospender_index)};
             auto history{BuildScriptHashHistory(scan)};
             auto scan_result{BuildScriptHashUtxos(scan)};
 

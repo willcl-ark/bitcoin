@@ -19,6 +19,7 @@
 #include <vector>
 
 class CScript;
+class TxoSpenderIndex;
 
 static constexpr bool DEFAULT_SCRIPTHASHINDEX{false};
 
@@ -53,6 +54,7 @@ class ScriptHashIndex final : public BaseIndex
 {
 private:
     std::unique_ptr<BaseIndex::DB> m_db;
+    const TxoSpenderIndex* const m_txospender_index{nullptr};
     mutable Mutex m_scan_mutex;
 
     bool AllowPrune() const override { return false; }
@@ -65,6 +67,11 @@ protected:
 
 public:
     explicit ScriptHashIndex(std::unique_ptr<interfaces::Chain> chain, size_t n_cache_size, bool f_memory = false, bool f_wipe = false);
+    explicit ScriptHashIndex(std::unique_ptr<interfaces::Chain> chain,
+                             size_t n_cache_size,
+                             const TxoSpenderIndex& txospender_index,
+                             bool f_memory = false,
+                             bool f_wipe = false);
 
     bool BlockUntilSyncedToActiveChain() const LOCKS_EXCLUDED(::cs_main);
     std::vector<ScriptHashHistory> GetHistory(const uint256& scripthash) const EXCLUSIVE_LOCKS_REQUIRED(!m_scan_mutex);
