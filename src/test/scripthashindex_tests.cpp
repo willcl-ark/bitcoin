@@ -4,6 +4,7 @@
 
 #include <chainparams.h>
 #include <index/scripthashindex.h>
+#include <index/txospenderindex.h>
 #include <script/script.h>
 #include <test/util/setup_common.h>
 #include <validation.h>
@@ -30,6 +31,27 @@ static CMutableTransaction CreateSpendTx(const CTransactionRef& prev_tx, const C
     vchSig.push_back(static_cast<unsigned char>(SIGHASH_ALL));
     spend_tx.vin[0].scriptSig << vchSig;
     return spend_tx;
+}
+
+static void CheckHistory(const std::vector<ScriptHashHistory>& history,
+                         const std::vector<Txid>& expected_txids)
+{
+    BOOST_REQUIRE_EQUAL(history.size(), expected_txids.size());
+    for (size_t i{0}; i < expected_txids.size(); ++i) {
+        BOOST_CHECK(history[i].txid == expected_txids[i]);
+    }
+}
+
+static void CheckUtxosEqual(const std::vector<ScriptHashUtxo>& a,
+                            const std::vector<ScriptHashUtxo>& b)
+{
+    BOOST_REQUIRE_EQUAL(a.size(), b.size());
+    for (size_t i{0}; i < a.size(); ++i) {
+        BOOST_CHECK(a[i].outpoint == b[i].outpoint);
+        BOOST_CHECK_EQUAL(a[i].height, b[i].height);
+        BOOST_CHECK_EQUAL(a[i].tx_order, b[i].tx_order);
+        BOOST_CHECK_EQUAL(a[i].value, b[i].value);
+    }
 }
 
 } // namespace
@@ -193,6 +215,62 @@ BOOST_FIXTURE_TEST_CASE(scripthashindex_compact_height_rows, TestChain100Setup)
 
     m_node.validation_signals->SyncWithValidationInterfaceQueue();
     index.Stop();
+}
+
+BOOST_FIXTURE_TEST_CASE(scripthashindex_txospender_shared_spends, TestChain100Setup)
+{
+    const CScript coinbase_spk = m_coinbase_txns[0]->vout[0].scriptPubKey;
+    const CScript dest_spk = CScript() << OP_TRUE;
+    const uint256 dest_sh = ComputeScriptHashIndexHash(dest_spk);
+
+    for (int i = 0; i < 50; ++i) {
+        CreateAndProcessBlock({}, coinbase_spk);
+    }
+
+    CMutableTransaction spend_tx_1{CreateSpendTx(m_coinbase_txns[0], coinbase_spk, dest_spk, coinbaseKey)};
+    CMutableTransaction spend_tx_2{CreateSpendTx(m_coinbase_txns[1], coinbase_spk, dest_spk, coinbaseKey)};
+    CMutableTransaction parent_tx{CreateSpendTx(m_coinbase_txns[2], coinbase_spk, dest_spk, coinbaseKey)};
+    CMutableTransaction child_tx{CreateSpendTx(MakeTransactionRef(parent_tx), dest_spk, coinbase_spk, coinbaseKey)};
+
+    CreateAndProcessBlock({spend_tx_1, spend_tx_2, parent_tx, child_tx}, coinbase_spk);
+    const std::vector<Txid> expected_history{
+        spend_tx_1.GetHash(),
+        spend_tx_2.GetHash(),
+        parent_tx.GetHash(),
+        child_tx.GetHash(),
+    };
+
+    ScriptHashActivity local_activity;
+    {
+        ScriptHashIndex local_index(interfaces::MakeChain(m_node), 1 << 20, /*f_memory=*/true);
+        BOOST_REQUIRE(local_index.Init());
+        local_index.Sync();
+        local_activity = local_index.GetActivity(dest_sh);
+        local_index.Stop();
+    }
+
+    TxoSpenderIndex txospender_index(interfaces::MakeChain(m_node), 1 << 20, /*f_memory=*/true);
+    BOOST_REQUIRE(txospender_index.Init());
+    txospender_index.Sync();
+
+    ScriptHashIndex shared_index(
+        interfaces::MakeChain(m_node),
+        1 << 20,
+        txospender_index,
+        /*f_memory=*/true);
+    BOOST_REQUIRE(shared_index.Init());
+    shared_index.Sync();
+    const auto shared_activity = shared_index.GetActivity(dest_sh);
+
+    CheckHistory(local_activity.history, expected_history);
+    CheckHistory(shared_activity.history, expected_history);
+    CheckUtxosEqual(shared_activity.utxos, local_activity.utxos);
+    BOOST_CHECK_EQUAL(shared_activity.balance, local_activity.balance);
+    BOOST_CHECK(shared_activity.bestblock == local_activity.bestblock);
+    BOOST_CHECK_EQUAL(shared_activity.height, local_activity.height);
+
+    shared_index.Stop();
+    txospender_index.Stop();
 }
 
 BOOST_FIXTURE_TEST_CASE(scripthashindex_disk_restart_reads, TestChain100Setup)
