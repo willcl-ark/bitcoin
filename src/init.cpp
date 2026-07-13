@@ -371,8 +371,8 @@ void Shutdown(NodeContext& node)
     // Stop and delete all indexes only after flushing background callbacks.
     for (auto* index : node.indexes) index->Stop();
     if (g_txindex) g_txindex.reset();
-    if (g_txospenderindex) g_txospenderindex.reset();
     if (g_scripthashindex) g_scripthashindex.reset();
+    if (g_txospenderindex) g_txospenderindex.reset();
     if (g_coin_stats_index) g_coin_stats_index.reset();
     DestroyAllBlockFilterIndexes();
     node.indexes.clear(); // all instances are nullptr now
@@ -1925,7 +1925,20 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     }
 
     if (args.GetBoolArg("-scripthashindex", DEFAULT_SCRIPTHASHINDEX)) {
-        g_scripthashindex = std::make_unique<ScriptHashIndex>(interfaces::MakeChain(node), index_cache_sizes.scripthash_index, false, do_reindex);
+        if (g_txospenderindex) {
+            g_scripthashindex = std::make_unique<ScriptHashIndex>(
+                interfaces::MakeChain(node),
+                index_cache_sizes.scripthash_index,
+                *g_txospenderindex,
+                false,
+                do_reindex);
+        } else {
+            g_scripthashindex = std::make_unique<ScriptHashIndex>(
+                interfaces::MakeChain(node),
+                index_cache_sizes.scripthash_index,
+                false,
+                do_reindex);
+        }
         node.indexes.emplace_back(g_scripthashindex.get());
     }
 
