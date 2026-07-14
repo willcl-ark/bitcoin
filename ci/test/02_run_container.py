@@ -30,10 +30,12 @@ def main():
     settings = set(l.split("=")[0].split("export ")[1] for l in settings)
     # Add "hidden" settings, which are never exported, manually. Otherwise,
     # they will not be passed on.
-    settings.update([
-        "BASE_BUILD_DIR",
-        "CI_FAILFAST_TEST_LEAVE_DANGLING",
-    ])
+    settings.update(
+        [
+            "BASE_BUILD_DIR",
+            "CI_FAILFAST_TEST_LEAVE_DANGLING",
+        ]
+    )
 
     # Append $USER to /tmp/env to support multi-user systems and $CONTAINER_NAME
     # to allow support starting multiple runs simultaneously by the same user.
@@ -51,8 +53,8 @@ def main():
         print("Running on host system without docker wrapper")
         print("Create missing folders")
         for create_dir in [
-                os.environ["CCACHE_DIR"],
-                os.environ["PREVIOUS_RELEASES_DIR"],
+            os.environ["CCACHE_DIR"],
+            os.environ["PREVIOUS_RELEASES_DIR"],
         ]:
             Path(create_dir).mkdir(parents=True, exist_ok=True)
 
@@ -86,27 +88,37 @@ def main():
             run(["docker", "volume", "create", f"{os.environ['CONTAINER_NAME']}_{suffix}"], check=False)
 
         CI_CCACHE_MOUNT = f"type=volume,src={os.environ['CONTAINER_NAME']}_ccache,dst={os.environ['CCACHE_DIR']}"
-        CI_DEPENDS_MOUNT = f"type=volume,src={os.environ['CONTAINER_NAME']}_depends,dst={os.environ['DEPENDS_DIR']}/built"
-        CI_DEPENDS_SOURCES_MOUNT = f"type=volume,src={os.environ['CONTAINER_NAME']}_depends_sources,dst={os.environ['DEPENDS_DIR']}/sources"
+        CI_DEPENDS_MOUNT = (
+            f"type=volume,src={os.environ['CONTAINER_NAME']}_depends,dst={os.environ['DEPENDS_DIR']}/built"
+        )
+        CI_DEPENDS_SOURCES_MOUNT = (
+            f"type=volume,src={os.environ['CONTAINER_NAME']}_depends_sources,dst={os.environ['DEPENDS_DIR']}/sources"
+        )
         CI_PREVIOUS_RELEASES_MOUNT = f"type=volume,src={os.environ['CONTAINER_NAME']}_previous_releases,dst={os.environ['PREVIOUS_RELEASES_DIR']}"
         CI_BUILD_MOUNT = []
 
         if os.getenv("DANGER_CI_ON_HOST_FOLDERS"):
             # ensure the directories exist
             for create_dir in [
-                    os.environ["CCACHE_DIR"],
-                    f"{os.environ['DEPENDS_DIR']}/built",
-                    f"{os.environ['DEPENDS_DIR']}/sources",
-                    os.environ["PREVIOUS_RELEASES_DIR"],
-                    os.environ["BASE_BUILD_DIR"],  # Unset by default, must be defined externally
+                os.environ["CCACHE_DIR"],
+                f"{os.environ['DEPENDS_DIR']}/built",
+                f"{os.environ['DEPENDS_DIR']}/sources",
+                os.environ["PREVIOUS_RELEASES_DIR"],
+                os.environ["BASE_BUILD_DIR"],  # Unset by default, must be defined externally
             ]:
                 Path(create_dir).mkdir(parents=True, exist_ok=True)
 
             CI_CCACHE_MOUNT = f"type=bind,src={os.environ['CCACHE_DIR']},dst={os.environ['CCACHE_DIR']}"
             CI_DEPENDS_MOUNT = f"type=bind,src={os.environ['DEPENDS_DIR']}/built,dst={os.environ['DEPENDS_DIR']}/built"
-            CI_DEPENDS_SOURCES_MOUNT = f"type=bind,src={os.environ['DEPENDS_DIR']}/sources,dst={os.environ['DEPENDS_DIR']}/sources"
-            CI_PREVIOUS_RELEASES_MOUNT = f"type=bind,src={os.environ['PREVIOUS_RELEASES_DIR']},dst={os.environ['PREVIOUS_RELEASES_DIR']}"
-            CI_BUILD_MOUNT = [f"--mount=type=bind,src={os.environ['BASE_BUILD_DIR']},dst={os.environ['BASE_BUILD_DIR']}"]
+            CI_DEPENDS_SOURCES_MOUNT = (
+                f"type=bind,src={os.environ['DEPENDS_DIR']}/sources,dst={os.environ['DEPENDS_DIR']}/sources"
+            )
+            CI_PREVIOUS_RELEASES_MOUNT = (
+                f"type=bind,src={os.environ['PREVIOUS_RELEASES_DIR']},dst={os.environ['PREVIOUS_RELEASES_DIR']}"
+            )
+            CI_BUILD_MOUNT = [
+                f"--mount=type=bind,src={os.environ['BASE_BUILD_DIR']},dst={os.environ['BASE_BUILD_DIR']}"
+            ]
 
         if os.getenv("DANGER_CI_ON_HOST_CCACHE_FOLDER"):
             if not os.path.isdir(os.environ["CCACHE_DIR"]):
@@ -145,7 +157,7 @@ def main():
             f"--env-file={env_file}",
             f"--name={os.environ['CONTAINER_NAME']}",
             "--network=ci-ip6net",
-            "--ip6=1111:1111::5", # Used by some of the tests, don't change it just here (keep them in sync).
+            "--ip6=1111:1111::5",  # Used by some of the tests, don't change it just here (keep them in sync).
             f"--platform={os.environ['CI_IMAGE_PLATFORM']}",
             os.environ["CONTAINER_NAME"],
         ]
@@ -156,7 +168,9 @@ def main():
             text=True,
         ).stdout.strip()
 
-        run(["docker", "network", "connect", "--ip=1.1.1.5", "ci-ip4net", container_id]) # The IP address is used by some of the tests, don't change it just here (keep them in sync).
+        run(
+            ["docker", "network", "connect", "--ip=1.1.1.5", "ci-ip4net", container_id]
+        )  # The IP address is used by some of the tests, don't change it just here (keep them in sync).
 
     def ci_exec(cmd_inner, **kwargs):
         if os.getenv("DANGER_RUN_CI_ON_HOST"):
@@ -173,15 +187,17 @@ def main():
         return run([*prefix, *cmd_inner], **kwargs)
 
     # Normalize all folders to BASE_ROOT_DIR
-    ci_exec([
-        "rsync",
-        "--recursive",
-        "--perms",
-        "--stats",
-        "--human-readable",
-        f"{os.environ['BASE_READ_ONLY_DIR']}/",
-        f"{os.environ['BASE_ROOT_DIR']}",
-    ])
+    ci_exec(
+        [
+            "rsync",
+            "--recursive",
+            "--perms",
+            "--stats",
+            "--human-readable",
+            f"{os.environ['BASE_READ_ONLY_DIR']}/",
+            f"{os.environ['BASE_ROOT_DIR']}",
+        ]
+    )
     ci_exec([f"{os.environ['BASE_ROOT_DIR']}/ci/test/01_base_install.sh"])
     ci_exec([f"{os.environ['BASE_ROOT_DIR']}/ci/test/03_test_script.sh"])
 

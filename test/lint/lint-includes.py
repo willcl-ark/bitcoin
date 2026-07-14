@@ -17,23 +17,24 @@ from subprocess import check_output, CalledProcessError
 from lint_ignore_dirs import SHARED_EXCLUDED_SUBTREES
 
 
-EXCLUDED_DIRS = ["contrib/devtools/bitcoin-tidy/",
-                ] + SHARED_EXCLUDED_SUBTREES
+EXCLUDED_DIRS = [
+    "contrib/devtools/bitcoin-tidy/",
+] + SHARED_EXCLUDED_SUBTREES
 
 EXPECTED_BOOST_INCLUDES = [
-                           "boost/multi_index/detail/hash_index_iterator.hpp",
-                           "boost/multi_index/hashed_index.hpp",
-                           "boost/multi_index/identity.hpp",
-                           "boost/multi_index/indexed_by.hpp",
-                           "boost/multi_index/ordered_index.hpp",
-                           "boost/multi_index/sequenced_index.hpp",
-                           "boost/multi_index/tag.hpp",
-                           "boost/multi_index_container.hpp",
-                           "boost/operators.hpp",
-                           "boost/test/included/unit_test.hpp",
-                           "boost/test/unit_test.hpp",
-                           "boost/tuple/tuple.hpp",
-                          ]
+    "boost/multi_index/detail/hash_index_iterator.hpp",
+    "boost/multi_index/hashed_index.hpp",
+    "boost/multi_index/identity.hpp",
+    "boost/multi_index/indexed_by.hpp",
+    "boost/multi_index/ordered_index.hpp",
+    "boost/multi_index/sequenced_index.hpp",
+    "boost/multi_index/tag.hpp",
+    "boost/multi_index_container.hpp",
+    "boost/operators.hpp",
+    "boost/test/included/unit_test.hpp",
+    "boost/test/unit_test.hpp",
+    "boost/tuple/tuple.hpp",
+]
 
 
 def get_toplevel():
@@ -65,7 +66,9 @@ def find_included_cpps():
     included_cpps = list()
 
     try:
-        included_cpps = check_output(["git", "grep", "-E", r"^#include [<\"][^>\"]+\.cpp[>\"]", "--", "*.cpp", "*.h"], text=True).splitlines()
+        included_cpps = check_output(
+            ["git", "grep", "-E", r"^#include [<\"][^>\"]+\.cpp[>\"]", "--", "*.cpp", "*.h"], text=True
+        ).splitlines()
     except CalledProcessError as e:
         if e.returncode > 1:
             raise e
@@ -79,13 +82,15 @@ def find_extra_boosts():
     exclusion_set = set()
 
     try:
-        included_boosts = check_output(["git", "grep", "-E", r"^#include <boost/", "--", "*.cpp", "*.h"], text=True).splitlines()
+        included_boosts = check_output(
+            ["git", "grep", "-E", r"^#include <boost/", "--", "*.cpp", "*.h"], text=True
+        ).splitlines()
     except CalledProcessError as e:
         if e.returncode > 1:
             raise e
 
     for boost in included_boosts:
-        filtered_included_boost_set.add(re.findall(r'(?<=\<).+?(?=\>)', boost)[0])
+        filtered_included_boost_set.add(re.findall(r"(?<=\<).+?(?=\>)", boost)[0])
 
     for expected_boost in EXPECTED_BOOST_INCLUDES:
         for boost in filtered_included_boost_set:
@@ -102,7 +107,9 @@ def find_quote_syntax_inclusions():
     quote_syntax_inclusions = list()
 
     try:
-        quote_syntax_inclusions = check_output(["git", "grep", r"^#include \"", "--", "*.cpp", "*.h"] + exclude_args, text=True).splitlines()
+        quote_syntax_inclusions = check_output(
+            ["git", "grep", r"^#include \"", "--", "*.cpp", "*.h"] + exclude_args, text=True
+        ).splitlines()
     except CalledProcessError as e:
         if e.returncode > 1:
             raise e
@@ -144,7 +151,7 @@ def main():
 
     if extra_boosts:
         for boost in extra_boosts:
-            print(f"A new Boost dependency in the form of \"{boost}\" appears to have been introduced:")
+            print(f'A new Boost dependency in the form of "{boost}" appears to have been introduced:')
             print(check_output(["git", "grep", boost, "--", "*.cpp", "*.h"], text=True))
         exit_code = 1
 
@@ -156,9 +163,11 @@ def main():
             if e.returncode > 1:
                 raise e
             else:
-                print(f"Good job! The Boost dependency \"{expected_boost}\" is no longer used. "
-                       "Please remove it from EXPECTED_BOOST_INCLUDES in test/lint/lint-includes.py "
-                       "to make sure this dependency is not accidentally reintroduced.\n")
+                print(
+                    f'Good job! The Boost dependency "{expected_boost}" is no longer used. '
+                    "Please remove it from EXPECTED_BOOST_INCLUDES in test/lint/lint-includes.py "
+                    "to make sure this dependency is not accidentally reintroduced.\n"
+                )
                 exit_code = 1
 
     # Enforce bracket syntax includes
@@ -169,7 +178,7 @@ def main():
     # the location of the source file actually is relevant.
 
     if quote_syntax_inclusions:
-        print("Please use bracket syntax includes (\"#include <foo.h>\") instead of quote syntax includes:")
+        print('Please use bracket syntax includes ("#include <foo.h>") instead of quote syntax includes:')
         for quote_syntax_inclusion in quote_syntax_inclusions:
             print(quote_syntax_inclusion)
         exit_code = 1

@@ -11,13 +11,14 @@ This script checks for git modules
 import subprocess
 import sys
 
+
 def main():
-    submodules_list = subprocess.check_output(['git', 'submodule', 'status', '--recursive'],
-                                                text = True).rstrip('\n')
+    submodules_list = subprocess.check_output(["git", "submodule", "status", "--recursive"], text=True).rstrip("\n")
     if submodules_list:
         print("These submodules were found, delete them:\n", submodules_list)
         sys.exit(1)
     sys.exit(0)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()
