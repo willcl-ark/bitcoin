@@ -2,6 +2,19 @@
 
 There are a few parameters that can be dialed down to reduce the memory usage of `bitcoind`. This can be useful on embedded systems or small VPSes.
 
+## Resource profiles
+
+The `-profile=<name>` option applies a predefined set of resource-related
+defaults, including `-dbcache`, `-par`, `-maxsigcachesize`, `-prune`,
+`-maxconnections`, `-maxreceivebuffer`, and `-maxsendbuffer`.
+
+- `pruned-tiny` might typically be used on a single-board computer with 1-2 GiB RAM.
+- `pruned-low` might be used on a small VPS or laptop with ~4 GiB RAM.
+- `performance` is a dedicated machine, with 16 GiB of RAM or more.
+- `server` is a large dedicated public node with many connections.
+
+Explicitly configured options still take precedence over anything bundled into a profile.
+
 ## Swapping
 
 When the operating system is under memory pressure, it may swap memory pages from RAM to disk.

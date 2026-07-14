@@ -434,6 +434,69 @@ class ConfArgsTest(BitcoinTestFramework):
             "-proxyrandomize is disabled. Tor circuits for private broadcast connections may "
             "be correlated to other connections over Tor. For maximum privacy set -proxyrandomize=1."))
 
+    def test_profile(self):
+        self.log.info("Test -profile")
+        self.stop_node(0)
+
+        self.nodes[0].assert_start_raises_init_error(
+            extra_args=["-profile=unknown"],
+            expected_msg=(
+                "Error: Unknown -profile value 'unknown'. Valid values are: "
+                "pruned-tiny, pruned-low, performance, server."),
+        )
+
+        with self.nodes[0].assert_debug_log(expected_msgs=[
+            "parameter interaction: applying -profile=pruned-tiny",
+            "parameter interaction: -profile=pruned-tiny -> "
+            "setting -dbcache=100",
+            "parameter interaction: -profile=pruned-tiny -> "
+            "setting -maxsigcachesize=8",
+            "parameter interaction: -profile=pruned-tiny -> "
+            "setting -prune=2048",
+        ]):
+            self.start_node(0, extra_args=["-profile=pruned-tiny"])
+        self.stop_node(0)
+
+        self.nodes[0].replace_in_config([("[regtest]\n", "profile=pruned-tiny\n[regtest]\n")])
+        with self.nodes[0].assert_debug_log(expected_msgs=[
+            'Config file arg: profile="pruned-tiny"',
+            "parameter interaction: applying -profile=pruned-tiny",
+            "parameter interaction: -profile=pruned-tiny -> "
+            "setting -prune=2048",
+        ]):
+            self.start_node(0, extra_args=[])
+        util.assert_equal(self.nodes[0].getblockchaininfo()["pruned"], True)
+        self.stop_node(0)
+        self.nodes[0].replace_in_config([("profile=pruned-tiny\n", "")])
+
+        with self.nodes[0].assert_debug_log(expected_msgs=[
+            "parameter interaction: -blocksonly=1 -> setting -maxmempool=5",
+            "parameter interaction: applying -profile=pruned-tiny",
+        ]):
+            self.start_node(
+                0, extra_args=["-blocksonly=1", "-profile=pruned-tiny"]
+            )
+        util.assert_equal(
+            self.nodes[0].getmempoolinfo()["maxmempool"], 5_000_000
+        )
+        self.stop_node(0)
+
+        with self.nodes[0].assert_debug_log(
+            expected_msgs=[
+                "parameter interaction: applying -profile=pruned-low",
+                "parameter interaction: -profile=pruned-low -> "
+                "setting -prune=10240",
+            ],
+            unexpected_msgs=[
+                "parameter interaction: -profile=pruned-low -> "
+                "setting -dbcache=300",
+            ],
+        ):
+            self.start_node(
+                0, extra_args=["-profile=pruned-low", "-dbcache=1234"]
+            )
+        self.stop_node(0)
+
     def test_ignored_conf(self):
         self.log.info('Test error is triggered when the datadir in use contains a bitcoin.conf file that would be ignored '
                       'because a conflicting -conf file argument is passed.')
@@ -520,6 +583,7 @@ class ConfArgsTest(BitcoinTestFramework):
         self.test_networkactive()
         self.test_connect_with_seednode()
         self.test_privatebroadcast()
+        self.test_profile()
 
         self.test_dir_config()
         self.test_negated_config()

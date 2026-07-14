@@ -65,6 +65,7 @@
 #include <node/mining_args.h>
 #include <node/mining_types.h>
 #include <node/peerman_args.h>
+#include <node/profile_args.h>
 #include <policy/feerate.h>
 #include <policy/fees/block_policy_estimator.h>
 #include <policy/fees/block_policy_estimator_args.h>
@@ -551,6 +552,7 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
             "(default: 0 = disable pruning blocks, 1 = allow manual pruning via RPC, >=%u = automatically prune block files to stay under the specified target size in MiB)", MIN_DISK_SPACE_FOR_BLOCK_FILES / 1_MiB), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-reindex", "If enabled, wipe chain state and block index, and rebuild them from blk*.dat files on disk. Also wipe and rebuild other optional indexes that are active. If an assumeutxo snapshot was loaded, its chainstate will be wiped as well. The snapshot can then be reloaded via RPC.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-reindex-chainstate", "If enabled, wipe chain state, and rebuild it from blk*.dat files on disk. If an assumeutxo snapshot was loaded, its chainstate will be wiped as well. The snapshot can then be reloaded via RPC.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-profile=<name>", strprintf("Apply a predefined CPU, disk, memory, and network profile. Explicitly configured options override profile values. Valid values: %s", node::ListProfiles()), ArgsManager::ALLOW_ANY | ArgsManager::DISALLOW_NEGATION | ArgsManager::DISALLOW_ELISION, OptionsCategory::OPTIONS);
     argsman.AddArg("-settings=<file>", strprintf("Specify path to dynamic settings data file. Can be disabled with -nosettings. File is written at runtime and not meant to be edited by users (use %s instead for custom settings). Relative paths will be prefixed by datadir location. (default: %s)", BITCOIN_CONF_FILENAME, BITCOIN_SETTINGS_FILENAME), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
 #if HAVE_SYSTEM
     argsman.AddArg("-startupnotify=<cmd>", "Execute command on startup.", ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
@@ -854,6 +856,8 @@ void InitParameterInteraction(ArgsManager& args)
             LogInfo("parameter interaction: -blocksonly=1 -> setting -maxmempool=%d\n", DEFAULT_BLOCKSONLY_MAX_MEMPOOL_SIZE_MB);
     }
 
+    node::ApplyProfileArgs(args);
+
     // Forcing relay from whitelisted hosts implies we will accept relays from them in the first place.
     if (args.GetBoolArg("-whitelistforcerelay", DEFAULT_WHITELISTFORCERELAY)) {
         if (args.SoftSetBoolArg("-whitelistrelay", true))
@@ -975,6 +979,10 @@ bool AppInitParameterInteraction(const ArgsManager& args)
 
     if (!errors.empty()) {
         return InitError(errors);
+    }
+
+    if (const auto error{node::GetProfileError(args)}) {
+        return InitError(Untranslated(*error));
     }
 
     // Testnet3 deprecation warning
