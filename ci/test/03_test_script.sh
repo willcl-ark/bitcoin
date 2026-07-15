@@ -189,28 +189,43 @@ if [[ "$CI_OS_NAME" == "macos" && "${GOAL}" = "install deploy" ]]; then
 fi
 
 if [ "$RUN_UNIT_TESTS" = "true" ]; then
+  CTEST_EXCLUDE_ARGS=()
+  if [ "${RUN_FUNCTIONAL_TESTS_WITH_CTEST:-false}" = "true" ]; then
+    CTEST_EXCLUDE_ARGS=(-LE '^functional$')
+  fi
   DIR_UNIT_TEST_DATA="${DIR_UNIT_TEST_DATA}" \
   LD_LIBRARY_PATH="${DEPENDS_DIR}/${HOST}/lib" \
   CTEST_OUTPUT_ON_FAILURE=ON \
   ctest --test-dir "${BASE_BUILD_DIR}" \
     --stop-on-failure \
+    "${CTEST_EXCLUDE_ARGS[@]}" \
     "${MAKEJOBS}" \
     --timeout $(( TEST_RUNNER_TIMEOUT_FACTOR * 60 ))
 fi
 
 if [ "$RUN_FUNCTIONAL_TESTS" = "true" ]; then
-  # parses TEST_RUNNER_EXTRA as an array which allows for multiple arguments such as TEST_RUNNER_EXTRA='--exclude "rpc_bind.py --ipv6"'
-  eval "TEST_RUNNER_EXTRA=($TEST_RUNNER_EXTRA)"
-  LD_LIBRARY_PATH="${DEPENDS_DIR}/${HOST}/lib" \
-  "${BASE_BUILD_DIR}/test/functional/test_runner.py" \
-    "${MAKEJOBS}" \
-    --tmpdirprefix "${BASE_SCRATCH_DIR}/test_runner/" \
-    --ansi \
-    --combinedlogslen=99999999 \
-    --timeout-factor="${TEST_RUNNER_TIMEOUT_FACTOR}" \
-    "${TEST_RUNNER_EXTRA[@]}" \
-    --quiet \
-    --failfast
+  if [ "${RUN_FUNCTIONAL_TESTS_WITH_CTEST:-false}" = "true" ]; then
+    LD_LIBRARY_PATH="${DEPENDS_DIR}/${HOST}/lib" \
+    CTEST_OUTPUT_ON_FAILURE=ON \
+    ctest --test-dir "${BASE_BUILD_DIR}" \
+      -L '^functional$' \
+      --stop-on-failure \
+      "${MAKEJOBS}" \
+      --timeout $(( TEST_RUNNER_TIMEOUT_FACTOR * 60 ))
+  else
+    # Parses TEST_RUNNER_EXTRA as an array which allows for multiple arguments such as TEST_RUNNER_EXTRA='--exclude "rpc_bind.py --ipv6"'
+    eval "TEST_RUNNER_EXTRA=($TEST_RUNNER_EXTRA)"
+    LD_LIBRARY_PATH="${DEPENDS_DIR}/${HOST}/lib" \
+    "${BASE_BUILD_DIR}/test/functional/test_runner.py" \
+      "${MAKEJOBS}" \
+      --tmpdirprefix "${BASE_SCRATCH_DIR}/test_runner/" \
+      --ansi \
+      --combinedlogslen=99999999 \
+      --timeout-factor="${TEST_RUNNER_TIMEOUT_FACTOR}" \
+      "${TEST_RUNNER_EXTRA[@]}" \
+      --quiet \
+      --failfast
+  fi
 fi
 
 if [ "${RUN_TIDY}" = "true" ]; then
