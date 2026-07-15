@@ -1,0 +1,99 @@
+# TODO: Once the minimum CMake version is 4.4, replace this
+# TEST_INCLUDE_FILES shim with discover_tests(). Adapt the runner output to
+# the line-oriented format required by DISCOVERY_MATCH.
+
+set(functional_discovery_command
+  "@Python3_EXECUTABLE@"
+  "@FUNCTIONAL_TEST_RUNNER@"
+  "--dump-ctest"
+  "--configfile=@FUNCTIONAL_TEST_CONFIG_FILE@"
+)
+if("@FUNCTIONAL_DISCOVERY_EXTENDED_ARG@" STREQUAL "--extended")
+  list(APPEND functional_discovery_command "--extended")
+endif()
+
+execute_process(
+  COMMAND ${functional_discovery_command}
+  RESULT_VARIABLE functional_discovery_result
+  OUTPUT_VARIABLE functional_inventory
+  ERROR_VARIABLE functional_discovery_error
+)
+if(NOT functional_discovery_result EQUAL 0)
+  # test_runner.py reports some failures (e.g. an unregistered script) on
+  # stdout, so surface both streams.
+  message(FATAL_ERROR
+    "Functional test discovery failed (${functional_discovery_result}):\n"
+    "${functional_discovery_error}"
+    "${functional_inventory}"
+  )
+endif()
+
+string(JSON functional_test_count ERROR_VARIABLE functional_json_error
+  LENGTH "${functional_inventory}" tests
+)
+if(functional_json_error)
+  message(FATAL_ERROR "Functional test discovery returned invalid JSON: ${functional_json_error}")
+endif()
+
+if(functional_test_count GREATER 0)
+  math(EXPR functional_last_test "${functional_test_count} - 1")
+  foreach(functional_test_index RANGE 0 ${functional_last_test})
+    string(JSON functional_test_name GET
+      "${functional_inventory}" tests ${functional_test_index} name
+    )
+    string(JSON functional_test_script GET
+      "${functional_inventory}" tests ${functional_test_index} script
+    )
+    string(JSON functional_test_portseed GET
+      "${functional_inventory}" tests ${functional_test_index} portseed
+    )
+    string(JSON functional_test_label_count LENGTH
+      "${functional_inventory}" tests ${functional_test_index} labels
+    )
+    set(functional_test_labels)
+    if(functional_test_label_count GREATER 0)
+      math(EXPR functional_last_label "${functional_test_label_count} - 1")
+      foreach(functional_label_index RANGE 0 ${functional_last_label})
+        string(JSON functional_label GET
+          "${functional_inventory}" tests ${functional_test_index} labels ${functional_label_index}
+        )
+        list(APPEND functional_test_labels "${functional_label}")
+      endforeach()
+    endif()
+
+    set(functional_test_command
+      "@Python3_EXECUTABLE@"
+      "@CMAKE_CURRENT_SOURCE_DIR@/${functional_test_script}"
+    )
+    string(JSON functional_test_arg_count LENGTH
+      "${functional_inventory}" tests ${functional_test_index} args
+    )
+    if(functional_test_arg_count GREATER 0)
+      math(EXPR functional_last_arg "${functional_test_arg_count} - 1")
+      foreach(functional_arg_index RANGE 0 ${functional_last_arg})
+        string(JSON functional_arg GET
+          "${functional_inventory}" tests ${functional_test_index} args ${functional_arg_index}
+        )
+        list(APPEND functional_test_command "${functional_arg}")
+      endforeach()
+    endif()
+
+    set(functional_test_tmpdir "@FUNCTIONAL_TEST_TMP_DIR@/${functional_test_name}")
+    list(APPEND functional_test_command
+      "--configfile=@FUNCTIONAL_TEST_CONFIG_FILE@"
+      "--cachedir=@FUNCTIONAL_TEST_CACHE_DIR@"
+      "--portseed=${functional_test_portseed}"
+      "--tmpdir=${functional_test_tmpdir}"
+    )
+
+    # CTest's test-time script context supports the legacy add_test signature.
+    add_test("${functional_test_name}" ${functional_test_command})
+    set_tests_properties("${functional_test_name}" PROPERTIES
+      ENVIRONMENT "PYTHON_GIL=1"
+      FIXTURES_REQUIRED functional_cache
+      LABELS "${functional_test_labels}"
+      SKIP_RETURN_CODE 77
+      WORKING_DIRECTORY "@CMAKE_CURRENT_BINARY_DIR@"
+    )
+  endforeach()
+endif()
