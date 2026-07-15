@@ -166,6 +166,32 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
             method()
             self.log.info(f"Method '{method_name}' executed successfully.")
 
+    def _print_combined_logs(self):
+        combined_logs_args = [
+            sys.executable,
+            os.path.join(os.path.dirname(os.path.realpath(__file__)), "../combine_logs.py"),
+            self.options.tmpdir,
+        ]
+        try:
+            combined_logs = subprocess.run(
+                combined_logs_args,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        except OSError as error:
+            print(f"Failed to combine functional test logs: {error}", file=sys.stderr)
+            return
+        if combined_logs.returncode != 0:
+            print("Failed to combine functional test logs:", file=sys.stderr)
+            print(combined_logs.stderr, file=sys.stderr, end="")
+            return
+
+        print("\n============")
+        print(f"Combined log for {self.options.tmpdir}:")
+        print("============\n")
+        print("\n".join(combined_logs.stdout.splitlines()[-self.options.combinedlogslen:]))
+
     def parse_args(self, test_file):
         previous_releases_path = os.getenv("PREVIOUS_RELEASES_DIR") or os.getcwd() + "/releases"
         parser = argparse.ArgumentParser(usage="%(prog)s [options]")
@@ -174,6 +200,9 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         parser.add_argument("--cachedir", dest="cachedir", default=os.path.abspath(os.path.dirname(test_file) + "/../cache"),
                             help="Directory for caching pregenerated datadirs (default: %(default)s)")
         parser.add_argument("--tmpdir", dest="tmpdir", help="Root directory for datadirs (must not exist)")
+        parser.add_argument("--combinedlogslen", "-c", type=int,
+                            default=int(os.getenv("CTEST_FUNCTIONAL_COMBINED_LOGS_LEN", "0")), metavar="n",
+                            help="On failure, print a log (of length n lines) to the console, combined from the test framework and all test nodes.")
         parser.add_argument("-l", "--loglevel", dest="loglevel", default="INFO",
                             help="log events at this level and higher to the console. Can be set to DEBUG, INFO, WARNING, ERROR or CRITICAL. Passing --loglevel DEBUG will output all logs to console. Note that logs at all levels are always written to the test_framework.log file in the temporary test directory.")
         parser.add_argument("--tracerpc", dest="trace_rpc", default=False, action="store_true",
@@ -327,6 +356,12 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         for h in list(rpc_logger.handlers):
             h.flush()
             rpc_logger.removeHandler(h)
+        if (
+            self.success == TestStatus.FAILED
+            and self.options.combinedlogslen
+            and os.path.isdir(self.options.tmpdir)
+        ):
+            self._print_combined_logs()
         if cleanup_tree_on_exit:
             self.cleanup_folder(self.options.tmpdir)
 
