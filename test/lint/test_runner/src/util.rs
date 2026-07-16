@@ -59,26 +59,33 @@ pub fn commit_range() -> String {
     })
 }
 
-/// Return all subtree paths
-pub fn get_subtrees() -> Vec<&'static str> {
-    // Keep in sync with [test/lint/README.md#git-subtree-checksh]
-    vec![
-        "src/crc32c",
-        "src/crypto/ctaes",
-        "src/ipc/libmultiprocess",
-        "src/leveldb",
-        "src/minisketch",
-        "src/secp256k1",
-    ]
+/// Return all subtree paths from Ruff's shared exclusion configuration.
+pub fn get_subtrees() -> Vec<String> {
+    let config: toml::Table = toml::from_str(include_str!("../../../../test/lint/exclude.toml"))
+        .expect("failed to parse test/lint/exclude.toml");
+    config
+        .get("exclude")
+        .expect("missing exclude in test/lint/exclude.toml")
+        .as_array()
+        .expect("exclude must be an array in test/lint/exclude.toml")
+        .iter()
+        .map(|value| {
+            let pattern = value
+                .as_str()
+                .expect("exclude entries must be strings in test/lint/exclude.toml");
+            pattern
+                .strip_prefix("../../")
+                .expect("exclude entries must start with ../../ in test/lint/exclude.toml")
+                .to_string()
+        })
+        .collect()
 }
 
 /// Return the pathspecs to exclude by default
 pub fn get_pathspecs_default_excludes() -> Vec<String> {
     get_subtrees()
-        .iter()
-        .chain(&[
-            "doc/release-notes/release-notes-*", // archived notes
-        ])
+        .into_iter()
+        .chain(["doc/release-notes/release-notes-*".to_string()]) // archived notes
         .map(|s| format!(":(exclude){s}"))
         .collect()
 }

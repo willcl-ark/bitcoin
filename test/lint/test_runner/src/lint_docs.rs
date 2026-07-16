@@ -44,7 +44,7 @@ pub fn lint_doc_args() -> LintResult {
 pub fn lint_markdown() -> LintResult {
     let bin_name = "mlc";
     let mut md_ignore_paths = get_subtrees();
-    md_ignore_paths.push("./doc/README_doxygen.md");
+    md_ignore_paths.push("./doc/README_doxygen.md".to_string());
     let md_ignore_path_str = md_ignore_paths.join(",");
 
     let mut cmd = Command::new(bin_name);

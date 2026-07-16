@@ -103,7 +103,7 @@ maintained:
 * for `src/minisketch`: https://github.com/bitcoin-core/minisketch.git (branch master)
 * for `src/secp256k1`: https://github.com/bitcoin-core/secp256k1.git (branch master)
 
-Keep this list in sync with `fn get_subtrees()` in the lint runner.
+The shared subtree paths are listed in `exclude.toml` and consumed by `fn get_subtrees()` in the lint runner.
 
 To do so, add the upstream repository as remote:
 
