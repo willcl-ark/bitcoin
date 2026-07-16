@@ -219,14 +219,19 @@ def run_tests(ci_type):
 def main():
     parser = argparse.ArgumentParser(description="Utility to run Windows CI steps.")
     parser.add_argument("ci_type", choices=GENERATE_OPTIONS, help="CI type to run.")
-    steps = list(map(lambda f: f.__name__, [
-        github_import_vs_env,
-        generate,
-        build,
-        check_manifests,
-        prepare_tests,
-        run_tests,
-    ]))
+    steps = list(
+        map(
+            lambda f: f.__name__,
+            [
+                github_import_vs_env,
+                generate,
+                build,
+                check_manifests,
+                prepare_tests,
+                run_tests,
+            ],
+        )
+    )
     parser.add_argument("step", choices=steps, help="CI step to perform.")
     args = parser.parse_args()
 

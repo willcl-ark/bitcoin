@@ -138,13 +138,18 @@ def run_unit_tests():
 
 def main():
     parser = argparse.ArgumentParser(description="Utility to run Windows CI steps.")
-    steps = list(map(lambda f: f.__name__, [
-        print_version,
-        check_manifests,
-        prepare_tests,
-        run_unit_tests,
-        run_functional_tests,
-    ]))
+    steps = list(
+        map(
+            lambda f: f.__name__,
+            [
+                print_version,
+                check_manifests,
+                prepare_tests,
+                run_unit_tests,
+                run_functional_tests,
+            ],
+        )
+    )
     parser.add_argument("step", choices=steps, help="CI step to perform.")
     args = parser.parse_args()
 
@@ -153,7 +158,7 @@ def main():
         str(Path.cwd() / "previous_releases"),
     )
 
-    exec(f'{args.step}()')
+    exec(f"{args.step}()")
 
 
 if __name__ == "__main__":
