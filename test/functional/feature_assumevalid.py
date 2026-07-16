@@ -139,7 +139,7 @@ class AssumeValidTest(BitcoinTestFramework):
         self.start_node(5)
 
         # nodes[0]
-        self.log.info("Send blocks to node0. Block 102 will be rejected.")
+        self.log.info('Send blocks to node0. Block 102 will be rejected.')
         p2p0 = self.nodes[0].add_p2p_connection(BaseNode())
         p2p0.send_header_for_blocks(self.blocks[0:2000])
         p2p0.send_header_for_blocks(self.blocks[2000:])
