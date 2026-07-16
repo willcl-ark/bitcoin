@@ -1,3 +1,8 @@
+line-length = 120
+indent-width = 4
+extend = "./test/lint/exclude.toml"
+extend-exclude = ["test"]
+
 [lint]
 select = [
     "B006", # mutable-argument-default

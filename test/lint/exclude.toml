@@ -1,0 +1,9 @@
+# Paths are relative to this file when it is extended by the root ruff.toml.
+exclude = [
+  "../../src/crc32c",
+  "../../src/crypto/ctaes",
+  "../../src/ipc/libmultiprocess",
+  "../../src/leveldb",
+  "../../src/minisketch",
+  "../../src/secp256k1"
+]
