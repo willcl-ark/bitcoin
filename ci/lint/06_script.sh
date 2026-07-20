@@ -22,7 +22,7 @@ if [ -n "${LINT_CI_IS_PR}" ]; then
   fi
 fi
 
-RUST_BACKTRACE=1 cargo run --manifest-path "./test/lint/test_runner/Cargo.toml" -- "$@"
+RUST_BACKTRACE=1 lint_test_runner "$@"
 
 if [ "${LINT_CI_SANITY_CHECK_COMMIT_SIG}" = "1" ] ; then
     # Sanity check only the last few commits to get notified of missing sigs,

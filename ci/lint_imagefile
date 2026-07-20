@@ -20,4 +20,10 @@ COPY ./ci/lint/01_install.sh /install.sh
 RUN /install.sh && \
   rm -rf /var/lib/apt/lists/*
 
+COPY ./test/lint/test_runner/Cargo.toml ./test/lint/test_runner/Cargo.lock /test/lint/test_runner/
+COPY ./test/lint/test_runner/src /test/lint/test_runner/src
+RUN cargo build --locked --release --manifest-path=/test/lint/test_runner/Cargo.toml && \
+    install /test/lint/test_runner/target/release/test_runner /usr/local/bin/lint_test_runner && \
+    rm -rf /test/lint/test_runner/target
+
 WORKDIR /bitcoin
