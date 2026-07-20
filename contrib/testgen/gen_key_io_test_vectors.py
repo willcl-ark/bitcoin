@@ -39,6 +39,7 @@ p2tr_prefix = (OP_1, 32)
 
 metadata_keys = ['isPrivkey', 'chain', 'isCompressed', 'tryCaseFlip']
 # templates for valid sequences
+# fmt: off
 templates = [
   # prefix, payload_size, suffix, metadata, output_prefix, output_suffix
   #                                  None = N/A
@@ -99,6 +100,7 @@ bech32_ng_templates = [
   ('tb',    2, 16, Encoding.BECH32,  False, False, False),
   ('bcrt', 16, 20, Encoding.BECH32,  False, False, False),
 ]
+# fmt: on
 
 def is_valid(v):
     '''Check vector v for validity'''

@@ -23,6 +23,7 @@ from download_utils import download_from_url
 
 TAR = os.getenv('TAR', 'tar')
 
+# fmt: off
 SHA256_SUMS = {
     "0e2819135366f150d9906e294b61dff58fd1996ebd26c2f8e979d6c0b7a79580": {"tag": "v0.14.3", "archive": "bitcoin-0.14.3-aarch64-linux-gnu.tar.gz"},
     "d86fc90824a85c38b25c8488115178d5785dbc975f5ff674f9f5716bc8ad6e65": {"tag": "v0.14.3", "archive": "bitcoin-0.14.3-arm-linux-gnueabihf.tar.gz"},
@@ -92,6 +93,7 @@ SHA256_SUMS = {
     "98add5f220c01b387343b70edeb6273403fe081e22cd85fda132704cdcaa98aa": {"tag": "v28.2", "archive": "bitcoin-28.2-x86_64-linux-gnu.tar.gz"},
     "da0869639c323bbf6f264f1829083b9514e10179b90c34b09d8cbcab8a1897e3": {"tag": "v28.2", "archive": "bitcoin-28.2-win64.zip"},
 }
+# fmt: on
 
 
 @contextlib.contextmanager

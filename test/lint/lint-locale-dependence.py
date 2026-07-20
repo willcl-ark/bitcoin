@@ -55,6 +55,7 @@ REGEXP_EXTERNAL_DEPENDENCIES_EXCLUSIONS = [
     "src/tinyformat.h",
 ] + SHARED_EXCLUDED_SUBTREES
 
+# fmt: off
 LOCALE_DEPENDENT_FUNCTIONS = [
     "alphasort",    # LC_COLLATE (via strcoll)
     "asctime",      # LC_TIME (directly)
@@ -207,6 +208,7 @@ LOCALE_DEPENDENT_FUNCTIONS = [
     "wcwidth",
     "wprintf"
 ]
+# fmt: on
 
 
 def find_locale_dependent_function_uses():
