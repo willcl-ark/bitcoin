@@ -30,8 +30,8 @@ def get_worktree_mounts(repo_root):
     gitdir = (repo_root / content.removeprefix("gitdir: ")).resolve()
     main_gitdir = gitdir.parent.parent
     return [
-        f"--volume={gitdir}:{gitdir}",
-        f"--volume={main_gitdir}:{main_gitdir}",
+        f"--volume={gitdir}:{gitdir}:ro",
+        f"--volume={main_gitdir}:{main_gitdir}:ro",
     ]
 
 
@@ -69,7 +69,8 @@ def main():
             "run",
             "--rm",
             *extra_env,
-            f"--volume={repo_root}:/bitcoin",
+            # Linting must not modify the source checkout.
+            f"--volume={repo_root}:/bitcoin:ro",
             *get_worktree_mounts(repo_root),
             *([] if is_ci else ["-it"]),
             container,

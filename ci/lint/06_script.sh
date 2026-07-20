@@ -13,6 +13,8 @@ set -o errexit -o pipefail -o xtrace
 git config --global --add safe.directory /bitcoin
 
 export PATH="/python_env/bin:${PATH}"
+export MYPY_CACHE_DIR="/tmp/mypy_cache"
+export PYTHONDONTWRITEBYTECODE=1
 
 if [ -n "${LINT_CI_IS_PR}" ]; then
   export COMMIT_RANGE="HEAD~..HEAD"
@@ -25,6 +27,14 @@ fi
 RUST_BACKTRACE=1 lint_test_runner "$@"
 
 if [ "${LINT_CI_SANITY_CHECK_COMMIT_SIG}" = "1" ] ; then
+    # Signature verification updates trusted roots and Git metadata.
+    SOURCE_HEAD="$(git rev-parse HEAD)"
+    VERIFY_COMMITS_DIR="$(mktemp -d)"
+    trap 'rm -rf "${VERIFY_COMMITS_DIR}"' EXIT
+    git clone --quiet --shared --no-checkout /bitcoin "${VERIFY_COMMITS_DIR}"
+    git -C "${VERIFY_COMMITS_DIR}" checkout --quiet --detach "${SOURCE_HEAD}"
+    cd "${VERIFY_COMMITS_DIR}" || exit 1
+
     # Sanity check only the last few commits to get notified of missing sigs,
     # missing keys, or expired keys. Usually there is only one new merge commit
     # per push on the master branch and a few commits on release branches, so

@@ -27,6 +27,15 @@ if ! grep --help 2>&1 | grep -q 'GNU'; then
     exit 1;
 fi
 
+# Scripted diffs require a writable checkout for their verification scripts.
+SOURCE_ROOT="$(git rev-parse --show-toplevel)"
+SOURCE_HEAD="$(git rev-parse HEAD)"
+TEMP_ROOT="$(mktemp -d)"
+trap 'rm -rf "${TEMP_ROOT}"' EXIT
+git clone --quiet --shared --no-checkout "${SOURCE_ROOT}" "${TEMP_ROOT}"
+git -C "${TEMP_ROOT}" checkout --quiet --detach "${SOURCE_HEAD}"
+cd "${TEMP_ROOT}" || exit 1
+
 RET=0
 PREV_BRANCH=$(git name-rev --name-only HEAD)
 PREV_HEAD=$(git rev-parse HEAD)

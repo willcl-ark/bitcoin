@@ -16,7 +16,7 @@ pub fn lint_py_lint() -> LintResult {
     )?;
 
     let mut cmd = Command::new(bin_name);
-    cmd.arg("check").args(files.lines());
+    cmd.args(["check", "--no-cache"]).args(files.lines());
 
     match cmd.status() {
         Ok(status) if status.success() => Ok(()),
