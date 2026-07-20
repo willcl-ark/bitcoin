@@ -96,9 +96,9 @@ You can also set up [upstream refspecs](#reference-prs-easily-with-refspecs) to 
 
 See [contrib/devtools/README.md](/contrib/devtools/README.md#clang-format-diff.py).
 
-### Format Python diffs with `yapf-diff.py`
+### Format Python code with Ruff
 
-Usage is exactly the same as [`clang-format-diff.py`](#format-cc-diffs-with-clang-format-diffpy). You can get it [here](https://github.com/MarcoFalke/yapf-diff).
+Run `ruff format .` from the repository root. This formats eligible Python files in the working tree, including untracked files; the corresponding lint check is limited to Git-tracked files.
 
 ## Rebasing/Merging code
 
