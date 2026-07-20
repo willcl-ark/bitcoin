@@ -3,25 +3,29 @@
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-'''
+"""
 This checks if all command line args are documented.
 Return value is 0 to indicate no error.
-'''
+"""
 
 from subprocess import check_output
 import re
 
-FOLDER_GREP = 'src'
-FOLDER_TEST = 'src/test/'
+FOLDER_GREP = "src"
+FOLDER_TEST = "src/test/"
 REGEX_ARG = r'\b(?:GetArg|GetArgs|GetBoolArg|GetIntArg|GetPathArg|IsArgSet|get_net)\("(-[^"]+)"'
 REGEX_DOC = r'AddArg\("(-[^"=]+?)(?:=|")'
-CMD_ROOT_DIR = '$(git rev-parse --show-toplevel)/{}'.format(FOLDER_GREP)
+CMD_ROOT_DIR = "$(git rev-parse --show-toplevel)/{}".format(FOLDER_GREP)
 CMD_GREP_ARGS = r"git grep --perl-regexp '{}' -- {} ':(exclude){}'".format(REGEX_ARG, CMD_ROOT_DIR, FOLDER_TEST)
-CMD_GREP_WALLET_ARGS = r"git grep --function-context 'void WalletInit::AddWalletOptions' -- {} | grep AddArg".format(CMD_ROOT_DIR)
-CMD_GREP_WALLET_HIDDEN_ARGS = r"git grep --function-context 'void DummyWalletInit::AddWalletOptions' -- {}".format(CMD_ROOT_DIR)
+CMD_GREP_WALLET_ARGS = r"git grep --function-context 'void WalletInit::AddWalletOptions' -- {} | grep AddArg".format(
+    CMD_ROOT_DIR
+)
+CMD_GREP_WALLET_HIDDEN_ARGS = r"git grep --function-context 'void DummyWalletInit::AddWalletOptions' -- {}".format(
+    CMD_ROOT_DIR
+)
 CMD_GREP_DOCS = r"git grep --perl-regexp '{}' {}".format(REGEX_DOC, CMD_ROOT_DIR)
 # list unsupported, deprecated and duplicate args as they need no documentation
-SET_DOC_OPTIONAL = set(['-h', '-?', '-dbcrashratio', '-forcecompactdb', '-ipcconnect', '-ipcfd'])
+SET_DOC_OPTIONAL = set(["-h", "-?", "-dbcrashratio", "-forcecompactdb", "-ipcconnect", "-ipcfd"])
 
 
 def lint_missing_argument_documentation():

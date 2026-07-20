@@ -9,9 +9,8 @@ import re
 # Directories with header-based modules, where the assumption that .cpp files
 # define functions and variables declared in corresponding .h files is
 # incorrect.
-HEADER_MODULE_PATHS = [
-    'interfaces/'
-]
+HEADER_MODULE_PATHS = ["interfaces/"]
+
 
 def module_name(path):
     if any(path.startswith(dirpath) for dirpath in HEADER_MODULE_PATHS):
@@ -23,6 +22,7 @@ def module_name(path):
     if path.endswith(".cpp"):
         return path[:-4]
     return None
+
 
 files = dict()
 deps: dict[str, set[str]] = dict()
@@ -42,7 +42,7 @@ for arg in sys.argv[1:]:
 # TODO: implement support for multiple include directories
 for arg in sorted(files.keys()):
     module = files[arg]
-    with open(arg, 'r') as f:
+    with open(arg, "r") as f:
         for line in f:
             match = RE.match(line)
             if match:

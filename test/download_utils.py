@@ -19,9 +19,9 @@ def download_from_url(url, archive):
         percent = min(100, (progress_bytes * 100) / total_size)
         bar_length = 40
         filled_length = int(bar_length * percent / 100)
-        bar = '#' * filled_length + '-' * (bar_length - filled_length)
+        bar = "#" * filled_length + "-" * (bar_length - filled_length)
         if now - last_print_time >= 1 or percent >= 100:
-            print(f'\rDownloading: [{bar}] {percent:.1f}%', flush=True, end="")
+            print(f"\rDownloading: [{bar}] {percent:.1f}%", flush=True, end="")
             last_print_time = now
 
     with urllib.request.urlopen(url) as response:
@@ -34,7 +34,7 @@ def download_from_url(url, archive):
         total_size = int(response.getheader("Content-Length"))
         progress_bytes = 0
 
-        with open(archive, 'wb') as file:
+        with open(archive, "wb") as file:
             while True:
                 chunk = response.read(8192)
                 if not chunk:
@@ -46,7 +46,7 @@ def download_from_url(url, archive):
         if progress_bytes < total_size:
             raise RuntimeError(f"Download incomplete: expected {total_size} bytes, got {progress_bytes} bytes")
 
-    print('\n', flush=True, end="") # Flush to avoid error output on the same line.
+    print("\n", flush=True, end="")  # Flush to avoid error output on the same line.
 
 
 def download_script_assets(script_assets_dir):

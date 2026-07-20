@@ -38,8 +38,8 @@ def main():
         not_matching = "\n".join(not_matching)
         error_msg = (
             "The test suite in file src/test/foo_tests.cpp should be named\n"
-            '`foo_tests`, or if there are multiple test suites, `foo_tests_bar`.\n'
-            'Please make sure the following test suites follow that convention:\n\n'
+            "`foo_tests`, or if there are multiple test suites, `foo_tests_bar`.\n"
+            "Please make sure the following test suites follow that convention:\n\n"
             f"{not_matching}\n"
         )
         print(error_msg)

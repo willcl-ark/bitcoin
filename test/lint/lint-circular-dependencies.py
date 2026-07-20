@@ -22,7 +22,6 @@ EXPECTED_CIRCULAR_DEPENDENCIES = (
     "wallet/wallet -> wallet/walletdb -> wallet/wallet",
     "kernel/coinstats -> validation -> kernel/coinstats",
     "versionbits -> versionbits_impl -> versionbits",
-
     # Temporary, removed in followup https://github.com/bitcoin/bitcoin/pull/24230
     "index/base -> node/context -> net_processing -> index/blockfilterindex -> index/base",
 )
@@ -36,7 +35,7 @@ def main():
 
     os.chdir(CODE_DIR)
     files = subprocess.check_output(
-        ['git', 'ls-files', '--', '*.h', '*.cpp'],
+        ["git", "ls-files", "--", "*.h", "*.cpp"],
         text=True,
     ).splitlines()
 
@@ -48,9 +47,7 @@ def main():
     )
 
     for dependency_str in dependencies_output.stdout.rstrip().split("\n"):
-        circular_dependencies.append(
-            re.sub("^Circular dependency: ", "", dependency_str)
-        )
+        circular_dependencies.append(re.sub("^Circular dependency: ", "", dependency_str))
 
     # Check for an unexpected dependencies
     for dependency in circular_dependencies:

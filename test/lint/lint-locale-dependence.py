@@ -48,7 +48,7 @@ KNOWN_VIOLATIONS = [
     "src/span.h:.*printf",
     "src/test/fuzz/locale.cpp:.*setlocale",
     "src/test/util_tests.cpp:.*strtoll",
-    "src/util/syserror.cpp:.*strerror",      # Outside this function use `SysErrorString`
+    "src/util/syserror.cpp:.*strerror",  # Outside this function use `SysErrorString`
 ]
 
 REGEXP_EXTERNAL_DEPENDENCIES_EXCLUSIONS = [
@@ -214,7 +214,15 @@ LOCALE_DEPENDENT_FUNCTIONS = [
 def find_locale_dependent_function_uses():
     regexp_locale_dependent_functions = "|".join(LOCALE_DEPENDENT_FUNCTIONS)
     exclude_args = [":(exclude)" + excl for excl in REGEXP_EXTERNAL_DEPENDENCIES_EXCLUSIONS]
-    git_grep_command = ["git", "grep", "--extended-regexp", "[^a-zA-Z0-9_\\`'\"<>](" +  regexp_locale_dependent_functions + ")(_r|_s)?\\(", "--", "*.cpp", "*.h"] + exclude_args
+    git_grep_command = [
+        "git",
+        "grep",
+        "--extended-regexp",
+        "[^a-zA-Z0-9_\\`'\"<>](" + regexp_locale_dependent_functions + ")(_r|_s)?\\(",
+        "--",
+        "*.cpp",
+        "*.h",
+    ] + exclude_args
     git_grep_output = list()
 
     try:
@@ -233,10 +241,13 @@ def main():
     git_grep_output = find_locale_dependent_function_uses()
 
     for locale_dependent_function in LOCALE_DEPENDENT_FUNCTIONS:
-        matches =  [line for line in git_grep_output
-                    if re.search("[^a-zA-Z0-9_\\`'\"<>]" + locale_dependent_function + "(_r|_s)?\\(", line)
-                    and not re.search("\\.(c|cpp|h):\\s*//.*" + locale_dependent_function, line)
-                    and not re.search(regexp_ignore_known_violations, line)]
+        matches = [
+            line
+            for line in git_grep_output
+            if re.search("[^a-zA-Z0-9_\\`'\"<>]" + locale_dependent_function + "(_r|_s)?\\(", line)
+            and not re.search("\\.(c|cpp|h):\\s*//.*" + locale_dependent_function, line)
+            and not re.search(regexp_ignore_known_violations, line)
+        ]
         if matches:
             print(f"The locale dependent function {locale_dependent_function}(...) appears to be used:")
             for match in matches:
@@ -245,8 +256,12 @@ def main():
             exit_code = 1
 
     if exit_code == 1:
-        print("Unnecessary locale dependence can cause bugs that are very tricky to isolate and fix. Please avoid using locale-dependent functions if possible.\n")
-        print(f"Advice not applicable in this specific case? Add an exception by updating the ignore list in {sys.argv[0]}")
+        print(
+            "Unnecessary locale dependence can cause bugs that are very tricky to isolate and fix. Please avoid using locale-dependent functions if possible.\n"
+        )
+        print(
+            f"Advice not applicable in this specific case? Add an exception by updating the ignore list in {sys.argv[0]}"
+        )
 
     sys.exit(exit_code)
 

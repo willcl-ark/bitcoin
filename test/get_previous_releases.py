@@ -21,7 +21,7 @@ import zipfile
 sys.path.append(str(Path(__file__).resolve().parent))
 from download_utils import download_from_url
 
-TAR = os.getenv('TAR', 'tar')
+TAR = os.getenv("TAR", "tar")
 
 # fmt: off
 SHA256_SUMS = {
@@ -109,27 +109,26 @@ def pushd(new_dir) -> None:
 def download_binary(tag, args) -> int:
     if Path(tag).is_dir():
         if not args.remove_dir:
-            print('Using cached {}'.format(tag))
+            print("Using cached {}".format(tag))
             return 0
         shutil.rmtree(tag)
 
-    bin_path = 'bin/bitcoin-core-{}'.format(tag[1:])
+    bin_path = "bin/bitcoin-core-{}".format(tag[1:])
 
-    match = re.compile('v(.*)(rc[0-9]+)$').search(tag)
+    match = re.compile("v(.*)(rc[0-9]+)$").search(tag)
     if match:
-        bin_path = 'bin/bitcoin-core-{}/test.{}'.format(
-            match.group(1), match.group(2))
+        bin_path = "bin/bitcoin-core-{}/test.{}".format(match.group(1), match.group(2))
 
     host = args.host
     if tag < "v23" and host in ["x86_64-apple-darwin", "arm64-apple-darwin"]:
         host = "osx64"
 
-    archive_format = 'tar.gz'
-    if host == 'win64':
-        archive_format = 'zip'
+    archive_format = "tar.gz"
+    if host == "win64":
+        archive_format = "zip"
 
-    archive = f'bitcoin-{tag[1:]}-{host}.{archive_format}'
-    archive_url = f'https://bitcoincore.org/{bin_path}/{archive}'
+    archive = f"bitcoin-{tag[1:]}-{host}.{archive_format}"
+    archive_url = f"https://bitcoincore.org/{bin_path}/{archive}"
 
     try:
         download_from_url(archive_url, archive)
@@ -148,8 +147,8 @@ def download_binary(tag, args) -> int:
         hasher.update(afile.read())
     archiveHash = hasher.hexdigest()
 
-    if archiveHash not in SHA256_SUMS or SHA256_SUMS[archiveHash]['archive'] != archive:
-        if archive in [v['archive'] for v in SHA256_SUMS.values()]:
+    if archiveHash not in SHA256_SUMS or SHA256_SUMS[archiveHash]["archive"] != archive:
+        if archive in [v["archive"] for v in SHA256_SUMS.values()]:
             print(f"Checksum {archiveHash} did not match", file=sys.stderr)
         else:
             print("Checksum for given version doesn't exist", file=sys.stderr)
@@ -159,9 +158,9 @@ def download_binary(tag, args) -> int:
     Path(tag).mkdir()
 
     # Extract archive
-    if host == 'win64':
+    if host == "win64":
         try:
-            with zipfile.ZipFile(archive, 'r') as zip:
+            with zipfile.ZipFile(archive, "r") as zip:
                 zip.extractall(tag)
             # Remove the top level directory to match tar's --strip-components=1
             extracted_items = os.listdir(tag)
@@ -175,9 +174,9 @@ def download_binary(tag, args) -> int:
             print(f"Zip extraction failed: {e}", file=sys.stderr)
             return 1
     else:
-        ret = subprocess.run([TAR, '-zxf', archive, '-C', tag,
-                              '--strip-components=1',
-                              'bitcoin-{tag}'.format(tag=tag[1:])]).returncode
+        ret = subprocess.run(
+            [TAR, "-zxf", archive, "-C", tag, "--strip-components=1", "bitcoin-{tag}".format(tag=tag[1:])]
+        ).returncode
         if ret != 0:
             print(f"Failed to extract the {tag} tarball", file=sys.stderr)
             return ret
@@ -187,27 +186,23 @@ def download_binary(tag, args) -> int:
     if tag >= "v23" and tag < "v28.2" and args.host == "arm64-apple-darwin":
         # Starting with v23 there are arm64 binaries for ARM (e.g. M1, M2) mac.
         # Until v28.2 they had to be signed to run.
-        binary_path = f'{os.getcwd()}/{tag}/bin/'
+        binary_path = f"{os.getcwd()}/{tag}/bin/"
 
         for arm_binary in os.listdir(binary_path):
             # Is it already signed?
             ret = subprocess.run(
-                ['codesign', '-v', binary_path + arm_binary],
+                ["codesign", "-v", binary_path + arm_binary],
                 stderr=subprocess.DEVNULL,  # Suppress expected stderr output
             ).returncode
             if ret == 1:
                 # Have to self-sign the binary
-                ret = subprocess.run(
-                    ['codesign', '-s', '-', binary_path + arm_binary]
-                ).returncode
+                ret = subprocess.run(["codesign", "-s", "-", binary_path + arm_binary]).returncode
                 if ret != 0:
                     print(f"Failed to self-sign {tag} {arm_binary} arm64 binary", file=sys.stderr)
                     return 1
 
                 # Confirm success
-                ret = subprocess.run(
-                    ['codesign', '-v', binary_path + arm_binary]
-                ).returncode
+                ret = subprocess.run(["codesign", "-v", binary_path + arm_binary]).returncode
                 if ret != 0:
                     print(f"Failed to verify the self-signed {tag} {arm_binary} arm64 binary", file=sys.stderr)
                     return 1
@@ -216,28 +211,27 @@ def download_binary(tag, args) -> int:
 
 
 def set_host(args) -> int:
-    if platform.system().lower() == 'windows':
-        if platform.machine() != 'AMD64':
-            print('Only 64bit Windows supported', file=sys.stderr)
+    if platform.system().lower() == "windows":
+        if platform.machine() != "AMD64":
+            print("Only 64bit Windows supported", file=sys.stderr)
             return 1
-        args.host = 'win64'
+        args.host = "win64"
         return 0
-    host = os.environ.get('HOST', subprocess.check_output(
-        './depends/config.guess').decode())
+    host = os.environ.get("HOST", subprocess.check_output("./depends/config.guess").decode())
     platforms = {
-        'aarch64-*-linux*': 'aarch64-linux-gnu',
-        'powerpc64le-*-linux-*': 'powerpc64le-linux-gnu',
-        'riscv64-*-linux*': 'riscv64-linux-gnu',
-        'x86_64-*-linux*': 'x86_64-linux-gnu',
-        'x86_64-apple-darwin*': 'x86_64-apple-darwin',
-        'aarch64-apple-darwin*': 'arm64-apple-darwin',
+        "aarch64-*-linux*": "aarch64-linux-gnu",
+        "powerpc64le-*-linux-*": "powerpc64le-linux-gnu",
+        "riscv64-*-linux*": "riscv64-linux-gnu",
+        "x86_64-*-linux*": "x86_64-linux-gnu",
+        "x86_64-apple-darwin*": "x86_64-apple-darwin",
+        "aarch64-apple-darwin*": "arm64-apple-darwin",
     }
-    args.host = ''
+    args.host = ""
     for pattern, target in platforms.items():
         if fnmatch(host, pattern):
             args.host = target
     if not args.host:
-        print('Not sure which binary to download for {}'.format(host), file=sys.stderr)
+        print("Not sure which binary to download for {}".format(host), file=sys.stderr)
         return 1
     return 0
 
@@ -256,23 +250,24 @@ def main(args) -> int:
     return 0
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-        epilog='''
+        epilog="""
         HOST can be set to any of the `host-platform-triplet`s from
         depends/README.md for which a release exists.
-        ''',
+        """,
     )
-    parser.add_argument('-r', '--remove-dir', action='store_true',
-                        help='remove existing directory.')
-    parser.add_argument('-t', '--target-dir', action='store',
-                        help='target directory.', default='releases')
-    all_tags = sorted([*set([v['tag'] for v in SHA256_SUMS.values()])])
-    parser.add_argument('tags', nargs='*', default=all_tags,
-                        help='release tags. e.g.: v0.18.1 v0.20.0rc2 '
-                        '(if not specified, the full list needed for '
-                        'backwards compatibility tests will be used)'
-                        )
+    parser.add_argument("-r", "--remove-dir", action="store_true", help="remove existing directory.")
+    parser.add_argument("-t", "--target-dir", action="store", help="target directory.", default="releases")
+    all_tags = sorted([*set([v["tag"] for v in SHA256_SUMS.values()])])
+    parser.add_argument(
+        "tags",
+        nargs="*",
+        default=all_tags,
+        help="release tags. e.g.: v0.18.1 v0.20.0rc2 "
+        "(if not specified, the full list needed for "
+        "backwards compatibility tests will be used)",
+    )
     args = parser.parse_args()
     sys.exit(main(args))
