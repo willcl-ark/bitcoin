@@ -29,6 +29,18 @@ pub fn lint_py_lint() -> LintResult {
     }
 }
 
+pub fn lint_py_format() -> LintResult {
+    let bin_name = "ruff";
+    match Command::new(bin_name)
+        .args(["format", "--check", "."])
+        .status()
+    {
+        Ok(status) if status.success() => Ok(()),
+        Ok(_) => Err(format!("`{bin_name} format --check` found errors!")),
+        Err(e) => Err(format!("Error running `{bin_name} format --check`: {e}")),
+    }
+}
+
 pub fn lint_rmtree() -> LintResult {
     let found = git()
         .args([

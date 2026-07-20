@@ -15,6 +15,7 @@ Extra arguments are passed to `cargo run -- ...` in the container so you can do:
 ```sh
 ./ci/lint.py --help
 ./ci/lint.py --lint=py_lint
+./ci/lint.py --lint=py_format
 ```
 
 test runner
@@ -54,6 +55,7 @@ or `--help`:
 | [`lint-python.py`](/test/lint/lint-python.py) | [pyzmq](https://github.com/zeromq/pyzmq)
 | [`lint-shell.py`](/test/lint/lint-shell.py) | [ShellCheck](https://github.com/koalaman/shellcheck)
 | `py_lint` | [ruff](https://github.com/astral-sh/ruff)
+| `py_format` | [ruff](https://github.com/astral-sh/ruff)
 | markdown link check | [mlc](https://github.com/becheran/mlc)
 
 Dependency versions and installation instructions are available in the [CI setup](../../ci/lint/01_install.sh) and the [lint_imagefile](../../ci/lint_imagefile) (for tools where an OCI imagefile exists).
