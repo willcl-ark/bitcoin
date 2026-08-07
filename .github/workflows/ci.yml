@@ -303,9 +303,31 @@ jobs:
         id: record-commit
         run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+  nix-cache:
+    name: 'Populate Nix binary cache'
+    runs-on: ${{ github.repository == 'bitcoin/bitcoin' && 'warp-ubuntu-latest-x64-4x' || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        if: &NIX_CACHE_WRITE github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
+      - uses: cachix/install-nix-action@v31
+        if: *NIX_CACHE_WRITE
+      - uses: Mic92/niks3-action@v1
+        if: *NIX_CACHE_WRITE
+        with:
+          server-url: https://cache.nix.fish.foo
+      - name: Build Nix environments
+        if: *NIX_CACHE_WRITE
+        run: |
+          for HOST in x86_64-w64-mingw32 x86_64-w64-mingw32ucrt; do
+            NIX_BUILD_SHELL=bash HOST="$HOST" nix-shell --fallback contrib/devtools/shell-win64-cross.nix --run true
+          done
+
   windows-cross:
     name: 'Windows-cross to x86_64, ${{ matrix.crt }}'
-    needs: record-frozen-commit
+    needs: [record-frozen-commit, nix-cache]
     runs-on: ${{ github.repository == 'bitcoin/bitcoin' && 'warp-ubuntu-latest-x64-4x' || 'ubuntu-latest' }}
     if: ${{ vars.SKIP_BRANCH_PUSH != 'true' || github.event_name == 'pull_request' }}
 
