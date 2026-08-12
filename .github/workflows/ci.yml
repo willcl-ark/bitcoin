@@ -328,7 +328,7 @@ jobs:
   windows-cross:
     name: 'Windows-cross to x86_64, ${{ matrix.crt }}'
     needs: nix-cache
-    runs-on: ${{ github.repository == 'bitcoin/bitcoin' && 'warp-ubuntu-latest-x64-4x' || 'ubuntu-latest' }}
+    runs-on: ${{ github.repository == 'willcl-ark/bitcoin' && 'warp-ubuntu-latest-x64-4x' || 'ubuntu-latest' }}
     if: ${{ vars.SKIP_BRANCH_PUSH != 'true' || github.event_name == 'pull_request' }}
 
     strategy:
