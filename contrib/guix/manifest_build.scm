@@ -26,6 +26,10 @@ FILE-NAME found in ./patches relative to the current file."
 
 (define building-on (string-append "--build=" (list-ref (string-split (%current-system) #\-) 0) "-guix-linux-gnu"))
 
+(define %glibc-source-url
+  (or (getenv "GUIX_GLIBC_SOURCE_URL")
+      "https://sourceware.org/git/glibc.git"))
+
 (define (base-binutils target)
   (package
     (inherit (cross-binutils target)) ;; 2.44
@@ -228,7 +232,7 @@ chain for " target " development."))
     (source (origin
               (method git-fetch)
               (uri (git-reference
-                    (url "https://sourceware.org/git/glibc.git")
+                    (url %glibc-source-url)
                     (commit commit)))
               (file-name (git-file-name "glibc" commit))
               (sha256
@@ -262,36 +266,38 @@ chain for " target " development."))
                    (("^install-others =.*$")
                     (string-append "install-others = " out "/etc/rpc\n")))))))))))))
 
-(packages->manifest
- (append
-  (list ;; The Basics
-        bash-minimal
-        which
-        coreutils-minimal
-        ;; File(system) inspection
-        grep
-        findutils
-        ;; File transformation
-        patch
-        sed
-        ;; Compression and archiving
-        tar
-        gzip
-        ;; Build tools
-        cmake-minimal-4
-        gnu-make
-        ;; Git
-        git-minimal)
-  (let ((target (getenv "HOST")))
-    (cond ((string-suffix? "-mingw32" target)
-           (list gcc-toolchain-14
-                 (make-mingw-pthreads-cross-toolchain target)))
-          ((string-contains target "-linux-")
-           (list gcc-toolchain-14
-                 (list gcc-toolchain-14 "static")
-                 (make-bitcoin-cross-toolchain target)))
-          ((string-contains target "darwin")
-           (list clang-toolchain-19
-                 libcxx ;; 19.1.7
-                 lld-19))
-          (else '())))))
+(if (getenv "GUIX_PREFETCH_GLIBC_SOURCE")
+    (package-source glibc-2.31)
+    (packages->manifest
+     (append
+      (list ;; The Basics
+            bash-minimal
+            which
+            coreutils-minimal
+            ;; File(system) inspection
+            grep
+            findutils
+            ;; File transformation
+            patch
+            sed
+            ;; Compression and archiving
+            tar
+            gzip
+            ;; Build tools
+            cmake-minimal-4
+            gnu-make
+            ;; Git
+            git-minimal)
+      (let ((target (getenv "HOST")))
+        (cond ((string-suffix? "-mingw32" target)
+               (list gcc-toolchain-14
+                     (make-mingw-pthreads-cross-toolchain target)))
+              ((string-contains target "-linux-")
+               (list gcc-toolchain-14
+                     (list gcc-toolchain-14 "static")
+                     (make-bitcoin-cross-toolchain target)))
+              ((string-contains target "darwin")
+               (list clang-toolchain-19
+                     libcxx ;; 19.1.7
+                     lld-19))
+              (else '()))))))

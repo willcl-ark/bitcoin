@@ -283,6 +283,51 @@ mkdir -p "$VAR_BASE"
 OUTDIR_BASE="${OUTDIR_BASE:-${VERSION_BASE}/output}"
 mkdir -p "$OUTDIR_BASE"
 
+# Fetch and prepare the glibc source before building any Linux host
+# environments. Both origins have the same fixed-output hash, so either one
+# populates the store path required by the build manifest.
+builds_linux=
+for host in $HOSTS; do
+    case "$host" in
+        *-linux-*) builds_linux=1; break ;;
+    esac
+done
+
+if [ -n "$builds_linux" ]; then
+    glibc_source_urls=(
+        "https://git.fish.foo/mirrors/glibc.git"
+        "https://sourceware.org/git/glibc.git"
+    )
+    glibc_source_fetched=
+    read -ra _guix_common_flags <<< "$ADDITIONAL_GUIX_COMMON_FLAGS"
+
+    for glibc_source_url in "${glibc_source_urls[@]}"; do
+        echo "INFO: Fetching and preparing glibc source from '${glibc_source_url}'..."
+        if GUIX_PREFETCH_GLIBC_SOURCE=1 \
+            GUIX_GLIBC_SOURCE_URL="$glibc_source_url" \
+            time-machine build \
+                --file="${PWD}/contrib/guix/manifest_build.scm" \
+                --cores="$JOBS" \
+                --keep-failed \
+                --fallback \
+                ${SUBSTITUTE_URLS:+--substitute-urls="$SUBSTITUTE_URLS"} \
+                "${_guix_common_flags[@]}"
+        then
+            glibc_source_fetched=1
+            break
+        fi
+    done
+
+    if [ -z "$glibc_source_fetched" ]; then
+        echo "ERR: Failed to fetch and prepare glibc source from all configured repositories." >&2
+        exit 1
+    fi
+fi
+
+# These variables are internal to the scoped prefetch commands above. Do not
+# let inherited values affect the subsequent manifest build.
+unset GUIX_PREFETCH_GLIBC_SOURCE GUIX_GLIBC_SOURCE_URL
+
 # Download the depends sources now as we won't have internet access in the build
 # container
 for host in $HOSTS; do
