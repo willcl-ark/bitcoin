@@ -30,26 +30,6 @@
       bitcoinHome = "/home/${bitcoinUser}";
       bitcoinData = "${bitcoinHome}/.bitcoin";
 
-      bitcoin-user-files = pkgs.runCommand "bitcoin-user-files" { } ''
-        mkdir -p "$out/etc"
-        printf '%s\n' \
-          'root:x:0:0:root:/root:/sbin/nologin' \
-          '${bitcoinUser}:x:${toString bitcoinUid}:${toString bitcoinGid}:Bitcoin Core:${bitcoinHome}:/sbin/nologin' \
-          > "$out/etc/passwd"
-        printf '%s\n' \
-          'root:x:0:' \
-          '${bitcoinUser}:x:${toString bitcoinGid}:' \
-          > "$out/etc/group"
-        printf '%s\n' \
-          'root:!:::::::' \
-          '${bitcoinUser}:!:::::::' \
-          > "$out/etc/shadow"
-        printf '%s\n' \
-          'root:!::' \
-          '${bitcoinUser}:!::' \
-          > "$out/etc/gshadow"
-      '';
-
       zeromq = pkgs.zeromq.override {
         enableCurve = false;
         enableDrafts = false;
@@ -150,10 +130,7 @@
         name = "bitcoin-core";
         tag = "latest";
         architecture = "amd64";
-        contents = [
-          bitcoin-core
-          bitcoin-user-files
-        ];
+        contents = [ bitcoin-core ];
         fakeRootCommands = ''
           mkdir -p ./home/${bitcoinUser}/.bitcoin
           chmod 0755 ./home ./home/${bitcoinUser}
@@ -163,12 +140,11 @@
         config = {
           Entrypoint = [ "/bin/bitcoind" ];
           Cmd = [ "-printtoconsole" ];
-          User = "${bitcoinUser}:${bitcoinUser}";
+          User = "${toString bitcoinUid}:${toString bitcoinGid}";
           Env = [
             "BITCOIN_DATA=${bitcoinData}"
             "HOME=${bitcoinHome}"
             "PATH=/bin"
-            "USER=${bitcoinUser}"
           ];
           WorkingDir = bitcoinHome;
           Volumes.${bitcoinData} = { };
