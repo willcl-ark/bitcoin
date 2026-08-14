@@ -7,17 +7,70 @@
     { nixpkgs, ... }:
     let
       system = "x86_64-linux";
-      pkgs = import nixpkgs { inherit system; };
+      pkgs = import nixpkgs {
+        inherit system;
+        overlays = [
+          (final: prev: {
+            capnproto = prev.capnproto.overrideAttrs (oldAttrs: rec {
+              version = "1.5.0";
+              src = prev.fetchFromGitHub {
+                owner = "capnproto";
+                repo = "capnproto";
+                rev = "v${version}";
+                hash = "sha256-2J3FYwPAtbahHI1y1KMqU8Gn2YlKyIW8kZIJz2Ja31w=";
+              };
+            });
+          })
+        ];
+      };
+
+      zeromq = pkgs.zeromq.override {
+        enableCurve = false;
+        enableDrafts = false;
+        libsodium = null;
+      };
+
+      capnproto-runtime =
+        pkgs.runCommand "capnproto-runtime-${pkgs.capnproto.version}"
+          {
+            nativeBuildInputs = [ pkgs.patchelf ];
+          }
+          ''
+            runtime_rpath='${
+              pkgs.lib.makeLibraryPath [
+                pkgs.stdenv.cc.cc
+                pkgs.glibc
+              ]
+            }:$ORIGIN'
+
+            for library in libcapnp-rpc libcapnp libkj-async libkj; do
+              install -Dm755 \
+                "${pkgs.capnproto}/lib/$library.so.${pkgs.capnproto.version}" \
+                "$out/lib/$library.so.${pkgs.capnproto.version}"
+              patchelf --set-rpath "$runtime_rpath" \
+                "$out/lib/$library.so.${pkgs.capnproto.version}"
+            done
+          '';
+
+      runtimeRpath = pkgs.lib.makeLibraryPath [
+        capnproto-runtime
+        zeromq
+        pkgs.sqlite
+        pkgs.stdenv.cc.cc
+        pkgs.glibc
+      ];
 
       nativeBuildInputs = with pkgs; [
         cmake
         ninja
+        patchelf
         pkg-config
         python3
       ];
 
       buildInputs = with pkgs; [
         boost
+        capnproto
         sqlite
         zeromq
       ];
@@ -30,16 +83,16 @@
         inherit nativeBuildInputs buildInputs;
 
         cmakeFlags = [
-          "-DBUILD_BITCOIN_BIN=OFF"
+          "-DBUILD_BITCOIN_BIN=ON"
           "-DBUILD_CLI=ON"
           "-DBUILD_DAEMON=ON"
           "-DBUILD_GUI=OFF"
           "-DBUILD_TESTS=OFF"
-          "-DBUILD_TX=OFF"
-          "-DBUILD_UTIL=OFF"
-          "-DBUILD_WALLET_TOOL=OFF"
+          "-DBUILD_TX=ON"
+          "-DBUILD_UTIL=ON"
+          "-DBUILD_WALLET_TOOL=ON"
           "-DENABLE_EXTERNAL_SIGNER=OFF"
-          "-DENABLE_IPC=OFF"
+          "-DENABLE_IPC=ON"
           "-DENABLE_WALLET=ON"
           "-DINSTALL_MAN=OFF"
           "-DWITH_CCACHE=OFF"
@@ -49,9 +102,21 @@
 
         installPhase = ''
           runHook preInstall
+          install -Dm755 bin/bitcoin $out/bin/bitcoin
           install -Dm755 bin/bitcoind $out/bin/bitcoind
           install -Dm755 bin/bitcoin-cli $out/bin/bitcoin-cli
+          install -Dm755 bin/bitcoin-tx $out/bin/bitcoin-tx
+          install -Dm755 bin/bitcoin-util $out/bin/bitcoin-util
+          install -Dm755 bin/bitcoin-wallet $out/bin/bitcoin-wallet
+          install -Dm755 bin/bitcoin-node $out/libexec/bitcoin-node
           runHook postInstall
+        '';
+
+        postFixup = ''
+          for binary in $out/bin/bitcoin-cli $out/libexec/bitcoin-node; do
+            patchelf --set-rpath "${runtimeRpath}" "$binary"
+            patchelf --shrink-rpath "$binary"
+          done
         '';
       };
 
