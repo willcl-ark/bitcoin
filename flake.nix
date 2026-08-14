@@ -3,7 +3,8 @@
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-  outputs = { nixpkgs, ... }:
+  outputs =
+    { nixpkgs, ... }:
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs { inherit system; };
@@ -74,5 +75,7 @@
       devShells.${system}.default = pkgs.mkShell {
         inherit nativeBuildInputs buildInputs;
       };
+
+      formatter.${system} = pkgs.nixfmt-tree;
     };
 }
