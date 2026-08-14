@@ -12,20 +12,17 @@
         overlays = [ (import ./overlays.nix) ];
       };
 
-      bitcoinSource = pkgs.lib.cleanSourceWith {
-        name = "bitcoin-core-source";
-        src = ./.;
-        filter =
-          path: type:
-          pkgs.lib.cleanSourceFilter path type
-          && !builtins.elem (baseNameOf path) [
-            "flake.lock"
-            "flake.nix"
-            "docker.nix"
-            "implementation.md"
-            "justfile"
-            "overlays.nix"
-          ];
+      bitcoinSource = pkgs.lib.fileset.toSource {
+        root = ./.;
+        fileset = pkgs.lib.fileset.unions [
+          ./CMakeLists.txt
+          ./cmake
+          ./contrib/devtools/split-debug.sh.in
+          ./contrib/filter-lcov.py
+          ./doc/CMakeLists.txt
+          ./src
+          ./test
+        ];
       };
 
       zeromq = pkgs.zeromq.override {
