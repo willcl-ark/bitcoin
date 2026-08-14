@@ -24,6 +24,32 @@
         ];
       };
 
+      bitcoinUid = 101;
+      bitcoinGid = 101;
+      bitcoinUser = "bitcoin";
+      bitcoinHome = "/home/${bitcoinUser}";
+      bitcoinData = "${bitcoinHome}/.bitcoin";
+
+      bitcoin-user-files = pkgs.runCommand "bitcoin-user-files" { } ''
+        mkdir -p "$out/etc"
+        printf '%s\n' \
+          'root:x:0:0:root:/root:/sbin/nologin' \
+          '${bitcoinUser}:x:${toString bitcoinUid}:${toString bitcoinGid}:Bitcoin Core:${bitcoinHome}:/sbin/nologin' \
+          > "$out/etc/passwd"
+        printf '%s\n' \
+          'root:x:0:' \
+          '${bitcoinUser}:x:${toString bitcoinGid}:' \
+          > "$out/etc/group"
+        printf '%s\n' \
+          'root:!:::::::' \
+          '${bitcoinUser}:!:::::::' \
+          > "$out/etc/shadow"
+        printf '%s\n' \
+          'root:!::' \
+          '${bitcoinUser}:!::' \
+          > "$out/etc/gshadow"
+      '';
+
       zeromq = pkgs.zeromq.override {
         enableCurve = false;
         enableDrafts = false;
@@ -124,10 +150,36 @@
         name = "bitcoin-core";
         tag = "latest";
         architecture = "amd64";
-        contents = [ bitcoin-core ];
+        contents = [
+          bitcoin-core
+          bitcoin-user-files
+        ];
+        fakeRootCommands = ''
+          mkdir -p ./home/${bitcoinUser}/.bitcoin
+          chmod 0755 ./home ./home/${bitcoinUser}
+          chmod 0700 ./home/${bitcoinUser}/.bitcoin
+          chown -R ${toString bitcoinUid}:${toString bitcoinGid} ./home/${bitcoinUser}
+        '';
         config = {
           Entrypoint = [ "/bin/bitcoind" ];
           Cmd = [ "-printtoconsole" ];
+          User = "${bitcoinUser}:${bitcoinUser}";
+          Env = [
+            "BITCOIN_DATA=${bitcoinData}"
+            "HOME=${bitcoinHome}"
+            "PATH=/bin"
+            "USER=${bitcoinUser}"
+          ];
+          WorkingDir = bitcoinHome;
+          Volumes.${bitcoinData} = { };
+          ExposedPorts = {
+            "8333/tcp" = { };
+            "18333/tcp" = { };
+            "18444/tcp" = { };
+            "38333/tcp" = { };
+            "48333/tcp" = { };
+          };
+          StopSignal = "SIGTERM";
         };
       };
     in
