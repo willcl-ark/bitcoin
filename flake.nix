@@ -30,6 +30,20 @@
       bitcoinHome = "/home/${bitcoinUser}";
       bitcoinData = "${bitcoinHome}/.bitcoin";
 
+      bitcoinSource = pkgs.lib.cleanSourceWith {
+        name = "bitcoin-core-source";
+        src = ./.;
+        filter =
+          path: type:
+          pkgs.lib.cleanSourceFilter path type
+          && !builtins.elem (baseNameOf path) [
+            "flake.lock"
+            "flake.nix"
+            "implementation.md"
+            "justfile"
+          ];
+      };
+
       zeromq = pkgs.zeromq.override {
         enableCurve = false;
         enableDrafts = false;
@@ -84,7 +98,7 @@
       bitcoin-core = pkgs.stdenv.mkDerivation {
         pname = "bitcoin-core";
         version = "31.99.0";
-        src = ./.;
+        src = bitcoinSource;
 
         inherit nativeBuildInputs buildInputs;
 
