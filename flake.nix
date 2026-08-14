@@ -12,12 +12,6 @@
         overlays = [ (import ./overlays.nix) ];
       };
 
-      bitcoinUid = 101;
-      bitcoinGid = 101;
-      bitcoinUser = "bitcoin";
-      bitcoinHome = "/home/${bitcoinUser}";
-      bitcoinData = "${bitcoinHome}/.bitcoin";
-
       bitcoinSource = pkgs.lib.cleanSourceWith {
         name = "bitcoin-core-source";
         src = ./.;
@@ -27,6 +21,7 @@
           && !builtins.elem (baseNameOf path) [
             "flake.lock"
             "flake.nix"
+            "docker.nix"
             "implementation.md"
             "justfile"
             "overlays.nix"
@@ -107,37 +102,9 @@
         '';
       };
 
-      docker-image = pkgs.dockerTools.buildLayeredImage {
-        name = "bitcoin-core";
-        tag = "latest";
-        architecture = "amd64";
-        contents = [ bitcoin-core ];
-        fakeRootCommands = ''
-          mkdir -p ./home/${bitcoinUser}/.bitcoin
-          chmod 0755 ./home ./home/${bitcoinUser}
-          chmod 0700 ./home/${bitcoinUser}/.bitcoin
-          chown -R ${toString bitcoinUid}:${toString bitcoinGid} ./home/${bitcoinUser}
-        '';
-        config = {
-          Entrypoint = [ "/bin/bitcoind" ];
-          Cmd = [ "-printtoconsole" ];
-          User = "${toString bitcoinUid}:${toString bitcoinGid}";
-          Env = [
-            "BITCOIN_DATA=${bitcoinData}"
-            "HOME=${bitcoinHome}"
-            "PATH=/bin"
-          ];
-          WorkingDir = bitcoinHome;
-          Volumes.${bitcoinData} = { };
-          ExposedPorts = {
-            "8333/tcp" = { };
-            "18333/tcp" = { };
-            "18444/tcp" = { };
-            "38333/tcp" = { };
-            "48333/tcp" = { };
-          };
-          StopSignal = "SIGTERM";
-        };
+      docker-image = import ./docker.nix {
+        inherit pkgs;
+        bitcoinCore = bitcoin-core;
       };
     in
     {
