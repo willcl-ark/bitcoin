@@ -9,19 +9,7 @@
       system = "x86_64-linux";
       pkgs = import nixpkgs {
         inherit system;
-        overlays = [
-          (final: prev: {
-            capnproto = prev.capnproto.overrideAttrs (oldAttrs: rec {
-              version = "1.5.0";
-              src = prev.fetchFromGitHub {
-                owner = "capnproto";
-                repo = "capnproto";
-                rev = "v${version}";
-                hash = "sha256-2J3FYwPAtbahHI1y1KMqU8Gn2YlKyIW8kZIJz2Ja31w=";
-              };
-            });
-          })
-        ];
+        overlays = [ (import ./overlays.nix) ];
       };
 
       bitcoinUid = 101;
@@ -41,6 +29,7 @@
             "flake.nix"
             "implementation.md"
             "justfile"
+            "overlays.nix"
           ];
       };
 
@@ -50,30 +39,8 @@
         libsodium = null;
       };
 
-      capnproto-runtime =
-        pkgs.runCommand "capnproto-runtime-${pkgs.capnproto.version}"
-          {
-            nativeBuildInputs = [ pkgs.patchelf ];
-          }
-          ''
-            runtime_rpath='${
-              pkgs.lib.makeLibraryPath [
-                pkgs.stdenv.cc.cc
-                pkgs.glibc
-              ]
-            }:$ORIGIN'
-
-            for library in libcapnp-rpc libcapnp libkj-async libkj; do
-              install -Dm755 \
-                "${pkgs.capnproto}/lib/$library.so.${pkgs.capnproto.version}" \
-                "$out/lib/$library.so.${pkgs.capnproto.version}"
-              patchelf --set-rpath "$runtime_rpath" \
-                "$out/lib/$library.so.${pkgs.capnproto.version}"
-            done
-          '';
-
       runtimeRpath = pkgs.lib.makeLibraryPath [
-        capnproto-runtime
+        pkgs.capnproto-runtime
         zeromq
         pkgs.sqlite
         pkgs.stdenv.cc.cc
