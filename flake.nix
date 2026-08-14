@@ -9,7 +9,7 @@
       system = "x86_64-linux";
       pkgs = import nixpkgs {
         inherit system;
-        overlays = [ (import ./overlays.nix) ];
+        overlays = [ (import ./nix/overlays.nix) ];
       };
 
       bitcoinSource = pkgs.lib.fileset.toSource {
@@ -99,7 +99,7 @@
         '';
       };
 
-      docker-image = import ./docker.nix {
+      docker-image = import ./nix/docker.nix {
         inherit pkgs;
         bitcoinCore = bitcoin-core;
       };
