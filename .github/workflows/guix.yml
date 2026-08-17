@@ -1,0 +1,135 @@
+# Copyright (c) 2023-present The Bitcoin Core developers
+# Distributed under the MIT software license, see the accompanying
+# file COPYING or https://opensource.org/license/mit.
+
+---
+name: Guix
+'on':
+  pull_request:
+  push:
+    branches:
+      - master
+
+concurrency:
+  group: ${{ github.event_name != 'pull_request' && github.run_id || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  HOSTS: x86_64-linux-gnu
+  GUIX_BINARY_VERSION: 1.5.0
+  GUIX_BINARY_SHA256: aa41025489c5061543e9c48873eaa829b900b2da75d40f9648913622f5f47817
+  GUIX_BOOTSTRAP_DIR: ${{ github.workspace }}/.guix-cache/bootstrap
+  FISH_SUBSTITUTE_KEY_SHA256: 5796b4e6cc23635052ba7cecdc4b8b92ba6a53ef374208ce5094c0920a72f40f
+  SOURCES_PATH: ${{ github.workspace }}/.guix-cache/depends-sources
+  BASE_CACHE: ${{ github.workspace }}/.guix-cache/depends-built
+  SUBSTITUTE_URLS: https://guix.fish.foo https://ci.guix.gnu.org
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  guix:
+    name: Guix, x86_64 Linux
+    runs-on: ${{ github.repository == 'bitcoin/bitcoin' && 'warp-ubuntu-latest-x64-8x' || 'ubuntu-24.04' }}
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.ref || '' }}
+
+      - name: Set cache variables
+        id: cache-vars
+        run: |
+          source contrib/guix/libexec/prelude.bash
+          echo "time-machine-commit=$GUIX_TIME_MACHINE_COMMIT" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Guix bootstrap cache
+        id: guix-bootstrap-cache
+        uses: ./.github/actions/cache/restore/internal
+        with:
+          provider: ${{ github.repository == 'bitcoin/bitcoin' && 'warp' || 'gha' }}
+          path: |
+            ${{ env.GUIX_BOOTSTRAP_DIR }}
+            ~/.cache/guix/checkouts
+          key: guix-bootstrap-${{ env.GUIX_BINARY_VERSION }}-${{ steps.cache-vars.outputs.time-machine-commit }}
+          restore-keys: guix-bootstrap-${{ env.GUIX_BINARY_VERSION }}-
+
+      - name: Restore depends sources cache
+        id: depends-sources-cache
+        uses: ./.github/actions/cache/restore/internal
+        with:
+          provider: ${{ github.repository == 'bitcoin/bitcoin' && 'warp' || 'gha' }}
+          path: ${{ env.SOURCES_PATH }}
+          key: guix-depends-sources-${{ hashFiles('depends/**') }}
+          restore-keys: guix-depends-sources-
+
+      - name: Restore built depends cache
+        id: built-depends-cache
+        uses: ./.github/actions/cache/restore/internal
+        with:
+          provider: ${{ github.repository == 'bitcoin/bitcoin' && 'warp' || 'gha' }}
+          path: ${{ env.BASE_CACHE }}
+          key: guix-built-depends-${{ env.HOSTS }}-${{ env.GUIX_BINARY_VERSION }}-${{ hashFiles('depends/**') }}-${{ hashFiles('contrib/guix/**') }}
+          restore-keys: guix-built-depends-${{ env.HOSTS }}-${{ env.GUIX_BINARY_VERSION }}-
+
+      - name: Install Guix
+        run: |
+          set +o pipefail
+
+          mkdir -p "$GUIX_BOOTSTRAP_DIR"
+          guix_tarball="${GUIX_BOOTSTRAP_DIR}/guix-binary-${GUIX_BINARY_VERSION}.x86_64-linux.tar.xz"
+          if [ ! -e "$guix_tarball" ]; then
+            wget --quiet \
+              --output-document "$guix_tarball" \
+              "https://ftp.gnu.org/gnu/guix/guix-binary-${GUIX_BINARY_VERSION}.x86_64-linux.tar.xz"
+          fi
+          echo "${GUIX_BINARY_SHA256}  ${guix_tarball}" | sha256sum --check
+
+          cd /tmp
+          wget --quiet --output-document guix-install.sh https://guix.gnu.org/guix-install.sh
+          chmod +x guix-install.sh
+          yes '' | sudo env GUIX_BINARY_FILE_NAME="$guix_tarball" ./guix-install.sh
+
+          fish_key="${RUNNER_TEMP}/guix-fish-signing-key.pub"
+          curl --fail --location --show-error \
+            --output "$fish_key" \
+            https://guix.fish.foo/signing-key.pub
+          echo "${FISH_SUBSTITUTE_KEY_SHA256}  ${fish_key}" | sha256sum --check
+          cat "$fish_key" | sudo guix archive --authorize
+
+      - name: Build with Guix
+        run: |
+          set -o errexit -o pipefail
+          ./contrib/guix/guix-build
+
+      - name: Save Guix bootstrap cache
+        if: success() && github.event_name == 'push' && github.ref_name == github.event.repository.default_branch && steps.guix-bootstrap-cache.outputs.cache-hit != 'true'
+        uses: ./.github/actions/cache/save/internal
+        with:
+          provider: ${{ github.repository == 'bitcoin/bitcoin' && 'warp' || 'gha' }}
+          path: |
+            ${{ env.GUIX_BOOTSTRAP_DIR }}
+            ~/.cache/guix/checkouts
+          key: ${{ steps.guix-bootstrap-cache.outputs.cache-primary-key }}
+
+      - name: Save depends sources cache
+        if: success() && github.event_name == 'push' && github.ref_name == github.event.repository.default_branch && steps.depends-sources-cache.outputs.cache-hit != 'true'
+        uses: ./.github/actions/cache/save/internal
+        with:
+          provider: ${{ github.repository == 'bitcoin/bitcoin' && 'warp' || 'gha' }}
+          path: ${{ env.SOURCES_PATH }}
+          key: ${{ steps.depends-sources-cache.outputs.cache-primary-key }}
+
+      - name: Save built depends cache
+        if: success() && github.event_name == 'push' && github.ref_name == github.event.repository.default_branch && steps.built-depends-cache.outputs.cache-hit != 'true'
+        uses: ./.github/actions/cache/save/internal
+        with:
+          provider: ${{ github.repository == 'bitcoin/bitcoin' && 'warp' || 'gha' }}
+          path: ${{ env.BASE_CACHE }}
+          key: ${{ steps.built-depends-cache.outputs.cache-primary-key }}
