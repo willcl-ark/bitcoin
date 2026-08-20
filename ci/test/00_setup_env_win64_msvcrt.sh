@@ -10,6 +10,8 @@ export CONTAINER_NAME=ci_win64_msvcrt
 export CI_IMAGE_NAME_TAG="mirror.gcr.io/ubuntu:26.04"
 export HOST=x86_64-w64-mingw32
 export PACKAGES="nix-bin nix-setup-systemd"
+export NIX_CACHE_URL="https://cache.nix.fish.foo"
+export NIX_CACHE_PUBLIC_KEY="cache.nix.fish.foo:iz0hMVvEFBvhsOoIyRRvot7B5xBaP/2sWMvneWypoBI="
 export RUN_UNIT_TESTS=false
 export RUN_FUNCTIONAL_TESTS=false
 export GOAL="deploy"

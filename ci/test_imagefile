@@ -14,6 +14,12 @@ ENV FILE_ENV=${FILE_ENV}
 ARG BASE_ROOT_DIR
 ENV BASE_ROOT_DIR=${BASE_ROOT_DIR}
 
+ARG NIX_CACHE_URL
+ARG NIX_CACHE_PUBLIC_KEY
+ENV NIX_CACHE_IN_DOCKER=1
+ENV NIX_CACHE_URL=${NIX_CACHE_URL}
+ENV NIX_CACHE_PUBLIC_KEY=${NIX_CACHE_PUBLIC_KEY}
+
 # Make retry available in PATH, needed for CI_RETRY_EXE
 COPY ./ci/retry/retry /usr/bin/retry
 COPY ./ci/test/00_setup_env.sh ./${FILE_ENV} ./ci/test/01_base_install.sh ${BASE_ROOT_DIR}/ci/test/

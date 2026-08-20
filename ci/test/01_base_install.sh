@@ -50,6 +50,11 @@ elif [ "$CI_OS_NAME" != "macos" ]; then
   ${CI_RETRY_EXE} apt-get install --no-install-recommends --no-upgrade -y $PACKAGES $CI_BASE_PACKAGES
 fi
 
+if [[ "${NIX_CACHE_IN_DOCKER:-}" == 1 && -n "${NIX_CACHE_URL:-}" ]]; then
+  printf 'extra-substituters = %s\nextra-trusted-public-keys = %s\n' \
+    "$NIX_CACHE_URL" "$NIX_CACHE_PUBLIC_KEY" >> /etc/nix/nix.conf
+fi
+
 if [[ ${HOST:-} == x86_64-w64-mingw32* ]]; then
   # Install Nix packages.
   NIX_BUILD_SHELL=bash nix-shell "${BASE_ROOT_DIR}/contrib/devtools/shell-win64-cross.nix" --run true

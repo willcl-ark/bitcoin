@@ -308,6 +308,9 @@ jobs:
     needs: record-frozen-commit
     runs-on: ${{ github.repository == 'bitcoin/bitcoin' && 'warp-ubuntu-latest-x64-4x' || 'ubuntu-latest' }}
     if: ${{ vars.SKIP_BRANCH_PUSH != 'true' || github.event_name == 'pull_request' }}
+    permissions:
+      contents: read
+      id-token: write
 
     strategy:
       fail-fast: false
@@ -341,6 +344,23 @@ jobs:
         uses: ./.github/actions/cache/restore
         with:
           provider: ${{ github.repository == 'bitcoin/bitcoin' && 'warp' || 'gha' }}
+
+      - name: Install Nix
+        if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
+        uses: cachix/install-nix-action@v31
+
+      - name: Configure niks3 cache
+        if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
+        uses: Mic92/niks3-action@v1
+        with:
+          server-url: https://cache.nix.fish.foo
+
+      - name: Pre-build Windows toolchain
+        if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
+        run: |
+          # shellcheck disable=SC1090
+          source "$FILE_ENV"
+          NIX_BUILD_SHELL=bash nix-shell contrib/devtools/shell-win64-cross.nix --run true
 
       - name: Configure Docker
         uses: ./.github/actions/configure-docker

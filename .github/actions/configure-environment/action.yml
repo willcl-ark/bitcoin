@@ -27,3 +27,7 @@ runs:
       run: |
         source $FILE_ENV
         echo "CONTAINER_NAME=$CONTAINER_NAME" >> "$GITHUB_ENV"
+        if [[ -n "${NIX_CACHE_URL:-}" ]]; then
+          echo "NIX_CACHE_URL=$NIX_CACHE_URL" >> "$GITHUB_ENV"
+          echo "NIX_CACHE_PUBLIC_KEY=$NIX_CACHE_PUBLIC_KEY" >> "$GITHUB_ENV"
+        fi

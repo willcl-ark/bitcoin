@@ -45,6 +45,11 @@ runs:
         # Always optimistically --cache‑from in case a cache blob exists
         args=(--cache-from "type=gha,${cache_options}")
 
+        if [[ -n "${NIX_CACHE_URL:-}" ]]; then
+          args+=(--build-arg "NIX_CACHE_URL=${NIX_CACHE_URL}")
+          args+=(--build-arg "NIX_CACHE_PUBLIC_KEY=${NIX_CACHE_PUBLIC_KEY}")
+        fi
+
         # Only add --cache-to when pushing to the default branch.
         if [[ ${{ github.event_name }} == "push" && ${{ github.ref_name }} == ${{ github.event.repository.default_branch }} ]]; then
           args+=(--cache-to "type=gha,mode=max,ignore-error=true,${cache_options}")
