@@ -19,6 +19,7 @@ BUILD_DIR = Path("/home/build")
 DEPENDS_DIR = Path("/home/depends")
 INSTALL_DIR = Path("/home/install")
 QA_ASSETS_DIR = Path("/home/qa-assets")
+TEST_HOME_DIR = Path("/home/test_home")
 TEST_RUNNER_DIR = Path("/home/test_runner")
 CCACHE_WRAPPER_DIR = Path("/home/ccache-wrappers")
 
@@ -231,7 +232,8 @@ def prepare_tests():
         env=env,
     )
 
-    datadir = Path.home() / ".bitcoin"
+    TEST_HOME_DIR.mkdir(parents=True, exist_ok=True)
+    datadir = TEST_HOME_DIR / ".bitcoin"
     if datadir.exists():
         sys.exit(f"Default datadir path already exists: {datadir}")
     datadir.write_text("")
@@ -245,6 +247,7 @@ def prepare_tests():
 def run_unit_tests():
     env = os.environ.copy()
     env["DIR_UNIT_TEST_DATA"] = str(QA_ASSETS_DIR / "unit_test_data")
+    env["HOME"] = str(TEST_HOME_DIR)
     env["LD_LIBRARY_PATH"] = str(depends_lib_dir())
     env["CTEST_OUTPUT_ON_FAILURE"] = "ON"
     if bsd() == "netbsd":
@@ -267,6 +270,7 @@ def run_unit_tests():
 def run_functional_tests():
     set_openbsd_limit(resource.RLIMIT_NOFILE, 1024)
     env = os.environ.copy()
+    env["HOME"] = str(TEST_HOME_DIR)
     env["LD_LIBRARY_PATH"] = str(depends_lib_dir())
     common_args = [
         "--tmpdirprefix",
