@@ -21,15 +21,50 @@ env:
   TEST_RUNNER_TIMEOUT_FACTOR: 8
 
 jobs:
-  openbsd:
-    name: 'OpenBSD, depends'
+  bsd:
+    name: '${{ matrix.name }}, depends'
     runs-on: ubuntu-latest
     if: ${{ vars.SKIP_BRANCH_PUSH != 'true' || github.event_name == 'pull_request' }}
     timeout-minutes: 360
 
     defaults:
       run:
-        shell: openbsd {0}
+        shell: bsd {0}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: OpenBSD
+            bsd: openbsd
+            env_file: ./ci/test/00_setup_env_openbsd_cross.sh
+            version_env: OPENBSD_VERSION
+            python: python3
+            mem: 6144
+            prepare: >-
+              pkg_add -U -v bash bison cmake-core curl gmake gtar-- ninja
+              python%3 py3-pip py3-zmq
+          - name: FreeBSD
+            bsd: freebsd
+            env_file: ./ci/test/00_setup_env_freebsd_cross.sh
+            version_env: FREEBSD_VERSION
+            python: python3
+            mem: 6144
+            prepare: |
+              pkg update
+              pkg install -y bash bison cmake-core curl gmake ninja pkgconf \
+                python3 devel/py-pip databases/py-sqlite3 net/py-pyzmq \
+                sysutils/lsof x11-fonts/fontconfig
+          - name: NetBSD
+            bsd: netbsd
+            env_file: ./ci/test/00_setup_env_netbsd_cross.sh
+            version_env: NETBSD_VERSION
+            python: python3.13
+            mem: 12288
+            prepare: |
+              echo "CHECK_OSABI=no" >> /etc/pkg_install.conf
+              pkg_add -u bash cmake curl gcc15 gmake lsof ninja-build perl \
+                pkgconf py313-pip py313-zmq python313
 
     steps:
       - name: Annotate with pull request number
@@ -43,48 +78,56 @@ jobs:
           # Ensure the latest merged pull request state is used, even on re-runs.
           ref: ${{ github.event_name == 'pull_request' && github.ref || '' }}
 
-      - name: Determine OpenBSD release
+      - name: Determine BSD release
+        env:
+          BSD_ENV_FILE: ${{ matrix.env_file }}
+          BSD_VERSION_ENV: ${{ matrix.version_env }}
         shell: bash
         run: |
-          source ./ci/test/00_setup_env_openbsd_cross.sh
-          echo "OPENBSD_VERSION=${OPENBSD_VERSION}" >> "$GITHUB_ENV"
+          # shellcheck disable=SC1090
+          source "$BSD_ENV_FILE"
+          echo "BSD_VERSION=${!BSD_VERSION_ENV}" >> "$GITHUB_ENV"
 
       - name: Start OpenBSD VM
+        if: matrix.bsd == 'openbsd'
         uses: vmactions/openbsd-vm@v1
-        with:
-          release: ${{ env.OPENBSD_VERSION }}
-          prepare: pkg_add -U -v bash bison cmake-core curl gmake gtar-- ninja python%3 py3-pip py3-zmq
+        with: &BSD_VM
+          release: ${{ env.BSD_VERSION }}
+          mem: ${{ matrix.mem }}
+          prepare: ${{ matrix.prepare }}
           sync: rsync
           copyback: false
           disable-cache: true
-          envs: 'CI_FAILFAST_TEST_LEAVE_DANGLING LC_ALL OPENBSD_VERSION TEST_RUNNER_TIMEOUT_FACTOR'
+          custom-shell-name: bsd
+          envs: 'BSD_VERSION CI_FAILFAST_TEST_LEAVE_DANGLING LC_ALL TEST_RUNNER_TIMEOUT_FACTOR'
+
+      - name: Start FreeBSD VM
+        if: matrix.bsd == 'freebsd'
+        uses: vmactions/freebsd-vm@v1
+        with: *BSD_VM
+
+      - name: Start NetBSD VM
+        if: matrix.bsd == 'netbsd'
+        uses: vmactions/netbsd-vm@v1
+        with: *BSD_VM
 
       - name: Build depends
-        run: |
-          set -e
-          ulimit -d 3000000
-          python3 .github/ci-openbsd.py build_depends
+        run: ${{ matrix.python }} .github/ci-bsd.py build_depends
 
       - name: Configure Bitcoin Core
-        run: python3 .github/ci-openbsd.py configure
+        run: ${{ matrix.python }} .github/ci-bsd.py configure
 
       - name: Build Bitcoin Core
-        run: |
-          set -e
-          ulimit -d 3000000
-          python3 .github/ci-openbsd.py build
+        run: ${{ matrix.python }} .github/ci-bsd.py build
 
       - name: Check bitcoind
-        run: python3 .github/ci-openbsd.py check_bitcoind
+        run: ${{ matrix.python }} .github/ci-bsd.py check_bitcoind
 
       - name: Prepare test dependencies
-        run: python3 .github/ci-openbsd.py prepare_tests
+        run: ${{ matrix.python }} .github/ci-bsd.py prepare_tests
 
       - name: Run unit tests
-        run: python3 .github/ci-openbsd.py run_unit_tests
+        run: ${{ matrix.python }} .github/ci-bsd.py run_unit_tests
 
       - name: Run functional tests
-        run: |
-          set -e
-          ulimit -n 1024
-          python3 .github/ci-openbsd.py run_functional_tests
+        run: ${{ matrix.python }} .github/ci-bsd.py run_functional_tests

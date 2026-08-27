@@ -5,6 +5,7 @@
 
 import argparse
 import os
+import resource
 import shlex
 import subprocess
 import sys
@@ -30,11 +31,18 @@ def run(cmd, **kwargs):
 
 
 def jobs():
-    return str(os.process_cpu_count() or 1)
+    return str(os.cpu_count() or 1)
 
 
 def timeout_factor():
     return int(os.environ.get("TEST_RUNNER_TIMEOUT_FACTOR", "8"))
+
+
+def bsd():
+    for name in ("freebsd", "netbsd", "openbsd"):
+        if sys.platform.startswith(name):
+            return name
+    sys.exit(f"Unsupported platform: {sys.platform}")
 
 
 def host():
@@ -44,9 +52,12 @@ def host():
     result = run(
         ["./depends/config.sub", guess], capture_output=True, text=True
     ).stdout.strip()
-    expected = f"x86_64-unknown-openbsd{os.environ.get('OPENBSD_VERSION', '7.9')}"
+    version = os.environ.get("BSD_VERSION")
+    if not version:
+        sys.exit("BSD_VERSION is not set")
+    expected = f"x86_64-unknown-{bsd()}{version}"
     if result != expected:
-        sys.exit(f"Unexpected OpenBSD depends HOST: expected {expected}, got {result}")
+        sys.exit(f"Unexpected BSD depends HOST: expected {expected}, got {result}")
     return result
 
 
@@ -54,7 +65,30 @@ def depends_lib_dir():
     return Path.cwd() / "depends" / host() / "lib"
 
 
+def set_openbsd_limit(resource_type, soft_limit):
+    if bsd() != "openbsd":
+        return
+    _, hard_limit = resource.getrlimit(resource_type)
+    resource.setrlimit(resource_type, (soft_limit, hard_limit))
+
+
 def build_depends():
+    set_openbsd_limit(resource.RLIMIT_DATA, 3_000_000 * 1024)
+    options = []
+    if bsd() in ("netbsd", "openbsd"):
+        options.append("NO_QT=1")
+    if bsd() in ("freebsd", "openbsd"):
+        options.extend(["build_CC=clang", "build_CXX=clang++"])
+    elif bsd() == "netbsd":
+        gcc = "/usr/pkg/gcc15/bin"
+        options.extend(
+            [
+                f"build_CC={gcc}/gcc",
+                f"build_CXX={gcc}/g++",
+                f"CC={gcc}/gcc",
+                f"CXX={gcc}/g++",
+            ]
+        )
     run(
         [
             "gmake",
@@ -63,15 +97,18 @@ def build_depends():
             "-j",
             jobs(),
             f"HOST={host()}",
-            "NO_QT=1",
-            "build_CC=clang",
-            "build_CXX=clang++",
             "LOG=1",
+            *options,
         ]
     )
 
 
 def configure():
+    options = []
+    if bsd() == "freebsd":
+        options.append("-DCMAKE_LINKER_TYPE=LLD")
+    else:
+        options.append("-DBUILD_GUI=OFF")
     run(
         [
             "cmake",
@@ -82,16 +119,17 @@ def configure():
             str(BUILD_DIR),
             "--toolchain",
             str(Path.cwd() / "depends" / host() / "toolchain.cmake"),
-            "-DBUILD_GUI=OFF",
             "-DCMAKE_COMPILE_WARNING_AS_ERROR=ON",
             f"-DCMAKE_INSTALL_PREFIX={INSTALL_DIR}",
             "-DREDUCE_EXPORTS=ON",
             "-DWITH_USDT=OFF",
+            *options,
         ]
     )
 
 
 def build():
+    set_openbsd_limit(resource.RLIMIT_DATA, 3_000_000 * 1024)
     run(
         [
             "cmake",
@@ -116,15 +154,20 @@ def check_bitcoind():
 
 def prepare_tests():
     env = os.environ.copy()
-    env["LDCXXSHARED"] = "c++ -pthread -shared -fPIC"
+    pip_options = []
+    if bsd() == "openbsd":
+        env["LDCXXSHARED"] = "c++ -pthread -shared -fPIC"
+        pip_options = ["--break-system-packages", "-C", "force-bundled-libcapnp=True"]
+    elif bsd() == "netbsd":
+        env["CXXFLAGS"] = "-DKJ_NO_EXCEPTIONS=0"
     run(
         [
-            "pip3",
+            sys.executable,
+            "-m",
+            "pip",
             "install",
-            "--break-system-packages",
             "pycapnp",
-            "-C",
-            "force-bundled-libcapnp=True",
+            *pip_options,
         ],
         env=env,
     )
@@ -145,6 +188,8 @@ def run_unit_tests():
     env["DIR_UNIT_TEST_DATA"] = str(QA_ASSETS_DIR / "unit_test_data")
     env["LD_LIBRARY_PATH"] = str(depends_lib_dir())
     env["CTEST_OUTPUT_ON_FAILURE"] = "ON"
+    if bsd() == "netbsd":
+        env["TMPDIR"] = str(TEST_RUNNER_DIR)
     run(
         [
             "ctest",
@@ -161,6 +206,7 @@ def run_unit_tests():
 
 
 def run_functional_tests():
+    set_openbsd_limit(resource.RLIMIT_NOFILE, 1024)
     env = os.environ.copy()
     env["LD_LIBRARY_PATH"] = str(depends_lib_dir())
     common_args = [
@@ -172,25 +218,37 @@ def run_functional_tests():
         "--failfast",
     ]
     runner = BUILD_DIR / "test" / "functional" / "test_runner.py"
+    # FreeBSD's lsof-based tests can fail when run concurrently. NetBSD's
+    # p2p_invalid_messages can exhaust memory. interface_rest can hang on
+    # OpenBSD, so give its separate run twice the usual timeout.
+    separate_tests = {
+        "freebsd": (["feature_bind_extra", "rpc_bind"], "1", 1),
+        "netbsd": (["p2p_invalid_messages"], None, 1),
+        "openbsd": (["interface_rest"], None, 2),
+    }
+    test_names, separate_jobs, timeout_multiplier = separate_tests[bsd()]
+    # Reindex is currently broken across BSD; see bitcoin/bitcoin#33128.
+    excludes = ["feature_reindex_init", *test_names]
     run(
         [
+            sys.executable,
             str(runner),
             "-j",
             jobs(),
             f"--timeout-factor={timeout_factor()}",
-            "--exclude",
-            "feature_reindex_init",
-            "--exclude",
-            "interface_rest",
+            *[arg for test in excludes for arg in ("--exclude", test)],
             *common_args,
         ],
         env=env,
     )
+    separate_jobs_args = ["-j", separate_jobs] if separate_jobs else []
     run(
         [
+            sys.executable,
             str(runner),
-            "interface_rest",
-            f"--timeout-factor={timeout_factor() * 2}",
+            *test_names,
+            *separate_jobs_args,
+            f"--timeout-factor={timeout_factor() * timeout_multiplier}",
             *common_args,
         ],
         env=env,
@@ -198,7 +256,7 @@ def run_functional_tests():
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Utility to run OpenBSD CI steps.")
+    parser = argparse.ArgumentParser(description="Utility to run BSD CI steps.")
     steps = {
         "build_depends": build_depends,
         "configure": configure,
