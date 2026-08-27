@@ -16,9 +16,11 @@ from download_utils import download_script_assets
 
 
 BUILD_DIR = Path("/home/build")
+DEPENDS_DIR = Path("/home/depends")
 INSTALL_DIR = Path("/home/install")
 QA_ASSETS_DIR = Path("/home/qa-assets")
 TEST_RUNNER_DIR = Path("/home/test_runner")
+CCACHE_WRAPPER_DIR = Path("/home/ccache-wrappers")
 
 
 def run(cmd, **kwargs):
@@ -62,7 +64,48 @@ def host():
 
 
 def depends_lib_dir():
-    return Path.cwd() / "depends" / host() / "lib"
+    return DEPENDS_DIR / host() / "lib"
+
+
+def cache_path(name):
+    value = os.environ.get(name)
+    if not value:
+        sys.exit(f"{name} is not set")
+    return value
+
+
+def ccache():
+    if bsd() == "netbsd":
+        return Path("/usr/pkg/bin/ccache")
+    return Path("/usr/local/bin/ccache")
+
+
+def prepare_ccache_dirs():
+    Path(cache_path("CCACHE_DIR")).mkdir(parents=True, exist_ok=True)
+    Path(cache_path("CCACHE_TEMPDIR")).mkdir(parents=True, exist_ok=True)
+
+
+def ccache_env():
+    prepare_ccache_dirs()
+    compilers = ("gcc", "g++") if bsd() == "netbsd" else ("clang", "clang++")
+    CCACHE_WRAPPER_DIR.mkdir(parents=True, exist_ok=True)
+    for compiler in compilers:
+        wrapper = CCACHE_WRAPPER_DIR / compiler
+        wrapper.unlink(missing_ok=True)
+        wrapper.symlink_to(ccache())
+
+    compiler_dir = Path("/usr/pkg/gcc15/bin") if bsd() == "netbsd" else Path("/usr/bin")
+    env = os.environ.copy()
+    env["CCACHE_PATH"] = str(compiler_dir)
+    env["PATH"] = os.pathsep.join(
+        [str(CCACHE_WRAPPER_DIR), str(compiler_dir), env["PATH"]]
+    )
+    return env
+
+
+def reset_ccache_stats():
+    prepare_ccache_dirs()
+    run([str(ccache()), "--zero-stats"])
 
 
 def set_openbsd_limit(resource_type, soft_limit):
@@ -74,19 +117,20 @@ def set_openbsd_limit(resource_type, soft_limit):
 
 def build_depends():
     set_openbsd_limit(resource.RLIMIT_DATA, 3_000_000 * 1024)
+    reset_ccache_stats()
+    depends_host = host()
     options = []
     if bsd() in ("netbsd", "openbsd"):
         options.append("NO_QT=1")
     if bsd() in ("freebsd", "openbsd"):
         options.extend(["build_CC=clang", "build_CXX=clang++"])
     elif bsd() == "netbsd":
-        gcc = "/usr/pkg/gcc15/bin"
         options.extend(
             [
-                f"build_CC={gcc}/gcc",
-                f"build_CXX={gcc}/g++",
-                f"CC={gcc}/gcc",
-                f"CXX={gcc}/g++",
+                "build_CC=gcc",
+                "build_CXX=g++",
+                "CC=gcc",
+                "CXX=g++",
             ]
         )
     run(
@@ -96,17 +140,28 @@ def build_depends():
             "depends",
             "-j",
             jobs(),
-            f"HOST={host()}",
+            f"HOST={depends_host}",
+            f"BASE_CACHE={cache_path('BASE_CACHE')}",
             "LOG=1",
+            f"SOURCES_PATH={cache_path('SOURCES_PATH')}",
+            f"WORK_PATH={DEPENDS_DIR / 'work'}",
+            f"x86_64_{bsd()}_prefix={DEPENDS_DIR / depends_host}",
             *options,
-        ]
+        ],
+        env=ccache_env(),
     )
 
 
 def configure():
+    prepare_ccache_dirs()
     options = []
+    env = None
     if bsd() == "freebsd":
         options.append("-DCMAKE_LINKER_TYPE=LLD")
+    elif bsd() == "netbsd":
+        env = os.environ.copy()
+        env["PATH"] = os.pathsep.join(["/usr/pkg/gcc15/bin", env["PATH"]])
+        options.append("-DBUILD_GUI=OFF")
     else:
         options.append("-DBUILD_GUI=OFF")
     run(
@@ -118,13 +173,16 @@ def configure():
             "-B",
             str(BUILD_DIR),
             "--toolchain",
-            str(Path.cwd() / "depends" / host() / "toolchain.cmake"),
+            str(DEPENDS_DIR / host() / "toolchain.cmake"),
+            f"-DCCACHE_EXECUTABLE={ccache()}",
             "-DCMAKE_COMPILE_WARNING_AS_ERROR=ON",
             f"-DCMAKE_INSTALL_PREFIX={INSTALL_DIR}",
             "-DREDUCE_EXPORTS=ON",
+            "-DWITH_CCACHE=ON",
             "-DWITH_USDT=OFF",
             *options,
-        ]
+        ],
+        env=env,
     )
 
 
@@ -142,6 +200,7 @@ def build():
             "install",
         ]
     )
+    run([str(ccache()), "--show-stats", "--verbose"])
 
 
 def check_bitcoind():

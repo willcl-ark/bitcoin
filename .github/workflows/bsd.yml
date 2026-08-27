@@ -16,6 +16,10 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  CCACHE_COMPILERCHECK: content
+  CCACHE_COMPRESS: 1
+  CCACHE_MAXSIZE: 2G
+  CCACHE_TEMPDIR: /home/ccache-temp
   CI_FAILFAST_TEST_LEAVE_DANGLING: 1
   LC_ALL: C.UTF-8
   TEST_RUNNER_TIMEOUT_FACTOR: 8
@@ -42,7 +46,7 @@ jobs:
             python: python3
             mem: 6144
             prepare: >-
-              pkg_add -U -v bash bison cmake-core curl gmake gtar-- ninja
+              pkg_add -U -v bash bison ccache cmake-core curl gmake gtar-- ninja
               python%3 py3-pip py3-zmq
           - name: FreeBSD
             bsd: freebsd
@@ -52,9 +56,9 @@ jobs:
             mem: 6144
             prepare: |
               pkg update
-              pkg install -y bash bison cmake-core curl gmake ninja pkgconf \
-                python3 devel/py-pip databases/py-sqlite3 net/py-pyzmq \
-                sysutils/lsof x11-fonts/fontconfig
+              pkg install -y bash bison ccache cmake-core curl gmake ninja \
+                pkgconf python3 devel/py-pip databases/py-sqlite3 \
+                net/py-pyzmq sysutils/lsof x11-fonts/fontconfig
           - name: NetBSD
             bsd: netbsd
             env_file: ./ci/test/00_setup_env_netbsd_cross.sh
@@ -63,8 +67,8 @@ jobs:
             mem: 12288
             prepare: |
               echo "CHECK_OSABI=no" >> /etc/pkg_install.conf
-              pkg_add -u bash cmake curl gcc15 gmake lsof ninja-build perl \
-                pkgconf py313-pip py313-zmq python313
+              pkg_add -u bash ccache cmake curl gcc15 gmake lsof ninja-build \
+                perl pkgconf py313-pip py313-zmq python313
 
     steps:
       - name: Annotate with pull request number
@@ -88,6 +92,48 @@ jobs:
           source "$BSD_ENV_FILE"
           echo "BSD_VERSION=${!BSD_VERSION_ENV}" >> "$GITHUB_ENV"
 
+      - name: Configure cache environment
+        env:
+          BSD_ENV_FILE: ${{ matrix.env_file }}
+        shell: bash
+        run: |
+          cache_root="${GITHUB_WORKSPACE}/.ci-cache"
+          {
+            echo "BASE_CACHE=${cache_root}/depends/built"
+            echo "CCACHE_BASEDIR=${GITHUB_WORKSPACE}"
+            echo "CCACHE_DIR=${cache_root}/ccache"
+            echo "CACHE_ID=ci_${{ matrix.bsd }}_native_${BSD_VERSION}"
+            echo "DEPENDS_HASH=$(git ls-tree HEAD depends "$BSD_ENV_FILE" .github/ci-bsd.py | sha256sum | cut -d' ' -f1)"
+            echo "SOURCES_PATH=${cache_root}/depends/sources"
+          } >> "$GITHUB_ENV"
+
+      - name: Restore ccache cache
+        id: ccache-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ env.CACHE_ID }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-${{ env.CACHE_ID }}-
+
+      - name: Restore depends sources cache
+        id: depends-sources-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ env.SOURCES_PATH }}
+          key: depends-sources-${{ env.CACHE_ID }}-${{ env.DEPENDS_HASH }}
+          restore-keys: |
+            depends-sources-${{ env.CACHE_ID }}-
+
+      - name: Restore built depends cache
+        id: depends-built-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ env.BASE_CACHE }}
+          key: depends-built-${{ env.CACHE_ID }}-${{ env.DEPENDS_HASH }}
+          restore-keys: |
+            depends-built-${{ env.CACHE_ID }}-
+
       - name: Start OpenBSD VM
         if: matrix.bsd == 'openbsd'
         uses: vmactions/openbsd-vm@v1
@@ -96,10 +142,10 @@ jobs:
           mem: ${{ matrix.mem }}
           prepare: ${{ matrix.prepare }}
           sync: rsync
-          copyback: false
+          copyback: true
           disable-cache: true
           custom-shell-name: bsd
-          envs: 'BSD_VERSION CI_FAILFAST_TEST_LEAVE_DANGLING LC_ALL TEST_RUNNER_TIMEOUT_FACTOR'
+          envs: 'BASE_CACHE BSD_VERSION CCACHE_BASEDIR CCACHE_COMPILERCHECK CCACHE_COMPRESS CCACHE_DIR CCACHE_MAXSIZE CCACHE_TEMPDIR CI_FAILFAST_TEST_LEAVE_DANGLING LC_ALL SOURCES_PATH TEST_RUNNER_TIMEOUT_FACTOR'
 
       - name: Start FreeBSD VM
         if: matrix.bsd == 'freebsd'
@@ -131,3 +177,24 @@ jobs:
 
       - name: Run functional tests
         run: ${{ matrix.python }} .github/ci-bsd.py run_functional_tests
+
+      - name: Save ccache cache
+        if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch && steps.ccache-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ steps.ccache-cache.outputs.cache-primary-key }}
+
+      - name: Save depends sources cache
+        if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch && steps.depends-sources-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ env.SOURCES_PATH }}
+          key: ${{ steps.depends-sources-cache.outputs.cache-primary-key }}
+
+      - name: Save built depends cache
+        if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch && steps.depends-built-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ env.BASE_CACHE }}
+          key: ${{ steps.depends-built-cache.outputs.cache-primary-key }}
