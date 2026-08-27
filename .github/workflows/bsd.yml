@@ -1,0 +1,90 @@
+# Copyright (c) 2026-present The Bitcoin Core developers
+# Distributed under the MIT software license, see the accompanying
+# file COPYING or https://opensource.org/license/mit.
+
+name: BSD CI
+on:
+  pull_request:
+  push:
+    branches:
+      - '**'
+    tags-ignore:
+      - '**'
+
+concurrency:
+  group: ${{ github.event_name != 'pull_request' && github.run_id || github.ref }}-bsd
+  cancel-in-progress: true
+
+env:
+  CI_FAILFAST_TEST_LEAVE_DANGLING: 1
+  LC_ALL: C.UTF-8
+  TEST_RUNNER_TIMEOUT_FACTOR: 8
+
+jobs:
+  openbsd:
+    name: 'OpenBSD, depends'
+    runs-on: ubuntu-latest
+    if: ${{ vars.SKIP_BRANCH_PUSH != 'true' || github.event_name == 'pull_request' }}
+    timeout-minutes: 360
+
+    defaults:
+      run:
+        shell: openbsd {0}
+
+    steps:
+      - name: Annotate with pull request number
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: echo "::notice title=debug_pull_request_number_str::${{ github.event.number }}"
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          # Ensure the latest merged pull request state is used, even on re-runs.
+          ref: ${{ github.event_name == 'pull_request' && github.ref || '' }}
+
+      - name: Determine OpenBSD release
+        shell: bash
+        run: |
+          source ./ci/test/00_setup_env_openbsd_cross.sh
+          echo "OPENBSD_VERSION=${OPENBSD_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Start OpenBSD VM
+        uses: vmactions/openbsd-vm@v1
+        with:
+          release: ${{ env.OPENBSD_VERSION }}
+          prepare: pkg_add -U -v bash bison cmake-core curl gmake gtar-- ninja python%3 py3-pip py3-zmq
+          sync: rsync
+          copyback: false
+          disable-cache: true
+          envs: 'CI_FAILFAST_TEST_LEAVE_DANGLING LC_ALL OPENBSD_VERSION TEST_RUNNER_TIMEOUT_FACTOR'
+
+      - name: Build depends
+        run: |
+          set -e
+          ulimit -d 3000000
+          python3 .github/ci-openbsd.py build_depends
+
+      - name: Configure Bitcoin Core
+        run: python3 .github/ci-openbsd.py configure
+
+      - name: Build Bitcoin Core
+        run: |
+          set -e
+          ulimit -d 3000000
+          python3 .github/ci-openbsd.py build
+
+      - name: Check bitcoind
+        run: python3 .github/ci-openbsd.py check_bitcoind
+
+      - name: Prepare test dependencies
+        run: python3 .github/ci-openbsd.py prepare_tests
+
+      - name: Run unit tests
+        run: python3 .github/ci-openbsd.py run_unit_tests
+
+      - name: Run functional tests
+        run: |
+          set -e
+          ulimit -n 1024
+          python3 .github/ci-openbsd.py run_functional_tests
