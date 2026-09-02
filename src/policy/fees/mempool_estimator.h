@@ -21,6 +21,8 @@
 #include <span>
 #include <vector>
 
+struct MempoolTransactionsRemovedForBlockInfo;
+
 class CBlock;
 class AutoFile;
 class ChainstateManager;
@@ -118,9 +120,8 @@ public:
         return m_prev_mined_blocks;
     }
 
-    void MempoolTxsRemovedForBlock(const std::shared_ptr<const CBlock>& block,
-                                   const std::vector<RemovedMempoolTransactionInfo>& txs_removed_for_block,
-                                   unsigned int block_height)
+    void MempoolTxsRemovedForBlock(const MempoolTransactionsRemovedForBlockInfo& block_info,
+                                   const std::vector<RemovedMempoolTransactionInfo>& txs_removed_for_block)
         EXCLUSIVE_LOCKS_REQUIRED(!cs);
     //! Health of the recent mined-block window for fee rate estimation.
     enum class MempoolHealth {

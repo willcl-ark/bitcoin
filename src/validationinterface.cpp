@@ -230,16 +230,14 @@ void ValidationSignals::BlockConnected(const ChainstateRole& role, std::shared_p
     ENQUEUE_AND_LOG_EVENT(std::move(event), std::move(log_msg));
 }
 
-void ValidationSignals::MempoolTransactionsRemovedForBlock(std::shared_ptr<const CBlock> block, std::vector<RemovedMempoolTransactionInfo> txs_removed_for_block, unsigned int block_height)
+void ValidationSignals::MempoolTransactionsRemovedForBlock(MempoolTransactionsRemovedForBlockInfo block_info, std::vector<RemovedMempoolTransactionInfo> txs_removed_for_block)
 {
-    Assume(block);
-    auto log_msg = LOG_MSG("%s: block hash=%s block height=%s txs removed=%s block txs=%s", __func__,
-                           block->GetHash().ToString(),
-                           block_height,
-                           txs_removed_for_block.size(),
-                           block->vtx.size());
-    auto event = [block = std::move(block), txs_removed_for_block = std::move(txs_removed_for_block), block_height, this] {
-        m_internals->Iterate([&](CValidationInterface& callbacks) { callbacks.MempoolTransactionsRemovedForBlock(block, txs_removed_for_block, block_height); });
+    auto log_msg = LOG_MSG("%s: block hash=%s block height=%s txs removed=%s", __func__,
+                           block_info.block_hash.ToString(),
+                           block_info.block_height,
+                           txs_removed_for_block.size());
+    auto event = [block_info, txs_removed_for_block = std::move(txs_removed_for_block), this] {
+        m_internals->Iterate([&](CValidationInterface& callbacks) { callbacks.MempoolTransactionsRemovedForBlock(block_info, txs_removed_for_block); });
     };
     ENQUEUE_AND_LOG_EVENT(std::move(event), std::move(log_msg));
 }

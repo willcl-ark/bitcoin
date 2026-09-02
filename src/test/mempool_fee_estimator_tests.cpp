@@ -58,7 +58,11 @@ void AddRemovedBlock(MemPoolFeeRateEstimator& fee_est,
             removed_txs_weight -= tx_weight;
         }
     }
-    fee_est.MempoolTxsRemovedForBlock(block, removed_txs, height);
+    const uint64_t block_weight{std::accumulate(std::next(block->vtx.begin()), block->vtx.end(), uint64_t{0},
+                                                [](uint64_t weight, const CTransactionRef& tx) {
+                                                    return weight + GetTransactionWeight(*tx);
+                                                })};
+    fee_est.MempoolTxsRemovedForBlock({block->GetHash(), block_weight, height}, removed_txs);
     height += 1;
 }
 

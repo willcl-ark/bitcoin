@@ -3087,7 +3087,13 @@ bool Chainstate::ConnectTip(
     m_chainman.UpdateIBDStatus();
     // Not fired while IBD is active. removeForBlock() above still runs.
     if (m_mempool && m_chainman.m_options.signals && !m_chainman.IsInitialBlockDownload()) {
-        m_chainman.m_options.signals->MempoolTransactionsRemovedForBlock(block_to_connect, std::move(txs_removed_for_block), pindexNew->nHeight);
+        Assume(!block_to_connect->vtx.empty());
+        const uint64_t block_weight{std::accumulate(std::next(block_to_connect->vtx.begin()), block_to_connect->vtx.end(), uint64_t{0},
+                                                    [](uint64_t weight, const CTransactionRef& tx) {
+                                                        return weight + GetTransactionWeight(*tx);
+                                                    })};
+        m_chainman.m_options.signals->MempoolTransactionsRemovedForBlock({
+            block_to_connect->GetHash(), block_weight, static_cast<unsigned int>(pindexNew->nHeight)}, std::move(txs_removed_for_block));
     }
     UpdateTip(pindexNew);
 

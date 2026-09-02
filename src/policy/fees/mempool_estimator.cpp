@@ -4,6 +4,8 @@
 
 #include <policy/fees/mempool_estimator.h>
 
+#include <validationinterface.h>
+
 #include <logging.h>
 #include <node/miner.h>
 #include <policy/feerate.h>
@@ -293,28 +295,21 @@ void MemPoolFeeRateEstimator::FlushMinedBlockStats()
 }
 
 
-void MemPoolFeeRateEstimator::MempoolTxsRemovedForBlock(const std::shared_ptr<const CBlock>& block,
-                                                        const std::vector<RemovedMempoolTransactionInfo>& txs_removed_for_block,
-                                                        unsigned int block_height)
+void MemPoolFeeRateEstimator::MempoolTxsRemovedForBlock(const MempoolTransactionsRemovedForBlockInfo& block_info,
+                                                        const std::vector<RemovedMempoolTransactionInfo>& txs_removed_for_block)
 {
     LOCK(cs);
-    Assert(!block->vtx.empty());
-    // Accumulate total block weight and removed mempool tx weight, both excluding the coinbase.
+    // Accumulate removed mempool tx weight, excluding the coinbase.
     const auto get_tx_weight = [](const CTransactionRef& tx) {
         return static_cast<uint64_t>(GetTransactionWeight(*tx));
     };
-    // Skip vtx[0], which is the coinbase.
-    const uint64_t block_weight = std::accumulate(std::next(block->vtx.begin()), block->vtx.end(), uint64_t{0},
-                                                  [&](uint64_t acc, const CTransactionRef& tx) {
-                                                      return acc + get_tx_weight(tx);
-                                                  });
     const uint64_t removed_weight = std::accumulate(
         txs_removed_for_block.begin(), txs_removed_for_block.end(), uint64_t{0},
         [&](uint64_t acc, const RemovedMempoolTransactionInfo& tx) {
             return acc + get_tx_weight(tx.info.m_tx);
         });
-    AddMinedBlockStats(m_prev_mined_blocks, {block_height, removed_weight, block_weight});
-    m_mined_blocks_tip_hash = block->GetHash();
+    AddMinedBlockStats(m_prev_mined_blocks, {block_info.block_height, removed_weight, block_info.block_txs_weight});
+    m_mined_blocks_tip_hash = block_info.block_hash;
     m_cache.Clear();
 }
 
