@@ -2958,6 +2958,7 @@ private:
 static constexpr int MAX_REORG_BLOCKS_IN_MEMORY{6};
 
 static ValidationSignals::BlockReader DeferredBlockReader(BlockManager& blockman, kernel::Notifications& notifications, const CBlockIndex& index, std::shared_ptr<ReorgPruneLock> prune_lock)
+    EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
 {
     AssertLockHeld(cs_main);
     const FlatFilePos position{index.GetBlockPos()};
