@@ -230,6 +230,19 @@ void ValidationSignals::BlockConnected(const ChainstateRole& role, std::shared_p
     ENQUEUE_AND_LOG_EVENT(std::move(event), std::move(log_msg));
 }
 
+void ValidationSignals::BlockConnected(const ChainstateRole& role, BlockReader read_block, const CBlockIndex* pindex)
+{
+    auto log_msg = LOG_MSG("%s: block hash=%s block height=%d", __func__,
+                           pindex->GetBlockHash().ToString(),
+                           pindex->nHeight);
+    auto event = [role, read_block = std::move(read_block), pindex, this] {
+        if (auto block{read_block()}) {
+            m_internals->Iterate([&](CValidationInterface& callbacks) { callbacks.BlockConnected(role, block, pindex); });
+        }
+    };
+    ENQUEUE_AND_LOG_EVENT(std::move(event), std::move(log_msg));
+}
+
 void ValidationSignals::MempoolTransactionsRemovedForBlock(MempoolTransactionsRemovedForBlockInfo block_info, std::vector<RemovedMempoolTransactionInfo> txs_removed_for_block)
 {
     auto log_msg = LOG_MSG("%s: block hash=%s block height=%s txs removed=%s", __func__,
@@ -249,6 +262,19 @@ void ValidationSignals::BlockDisconnected(std::shared_ptr<const CBlock> pblock, 
                           pindex->nHeight);
     auto event = [pblock = std::move(pblock), pindex, this] {
         m_internals->Iterate([&](CValidationInterface& callbacks) { callbacks.BlockDisconnected(pblock, pindex); });
+    };
+    ENQUEUE_AND_LOG_EVENT(std::move(event), std::move(log_msg));
+}
+
+void ValidationSignals::BlockDisconnected(BlockReader read_block, const CBlockIndex* pindex)
+{
+    auto log_msg = LOG_MSG("%s: block hash=%s block height=%d", __func__,
+                           pindex->GetBlockHash().ToString(),
+                           pindex->nHeight);
+    auto event = [read_block = std::move(read_block), pindex, this] {
+        if (auto block{read_block()}) {
+            m_internals->Iterate([&](CValidationInterface& callbacks) { callbacks.BlockDisconnected(block, pindex); });
+        }
     };
     ENQUEUE_AND_LOG_EVENT(std::move(event), std::move(log_msg));
 }

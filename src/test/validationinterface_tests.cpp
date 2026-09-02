@@ -3,7 +3,9 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <boost/test/unit_test.hpp>
+#include <chain.h>
 #include <consensus/validation.h>
+#include <kernel/types.h>
 #include <primitives/block.h>
 #include <scheduler.h>
 #include <test/util/setup_common.h>
@@ -11,6 +13,7 @@
 #include <validationinterface.h>
 
 #include <atomic>
+#include <future>
 #include <memory>
 
 BOOST_FIXTURE_TEST_SUITE(validationinterface_tests, ChainTestingSetup)
@@ -46,6 +49,63 @@ BOOST_AUTO_TEST_CASE(unregister_validation_interface_race)
     gen.join();
     sub.join();
     BOOST_CHECK(!generate);
+}
+
+struct BlockSubscriber final : public CValidationInterface {
+    std::shared_ptr<const CBlock> m_connected_block;
+    std::shared_ptr<const CBlock> m_disconnected_block;
+
+    void BlockConnected(const kernel::ChainstateRole&, const std::shared_ptr<const CBlock>& block, const CBlockIndex*) override
+    {
+        m_connected_block = block;
+    }
+
+    void BlockDisconnected(const std::shared_ptr<const CBlock>& block, const CBlockIndex*) override
+    {
+        m_disconnected_block = block;
+    }
+};
+
+BOOST_AUTO_TEST_CASE(deferred_block_read)
+{
+    std::promise<void> queue_blocked;
+    std::promise<void> release_queue;
+    auto release_future{release_queue.get_future().share()};
+    m_node.validation_signals->CallFunctionInValidationInterfaceQueue([&] {
+        queue_blocked.set_value();
+        release_future.wait();
+    });
+    queue_blocked.get_future().wait();
+
+    const uint256 block_hash{1};
+    CBlockIndex index;
+    index.phashBlock = &block_hash;
+    index.nHeight = 1;
+    auto expected_block{std::make_shared<CBlock>()};
+    std::atomic<bool> connected_reader_called{false};
+    std::atomic<bool> disconnected_reader_called{false};
+    auto subscriber{std::make_shared<BlockSubscriber>()};
+    m_node.validation_signals->RegisterSharedValidationInterface(subscriber);
+    m_node.validation_signals->BlockConnected(kernel::ChainstateRole{}, [&] {
+        connected_reader_called = true;
+        return expected_block;
+    }, &index);
+    m_node.validation_signals->BlockDisconnected([&] {
+        disconnected_reader_called = true;
+        return expected_block;
+    }, &index);
+
+    BOOST_CHECK(!connected_reader_called);
+    BOOST_CHECK(!disconnected_reader_called);
+    BOOST_CHECK(!subscriber->m_connected_block);
+    BOOST_CHECK(!subscriber->m_disconnected_block);
+    release_queue.set_value();
+    m_node.validation_signals->SyncWithValidationInterfaceQueue();
+    BOOST_CHECK(connected_reader_called);
+    BOOST_CHECK(disconnected_reader_called);
+    BOOST_CHECK(subscriber->m_connected_block == expected_block);
+    BOOST_CHECK(subscriber->m_disconnected_block == expected_block);
+    m_node.validation_signals->UnregisterSharedValidationInterface(subscriber);
 }
 
 class TestInterface : public CValidationInterface

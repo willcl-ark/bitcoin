@@ -2933,7 +2933,46 @@ void Chainstate::UpdateTip(const CBlockIndex* pindexNew)
   * disconnectpool (note that the caller is responsible for mempool consistency
   * in any case).
   */
-bool Chainstate::DisconnectTip(BlockValidationState& state, DisconnectedBlockTransactions* disconnectpool)
+class ReorgPruneLock
+{
+public:
+    ReorgPruneLock(BlockManager& blockman, int height_first) : m_blockman{blockman}
+    {
+        AssertLockHeld(cs_main);
+        static uint64_t next_id{0};
+        m_name = strprintf("validation-interface-reorg-%d", ++next_id);
+        m_blockman.UpdatePruneLock(m_name, {height_first});
+    }
+
+    ~ReorgPruneLock()
+    {
+        LOCK(cs_main);
+        Assume(m_blockman.DeletePruneLock(m_name));
+    }
+
+private:
+    BlockManager& m_blockman;
+    std::string m_name;
+};
+
+static constexpr int MAX_REORG_BLOCKS_IN_MEMORY{6};
+
+static ValidationSignals::BlockReader DeferredBlockReader(BlockManager& blockman, kernel::Notifications& notifications, const CBlockIndex& index, std::shared_ptr<ReorgPruneLock> prune_lock)
+{
+    AssertLockHeld(cs_main);
+    const FlatFilePos position{index.GetBlockPos()};
+    const uint256 expected_hash{index.GetBlockHash()};
+    return [&blockman, &notifications, position, expected_hash, prune_lock = std::move(prune_lock)] {
+        auto block{std::make_shared<CBlock>()};
+        if (!blockman.ReadBlock(*block, position, expected_hash)) {
+            notifications.fatalError(_("Failed to read block for validation interface notification."));
+            return std::shared_ptr<const CBlock>{};
+        }
+        return std::shared_ptr<const CBlock>{std::move(block)};
+    };
+}
+
+bool Chainstate::DisconnectTip(BlockValidationState& state, DisconnectedBlockTransactions* disconnectpool, std::shared_ptr<ReorgPruneLock> reorg_prune_lock)
 {
     AssertLockHeld(cs_main);
     if (m_mempool) AssertLockHeld(m_mempool->cs);
@@ -2947,6 +2986,10 @@ bool Chainstate::DisconnectTip(BlockValidationState& state, DisconnectedBlockTra
     if (!m_blockman.ReadBlock(block, *pindexDelete)) {
         LogError("DisconnectTip(): Failed to read block\n");
         return false;
+    }
+    ValidationSignals::BlockReader deferred_block;
+    if (reorg_prune_lock) {
+        deferred_block = DeferredBlockReader(m_blockman, m_chainman.GetNotifications(), *pindexDelete, std::move(reorg_prune_lock));
     }
     // Apply the block atomically to the chain state.
     const auto time_start{SteadyClock::now()};
@@ -2993,7 +3036,11 @@ bool Chainstate::DisconnectTip(BlockValidationState& state, DisconnectedBlockTra
     // Let wallets know transactions went from 1-confirmed to
     // 0-confirmed or conflicted:
     if (m_chainman.m_options.signals) {
-        m_chainman.m_options.signals->BlockDisconnected(std::move(pblock), pindexDelete);
+        if (deferred_block) {
+            m_chainman.m_options.signals->BlockDisconnected(std::move(deferred_block), pindexDelete);
+        } else {
+            m_chainman.m_options.signals->BlockDisconnected(std::move(pblock), pindexDelete);
+        }
     }
     return true;
 }
@@ -3001,6 +3048,7 @@ bool Chainstate::DisconnectTip(BlockValidationState& state, DisconnectedBlockTra
 struct ConnectedBlock {
     const CBlockIndex* pindex;
     std::shared_ptr<const CBlock> pblock;
+    ValidationSignals::BlockReader read_block;
 };
 
 /**
@@ -3014,7 +3062,8 @@ bool Chainstate::ConnectTip(
     CBlockIndex* pindexNew,
     std::shared_ptr<const CBlock> block_to_connect,
     std::vector<ConnectedBlock>& connected_blocks,
-    DisconnectedBlockTransactions& disconnectpool)
+    DisconnectedBlockTransactions& disconnectpool,
+    std::shared_ptr<ReorgPruneLock> reorg_prune_lock)
 {
     AssertLockHeld(cs_main);
     if (m_mempool) AssertLockHeld(m_mempool->cs);
@@ -3121,7 +3170,11 @@ bool Chainstate::ConnectTip(
     Chainstate& current_cs{m_chainman.CurrentChainstate()};
     m_chainman.MaybeValidateSnapshot(*this, current_cs);
 
-    connected_blocks.emplace_back(pindexNew, std::move(block_to_connect));
+    if (reorg_prune_lock) {
+        connected_blocks.emplace_back(pindexNew, nullptr, DeferredBlockReader(m_blockman, m_chainman.GetNotifications(), *pindexNew, std::move(reorg_prune_lock)));
+    } else {
+        connected_blocks.emplace_back(pindexNew, std::move(block_to_connect), ValidationSignals::BlockReader{});
+    }
     return true;
 }
 
@@ -3209,12 +3262,17 @@ bool Chainstate::ActivateBestChainStep(BlockValidationState& state, CBlockIndex&
 
     const CBlockIndex* pindexOldTip = m_chain.Tip();
     const CBlockIndex* pindexFork = m_chain.FindFork(index_most_work);
+    std::shared_ptr<ReorgPruneLock> reorg_prune_lock;
+    if (m_chainman.m_options.signals && pindexOldTip && pindexFork &&
+        pindexOldTip->nHeight - pindexFork->nHeight > MAX_REORG_BLOCKS_IN_MEMORY) {
+        reorg_prune_lock = std::make_shared<ReorgPruneLock>(m_blockman, pindexFork->nHeight + 1);
+    }
 
     // Disconnect active blocks which are no longer in the best chain.
     bool fBlocksDisconnected = false;
     DisconnectedBlockTransactions disconnectpool{MAX_DISCONNECTED_TX_POOL_BYTES};
     while (m_chain.Tip() && m_chain.Tip() != pindexFork) {
-        if (!DisconnectTip(state, &disconnectpool)) {
+        if (!DisconnectTip(state, &disconnectpool, reorg_prune_lock)) {
             // This is likely a fatal error, but keep the mempool consistent,
             // just in case. Only remove from the mempool in this case.
             MaybeUpdateMempoolForReorg(disconnectpool, false);
@@ -3247,7 +3305,7 @@ bool Chainstate::ActivateBestChainStep(BlockValidationState& state, CBlockIndex&
 
         // Connect new blocks.
         for (CBlockIndex* pindexConnect : vpindexToConnect | std::views::reverse) {
-            if (!ConnectTip(state, pindexConnect, pindexConnect == &index_most_work ? pblock : std::shared_ptr<const CBlock>(), connected_blocks, disconnectpool)) {
+            if (!ConnectTip(state, pindexConnect, pindexConnect == &index_most_work ? pblock : std::shared_ptr<const CBlock>(), connected_blocks, disconnectpool, reorg_prune_lock)) {
                 if (state.IsInvalid()) {
                     // The block violates a consensus rule.
                     if (state.GetResult() != BlockValidationResult::BLOCK_MUTATED) {
@@ -3409,9 +3467,13 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                 }
                 pindexNewTip = m_chain.Tip();
 
-                for (auto& [index, block] : std::move(connected_blocks)) {
+                for (auto& [index, block, read_block] : std::move(connected_blocks)) {
                     if (m_chainman.m_options.signals) {
-                        m_chainman.m_options.signals->BlockConnected(chainstate_role, std::move(Assert(block)), Assert(index));
+                        if (read_block) {
+                            m_chainman.m_options.signals->BlockConnected(chainstate_role, std::move(read_block), Assert(index));
+                        } else {
+                            m_chainman.m_options.signals->BlockConnected(chainstate_role, std::move(Assert(block)), Assert(index));
+                        }
                     }
                 }
 

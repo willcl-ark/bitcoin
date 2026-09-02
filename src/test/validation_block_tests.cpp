@@ -28,6 +28,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <future>
 #include <memory>
 #include <span>
 #include <thread>
@@ -224,6 +225,57 @@ BOOST_AUTO_TEST_CASE(processnewblock_signals_ordering)
 
     LOCK(cs_main);
     BOOST_CHECK_EQUAL(sub->m_expected_tip, m_node.chainman->ActiveChain().Tip()->GetBlockHash());
+}
+
+BOOST_AUTO_TEST_CASE(deep_reorg_notifications_read_blocks_lazily)
+{
+    auto process_block = [&](const std::shared_ptr<const CBlock>& block) {
+        bool new_block;
+        return Assert(m_node.chainman)->ProcessNewBlock(block, /*force_processing=*/true, /*min_pow_checked=*/true, &new_block);
+    };
+    BOOST_REQUIRE(process_block(std::make_shared<CBlock>(Params().GenesisBlock())));
+
+    for (const int reorg_depth : {6, 7}) {
+        m_node.validation_signals->SyncWithValidationInterfaceQueue();
+        const uint256 fork_hash{WITH_LOCK(cs_main, return m_node.chainman->ActiveChain().Tip()->GetBlockHash())};
+
+        uint256 main_tip{fork_hash};
+        for (int i = 0; i < reorg_depth; ++i) {
+            auto block{GoodBlock(main_tip)};
+            main_tip = block->GetHash();
+            BOOST_REQUIRE(process_block(block));
+        }
+        m_node.validation_signals->SyncWithValidationInterfaceQueue();
+
+        uint256 alternate_tip{fork_hash};
+        for (int i = 0; i < reorg_depth; ++i) {
+            auto block{GoodBlock(alternate_tip)};
+            alternate_tip = block->GetHash();
+            BOOST_REQUIRE(process_block(block));
+        }
+        BOOST_REQUIRE_EQUAL(WITH_LOCK(cs_main, return m_node.chainman->ActiveChain().Tip()->GetBlockHash()), main_tip);
+
+        std::promise<void> queue_blocked;
+        std::promise<void> release_queue;
+        auto release_future{release_queue.get_future().share()};
+        m_node.validation_signals->CallFunctionInValidationInterfaceQueue([&] {
+            queue_blocked.set_value();
+            release_future.wait();
+        });
+        queue_blocked.get_future().wait();
+
+        auto block{GoodBlock(alternate_tip)};
+        std::weak_ptr<const CBlock> weak_block{block};
+        BOOST_CHECK(process_block(block));
+        block.reset();
+
+        // Reorgs up to six blocks retain their notification payloads. Deeper
+        // reorgs release them while the validation queue is still blocked.
+        BOOST_CHECK_EQUAL(weak_block.expired(), reorg_depth > 6);
+        release_queue.set_value();
+        m_node.validation_signals->SyncWithValidationInterfaceQueue();
+        BOOST_CHECK(weak_block.expired());
+    }
 }
 
 /**

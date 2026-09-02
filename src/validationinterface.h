@@ -177,6 +177,8 @@ private:
     std::unique_ptr<ValidationSignalsImpl> m_internals;
 
 public:
+    using BlockReader = std::function<std::shared_ptr<const CBlock>()>;
+
     // The task runner will block validation if it calls its insert method's
     // func argument synchronously. In this class func contains a loop that
     // dispatches a single validation event to all subscribers sequentially.
@@ -233,7 +235,9 @@ public:
     void TransactionRemovedFromMempool(const CTransactionRef&, MemPoolRemovalReason, uint64_t mempool_sequence);
     void MempoolTransactionsRemovedForBlock(MempoolTransactionsRemovedForBlockInfo block_info, std::vector<RemovedMempoolTransactionInfo> txs_removed_for_block);
     void BlockConnected(const kernel::ChainstateRole&, std::shared_ptr<const CBlock>, const CBlockIndex* pindex);
+    void BlockConnected(const kernel::ChainstateRole&, BlockReader, const CBlockIndex* pindex);
     void BlockDisconnected(std::shared_ptr<const CBlock>, const CBlockIndex* pindex);
+    void BlockDisconnected(BlockReader, const CBlockIndex* pindex);
     void ChainStateFlushed(const kernel::ChainstateRole&, const CBlockLocator&);
     void BlockChecked(const std::shared_ptr<const CBlock>&, const BlockValidationState&);
     void NewPoWValidBlock(const CBlockIndex *, const std::shared_ptr<const CBlock>&);
