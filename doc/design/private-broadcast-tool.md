@@ -3,21 +3,21 @@
 The goal is one thing: broadcast a transaction without ever revealing the sender's permanent
 identity, its IP address or its onion address. Everything else here serves that.
 
-`bitcoin-privbcast` announces one final transaction to a small, bounded set of peers over Tor,
-and then stops: at most 24 connections, all over within ten minutes, nothing kept afterwards.
-It is a separate program from `bitcoind`, and that separation is the design. Two rules make it.
-The tool touches no node state, so nothing a recipient sees at the P2P layer can be tied to a
-node. Its schedule is drawn before the first connection and never moved by anything a peer
-does, so nothing the network does can steer it. The tool does not promise delivery, does not
-hide that a job ran, and does not retry on its own.
+`bitcoin-privbcast` announces one final transaction, or one parent and its child, to a small,
+bounded set of peers over Tor, and then stops: at most 24 connections, all over within ten
+minutes, nothing kept afterwards. It is a separate program from `bitcoind`, and that separation
+is the design. Two rules make it. The tool touches no node state, so nothing a recipient sees
+at the P2P layer can be tied to a node. Its schedule is drawn before the first connection and
+never moved by anything a peer does, so nothing the network does can steer it. The tool does
+not promise delivery, does not hide that a job ran, and does not retry on its own.
 
 ## Who sees what
 
 Every party sees a Tor circuit and never the sender.
 
-- **A recipient**: an exit or an onion circuit, a constant wire profile, and the transaction.
-  No IP, onion address, peer set, address manager, mempool or validation cache exists on the
-  job's side to leak.
+- **A recipient**: an exit or an onion circuit, a constant wire profile, and the transaction (a
+  child and, on request, its parent). No IP, onion address, peer set, address manager, mempool
+  or validation cache exists on the job's side to leak.
 - **A Tor exit**, on an exit-path connection: the transaction and the recipient. It can drop or
   alter that one connection; it is never on an onion slot's path.
 - **A DNS seed, or an exit's resolver**: a query for the seed's name from a Tor exit. It can
@@ -97,12 +97,13 @@ All durations are compile-time constants (`src/privbcast/*.h`). There are no kno
 tunable would make its users distinguishable.
 
 Where the numbers come from: the 50 s backup floor, the 310 s slot and the 568 s bound are
-derived from the per-connection budgets; the 18 s discovery window is measured (RESOLVE bursts
-finished within 8 s nine times in ten on one Tor client); the onion reachability under Limits
-comes from probing each release's fixed-seed list. Six slots, three prompt, three backups each,
-and the two windows are choices: enough that losing a path or a few peers does not lose the job,
-few enough that a job stays a small event. None is a privacy parameter; changing one changes cost
-and robustness for every user of a release alike.
+derived from the per-connection budgets; the 18 s discovery window and the 30 s parent hold are
+measured (RESOLVE bursts finished within 8 s nine times in ten on one Tor client; orphan
+resolution asks within about 4 s on signet); the onion reachability under Limits comes from
+probing each release's fixed-seed list. Six slots, three prompt, three backups each, and the two
+windows are choices: enough that losing a path or a few peers does not lose the job, few enough
+that a job stays a small event. None is a privacy parameter; changing one changes cost and
+robustness for every user of a release alike.
 
 The schedule makes no claim about hiding the user's address: that comes entirely from the
 tool being nodeless and reaching everything through Tor. What the schedule buys is delivery
@@ -111,13 +112,61 @@ privacy on top: the later slots open at random offsets within fixed windows, in 
 and at least 5 s apart, and there is no regular grid to recognise. The prompt trio is
 deliberately simultaneous, and backups can still cluster; bursts are not eliminated.
 
+## One parent, one child
+
+A transaction whose fee is too low to enter mempools on its own can be carried by a child
+that spends it, when the recipient evaluates the two together (Bitcoin Core 28 and later do
+this for exactly one parent and one child). Give the tool both transactions, in either order,
+and it works out which is which.
+
+- Only the child is announced. Announcing the parent would invite a request for it before
+  the child; a low-fee parent received alone is rejected, and the tool would then have to
+  serve it a second time, which it never does.
+- The child is served once, on the exact single-entry request for it by wtxid. The tool then
+  holds for 30 s for the peer to ask for the parent, which a recipient that lacks it does about
+  4 s later (its orphan-resolution delays; measured on signet). That request may batch the parent
+  with the child's other inputs, so the tool serves the parent and, like any node, answers the
+  entries it does not have with `notfound`; it never says that about its own two transactions.
+- The parent is served once, only if it is the parent given, and only on one of two requests:
+  - after the child was served, a request naming the parent by txid (orphan resolution);
+  - before the child was served, a request naming the parent and not the child, from a recipient
+    that already held the child as an orphan learned from another peer (our wtxid announcement
+    adds us as an announcer of that orphan, so it asks us only for the parent).
+  A request that names the child alongside the parent before the child was served is ignored
+  outright, with no `notfound` either: a peer we have not served cannot have learned the child's
+  inputs from us, so that request is not one our announcement made possible. The connection stays
+  open and the child's own request is still answered afterwards. Once the parent is served, PING
+  goes out and nothing more is served on that connection.
+- If no request for the parent arrives within the hold, PING goes out anyway; the tool cannot
+  tell whether the peer already had the parent, was still waiting on a request to another peer,
+  or will not take the package.
+- One request window still bounds the whole exchange; the second request restarts nothing,
+  and the announcement point and the replacement rules are unchanged.
+- Which recipients accept the package depends on the parent. A parent below the minimum relay
+  feerate is accepted as part of a package by Bitcoin Core 28 and later only if it is TRUC
+  (version 3); a non-TRUC parent below that feerate needs Bitcoin Core 31 or later, and older
+  recipients drop it. Whether the package reaches miners depends on what they run.
+- The tool cannot check that the child has no other unconfirmed parent, or that the child pays
+  enough for both, and there is no dry run for a package: `testmempoolaccept` checks each
+  transaction on its own and does not apply the child's fee to the parent, so it reports a
+  low-fee parent as "min relay fee not met" even when the package would be accepted, and
+  stops there without evaluating the child at all, so that rejection says nothing about the
+  child's validity. Work out the package feerate yourself. Nor can the tool see whether the
+  recipient accepted the package; a PONG means only that the recipient processed what we sent.
+  A recipient older than Core 28 asks for the parent, rejects it alone and keeps the child as an
+  orphan only until we disconnect.
+- Serving a second transaction on request happens only in package mode, so a recipient that
+  asks for the parent learns the sender used package mode. That the two transactions belong
+  together is already visible on the chain.
+
 ## Using it
 
 1. Check the transaction with `bitcoin-cli testmempoolaccept` first. The tool does only
    stateless sanity checks itself. The check leaves the node's validation and coins caches
    untouched, but reading the inputs warms the node's database and page caches like any
    UTXO lookup; if even that matters to you, run the check on a node that is not your
-   public one.
+   public one. For a parent and child it rejects a low-fee parent on its own; see "One
+   parent, one child".
 2. Feed the final hex on stdin: `bitcoin-privbcast send < tx.hex` (Tor at 127.0.0.1:9050;
    `-tor=` for another listener). The report, as JSON, goes to stdout; progress lines to
    stderr.
