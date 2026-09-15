@@ -358,8 +358,7 @@ CNode* CConnman::ConnectNode(CAddress addrConnect,
                              const char* pszDest,
                              bool fCountFailure,
                              ConnectionType conn_type,
-                             bool use_v2transport,
-                             const std::optional<Proxy>& proxy_override)
+                             bool use_v2transport)
 {
     AssertLockNotHeld(m_nodes_mutex);
     AssertLockNotHeld(m_unused_i2p_sessions_mutex);
@@ -426,9 +425,7 @@ CNode* CConnman::ConnectNode(CAddress addrConnect,
 
     for (auto& target_addr : connect_to) {
         if (target_addr.IsValid()) {
-            const std::optional<Proxy> use_proxy{
-                proxy_override.has_value() ? proxy_override : GetProxy(target_addr.GetNetwork()),
-            };
+            const auto use_proxy{GetProxy(target_addr.GetNetwork())};
             bool proxyConnectionFailed = false;
 
             if (target_addr.IsI2P() && use_proxy) {
@@ -515,7 +512,6 @@ CNode* CConnman::ConnectNode(CAddress addrConnect,
                                 network_id,
                                 CNodeOptions{
                                     .permission_flags = permission_flags,
-                                    .proxy_override = proxy_override,
                                     .i2p_sam_session = std::move(i2p_transient_session),
                                     .recv_flood_size = nReceiveFloodSize,
                                     .use_v2transport = use_v2transport,
@@ -1023,8 +1019,7 @@ bool CConnman::AddConnection(const std::string& address, ConnectionType conn_typ
                           /*grant_outbound=*/std::move(grant),
                           /*pszDest=*/address.c_str(),
                           /*conn_type=*/conn_type,
-                          /*use_v2transport=*/use_v2transport,
-                          /*proxy_override=*/std::nullopt);
+                          /*use_v2transport=*/use_v2transport);
     return true;
 }
 
@@ -1065,7 +1060,6 @@ void CConnman::DisconnectNodes()
                 // and we don't want to hold up the socket handler thread for that long.
                 if (network_active && pnode->m_transport->ShouldReconnectV1()) {
                     reconnections_to_add.push_back({
-                        .proxy_override = pnode->m_proxy_override,
                         .addr_connect = pnode->addr,
                         .grant = std::move(pnode->grantOutbound),
                         .destination = pnode->m_dest,
@@ -1553,8 +1547,7 @@ void CConnman::ProcessAddrFetch()
                               /*grant_outbound=*/std::move(grant),
                               /*pszDest=*/strDest.c_str(),
                               /*conn_type=*/ConnectionType::ADDR_FETCH,
-                              /*use_v2transport=*/use_v2transport,
-                              /*proxy_override=*/std::nullopt);
+                              /*use_v2transport=*/use_v2transport);
     }
 }
 
@@ -1704,8 +1697,7 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
                                       /*grant_outbound=*/{},
                                       /*pszDest=*/strAddr.c_str(),
                                       /*conn_type=*/ConnectionType::MANUAL,
-                                      /*use_v2transport=*/use_v2transport,
-                                      /*proxy_override=*/std::nullopt);
+                                      /*use_v2transport=*/use_v2transport);
                 for (int i = 0; i < 10 && i < nLoop; i++)
                 {
                     if (!m_interrupt_net->sleep_for(500ms)) {
@@ -2059,8 +2051,7 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
                                   /*grant_outbound=*/std::move(grant),
                                   /*pszDest=*/nullptr,
                                   /*conn_type=*/conn_type,
-                                  /*use_v2transport=*/use_v2transport,
-                                  /*proxy_override=*/std::nullopt);
+                                  /*use_v2transport=*/use_v2transport);
         }
     }
 }
@@ -2164,8 +2155,7 @@ void CConnman::ThreadOpenAddedConnections()
                                   /*grant_outbound=*/std::move(grant),
                                   /*pszDest=*/info.m_params.m_added_node.c_str(),
                                   /*conn_type=*/ConnectionType::MANUAL,
-                                  /*use_v2transport=*/info.m_params.m_use_v2transport,
-                                  /*proxy_override=*/std::nullopt);
+                                  /*use_v2transport=*/info.m_params.m_use_v2transport);
             if (!m_interrupt_net->sleep_for(500ms)) return;
             grant = CountingSemaphoreGrant<>(*semAddnode, /*fTry=*/true);
         }
@@ -2184,8 +2174,7 @@ bool CConnman::OpenNetworkConnection(const CAddress& addrConnect,
                                      CountingSemaphoreGrant<>&& grant_outbound,
                                      const char* pszDest,
                                      ConnectionType conn_type,
-                                     bool use_v2transport,
-                                     const std::optional<Proxy>& proxy_override)
+                                     bool use_v2transport)
 {
     AssertLockNotHeld(m_nodes_mutex);
     AssertLockNotHeld(m_unused_i2p_sessions_mutex);
@@ -2209,7 +2198,7 @@ bool CConnman::OpenNetworkConnection(const CAddress& addrConnect,
         return false;
     }
 
-    CNode* pnode = ConnectNode(addrConnect, pszDest, fCountFailure, conn_type, use_v2transport, proxy_override);
+    CNode* pnode = ConnectNode(addrConnect, pszDest, fCountFailure, conn_type, use_v2transport);
 
     if (!pnode)
         return false;
@@ -3027,7 +3016,6 @@ CNode::CNode(NodeId idIn,
       m_permission_flags{node_opts.permission_flags},
       m_sock{sock},
       m_connected{NodeClock::now()},
-      m_proxy_override{std::move(node_opts.proxy_override)},
       addr{addrIn},
       addrBind{addrBindIn},
       m_addr_name{addrNameIn.empty() ? addr.ToStringAddrPort() : addrNameIn},
@@ -3191,8 +3179,7 @@ void CConnman::PerformReconnections()
                               std::move(item.grant),
                               item.destination.empty() ? nullptr : item.destination.c_str(),
                               item.conn_type,
-                              item.use_v2transport,
-                              item.proxy_override);
+                              item.use_v2transport);
     }
 }
 

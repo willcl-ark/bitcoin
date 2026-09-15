@@ -389,8 +389,7 @@ static RPCMethod addnode()
                                       /*grant_outbound=*/{},
                                       /*pszDest=*/std::string{node_arg}.c_str(),
                                       /*conn_type=*/ConnectionType::MANUAL,
-                                      /*use_v2transport=*/use_v2transport,
-                                      /*proxy_override=*/std::nullopt);
+                                      /*use_v2transport=*/use_v2transport);
         return UniValue::VNULL;
     }
 
