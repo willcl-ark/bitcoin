@@ -9,7 +9,6 @@
 #include <interfaces/chain.h>
 #include <key_io.h>
 #include <merkleblock.h>
-#include <node/types.h>
 #include <rpc/util.h>
 #include <script/descriptor.h>
 #include <script/script.h>

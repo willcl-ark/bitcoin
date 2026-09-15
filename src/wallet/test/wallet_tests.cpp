@@ -19,7 +19,6 @@
 #include <key_io.h>
 #include <logging.h>
 #include <node/blockstorage.h>
-#include <node/types.h>
 #include <policy/policy.h>
 #include <rpc/server.h>
 #include <script/solver.h>

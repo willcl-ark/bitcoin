@@ -75,7 +75,6 @@ enum class ConnectionType {
      * AddrMan is empty.
      */
     ADDR_FETCH,
-
 };
 
 /** Convert ConnectionType enum to a string value */

@@ -12,7 +12,6 @@
 #include <interfaces/handler.h>
 #include <kernel/cs_main.h>
 #include <key.h>
-#include <node/types.h>
 #include <outputtype.h>
 #include <policy/feerate.h>
 #include <primitives/transaction.h>

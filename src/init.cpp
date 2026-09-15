@@ -2351,7 +2351,6 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
                     conflict->ToStringAddrPort()));
     }
 
-
     if (!node.connman->Start(scheduler, connOptions)) {
         return false;
     }

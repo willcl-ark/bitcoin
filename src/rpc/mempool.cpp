@@ -152,7 +152,6 @@ static RPCMethod sendrawtransaction()
     };
 }
 
-
 static RPCMethod testmempoolaccept()
 {
     return RPCMethod{
