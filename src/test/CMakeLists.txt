@@ -6,6 +6,7 @@
 # SOURCES property is processed to gather test suite macros.
 add_executable(test_bitcoin
   main.cpp
+  ../send.cpp
   addrman_tests.cpp
   allocator_tests.cpp
   amount_tests.cpp
@@ -91,6 +92,7 @@ add_executable(test_bitcoin
   reverselock_tests.cpp
   rpc_tests.cpp
   sanity_tests.cpp
+  send_tests.cpp
   scheduler_tests.cpp
   script_assets_tests.cpp
   script_p2sh_tests.cpp
