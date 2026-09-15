@@ -180,12 +180,22 @@ if(ENABLE_WALLET)
 endif()
 
 
+add_library(bitcoin_transport STATIC EXCLUDE_FROM_ALL
+  bip324.cpp
+  transport.cpp
+)
+target_link_libraries(bitcoin_transport
+  PRIVATE
+    core_interface
+    bitcoin_common
+    bitcoin_util
+)
+
 # P2P and RPC server functionality used by `bitcoind` and `bitcoin-qt` executables.
 add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   addrdb.cpp
   addrman.cpp
   banman.cpp
-  bip324.cpp
   blockencodings.cpp
   blockfilter.cpp
   consensus/tx_verify.cpp
@@ -285,6 +295,7 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
 target_link_libraries(bitcoin_node
   PRIVATE
     core_interface
+    bitcoin_transport
     bitcoin_common
     bitcoin_util
     $<TARGET_NAME_IF_EXISTS:bitcoin_zmq>

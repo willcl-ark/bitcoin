@@ -3,20 +3,29 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <chainparams.h>
+#include <crypto/sha256.h>
 #include <hash.h>
-#include <net.h>
 #include <netmessagemaker.h>
 #include <protocol.h>
+#include <random.h>
 #include <test/fuzz/FuzzedDataProvider.h>
 #include <test/fuzz/fuzz.h>
 #include <test/fuzz/util.h>
+#include <transport.h>
 #include <util/chaintype.h>
 
 #include <algorithm>
+#include <array>
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <limits>
+#include <memory>
 #include <optional>
+#include <span>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace {
