@@ -76,12 +76,6 @@ enum class ConnectionType {
      */
     ADDR_FETCH,
 
-    /**
-     * Private broadcast connections are short-lived and only opened to
-     * privacy networks (Tor, I2P) for relaying privacy-sensitive data (like
-     * our own transactions) and closed afterwards.
-     */
-    PRIVATE_BROADCAST,
 };
 
 /** Convert ConnectionType enum to a string value */
