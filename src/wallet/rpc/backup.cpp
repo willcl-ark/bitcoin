@@ -423,7 +423,7 @@ RPCMethod importdescriptors()
     // Rescan the blockchain using the lowest timestamp
     if (rescan) {
         int64_t scanned_time = pwallet->Scanner().ScanFromTime(lowest_timestamp, reserver);
-        pwallet->ResubmitWalletTransactions(node::TxBroadcast::MEMPOOL_NO_BROADCAST, /*force=*/true);
+        pwallet->ResubmitWalletTransactions(/*relay=*/false, /*force=*/true);
 
         if (pwallet->Scanner().IsAborting()) {
             throw JSONRPCError(RPC_MISC_ERROR, "Rescan aborted by user.");

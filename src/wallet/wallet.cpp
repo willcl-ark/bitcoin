@@ -1812,7 +1812,7 @@ void CWallet::MaybeUpdateBirthTime(int64_t time)
 
 bool CWallet::SubmitTxMemoryPoolAndRelay(CWalletTx& wtx,
                                          std::string& err_string,
-                                         node::TxBroadcast broadcast_method) const
+                                         bool relay) const
 {
     AssertLockHeld(cs_wallet);
 
@@ -1826,16 +1826,8 @@ bool CWallet::SubmitTxMemoryPoolAndRelay(CWalletTx& wtx,
     // Don't try to submit conflicted or confirmed transactions.
     if (GetTxDepthInMainChain(wtx) != 0) return false;
 
-    const char* what{""};
-    switch (broadcast_method) {
-    case node::TxBroadcast::MEMPOOL_AND_BROADCAST_TO_ALL:
-        what = "to mempool and for broadcast to peers";
-        break;
-    case node::TxBroadcast::MEMPOOL_NO_BROADCAST:
-        what = "to mempool without broadcast";
-        break;
-    }
-    WalletLogPrintf("Submitting wtx %s %s\n", wtx.GetHash().ToString(), what);
+    WalletLogPrintf("Submitting wtx %s to mempool%s\n", wtx.GetHash().ToString(),
+                    relay ? " and for broadcast to peers" : " without broadcast");
     // We must set TxStateInMempool here. Even though it will also be set later by the
     // entered-mempool callback, if we did not there would be a race where a
     // user could call sendmoney in a loop and hit spurious out of funds errors
@@ -1845,7 +1837,7 @@ bool CWallet::SubmitTxMemoryPoolAndRelay(CWalletTx& wtx,
     // If broadcast fails for any reason, trying to set wtx.m_state here would be incorrect.
     // If transaction was previously in the mempool, it should be updated when
     // TransactionRemovedFromMempool fires.
-    bool ret = chain().broadcastTransaction(wtx.GetTx(), m_default_max_tx_fee, broadcast_method, err_string);
+    bool ret = chain().broadcastTransaction(wtx.GetTx(), m_default_max_tx_fee, relay, err_string);
     if (ret) wtx.m_state = TxStateInMempool{};
     return ret;
 }
@@ -1900,11 +1892,10 @@ NodeClock::time_point CWallet::GetDefaultNextResend() { return FastRandomContext
 //
 // The `force` option results in all unconfirmed transactions being submitted to
 // the mempool. This does not necessarily result in those transactions being relayed,
-// that depends on the `broadcast_method` option. Periodic rebroadcast uses the pattern
-// broadcast_method=TxBroadcast::MEMPOOL_AND_BROADCAST_TO_ALL force=false, while loading into
-// the mempool (on start, or after import) uses
-// broadcast_method=TxBroadcast::MEMPOOL_NO_BROADCAST force=true.
-void CWallet::ResubmitWalletTransactions(node::TxBroadcast broadcast_method, bool force)
+// that depends on the `relay` option. Periodic rebroadcast uses relay=true and
+// force=false, while loading into the mempool (on start, or after import) uses
+// relay=false and force=true.
+void CWallet::ResubmitWalletTransactions(bool relay, bool force)
 {
     // Don't attempt to resubmit if the wallet is configured to not broadcast,
     // even if forcing.
@@ -1930,7 +1921,7 @@ void CWallet::ResubmitWalletTransactions(node::TxBroadcast broadcast_method, boo
         // Now try submitting the transactions to the memory pool and (optionally) relay them.
         for (auto wtx : to_submit) {
             std::string unused_err_string;
-            if (SubmitTxMemoryPoolAndRelay(*wtx, unused_err_string, broadcast_method)) ++submitted_tx_count;
+            if (SubmitTxMemoryPoolAndRelay(*wtx, unused_err_string, relay)) ++submitted_tx_count;
         }
     } // cs_wallet
 
@@ -1945,7 +1936,7 @@ void MaybeResendWalletTxs(WalletContext& context)
 {
     for (const std::shared_ptr<CWallet>& pwallet : GetWallets(context)) {
         if (!pwallet->ShouldResend()) continue;
-        pwallet->ResubmitWalletTransactions(node::TxBroadcast::MEMPOOL_AND_BROADCAST_TO_ALL, /*force=*/false);
+        pwallet->ResubmitWalletTransactions(/*relay=*/true, /*force=*/false);
         pwallet->SetNextResend();
     }
 }
@@ -2155,7 +2146,7 @@ void CWallet::CommitTransaction(
     }
 
     std::string err_string;
-    if (!SubmitTxMemoryPoolAndRelay(*wtx, err_string, node::TxBroadcast::MEMPOOL_AND_BROADCAST_TO_ALL)) {
+    if (!SubmitTxMemoryPoolAndRelay(*wtx, err_string, /*relay=*/true)) {
         WalletLogPrintf("CommitTransaction(): Transaction cannot be broadcast immediately, %s\n", err_string);
         // TODO: if we expect the failure to be long term or permanent, instead delete wtx from the wallet and return failure.
     }
@@ -3123,7 +3114,7 @@ void CWallet::postInitProcess()
 {
     // Add wallet transactions that aren't already in a block to mempool
     // Do this here as mempool requires genesis block to be loaded
-    ResubmitWalletTransactions(node::TxBroadcast::MEMPOOL_NO_BROADCAST, /*force=*/true);
+    ResubmitWalletTransactions(/*relay=*/false, /*force=*/true);
 
     // Update wallet transactions with current mempool transactions.
     WITH_LOCK(cs_wallet, chain().requestMempoolTransactions(*this));

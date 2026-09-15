@@ -46,7 +46,7 @@ inline constexpr CAmount DEFAULT_MAX_BURN_AMOUNT{0};
  * @param[in]  tx the transaction to broadcast
  * @param[out] err_string reference to std::string to fill with error string if available
  * @param[in]  max_tx_fee reject txs with fees higher than this (if 0, accept any fee)
- * @param[in]  broadcast_method whether to add the transaction to the mempool and how to broadcast it
+ * @param[in]  relay whether to relay the transaction to P2P peers
  * @param[in]  wait_callback wait until callbacks have been processed to avoid stale result due to a sequentially RPC.
  * return error
  */
@@ -54,7 +54,7 @@ inline constexpr CAmount DEFAULT_MAX_BURN_AMOUNT{0};
                                                     CTransactionRef tx,
                                                     std::string& err_string,
                                                     const CAmount& max_tx_fee,
-                                                    TxBroadcast broadcast_method,
+                                                    bool relay,
                                                     bool wait_callback);
 
 /**

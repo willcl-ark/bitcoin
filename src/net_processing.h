@@ -136,7 +136,7 @@ public:
      * Later, depending on `-txsendrate`, `Peer::TxRelay::m_next_inv_send_time` and if
      * the transaction is in the mempool, an `INV` about it may be sent to the peer.
      */
-    virtual void InitiateTxBroadcastToAll(const Wtxid& wtxid) = 0;
+    virtual void RelayTransaction(const Wtxid& wtxid) = 0;
 
     /** Send ping message to all peers */
     virtual void SendPings() = 0;

@@ -627,7 +627,7 @@ public:
     void SetNextResend() { m_next_resend = GetDefaultNextResend(); }
     /** Return true if all conditions for periodically resending transactions are met. */
     bool ShouldResend() const;
-    void ResubmitWalletTransactions(node::TxBroadcast broadcast_method, bool force);
+    void ResubmitWalletTransactions(bool relay, bool force);
 
     OutputType TransactionChangeType(const std::optional<OutputType>& change_type, const std::vector<CRecipient>& vecSend) const;
 
@@ -674,8 +674,8 @@ public:
         const std::vector<std::string>& payment_requests = {}
     );
 
-    /** Pass this transaction to node for optional mempool insertion and relay to peers. */
-    bool SubmitTxMemoryPoolAndRelay(CWalletTx& wtx, std::string& err_string, node::TxBroadcast broadcast_method) const
+    /** Submit this transaction to the mempool and optionally relay it to peers. */
+    bool SubmitTxMemoryPoolAndRelay(CWalletTx& wtx, std::string& err_string, bool relay) const
         EXCLUSIVE_LOCKS_REQUIRED(cs_wallet);
 
     /** Updates wallet birth time if 'time' is below it */

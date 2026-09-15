@@ -141,7 +141,7 @@ static RPCMethod sendrawtransaction()
                                                               tx,
                                                               err_string,
                                                               max_raw_tx_fee,
-                                                              node::TxBroadcast::MEMPOOL_AND_BROADCAST_TO_ALL,
+                                                              /*relay=*/true,
                                                               /*wait_callback=*/true);
             if (TransactionError::OK != err) {
                 throw JSONRPCTransactionError(err, err_string);
@@ -1364,7 +1364,7 @@ static RPCMethod submitpackage()
                                                       tx,
                                                       err_string,
                                                       /*max_tx_fee=*/0,
-                                                      node::TxBroadcast::MEMPOOL_AND_BROADCAST_TO_ALL,
+                                                      /*relay=*/true,
                                                       /*wait_callback=*/true);
                 if (err != TransactionError::OK) {
                     throw JSONRPCTransactionError(err,

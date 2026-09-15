@@ -39,7 +39,6 @@ struct ChainstateRole;
 } // namespace kernel
 namespace node {
 struct NodeContext;
-enum class TxBroadcast : uint8_t;
 } // namespace node
 
 namespace interfaces {
@@ -193,18 +192,16 @@ public:
     //! Check if transaction has descendants in mempool.
     virtual bool hasDescendantsInMempool(const Txid& txid) = 0;
 
-    //! Process a local transaction, optionally adding it to the mempool and
-    //! optionally broadcasting it to the network.
+    //! Submit a local transaction to the mempool and optionally relay it to the network.
     //! @param[in] tx Transaction to process.
     //! @param[in] max_tx_fee Don't add the transaction to the mempool or
     //! broadcast it if its fee is higher than this.
-    //! @param[in] broadcast_method Whether to add the transaction to the
-    //! mempool and how/whether to broadcast it.
+    //! @param[in] relay Whether to relay the transaction to the network.
     //! @param[out] err_string Set if an error occurs.
     //! @return False if the transaction could not be added due to the fee or for another reason.
     virtual bool broadcastTransaction(const CTransactionRef& tx,
                                       const CAmount& max_tx_fee,
-                                      node::TxBroadcast broadcast_method,
+                                      bool relay,
                                       std::string& err_string) = 0;
 
     //! Calculate mempool ancestor and cluster counts for the given transaction.
