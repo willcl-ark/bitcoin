@@ -5,27 +5,44 @@
 #ifndef BITCOIN_SEND_H
 #define BITCOIN_SEND_H
 
+#include <netaddress.h>
+#include <primitives/transaction.h>
 #include <util/time.h>
 
 #include <chrono>
+#include <cstdint>
+#include <iosfwd>
+#include <optional>
 #include <span>
+#include <string>
+#include <string_view>
+#include <vector>
 
-class CService;
 class CThreadInterrupt;
-class CTransaction;
 class Sock;
 class Transport;
 
 namespace txsend {
 
-enum class SessionResult { SUCCESS,
-                           PEER_ERROR,
-                           INTERRUPTED };
-enum class SendResult { SUCCESS,
-                        PEER_ERROR,
-                        PROXY_ERROR,
-                        DISCLOSED,
-                        INTERRUPTED };
+enum class SessionResult {
+    SUCCESS,
+    PEER_ERROR,
+    INTERRUPTED,
+};
+enum class SendResult {
+    SUCCESS,
+    PEER_ERROR,
+    PROXY_ERROR,
+    LOCAL_ERROR,
+    DISCLOSED,
+    INTERRUPTED,
+};
+
+/** Input checks do not create sockets, resolve names, or consult node state. */
+std::optional<std::vector<CService>> ParseDestinations(std::span<const std::string> entries, uint16_t default_port);
+std::optional<CService> ParseProxy(std::string_view entry);
+std::optional<std::chrono::milliseconds> ParseTimeout(std::string_view seconds);
+CTransactionRef ReadTransaction(std::istream& input);
 
 /** Drive one already-proxied connection. The caller must select chain parameters
  * and keep an ECC context alive for the transport's lifetime. disclosure_started

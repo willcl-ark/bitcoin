@@ -4,6 +4,7 @@
 
 #include <bip324.h>
 #include <compat/compat.h>
+#include <consensus/consensus.h>
 #include <netaddress.h>
 #include <netbase.h>
 #include <netmessagemaker.h>
@@ -18,6 +19,7 @@
 #include <test/util/time.h>
 #include <transport.h>
 #include <uint256.h>
+#include <util/strencodings.h>
 #include <util/threadinterrupt.h>
 
 #include <boost/test/unit_test.hpp>
@@ -33,6 +35,8 @@
 #include <limits>
 #include <memory>
 #include <span>
+#include <sstream>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -179,6 +183,7 @@ public:
     std::chrono::milliseconds io_delay{0};
     const bool* disclosure{nullptr};
     bool fail_disclosure{false};
+    bool throw_after_verack{false};
     bool block_disclosure{false};
     mutable size_t disclosure_writes{0};
     size_t fail_after_writes{0};
@@ -186,6 +191,7 @@ public:
 
     ssize_t Send(const void* data, size_t len, int) const override
     {
+        if (throw_after_verack && !commands.empty() && commands.back() == NetMsgType::VERACK) throw std::runtime_error{"Untrusted diagnostic"};
         if (disclosure && *disclosure) {
             ++disclosure_writes;
             if (fail_disclosure && disclosure_writes > fail_after_writes) return 0;
@@ -352,6 +358,90 @@ private:
 } // namespace
 
 BOOST_FIXTURE_TEST_SUITE(send_tests, BasicTestingSetup)
+
+BOOST_AUTO_TEST_CASE(destination_input)
+{
+    const std::string onion{"pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion"};
+    const std::vector<std::string> entries{onion, onion + ":8333", onion + ":8334", onion};
+    const auto parsed = txsend::ParseDestinations(entries, 8333);
+    BOOST_REQUIRE(parsed);
+    BOOST_REQUIRE_EQUAL(parsed->size(), 2U);
+    BOOST_CHECK_EQUAL((*parsed)[0].GetPort(), 8333);
+    BOOST_CHECK_EQUAL((*parsed)[1].GetPort(), 8334);
+    BOOST_CHECK((*parsed)[0].IsTor());
+    BOOST_CHECK(!txsend::ParseDestinations({}, 8333));
+    for (const auto& bad : std::vector<std::string>{"", "localhost", "127.0.0.1", "[::1]", "http://" + onion,
+                                                    "aaaaaaaaaaaaaaaa.onion", std::string(56, 'a') + ".onion",
+                                                    onion + ":", onion + ":0", onion + ":65536", onion + ":-1",
+                                                    onion + ":+1", onion + ":1:2", onion + "=ignored", onion + ":8333/path"}) {
+        const std::vector<std::string> later_bad{onion, bad};
+        BOOST_CHECK(!txsend::ParseDestinations(later_bad, 8333));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(proxy_and_timeout_input)
+{
+    for (const auto* good : {"127.0.0.1:9050", "127.1.2.3:65535", "[::1]:1"})
+        BOOST_CHECK(txsend::ParseProxy(good));
+    for (const auto* bad : {"localhost:9050", "example.com:9050", "0.0.0.0:9050", "0.1.2.3:9050", "192.168.1.1:9050",
+                            "[::]:9050", "[2001:db8::1]:9050", "::1:9050", "[127.0.0.1]:9050", "[::ffff:127.0.0.1]:9050",
+                            "127.0.0.1", "127.0.0.1:0", "127.0.0.1:65536", "[::1]", "[::1]:", "127.0.0.1:+1"}) {
+        BOOST_CHECK(!txsend::ParseProxy(bad));
+    }
+    BOOST_CHECK(txsend::ParseTimeout("1") == 1s);
+    BOOST_CHECK(txsend::ParseTimeout("60") == 60s);
+    for (const auto* bad : {"", "0", "-1", "+1", "1.0", " 1", "1 ", "18446744073709551615", "9223372036854775807"}) {
+        BOOST_CHECK(!txsend::ParseTimeout(bad));
+    }
+    FakeSteadyClock clock;
+    const auto max_seconds = std::chrono::duration_cast<std::chrono::seconds>(MockableSteadyClock::time_point::max() - MockableSteadyClock::now()).count();
+    BOOST_CHECK(txsend::ParseTimeout(std::to_string(max_seconds)));
+    BOOST_CHECK(!txsend::ParseTimeout(std::to_string(max_seconds + 1)));
+    clock += 1s;
+    BOOST_CHECK(!txsend::ParseTimeout(std::to_string(max_seconds)));
+}
+
+BOOST_AUTO_TEST_CASE(transaction_input)
+{
+    for (bool witness : {false, true}) {
+        const auto tx = TestTransaction(witness);
+        const auto hex = HexStr(NetMsg::Make(NetMsgType::TX, TX_WITH_WITNESS(tx)).data);
+        for (const auto* ending : {"", "\n", "\r\n"}) {
+            std::istringstream input{hex + ending};
+            const auto decoded = txsend::ReadTransaction(input);
+            BOOST_REQUIRE(decoded);
+            BOOST_CHECK(decoded->GetWitnessHash() == tx.GetWitnessHash());
+        }
+        std::string upper = hex;
+        for (auto& c : upper)
+            if (c >= 'a' && c <= 'f') c -= 'a' - 'A';
+        std::istringstream upper_input{upper};
+        BOOST_CHECK(txsend::ReadTransaction(upper_input));
+        for (const auto& bad : std::vector<std::string>{"", "0", "zz", hex + "00", hex + hex, hex + "\r",
+                                                        hex + "\n\n", hex + " \n", " " + hex, hex + "\n00"}) {
+            std::istringstream input{bad};
+            BOOST_CHECK(!txsend::ReadTransaction(input));
+        }
+    }
+    for (int scenario = 0; scenario < 4; ++scenario) {
+        CMutableTransaction tx{TestTransaction()};
+        if (scenario == 0) {
+            tx.vin[0].prevout.SetNull();
+            tx.vin[0].scriptSig = CScript{} << OP_0 << OP_0;
+        }
+        if (scenario == 1) tx.vin.push_back(tx.vin[0]);
+        if (scenario == 2) tx.vout[0].nValue = -1;
+        if (scenario == 3) tx.vout.clear();
+        std::istringstream input{HexStr(NetMsg::Make(NetMsgType::TX, TX_WITH_WITNESS(tx)).data)};
+        BOOST_CHECK(!txsend::ReadTransaction(input));
+    }
+    std::istringstream oversized{std::string(2 * MAX_BLOCK_WEIGHT + 3, '0')};
+    BOOST_CHECK(!txsend::ReadTransaction(oversized));
+    CMutableTransaction heavy{TestTransaction(false)};
+    heavy.vout[0].scriptPubKey.resize(MAX_BLOCK_WEIGHT / 4 + 1);
+    std::istringstream heavy_input{HexStr(NetMsg::Make(NetMsgType::TX, TX_WITH_WITNESS(heavy)).data)};
+    BOOST_CHECK(!txsend::ReadTransaction(heavy_input));
+}
 
 BOOST_AUTO_TEST_CASE(handoff)
 {
@@ -630,7 +720,7 @@ BOOST_AUTO_TEST_CASE(attempt_policy)
         CService{onion, 8335},
     };
     const CService proxy = LookupNumeric("127.0.0.1:9050");
-    for (int scenario = 0; scenario < 7; ++scenario) {
+    for (int scenario = 0; scenario < 9; ++scenario) {
         FakeSteadyClock clock;
         const auto tx = TestTransaction();
         ProxyTranscript transcript;
@@ -641,6 +731,7 @@ BOOST_AUTO_TEST_CASE(attempt_policy)
             BOOST_CHECK_EQUAL(type, SOCK_STREAM);
             BOOST_CHECK_EQUAL(protocol, IPPROTO_TCP);
             const size_t attempt = attempts++;
+            if (scenario == 8) throw std::runtime_error{"Local failure"};
             if (scenario == 6) return {};
             auto sock = std::make_unique<ProxyPeerSock>(!(scenario == 1 && attempt == 1), tx, clock, transcript, proxy);
             if (scenario == 0 && attempt == 0) sock->services = NODE_NONE;
@@ -652,17 +743,19 @@ BOOST_AUTO_TEST_CASE(attempt_policy)
                 sock->request = false;
                 sock->cancel_on_wait = &interrupt;
             }
+            if (scenario == 7) sock->throw_after_verack = true;
             return sock;
         };
         const auto result = txsend::SendTransaction(tx, destinations, proxy, 1s, interrupt);
         const auto expected = scenario == 2                  ? txsend::SendResult::DISCLOSED :
                               scenario == 3 || scenario == 6 ? txsend::SendResult::PROXY_ERROR :
-                              scenario == 5                  ? txsend::SendResult::DISCLOSED :
+                              scenario == 5 || scenario == 7 ? txsend::SendResult::DISCLOSED :
+                              scenario == 8                  ? txsend::SendResult::LOCAL_ERROR :
                                                                txsend::SendResult::SUCCESS;
         BOOST_CHECK(result == expected);
         BOOST_CHECK_EQUAL(attempts, scenario == 0 || scenario == 1 || scenario == 4 ? 2U : 1U);
         BOOST_CHECK_EQUAL(transcript.open, 0U);
-        if (scenario != 6) BOOST_CHECK_EQUAL(transcript.peak_open, 1U);
+        if (scenario != 6 && scenario != 8) BOOST_CHECK_EQUAL(transcript.peak_open, 1U);
         if (transcript.passwords.size() == 2) BOOST_CHECK(transcript.passwords[0] != transcript.passwords[1]);
         if (scenario == 1) BOOST_CHECK(transcript.destinations[0] == transcript.destinations[1]);
         if (scenario == 0 || scenario == 4) BOOST_CHECK(transcript.destinations[0] != transcript.destinations[1]);

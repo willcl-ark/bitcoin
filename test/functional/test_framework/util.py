@@ -297,6 +297,10 @@ class Binaries:
         "Return argv array that should be used to invoke bitcoin-util"
         return self._argv("util", self.paths.bitcoinutil)
 
+    def broadcast_argv(self):
+        "Return argv for standalone bitcoin-broadcast, which has no wrapper command."
+        return self.valgrind_cmd + [self.paths.bitcoinbroadcast]
+
     def wallet_argv(self):
         "Return argv array that should be used to invoke bitcoin-wallet"
         return self._argv("wallet", self.paths.bitcoinwallet)
@@ -339,6 +343,7 @@ def get_binary_paths(config):
         "bench_bitcoin": "BITCOIN_BENCH",
         "bitcoin-cli": "BITCOINCLI",
         "bitcoin-util": "BITCOINUTIL",
+        "bitcoin-broadcast": "BITCOINBROADCAST",
         "bitcoin-tx": "BITCOINTX",
         "bitcoin-chainstate": "BITCOINCHAINSTATE",
         "bitcoin-wallet": "BITCOINWALLET",

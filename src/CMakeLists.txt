@@ -400,6 +400,21 @@ if(BUILD_TX)
 endif()
 
 
+if(BUILD_BROADCAST)
+  add_executable(bitcoin-broadcast
+    bitcoin-broadcast.cpp
+    send.cpp
+  )
+  add_windows_application_manifest(bitcoin-broadcast)
+  target_link_libraries(bitcoin-broadcast
+    core_interface
+    bitcoin_transport
+    bitcoin_common
+    bitcoin_util
+  )
+endif()
+
+
 if(BUILD_UTIL)
   add_executable(bitcoin-util
     bitcoin-util.cpp
