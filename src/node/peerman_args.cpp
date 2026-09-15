@@ -28,8 +28,6 @@ void ApplyArgsManOptions(const ArgsManager& argsman, PeerManager::Options& optio
         options.tx_send_rate = uint32_t(std::clamp<int64_t>(*value, 1, 1000));
     }
 
-    if (auto value{argsman.GetBoolArg("-privatebroadcast")}) options.private_broadcast = *value;
 }
 
 } // namespace node
-

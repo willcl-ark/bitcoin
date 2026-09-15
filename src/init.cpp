@@ -582,9 +582,8 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-listen", strprintf("Accept connections from outside (default: %u if no -proxy, -connect or -maxconnections=0)", DEFAULT_LISTEN), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-listenonion", strprintf("Automatically create Tor onion service (default: %d)", DEFAULT_LISTEN_ONION), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-maxconnections=<n>", strprintf("Maintain at most <n> automatic connections to peers (default: %u). %u slots of these are reserved for outgoing connections. See -inboundrelaypercent for more information about limits applied to transaction relay inbound peers. "
-                                                    "This limit does not apply to connections manually added via -addnode or the addnode RPC, which have a separate limit of %u. "
-                                                    "It does not apply to short-lived private broadcast connections either, which have a separate limit of %u.",
-                                                    DEFAULT_MAX_PEER_CONNECTIONS, MAX_OUTBOUND_FULL_RELAY_CONNECTIONS + MAX_BLOCK_RELAY_ONLY_CONNECTIONS + MAX_FEELER_CONNECTIONS, MAX_ADDNODE_CONNECTIONS, MAX_PRIVATE_BROADCAST_CONNECTIONS),
+                                                    "This limit does not apply to connections manually added via -addnode or the addnode RPC, which have a separate limit of %u.",
+                                                    DEFAULT_MAX_PEER_CONNECTIONS, MAX_OUTBOUND_FULL_RELAY_CONNECTIONS + MAX_BLOCK_RELAY_ONLY_CONNECTIONS + MAX_FEELER_CONNECTIONS, MAX_ADDNODE_CONNECTIONS),
                    ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-inboundrelaypercent=<n>", strprintf("Permit a maximum percent of inbound connections to relay transactions, to limit memory utilization (0 to 100, default: %u).", DEFAULT_FULL_RELAY_INBOUND_PCT), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-maxreceivebuffer=<n>", strprintf("Maximum per-connection receive buffer, <n>*1000 bytes (default: %u)", DEFAULT_MAXRECEIVEBUFFER), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
@@ -718,15 +717,6 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
                    strprintf("Set the maximum ongoing rate for sending transactions to (inbound) peers (default: %u tx/s)",
                              DEFAULT_TX_SEND_RATE),
                    ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::NODE_RELAY);
-    argsman.AddArg("-privatebroadcast",
-                   strprintf(
-                       "Broadcast transactions submitted via sendrawtransaction RPC using short-lived "
-                       "connections through the Tor or I2P networks, without putting them in the mempool first. "
-                       "Transactions submitted through the wallet are not affected by this option "
-                       "(default: %u)",
-                   DEFAULT_PRIVATE_BROADCAST),
-                   ArgsManager::ALLOW_ANY,
-                   OptionsCategory::NODE_RELAY);
     argsman.AddArg("-whitelistforcerelay", strprintf("Add 'forcerelay' permission to whitelisted peers with default permissions. This will relay transactions even if the transactions were already in the mempool. (default: %d)", DEFAULT_WHITELISTFORCERELAY), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
     argsman.AddArg("-whitelistrelay", strprintf("Add 'relay' permission to whitelisted peers with default permissions. This will accept relayed transactions even when not relaying transactions (default: %d)", DEFAULT_WHITELISTRELAY), ArgsManager::ALLOW_ANY, OptionsCategory::NODE_RELAY);
 
@@ -1069,9 +1059,6 @@ bool AppInitParameterInteraction(const ArgsManager& args)
     if (user_p2p_max_connections < 0) {
         return InitError(Untranslated("-maxconnections must be greater or equal than zero"));
     }
-    const size_t max_private{args.GetBoolArg("-privatebroadcast", DEFAULT_PRIVATE_BROADCAST)
-                             ? MAX_PRIVATE_BROADCAST_CONNECTIONS
-                             : 0};
 
     // HTTP server listen sockets: by default two (IPv4 and IPv6 loopback), or one per -rpcbind entry
     int num_rpc_bind = std::max(args.GetArgs("-rpcbind").size(), size_t(2));
@@ -1093,8 +1080,7 @@ bool AppInitParameterInteraction(const ArgsManager& args)
                               num_p2p_bind +
                               num_rpc_bind +
                               user_rpc_max_connections +
-                              user_p2p_max_connections +
-                              static_cast<int64_t>(max_private);
+                              user_p2p_max_connections;
     if (total_fds > std::numeric_limits<int>::max()) {
         return InitError(Untranslated("Too many file descriptors requested. Try lower values for -rpcmaxconnections "
                                       "or -maxconnections, or fewer settings of "
@@ -2365,31 +2351,6 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
                     conflict->ToStringAddrPort()));
     }
 
-    if (args.GetBoolArg("-privatebroadcast", DEFAULT_PRIVATE_BROADCAST)) {
-        // If -listenonion is set, then NET_ONION may not be reachable now
-        // but may become reachable later, thus only error here if it is not
-        // reachable and will not become reachable for sure.
-        const bool onion_may_become_reachable{listenonion && (!args.IsArgSet("-onlynet") || onlynet_used_with_onion)};
-        if (!g_reachable_nets.Contains(NET_I2P) &&
-            !g_reachable_nets.Contains(NET_ONION) &&
-            !onion_may_become_reachable) {
-            return InitError(_("Private broadcast of own transactions requested (-privatebroadcast), "
-                               "but none of Tor or I2P networks is reachable"));
-        }
-        if (!connOptions.m_use_addrman_outgoing) {
-            return InitError(_("Private broadcast of own transactions requested (-privatebroadcast), "
-                               "but -connect is also configured. They are incompatible because the "
-                               "private broadcast needs to open new connections to randomly "
-                               "chosen Tor or I2P peers. Consider using -maxconnections=0 -addnode=... "
-                               "instead"));
-        }
-        if (!proxyRandomize && (g_reachable_nets.Contains(NET_ONION) || onion_may_become_reachable)) {
-            InitWarning(_("Private broadcast of own transactions requested (-privatebroadcast) and "
-                          "-proxyrandomize is disabled. Tor circuits for private broadcast connections "
-                          "may be correlated to other connections over Tor. For maximum privacy set "
-                          "-proxyrandomize=1."));
-        }
-    }
 
     if (!node.connman->Start(scheduler, connOptions)) {
         return false;
