@@ -5,6 +5,7 @@
 add_subdirectory(util)
 
 add_executable(fuzz
+  ../../send.cpp
   addition_overflow.cpp
   addrman.cpp
   asmap.cpp
@@ -114,6 +115,7 @@ add_executable(fuzz
   script_ops.cpp
   script_parsing.cpp
   script_sigcache.cpp
+  send.cpp
   script_sign.cpp
   scriptnum_ops.cpp
   secp256k1_ec_seckey_import_export_der.cpp
