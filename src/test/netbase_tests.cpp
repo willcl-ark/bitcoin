@@ -11,19 +11,307 @@
 #include <serialize.h>
 #include <streams.h>
 #include <test/util/common.h>
+#include <test/util/net.h>
 #include <test/util/setup_common.h>
+#include <test/util/time.h>
 #include <util/strencodings.h>
 #include <util/translation.h>
 
-#include <string>
-#include <numeric>
-
 #include <boost/test/unit_test.hpp>
+
+#include <algorithm>
+#include <cassert>
+#include <cerrno>
+#include <chrono>
+#include <cstdint>
+#include <functional>
+#include <limits>
+#include <memory>
+#include <numeric>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
 using namespace std::literals;
 using namespace util::hex_literals;
 
 BOOST_FIXTURE_TEST_SUITE(netbase_tests, BasicTestingSetup)
+
+namespace {
+
+class Socks5TestSock : public StaticContentsSock
+{
+public:
+    explicit Socks5TestSock(const std::vector<uint8_t>& reply)
+        : StaticContentsSock{std::string{reply.begin(), reply.end()}} {}
+
+    mutable std::vector<uint8_t> sent;
+    FakeSteadyClock* clock{nullptr};
+    size_t max_read{std::numeric_limits<size_t>::max()};
+    size_t max_write{std::numeric_limits<size_t>::max()};
+    std::chrono::milliseconds read_delay{0};
+    std::chrono::milliseconds write_delay{0};
+    bool block_read{false};
+    bool block_write{false};
+    bool block_connect{false};
+    bool interrupt_wait{false};
+
+    static void SetError(int err)
+    {
+#ifdef WIN32
+        WSASetLastError(err);
+#else
+        errno = err;
+#endif
+    }
+
+    ssize_t Send(const void* data, size_t len, int) const override
+    {
+        if (block_write) {
+            SetError(WSAEWOULDBLOCK);
+            return -1;
+        }
+        len = std::min(len, max_write);
+        const auto* bytes = static_cast<const uint8_t*>(data);
+        sent.insert(sent.end(), bytes, bytes + len);
+        if (clock) *clock += write_delay;
+        return len;
+    }
+
+    ssize_t Recv(void* data, size_t len, int flags) const override
+    {
+        if (block_read) {
+            SetError(WSAEWOULDBLOCK);
+            return -1;
+        }
+        const auto ret = StaticContentsSock::Recv(data, std::min(len, max_read), flags);
+        if (clock && ret > 0) *clock += read_delay;
+        return ret;
+    }
+
+    int Connect(const sockaddr*, socklen_t) const override
+    {
+        if (!block_connect) return 0;
+        SetError(WSAEINPROGRESS);
+        return SOCKET_ERROR;
+    }
+
+    bool Wait(std::chrono::milliseconds timeout, Event requested, Event* occurred = nullptr) const override
+    {
+        if (clock) *clock += timeout;
+        if (interrupt_wait) g_socks5_interrupt();
+        if (occurred) *occurred = block_connect ? 0 : requested;
+        return true;
+    }
+
+private:
+    Socks5TestSock& operator=(Sock&&) override
+    {
+        assert(false && "Moving into a mock socket is not allowed.");
+        return *this;
+    }
+};
+
+} // namespace
+
+BOOST_AUTO_TEST_CASE(socks5_authentication)
+{
+    g_socks5_interrupt.reset();
+    const ProxyCredentials auth{"user", "password"};
+    Socks5TestSock sock{{5, 0, 5, 0, 0, 1, 127, 0, 0, 1, 0, 1}};
+    BOOST_REQUIRE_EQUAL(Socks5("test.onion", 8333, &auth, sock, Socks5AuthPolicy::ALLOW_NOAUTH, std::nullopt, g_socks5_interrupt), Socks5Result::SUCCESS);
+    const std::vector<uint8_t> greeting{5, 2, 0, 2};
+    BOOST_REQUIRE_GE(sock.sent.size(), greeting.size());
+    BOOST_CHECK(std::equal(greeting.begin(), greeting.end(), sock.sent.begin()));
+
+    Socks5TestSock strict{{5, 0}};
+    BOOST_CHECK_EQUAL(Socks5("test.onion", 8333, &auth, strict, Socks5AuthPolicy::REQUIRE_AUTH, std::nullopt, g_socks5_interrupt), Socks5Result::PROXY_ERROR);
+    BOOST_CHECK(strict.sent == std::vector<uint8_t>({5, 1, 2}));
+
+    Socks5TestSock authenticated{{5, 2, 1, 0, 5, 0, 0, 1, 127, 0, 0, 1, 0, 1}};
+    BOOST_REQUIRE_EQUAL(Socks5("test.onion", 8333, &auth, authenticated, Socks5AuthPolicy::REQUIRE_AUTH, std::nullopt, g_socks5_interrupt), Socks5Result::SUCCESS);
+    const std::vector<uint8_t> expected{
+        5, 1, 2,
+        1, 4, 'u', 's', 'e', 'r', 8, 'p', 'a', 's', 's', 'w', 'o', 'r', 'd',
+        5, 1, 0, 3, 10, 't', 'e', 's', 't', '.', 'o', 'n', 'i', 'o', 'n', 0x20, 0x8d};
+    BOOST_CHECK(authenticated.sent == expected);
+    Socks5TestSock unauthenticated{{5, 0, 5, 0, 0, 1, 127, 0, 0, 1, 0, 1}};
+    BOOST_REQUIRE_EQUAL(Socks5("test.onion", 8333, nullptr, unauthenticated, Socks5AuthPolicy::ALLOW_NOAUTH, std::nullopt, g_socks5_interrupt), Socks5Result::SUCCESS);
+    BOOST_REQUIRE_GE(unauthenticated.sent.size(), 3U);
+    BOOST_CHECK_EQUAL(unauthenticated.sent[1], 1U);
+    BOOST_CHECK_EQUAL(unauthenticated.sent[2], 0U);
+}
+
+BOOST_AUTO_TEST_CASE(socks5_bad_authentication)
+{
+    g_socks5_interrupt.reset();
+    const ProxyCredentials auth{"user", "password"};
+    for (const auto& reply : std::vector<std::vector<uint8_t>>{{5, 1}, {5, 255}, {4, 2}, {5, 2, 1, 1}, {5, 2, 2, 0}, {5}, {5, 2, 1}}) {
+        Socks5TestSock sock{reply};
+        BOOST_CHECK_EQUAL(Socks5("test.onion", 8333, &auth, sock, Socks5AuthPolicy::REQUIRE_AUTH, std::nullopt, g_socks5_interrupt), Socks5Result::PROXY_ERROR);
+    }
+    Socks5TestSock missing{{5, 2}};
+    BOOST_CHECK_EQUAL(Socks5("test.onion", 8333, nullptr, missing, Socks5AuthPolicy::REQUIRE_AUTH, std::nullopt, g_socks5_interrupt), Socks5Result::PROXY_ERROR);
+    BOOST_CHECK(missing.sent.empty());
+    const ProxyCredentials oversized{std::string(256, 'x'), "password"};
+    Socks5TestSock long_auth{{5, 2}};
+    BOOST_CHECK_EQUAL(Socks5("test.onion", 8333, &oversized, long_auth, Socks5AuthPolicy::REQUIRE_AUTH, std::nullopt, g_socks5_interrupt), Socks5Result::PROXY_ERROR);
+}
+
+BOOST_AUTO_TEST_CASE(socks5_reply_validation)
+{
+    g_socks5_interrupt.reset();
+    const ProxyCredentials auth{"user", "password"};
+    const std::vector<uint8_t> success{5, 2, 1, 0, 5, 0, 0, 1, 127, 0, 0, 1, 0, 1};
+    for (const uint8_t status : {1, 2, 3, 4, 5, 6, 0xf0, 0xf7}) {
+        auto reply = success;
+        reply[5] = status;
+        Socks5TestSock sock{reply};
+        BOOST_CHECK_EQUAL(Socks5("test.onion", 8333, &auth, sock, Socks5AuthPolicy::REQUIRE_AUTH, std::nullopt, g_socks5_interrupt), Socks5Result::DESTINATION_ERROR);
+    }
+    for (const auto& [offset, value] : std::vector<std::pair<size_t, uint8_t>>{{4, 4}, {5, 7}, {5, 8}, {5, 9}, {6, 1}, {7, 2}}) {
+        auto reply = success;
+        reply[offset] = value;
+        Socks5TestSock sock{reply};
+        BOOST_CHECK_EQUAL(Socks5("test.onion", 8333, &auth, sock, Socks5AuthPolicy::REQUIRE_AUTH, std::nullopt, g_socks5_interrupt), Socks5Result::PROXY_ERROR);
+    }
+    for (size_t len = 4; len < success.size(); ++len) {
+        Socks5TestSock sock{std::vector<uint8_t>{success.begin(), success.begin() + len}};
+        BOOST_CHECK_EQUAL(Socks5("test.onion", 8333, &auth, sock, Socks5AuthPolicy::REQUIRE_AUTH, std::nullopt, g_socks5_interrupt), Socks5Result::PROXY_ERROR);
+    }
+    Socks5TestSock domain{{5, 2, 1, 0, 5, 0, 0, 3, 1, 'x', 0, 1}};
+    BOOST_CHECK_EQUAL(Socks5("test.onion", 8333, &auth, domain, Socks5AuthPolicy::REQUIRE_AUTH, std::nullopt, g_socks5_interrupt), Socks5Result::SUCCESS);
+    Socks5TestSock empty_domain{{5, 2, 1, 0, 5, 0, 0, 3, 0, 0, 1}};
+    BOOST_CHECK_EQUAL(Socks5("test.onion", 8333, &auth, empty_domain, Socks5AuthPolicy::REQUIRE_AUTH, std::nullopt, g_socks5_interrupt), Socks5Result::PROXY_ERROR);
+    auto ipv6_reply = success;
+    ipv6_reply[7] = 4;
+    ipv6_reply.insert(ipv6_reply.end() - 2, 12, 0);
+    Socks5TestSock ipv6{ipv6_reply};
+    BOOST_CHECK_EQUAL(Socks5("test.onion", 8333, &auth, ipv6, Socks5AuthPolicy::REQUIRE_AUTH, std::nullopt, g_socks5_interrupt), Socks5Result::SUCCESS);
+}
+
+BOOST_AUTO_TEST_CASE(socks5_deadline)
+{
+    g_socks5_interrupt.reset();
+    FakeSteadyClock clock;
+    const ProxyCredentials auth{"user", "password"};
+    const std::vector<uint8_t> success{5, 2, 1, 0, 5, 0, 0, 1, 127, 0, 0, 1, 0, 1};
+    Socks5TestSock drip{success};
+    drip.clock = &clock;
+    drip.max_read = 1;
+    drip.read_delay = 100ms;
+    const auto deadline = MockableSteadyClock::now() + 250ms;
+    BOOST_CHECK_EQUAL(Socks5("test.onion", 8333, &auth, drip, Socks5AuthPolicy::REQUIRE_AUTH, deadline, g_socks5_interrupt), Socks5Result::PROXY_ERROR);
+    BOOST_CHECK_GE(MockableSteadyClock::now(), deadline);
+    BOOST_CHECK_EQUAL(drip.sent.size(), 18U); // Greeting and authentication, no CONNECT.
+
+    Socks5TestSock partial_reply{success};
+    partial_reply.clock = &clock;
+    partial_reply.max_read = 1;
+    partial_reply.read_delay = 10ms;
+    // Authentication takes four reads; expire during the CONNECT reply header.
+    BOOST_CHECK_EQUAL(Socks5("test.onion", 8333, &auth, partial_reply, Socks5AuthPolicy::REQUIRE_AUTH, MockableSteadyClock::now() + 60ms, g_socks5_interrupt), Socks5Result::PROXY_ERROR);
+
+    Socks5TestSock per_operation{success};
+    per_operation.clock = &clock;
+    per_operation.max_read = 1;
+    per_operation.read_delay = 100ms;
+    BOOST_CHECK_EQUAL(Socks5("test.onion", 8333, &auth, per_operation, Socks5AuthPolicy::ALLOW_NOAUTH, std::nullopt, g_socks5_interrupt), Socks5Result::SUCCESS);
+
+    for (const auto timeout : {140ms, 141ms}) {
+        Socks5TestSock boundary{success};
+        boundary.clock = &clock;
+        boundary.max_read = 1;
+        boundary.read_delay = 10ms;
+        BOOST_CHECK_EQUAL(Socks5("test.onion", 8333, &auth, boundary, Socks5AuthPolicy::REQUIRE_AUTH, MockableSteadyClock::now() + timeout, g_socks5_interrupt),
+                          timeout == 140ms ? Socks5Result::PROXY_ERROR : Socks5Result::SUCCESS);
+    }
+
+    Socks5TestSock short_write{success};
+    short_write.clock = &clock;
+    short_write.max_write = 1;
+    short_write.write_delay = 10ms;
+    BOOST_CHECK_EQUAL(Socks5("test.onion", 8333, &auth, short_write, Socks5AuthPolicy::REQUIRE_AUTH, MockableSteadyClock::now() + 15ms, g_socks5_interrupt), Socks5Result::PROXY_ERROR);
+    BOOST_CHECK_EQUAL(short_write.sent.size(), 2U);
+
+    Socks5TestSock bounded{success};
+    bounded.clock = &clock;
+    bounded.max_read = 1;
+    bounded.max_write = 1;
+    BOOST_CHECK_EQUAL(Socks5("test.onion", 8333, &auth, bounded, Socks5AuthPolicy::REQUIRE_AUTH, MockableSteadyClock::now() + 1s, g_socks5_interrupt), Socks5Result::SUCCESS);
+
+    for (bool sending : {false, true}) {
+        Socks5TestSock blocked{success};
+        blocked.clock = &clock;
+        blocked.block_write = sending;
+        blocked.block_read = !sending;
+        const auto end = MockableSteadyClock::now() + 25ms;
+        BOOST_CHECK_EQUAL(Socks5("test.onion", 8333, &auth, blocked, Socks5AuthPolicy::REQUIRE_AUTH, end, g_socks5_interrupt), Socks5Result::PROXY_ERROR);
+        BOOST_CHECK_EQUAL(MockableSteadyClock::now(), end);
+    }
+
+    Socks5TestSock expired{success};
+    BOOST_CHECK_EQUAL(Socks5("test.onion", 8333, &auth, expired, Socks5AuthPolicy::REQUIRE_AUTH, MockableSteadyClock::now(), g_socks5_interrupt), Socks5Result::PROXY_ERROR);
+    BOOST_CHECK(expired.sent.empty());
+    struct QueryInterrupt : CThreadInterrupt {
+        bool interrupted() const override { return true; }
+    } local_interrupt;
+    BOOST_CHECK_EQUAL(Socks5("test.onion", 8333, &auth, expired, Socks5AuthPolicy::REQUIRE_AUTH, MockableSteadyClock::now() + 1s, local_interrupt), Socks5Result::PROXY_ERROR);
+    BOOST_CHECK(expired.sent.empty());
+    BOOST_CHECK(!g_socks5_interrupt);
+    g_socks5_interrupt();
+    BOOST_CHECK_EQUAL(Socks5("test.onion", 8333, &auth, expired, Socks5AuthPolicy::REQUIRE_AUTH, std::nullopt, g_socks5_interrupt), Socks5Result::PROXY_ERROR);
+    BOOST_CHECK(expired.sent.empty());
+    g_socks5_interrupt.reset();
+}
+
+BOOST_AUTO_TEST_CASE(proxy_connect_deadline)
+{
+    struct RestoreFactory {
+        decltype(CreateSock) saved{CreateSock};
+        ~RestoreFactory()
+        {
+            CreateSock = saved;
+            g_socks5_interrupt.reset();
+        }
+    } restore;
+    g_socks5_interrupt.reset();
+    FakeSteadyClock clock;
+    size_t creations{0};
+    bool cancel_during_wait{false};
+    CreateSock = [&](int domain, int type, int protocol) {
+        BOOST_CHECK_EQUAL(domain, AF_INET);
+        BOOST_CHECK_EQUAL(type, SOCK_STREAM);
+        BOOST_CHECK_EQUAL(protocol, IPPROTO_TCP);
+        ++creations;
+        auto sock = std::make_unique<Socks5TestSock>(std::vector<uint8_t>{});
+        sock->clock = &clock;
+        sock->block_connect = true;
+        sock->interrupt_wait = cancel_during_wait;
+        return sock;
+    };
+    const auto proxy = LookupNumeric("127.0.0.1:9050");
+    const auto deadline = MockableSteadyClock::now() + 25ms;
+    BOOST_CHECK(!ConnectDirectly(proxy, true, 60s, deadline, g_socks5_interrupt));
+    BOOST_CHECK_EQUAL(MockableSteadyClock::now(), deadline);
+    BOOST_CHECK_EQUAL(creations, 1U);
+    BOOST_CHECK(!ConnectDirectly(proxy, true, 60s, deadline, g_socks5_interrupt));
+    BOOST_CHECK_EQUAL(creations, 1U);
+    CThreadInterrupt local_interrupt;
+    local_interrupt();
+    BOOST_CHECK(!ConnectDirectly(proxy, true, 60s, MockableSteadyClock::now() + 60s, local_interrupt));
+    BOOST_CHECK_EQUAL(creations, 1U);
+    BOOST_CHECK(!g_socks5_interrupt);
+    g_socks5_interrupt();
+    BOOST_CHECK(!ConnectDirectly(proxy, true, 60s, MockableSteadyClock::now() + 60s, g_socks5_interrupt));
+    BOOST_CHECK_EQUAL(creations, 1U);
+    g_socks5_interrupt.reset();
+    cancel_during_wait = true;
+    BOOST_CHECK(!ConnectDirectly(proxy, true, 60s, MockableSteadyClock::now() + 60s, g_socks5_interrupt));
+    BOOST_CHECK_EQUAL(creations, 2U);
+    BOOST_CHECK(g_socks5_interrupt);
+}
 
 static CNetAddr ResolveIP(const std::string& ip)
 {

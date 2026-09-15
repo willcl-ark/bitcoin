@@ -10,6 +10,7 @@
 #include <serialize.h>
 #include <util/sock.h>
 #include <util/threadinterrupt.h>
+#include <util/time.h>
 
 #include <chrono>
 #include <cstdint>
@@ -96,6 +97,17 @@ struct ProxyCredentials
 {
     std::string username;
     std::string password;
+};
+
+enum class Socks5AuthPolicy {
+    ALLOW_NOAUTH,
+    REQUIRE_AUTH,
+};
+
+enum class Socks5Result {
+    SUCCESS,
+    PROXY_ERROR,
+    DESTINATION_ERROR,
 };
 
 /**
@@ -306,10 +318,13 @@ extern std::function<std::unique_ptr<Sock>(int, int, int)> CreateSock;
  */
 std::unique_ptr<Sock> ConnectDirectly(const CService& dest, bool manual_connection);
 
-/** Create a socket and try to connect to the specified service, using the provided timeout. */
+/** Create a socket and connect using the timeout, additionally capped by an optional
+ * absolute deadline. The interrupt is checked when a deadline is supplied. */
 std::unique_ptr<Sock> ConnectDirectly(const CService& dest,
                                       bool manual_connection,
-                                      std::chrono::milliseconds timeout);
+                                      std::chrono::milliseconds timeout,
+                                      std::optional<MockableSteadyClock::time_point> deadline,
+                                      const CThreadInterrupt& interrupt);
 
 /**
  * Connect to a specified destination service through a SOCKS5 proxy by first
@@ -341,8 +356,12 @@ extern CThreadInterrupt g_socks5_interrupt;
  * @param auth The credentials with which to authenticate with the specified
  *             SOCKS5 proxy.
  * @param socket The SOCKS5 proxy socket.
+ * @param auth_policy Whether the proxy must authenticate the supplied credentials.
+ * @param deadline Absolute monotonic deadline for the entire attempt, or no value
+ *                 to retain the node's per-operation timeout policy.
+ * @param interrupt Cancellation checked during every read and write.
  *
- * @returns Whether or not the operation succeeded.
+ * @returns Success, a proxy/setup failure, or a destination connection failure.
  *
  * @note The specified SOCKS5 proxy socket must already be connected to the
  *       SOCKS5 proxy.
@@ -350,7 +369,11 @@ extern CThreadInterrupt g_socks5_interrupt;
  * @see <a href="https://www.ietf.org/rfc/rfc1928.txt">RFC1928: SOCKS Protocol
  *      Version 5</a>
  */
-bool Socks5(const std::string& strDest, uint16_t port, const ProxyCredentials* auth, const Sock& socket);
+Socks5Result Socks5(const std::string& strDest, uint16_t port,
+                    const ProxyCredentials* auth, const Sock& socket,
+                    Socks5AuthPolicy auth_policy,
+                    std::optional<MockableSteadyClock::time_point> deadline,
+                    const CThreadInterrupt& interrupt);
 
 /**
  * Determine if a port is "bad" from the perspective of attempting to connect

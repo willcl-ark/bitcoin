@@ -16,12 +16,15 @@
 #include <util/string.h>
 #include <util/time.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <functional>
 #include <limits>
 #include <memory>
+#include <optional>
+#include <span>
 
 #ifdef HAVE_SOCKADDR_UN
 #include <sys/un.h>
@@ -294,6 +297,7 @@ enum SOCKS5Atyp: uint8_t {
 enum class IntrRecvError {
     OK,
     Timeout,
+    PartialTimeout,
     Disconnected,
     NetworkError,
     Interrupted
@@ -305,47 +309,65 @@ enum class IntrRecvError {
  *
  * @param data The buffer where the read bytes should be stored.
  * @param len The number of bytes to read into the specified buffer.
- * @param timeout The total timeout for this read.
+ * @param deadline Absolute deadline, or no value for the node's per-operation timeout.
  * @param sock The socket (has to be in non-blocking mode) from which to read bytes.
  *
  * @returns An IntrRecvError indicating the resulting status of this read.
  *          IntrRecvError::OK only if all of the specified number of bytes were
  *          read.
  *
- * @see This function can be interrupted by calling g_socks5_interrupt().
+ * @see This function checks the caller's interrupt between I/O operations.
  *      Sockets can be made non-blocking with Sock::SetNonBlocking().
  */
-static IntrRecvError InterruptibleRecv(uint8_t* data, size_t len, std::chrono::milliseconds timeout, const Sock& sock)
+static IntrRecvError InterruptibleRecv(uint8_t* data, size_t len,
+                                       std::optional<MockableSteadyClock::time_point> deadline,
+                                       const Sock& sock, const CThreadInterrupt& interrupt)
 {
-    auto curTime{Now<SteadyMilliseconds>()};
-    const auto endTime{curTime + timeout};
-    while (len > 0 && curTime < endTime) {
-        ssize_t ret = sock.Recv(data, len, 0); // Optimistically try the recv first
+    const auto end_time = deadline.value_or(MockableSteadyClock::now() + g_socks5_recv_timeout);
+    const size_t initial_len = len;
+    while (len > 0) {
+        if (interrupt) return IntrRecvError::Interrupted;
+        const auto now = MockableSteadyClock::now();
+        if (now >= end_time) return len == initial_len ? IntrRecvError::Timeout : IntrRecvError::PartialTimeout;
+        const ssize_t ret = sock.Recv(data, len, 0);
         if (ret > 0) {
             len -= ret;
             data += ret;
-        } else if (ret == 0) { // Unexpected disconnection
+        } else if (ret == 0) {
             return IntrRecvError::Disconnected;
-        } else { // Other error or blocking
-            int nErr = WSAGetLastError();
-            if (nErr == WSAEINPROGRESS || nErr == WSAEWOULDBLOCK || nErr == WSAEINVAL) {
-                // Only wait at most MAX_WAIT_FOR_IO at a time, unless
-                // we're approaching the end of the specified total timeout
-                const auto remaining = std::chrono::milliseconds{endTime - curTime};
-                const auto timeout = std::min(remaining, std::chrono::milliseconds{MAX_WAIT_FOR_IO});
-                if (!sock.Wait(timeout, Sock::RecvEvent)) {
-                    return IntrRecvError::NetworkError;
-                }
-            } else {
+        } else {
+            const int err = WSAGetLastError();
+            if (IOErrorIsPermanent(err) && err != WSAEINVAL) return IntrRecvError::NetworkError;
+            const auto remaining = std::chrono::ceil<std::chrono::milliseconds>(end_time - now);
+            if (!sock.Wait(std::min(remaining, std::chrono::milliseconds{MAX_WAIT_FOR_IO}), Sock::RecvEvent)) {
                 return IntrRecvError::NetworkError;
             }
         }
-        if (g_socks5_interrupt) {
-            return IntrRecvError::Interrupted;
-        }
-        curTime = Now<SteadyMilliseconds>();
     }
-    return len == 0 ? IntrRecvError::OK : IntrRecvError::Timeout;
+    if (interrupt) return IntrRecvError::Interrupted;
+    return MockableSteadyClock::now() < end_time ? IntrRecvError::OK : IntrRecvError::PartialTimeout;
+}
+
+/** SOCKS writes use the same monotonic deadline as reads, including short writes. */
+static bool InterruptibleSend(std::span<const uint8_t> data,
+                              std::optional<MockableSteadyClock::time_point> deadline,
+                              const Sock& sock, const CThreadInterrupt& interrupt)
+{
+    const auto end_time = deadline.value_or(MockableSteadyClock::now() + g_socks5_recv_timeout);
+    while (!data.empty()) {
+        if (interrupt) return false;
+        const auto now = MockableSteadyClock::now();
+        if (now >= end_time) return false;
+        const ssize_t ret = sock.Send(data.data(), data.size(), MSG_NOSIGNAL);
+        if (ret > 0) {
+            data = data.subspan(ret);
+        } else {
+            if (ret == 0 || IOErrorIsPermanent(WSAGetLastError())) return false;
+            const auto remaining = std::chrono::ceil<std::chrono::milliseconds>(end_time - now);
+            if (!sock.Wait(std::min(remaining, std::chrono::milliseconds{MAX_WAIT_FOR_IO}), Sock::SendEvent)) return false;
+        }
+    }
+    return !interrupt && MockableSteadyClock::now() < end_time;
 }
 
 /** Convert SOCKS5 reply to an error message */
@@ -389,19 +411,28 @@ static std::string Socks5ErrorString(uint8_t err)
     }
 }
 
-bool Socks5(const std::string& strDest, uint16_t port, const ProxyCredentials* auth, const Sock& sock)
+Socks5Result Socks5(const std::string& strDest, uint16_t port, const ProxyCredentials* auth,
+                    const Sock& sock, Socks5AuthPolicy auth_policy,
+                    std::optional<MockableSteadyClock::time_point> deadline,
+                    const CThreadInterrupt& interrupt)
 {
     try {
         IntrRecvError recvr;
         LogDebug(BCLog::NET, "SOCKS5 connecting %s\n", strDest);
-        if (strDest.size() > 255) {
+        if (interrupt || (deadline && MockableSteadyClock::now() >= *deadline)) return Socks5Result::PROXY_ERROR;
+        if (auth_policy == Socks5AuthPolicy::REQUIRE_AUTH &&
+            (!auth || auth->username.empty() || auth->password.empty())) return Socks5Result::PROXY_ERROR;
+        if (strDest.empty() || ContainsNUL(strDest) || strDest.size() > 255) {
             LogError("Hostname too long\n");
-            return false;
+            return Socks5Result::PROXY_ERROR;
         }
         // Construct the version identifier/method selection message
         std::vector<uint8_t> vSocks5Init;
         vSocks5Init.push_back(SOCKSVersion::SOCKS5); // We want the SOCK5 protocol
-        if (auth) {
+        if (auth_policy == Socks5AuthPolicy::REQUIRE_AUTH) {
+            vSocks5Init.push_back(0x01);
+            vSocks5Init.push_back(SOCKS5Method::USER_PASS);
+        } else if (auth) {
             vSocks5Init.push_back(0x02); // 2 method identifiers follow...
             vSocks5Init.push_back(SOCKS5Method::NOAUTH);
             vSocks5Init.push_back(SOCKS5Method::USER_PASS);
@@ -409,15 +440,15 @@ bool Socks5(const std::string& strDest, uint16_t port, const ProxyCredentials* a
             vSocks5Init.push_back(0x01); // 1 method identifier follows...
             vSocks5Init.push_back(SOCKS5Method::NOAUTH);
         }
-        sock.SendComplete(vSocks5Init, g_socks5_recv_timeout, g_socks5_interrupt);
+        if (!InterruptibleSend(vSocks5Init, deadline, sock, interrupt)) return Socks5Result::PROXY_ERROR;
         uint8_t pchRet1[2];
-        if (InterruptibleRecv(pchRet1, 2, g_socks5_recv_timeout, sock) != IntrRecvError::OK) {
+        if (InterruptibleRecv(pchRet1, 2, deadline, sock, interrupt) != IntrRecvError::OK) {
             LogInfo("Socks5() connect to %s:%d failed: InterruptibleRecv() timeout or other failure\n", strDest, port);
-            return false;
+            return Socks5Result::PROXY_ERROR;
         }
         if (pchRet1[0] != SOCKSVersion::SOCKS5) {
             LogError("Proxy failed to initialize\n");
-            return false;
+            return Socks5Result::PROXY_ERROR;
         }
         if (pchRet1[1] == SOCKS5Method::USER_PASS && auth) {
             // Perform username/password authentication (as described in RFC1929)
@@ -425,28 +456,28 @@ bool Socks5(const std::string& strDest, uint16_t port, const ProxyCredentials* a
             vAuth.push_back(0x01); // Current (and only) version of user/pass subnegotiation
             if (auth->username.size() > 255 || auth->password.size() > 255) {
                 LogError("Proxy username or password too long\n");
-                return false;
+                return Socks5Result::PROXY_ERROR;
             }
             vAuth.push_back(auth->username.size());
             vAuth.insert(vAuth.end(), auth->username.begin(), auth->username.end());
             vAuth.push_back(auth->password.size());
             vAuth.insert(vAuth.end(), auth->password.begin(), auth->password.end());
             LogDebug(BCLog::PROXY, "SOCKS5 sending username/password authentication\n");
-            sock.SendComplete(vAuth, g_socks5_recv_timeout, g_socks5_interrupt);
+            if (!InterruptibleSend(vAuth, deadline, sock, interrupt)) return Socks5Result::PROXY_ERROR;
             uint8_t pchRetA[2];
-            if (InterruptibleRecv(pchRetA, 2, g_socks5_recv_timeout, sock) != IntrRecvError::OK) {
+            if (InterruptibleRecv(pchRetA, 2, deadline, sock, interrupt) != IntrRecvError::OK) {
                 LogError("Error reading proxy authentication response\n");
-                return false;
+                return Socks5Result::PROXY_ERROR;
             }
             if (pchRetA[0] != 0x01 || pchRetA[1] != 0x00) {
                 LogError("Proxy authentication unsuccessful\n");
-                return false;
+                return Socks5Result::PROXY_ERROR;
             }
-        } else if (pchRet1[1] == SOCKS5Method::NOAUTH) {
+        } else if (pchRet1[1] == SOCKS5Method::NOAUTH && auth_policy == Socks5AuthPolicy::ALLOW_NOAUTH) {
             // Perform no authentication
         } else {
             LogError("Proxy requested wrong authentication method %02x\n", pchRet1[1]);
-            return false;
+            return Socks5Result::PROXY_ERROR;
         }
         std::vector<uint8_t> vSocks5;
         vSocks5.push_back(SOCKSVersion::SOCKS5);   // VER protocol version
@@ -457,65 +488,70 @@ bool Socks5(const std::string& strDest, uint16_t port, const ProxyCredentials* a
         vSocks5.insert(vSocks5.end(), strDest.begin(), strDest.end());
         vSocks5.push_back((port >> 8) & 0xFF);
         vSocks5.push_back((port >> 0) & 0xFF);
-        sock.SendComplete(vSocks5, g_socks5_recv_timeout, g_socks5_interrupt);
+        if (!InterruptibleSend(vSocks5, deadline, sock, interrupt)) return Socks5Result::PROXY_ERROR;
         uint8_t pchRet2[4];
-        if ((recvr = InterruptibleRecv(pchRet2, 4, g_socks5_recv_timeout, sock)) != IntrRecvError::OK) {
+        if ((recvr = InterruptibleRecv(pchRet2, 4, deadline, sock, interrupt)) != IntrRecvError::OK) {
             if (recvr == IntrRecvError::Timeout) {
                 /* If a timeout happens here, this effectively means we timed out while connecting
                  * to the remote node. This is very common for Tor, so do not print an
                  * error message. */
-                return false;
+                return Socks5Result::DESTINATION_ERROR;
             } else {
                 LogError("Error while reading proxy response\n");
-                return false;
+                return Socks5Result::PROXY_ERROR;
             }
         }
         if (pchRet2[0] != SOCKSVersion::SOCKS5) {
             LogError("Proxy failed to accept request\n");
-            return false;
-        }
-        if (pchRet2[1] != SOCKS5Reply::SUCCEEDED) {
-            // Failures to connect to a peer that are not proxy errors
-            LogDebug(BCLog::NET,
-                          "Socks5() connect to %s:%d failed: %s\n", strDest, port, Socks5ErrorString(pchRet2[1]));
-            return false;
+            return Socks5Result::PROXY_ERROR;
         }
         if (pchRet2[2] != 0x00) { // Reserved field must be 0
             LogError("Error: malformed proxy response\n");
-            return false;
+            return Socks5Result::PROXY_ERROR;
         }
         uint8_t pchRet3[256];
         switch (pchRet2[3]) {
-        case SOCKS5Atyp::IPV4: recvr = InterruptibleRecv(pchRet3, 4, g_socks5_recv_timeout, sock); break;
-        case SOCKS5Atyp::IPV6: recvr = InterruptibleRecv(pchRet3, 16, g_socks5_recv_timeout, sock); break;
+        case SOCKS5Atyp::IPV4: recvr = InterruptibleRecv(pchRet3, 4, deadline, sock, interrupt); break;
+        case SOCKS5Atyp::IPV6: recvr = InterruptibleRecv(pchRet3, 16, deadline, sock, interrupt); break;
         case SOCKS5Atyp::DOMAINNAME: {
-            recvr = InterruptibleRecv(pchRet3, 1, g_socks5_recv_timeout, sock);
+            recvr = InterruptibleRecv(pchRet3, 1, deadline, sock, interrupt);
             if (recvr != IntrRecvError::OK) {
                 LogError("Error reading from proxy\n");
-                return false;
+                return Socks5Result::PROXY_ERROR;
             }
             int nRecv = pchRet3[0];
-            recvr = InterruptibleRecv(pchRet3, nRecv, g_socks5_recv_timeout, sock);
+            if (nRecv == 0) return Socks5Result::PROXY_ERROR;
+            recvr = InterruptibleRecv(pchRet3, nRecv, deadline, sock, interrupt);
             break;
         }
         default: {
             LogError("Error: malformed proxy response\n");
-            return false;
+            return Socks5Result::PROXY_ERROR;
         }
         }
         if (recvr != IntrRecvError::OK) {
             LogError("Error reading from proxy\n");
-            return false;
+            return Socks5Result::PROXY_ERROR;
         }
-        if (InterruptibleRecv(pchRet3, 2, g_socks5_recv_timeout, sock) != IntrRecvError::OK) {
+        if (InterruptibleRecv(pchRet3, 2, deadline, sock, interrupt) != IntrRecvError::OK) {
             LogError("Error reading from proxy\n");
-            return false;
+            return Socks5Result::PROXY_ERROR;
+        }
+        if (pchRet2[1] != SOCKS5Reply::SUCCEEDED) {
+            LogDebug(BCLog::NET, "Socks5() connect to %s:%d failed: %s\n", strDest, port, Socks5ErrorString(pchRet2[1]));
+            // CONNECT and domain names are required capabilities of this proxy.
+            const uint8_t reply = pchRet2[1];
+            if ((reply >= SOCKS5Reply::GENFAILURE && reply <= SOCKS5Reply::TTLEXPIRED) ||
+                (reply >= SOCKS5Reply::TOR_HS_DESC_NOT_FOUND && reply <= SOCKS5Reply::TOR_HS_INTRO_TIMEOUT)) {
+                return Socks5Result::DESTINATION_ERROR;
+            }
+            return Socks5Result::PROXY_ERROR;
         }
         LogDebug(BCLog::NET, "SOCKS5 connected %s\n", strDest);
-        return true;
+        return Socks5Result::SUCCESS;
     } catch (const std::runtime_error& e) {
         LogError("Error during SOCKS5 proxy handshake: %s\n", e.what());
-        return false;
+        return Socks5Result::PROXY_ERROR;
     }
 }
 
@@ -592,8 +628,11 @@ static bool ConnectToSocket(const Sock& sock,
                             socklen_t len,
                             const std::string& dest_str,
                             bool manual_connection,
-                            std::chrono::milliseconds timeout)
+                            std::chrono::milliseconds timeout,
+                            std::optional<MockableSteadyClock::time_point> deadline,
+                            const CThreadInterrupt& interrupt)
 {
+    if (deadline && (interrupt || MockableSteadyClock::now() >= *deadline)) return false;
     // Connect to `sockaddr` using `sock`.
     if (sock.Connect(sockaddr, len) == SOCKET_ERROR) {
         int nErr = WSAGetLastError();
@@ -604,13 +643,24 @@ static bool ConnectToSocket(const Sock& sock,
             // asynchronously. Thus, use async I/O api (select/poll)
             // synchronously to check for successful connection with a timeout.
             const Sock::Event requested = Sock::RecvEvent | Sock::SendEvent;
-            Sock::Event occurred;
-            if (!sock.Wait(timeout, requested, &occurred)) {
-                LogInfo("wait for connect to %s failed: %s\n",
-                          dest_str,
-                          NetworkErrorString(WSAGetLastError()));
-                return false;
-            } else if (occurred == 0) {
+            Sock::Event occurred{0};
+            const auto end_time = deadline ? std::min(*deadline, MockableSteadyClock::now() + timeout) : MockableSteadyClock::time_point{};
+            do {
+                auto wait_time = timeout;
+                if (deadline) {
+                    const auto now = MockableSteadyClock::now();
+                    if (interrupt || now >= end_time) return false;
+                    wait_time = std::min(std::chrono::ceil<std::chrono::milliseconds>(end_time - now), std::chrono::milliseconds{MAX_WAIT_FOR_IO});
+                }
+                if (!sock.Wait(wait_time, requested, &occurred)) {
+                    LogInfo("wait for connect to %s failed: %s\n",
+                            dest_str,
+                            NetworkErrorString(WSAGetLastError()));
+                    return false;
+                }
+            } while (deadline && occurred == 0);
+            if (deadline && (interrupt || MockableSteadyClock::now() >= end_time)) return false;
+            if (occurred == 0) {
                 LogDebug(BCLog::NET, "connection attempt to %s timed out\n", dest_str);
                 return false;
             }
@@ -644,18 +694,21 @@ static bool ConnectToSocket(const Sock& sock,
             return false;
         }
     }
-    return true;
+    return !deadline || (!interrupt && MockableSteadyClock::now() < *deadline);
 }
 
 std::unique_ptr<Sock> ConnectDirectly(const CService& dest, bool manual_connection)
 {
-    return ConnectDirectly(dest, manual_connection, std::chrono::milliseconds{nConnectTimeout});
+    return ConnectDirectly(dest, manual_connection, std::chrono::milliseconds{nConnectTimeout}, std::nullopt, g_socks5_interrupt);
 }
 
 std::unique_ptr<Sock> ConnectDirectly(const CService& dest,
                                       bool manual_connection,
-                                      std::chrono::milliseconds timeout)
+                                      std::chrono::milliseconds timeout,
+                                      std::optional<MockableSteadyClock::time_point> deadline,
+                                      const CThreadInterrupt& interrupt)
 {
+    if (deadline && (interrupt || MockableSteadyClock::now() >= *deadline)) return {};
     auto sock = CreateSock(dest.GetSAFamily(), SOCK_STREAM, IPPROTO_TCP);
     if (!sock) {
         LogError("Cannot create a socket for connecting to %s\n", dest.ToStringAddrPort());
@@ -670,7 +723,7 @@ std::unique_ptr<Sock> ConnectDirectly(const CService& dest,
         return {};
     }
 
-    if (!ConnectToSocket(*sock, (struct sockaddr*)&sockaddr, len, dest.ToStringAddrPort(), manual_connection, timeout)) {
+    if (!ConnectToSocket(*sock, (struct sockaddr*)&sockaddr, len, dest.ToStringAddrPort(), manual_connection, timeout, deadline, interrupt)) {
         return {};
     }
 
@@ -704,7 +757,9 @@ std::unique_ptr<Sock> Proxy::Connect() const
                          len,
                          path,
                          /*manual_connection=*/true,
-                         std::chrono::milliseconds{nConnectTimeout})) {
+                         std::chrono::milliseconds{nConnectTimeout},
+                         std::nullopt,
+                         g_socks5_interrupt)) {
         return {};
     }
 
@@ -817,11 +872,11 @@ std::unique_ptr<Sock> ConnectThroughProxy(const Proxy& proxy,
     if (proxy.m_tor_stream_isolation) {
         static TorStreamIsolationCredentialsGenerator generator;
         ProxyCredentials random_auth{generator.Generate()};
-        if (!Socks5(dest, port, &random_auth, *sock)) {
+        if (Socks5(dest, port, &random_auth, *sock, Socks5AuthPolicy::ALLOW_NOAUTH, std::nullopt, g_socks5_interrupt) != Socks5Result::SUCCESS) {
             return {};
         }
     } else {
-        if (!Socks5(dest, port, nullptr, *sock)) {
+        if (Socks5(dest, port, nullptr, *sock, Socks5AuthPolicy::ALLOW_NOAUTH, std::nullopt, g_socks5_interrupt) != Socks5Result::SUCCESS) {
             return {};
         }
     }

@@ -13,6 +13,7 @@
 #include <util/time.h>
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -49,5 +50,11 @@ FUZZ_TARGET(socks5, .init = initialize_socks5)
     auto str_dest = fuzzed_data_provider.ConsumeRandomLengthString(512);
     auto port = fuzzed_data_provider.ConsumeIntegral<uint16_t>();
     auto* auth = fuzzed_data_provider.ConsumeBool() ? &proxy_credentials : nullptr;
-    (void)Socks5(str_dest, port, auth, fuzzed_sock);
+    const auto auth_policy = fuzzed_data_provider.ConsumeBool() ? Socks5AuthPolicy::REQUIRE_AUTH : Socks5AuthPolicy::ALLOW_NOAUTH;
+    std::optional<MockableSteadyClock::time_point> deadline;
+    if (fuzzed_data_provider.ConsumeBool()) {
+        const auto timeout = fuzzed_data_provider.ConsumeIntegralInRange<int>(1, 60) * 1ms;
+        deadline = MockableSteadyClock::now() + timeout;
+    }
+    (void)Socks5(str_dest, port, auth, fuzzed_sock, auth_policy, deadline, g_socks5_interrupt);
 }
