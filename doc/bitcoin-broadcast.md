@@ -150,8 +150,10 @@ session can identify broadcasting clients as a class.
 
 Repeated manual invocations can disclose the same transaction to more peers.
 Avoid other broadcasting paths first: `sendrawtransaction` already broadcasts.
-The tool does not retry later, rebroadcast automatically, or retire the node's
-existing `-privatebroadcast` option.
+The tool does not retry later or rebroadcast automatically. The node's built-in
+`-privatebroadcast` option and its `getprivatebroadcastinfo` and
+`abortprivatebroadcast` RPCs have been removed. Wallet and `sendrawtransaction`
+broadcasts use ordinary node relay; they do not invoke `bitcoin-broadcast`.
 
 ## Building
 
