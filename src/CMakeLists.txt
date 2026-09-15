@@ -403,6 +403,7 @@ endif()
 if(BUILD_BROADCAST)
   add_executable(bitcoin-broadcast
     bitcoin-broadcast.cpp
+    bitcoin-broadcast-res.rc
     send.cpp
   )
   add_windows_application_manifest(bitcoin-broadcast)
@@ -411,6 +412,11 @@ if(BUILD_BROADCAST)
     bitcoin_transport
     bitcoin_common
     bitcoin_util
+  )
+  install_binary_component(bitcoin-broadcast HAS_MANPAGE)
+  install(FILES ${PROJECT_SOURCE_DIR}/doc/bitcoin-broadcast.md
+    DESTINATION ${CMAKE_INSTALL_DOCDIR}
+    COMPONENT bitcoin-broadcast
   )
 endif()
 

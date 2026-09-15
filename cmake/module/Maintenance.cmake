@@ -21,6 +21,12 @@ endfunction()
 function(add_windows_deploy_target)
   configure_file(${PROJECT_SOURCE_DIR}/cmake/script/GenerateWindowsInstaller.cmake.in ${PROJECT_BINARY_DIR}/GenerateWindowsInstaller.cmake USE_SOURCE_PERMISSIONS @ONLY)
   if(MINGW AND TARGET bitcoin AND TARGET bitcoin-qt AND TARGET bitcoind AND TARGET bitcoin-cli AND TARGET bitcoin-tx AND TARGET bitcoin-wallet AND TARGET bitcoin-util AND TARGET test_bitcoin)
+    set(send_deploy_commands)
+    if(TARGET bitcoin-broadcast)
+      list(APPEND send_deploy_commands
+        COMMAND ${CMAKE_STRIP} $<TARGET_FILE:bitcoin-broadcast> -o release/$<TARGET_FILE_NAME:bitcoin-broadcast>
+      )
+    endif()
     add_custom_command(
       OUTPUT ${PROJECT_BINARY_DIR}/bitcoin-win64-setup.exe
       WORKING_DIRECTORY ${PROJECT_BINARY_DIR}
@@ -32,6 +38,7 @@ function(add_windows_deploy_target)
       COMMAND ${CMAKE_STRIP} $<TARGET_FILE:bitcoin-tx> -o release/$<TARGET_FILE_NAME:bitcoin-tx>
       COMMAND ${CMAKE_STRIP} $<TARGET_FILE:bitcoin-wallet> -o release/$<TARGET_FILE_NAME:bitcoin-wallet>
       COMMAND ${CMAKE_STRIP} $<TARGET_FILE:bitcoin-util> -o release/$<TARGET_FILE_NAME:bitcoin-util>
+      ${send_deploy_commands}
       COMMAND ${CMAKE_STRIP} $<TARGET_FILE:test_bitcoin> -o release/$<TARGET_FILE_NAME:test_bitcoin>
       COMMAND ${CMAKE_COMMAND} -D BIN_DIR=release -D LIBEXEC_DIR=release -P GenerateWindowsInstaller.cmake
     )

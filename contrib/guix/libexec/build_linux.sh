@@ -58,6 +58,7 @@ mkdir -p "$DISTSRC"
           -DBUILD_FUZZ_BINARY=OFF \
           -DBUILD_GUI=OFF \
           -DBUILD_GUI_TESTS=OFF \
+          -DBUILD_BROADCAST=ON \
           -DCMAKE_EXE_LINKER_FLAGS="${HOST_LDFLAGS} -static-libstdc++ -static-libgcc" \
           -DCMAKE_INSTALL_PREFIX="${INSTALLPATH}" \
           -DCMAKE_SKIP_RPATH=TRUE \

@@ -49,6 +49,7 @@ mkdir -p "$DISTSRC"
           -DBUILD_FUZZ_BINARY=OFF \
           -DBUILD_GUI=OFF \
           -DBUILD_GUI_TESTS=OFF \
+          -DBUILD_BROADCAST=ON \
           -DCMAKE_INSTALL_PREFIX="${INSTALLPATH}" \
           -DREDUCE_EXPORTS=ON \
           -DWITH_CCACHE=OFF
