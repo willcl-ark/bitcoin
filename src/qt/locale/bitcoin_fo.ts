@@ -2150,11 +2150,6 @@ Fært tú hesi feilboð, skalt tú biðja seljaran, ella tann vinnurekandi, útf
         <translation>Útgangandi</translation>
     </message>
     <message>
-        <source>Private Broadcast</source>
-        <extracomment>Short-lived peer connection type that is used for broadcasting privacy-sensitive data.</extracomment>
-        <translation>Loyniútvarping</translation>
-    </message>
-    <message>
         <source>Unroutable</source>
         <translation>Óbeinasamt</translation>
     </message>
@@ -2517,11 +2512,6 @@ Fært tú hesi feilboð, skalt tú biðja seljaran, ella tann vinnurekandi, útf
     <message>
         <source>Ping Wait</source>
         <translation>Ping-bíðitíð</translation>
-    </message>
-    <message>
-        <source>Private broadcast: short-lived, for broadcasting privacy-sensitive transactions</source>
-        <extracomment>Explanatory text for a short-lived outbound peer connection that is used to broadcast privacy-sensitive data (like our transactions).</extracomment>
-        <translation>Loyniútvarping: stokkut, at útvarpa viðkvæmar flytingar</translation>
     </message>
     <message>
         <source>Received</source>
@@ -4794,18 +4784,6 @@ Bar ikki til at endurinnlesa mapputrygdaravrit.</translation>
     <message>
         <source>Please contribute if you find %s useful. Visit %s for further information about the software.</source>
         <translation>Vinaliga gev títt ískoyti um tú fært nyttu úr %s. Sí meira kunning um ritbúnaðin á %s.</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast) and -proxyrandomize is disabled. Tor circuits for private broadcast connections may be correlated to other connections over Tor. For maximum privacy set -proxyrandomize=1.</source>
-        <translation>Loyniútvarping, av egnum flytingum, er ásett (-privatebroadcast), samstundis sum -proxyrandomize er óvirkt. Tor sambond, ið verða brúktar til loyniútvarping, kunnu tí verða set í samband við onnur Tor sambond frá hesum viðskiftaranum. Áset -proxyrandomize=1 fyri bestu loynd.</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast), but -connect is also configured. They are incompatible because the private broadcast needs to open new connections to randomly chosen Tor or I2P peers. Consider using -maxconnections=0 -addnode=... instead</source>
-        <translation>Loyniútvarping, av egnum flytingum, er ásett (-privatebroadcast), samstundis sum -connect er ásett. Stillingarnar eru ósambæriligar tí loyniútvarping tørvar at sambinda til tilvildarligar Tor ella I2P javningar. Hugsa um at áseta -maxconnections=0 -addnode=... ístaðin.</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast), but none of Tor or I2P networks is reachable</source>
-        <translation>Loyniútvarping, av egnum flytingum, er ásett (-privatebroadcast), men hvørki Tor ella I2P netini kunnu røkkast.</translation>
     </message>
     <message>
         <source>Prune cannot be configured with a negative value.</source>

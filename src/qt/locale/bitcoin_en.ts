@@ -2294,11 +2294,6 @@ If you are receiving this error you should request the merchant provide a BIP21 
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>Private Broadcast</source>
-        <extracomment>Short-lived peer connection type that is used for broadcasting privacy-sensitive data.</extracomment>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
         <source>Unroutable</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2700,11 +2695,6 @@ If you are receiving this error you should request the merchant provide a BIP21 
     </message>
     <message>
         <source>Ping Wait</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>Private broadcast: short-lived, for broadcasting privacy-sensitive transactions</source>
-        <extracomment>Explanatory text for a short-lived outbound peer connection that is used to broadcast privacy-sensitive data (like our transactions).</extracomment>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -5004,18 +4994,6 @@ Unable to restore backup of wallet.</source>
     </message>
     <message>
         <source>Please contribute if you find %s useful. Visit %s for further information about the software.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast) and -proxyrandomize is disabled. Tor circuits for private broadcast connections may be correlated to other connections over Tor. For maximum privacy set -proxyrandomize=1.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast), but -connect is also configured. They are incompatible because the private broadcast needs to open new connections to randomly chosen Tor or I2P peers. Consider using -maxconnections=0 -addnode=... instead</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast), but none of Tor or I2P networks is reachable</source>
         <translation type="unfinished"></translation>
     </message>
     <message>

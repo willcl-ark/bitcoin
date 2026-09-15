@@ -2007,11 +2007,6 @@ The migration process will create a backup of the wallet before migrating. This 
         <translation>Нет</translation>
     </message>
     <message>
-        <source>Private Broadcast</source>
-        <extracomment>Short-lived peer connection type that is used for broadcasting privacy-sensitive data.</extracomment>
-        <translation>Конфеденциальная трансляции транзакций</translation>
-    </message>
-    <message>
         <source>default wallet</source>
         <translation>кошелёк по умолчанию</translation>
     </message>
@@ -2256,11 +2251,6 @@ The migration process will create a backup of the wallet before migrating. This 
     <message>
         <source>Ping Wait</source>
         <translation>Ожидание отклика</translation>
-    </message>
-    <message>
-        <source>Private broadcast: short-lived, for broadcasting privacy-sensitive transactions</source>
-        <extracomment>Explanatory text for a short-lived outbound peer connection that is used to broadcast privacy-sensitive data (like our transactions).</extracomment>
-        <translation>Приватная рассылка: кратковременная, для трансляции транзакций, требующих защиты конфиденциальности</translation>
     </message>
     <message>
         <source>Received</source>
@@ -3926,18 +3916,6 @@ Go to File &gt; Open Wallet to load a wallet.
     <message>
         <source>Please contribute if you find %s useful. Visit %s for further information about the software.</source>
         <translation>Пожалуйста, внесите свой вклад, если вы считаете %s полезным. Посетите %s для получения дополнительной информации о программном обеспечении.</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast) and -proxyrandomize is disabled. Tor circuits for private broadcast connections may be correlated to other connections over Tor. For maximum privacy set -proxyrandomize=1.</source>
-        <translation>Приватное вещание своих транзакций требует (-privatebroadcast) ,а -proxyrandomize отключен. Цепочка сети Tor для приватного вещания может коррелировать с другими соединениями через Tor. Для большей приватности установите -proxyrandomize=1.</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast), but -connect is also configured. They are incompatible because the private broadcast needs to open new connections to randomly chosen Tor or I2P peers. Consider using -maxconnections=0 -addnode=... instead</source>
-        <translation>Приватное вещание своих транзакций запрошено (-privatebroadcast), но также настроено -connect. Вместе они не совместимы потому что при приватной рассылке необходимо открывать новые соединения к случайно выбираемым узлам Tor или I2P. Предлагается исползовать -maxconnections=0 -addnode=... взамен</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast), but none of Tor or I2P networks is reachable</source>
-        <translation>Приватное вещание своих транзакций запрошено (-privatebroadcast) , но отсутствуют доступные сети Tor or I2P</translation>
     </message>
     <message>
         <source>Prune cannot be configured with a negative value.</source>

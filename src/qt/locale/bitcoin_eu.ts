@@ -2164,11 +2164,6 @@ Errore hau jasotzen baduzu, merkatariei BIP21-arekin bateragarria den URI bat em
         <translation>Irteerakoa</translation>
     </message>
     <message>
-        <source>Private Broadcast</source>
-        <extracomment>Short-lived peer connection type that is used for broadcasting privacy-sensitive data.</extracomment>
-        <translation>Emisio pribatua</translation>
-    </message>
-    <message>
         <source>Unroutable</source>
         <translation>Bideraezina</translation>
     </message>
@@ -2527,11 +2522,6 @@ Errore hau jasotzen baduzu, merkatariei BIP21-arekin bateragarria den URI bat em
     <message>
         <source>Ping Wait</source>
         <translation>Pingaren Itxaronaldia</translation>
-    </message>
-    <message>
-        <source>Private broadcast: short-lived, for broadcasting privacy-sensitive transactions</source>
-        <extracomment>Explanatory text for a short-lived outbound peer connection that is used to broadcast privacy-sensitive data (like our transactions).</extracomment>
-        <translation>Emisio pribatua: iraupen laburrekoa, pribatutasunarekiko sentikorrak diren transakzioak zabaltzeko.</translation>
     </message>
     <message>
         <source>Received</source>
@@ -4781,18 +4771,6 @@ Errorea: %sezin izan da tx gehitu watch-only zorrora</translation>
     <message>
         <source>Please contribute if you find %s useful. Visit %s for further information about the software.</source>
         <translation>Mesedez, lagundu %s erabilgarria iruditzen bazaizu. Bisitatu %s softwareari buruzko informazio gehiago lortzeko.</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast) and -proxyrandomize is disabled. Tor circuits for private broadcast connections may be correlated to other connections over Tor. For maximum privacy set -proxyrandomize=1.</source>
-        <translation>Norberaren transakzioen emisio pribatua eskatu da (-privatebroadcast) eta -proxyrandomize desgaituta dago. Emisio pribaturako Tor zirkuituak beste Tor konexio batzuekin erlazionatu daitezke. Pribatutasun handiena lortzeko, ezarri -proxyrandomize=1.</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast), but -connect is also configured. They are incompatible because the private broadcast needs to open new connections to randomly chosen Tor or I2P peers. Consider using -maxconnections=0 -addnode=... instead</source>
-        <translation>Norberaren transakzioen emisio pribatua eskatu da (-privatebroadcast), baina -connect ere konfiguratuta dago. Bi aukera horiek bateraezinak dira, emisio pribatuak ausaz hautatutako Tor edo I2P pareekin konexio berriak ireki behar dituelako. Horren ordez, erabili -maxconnections=0 -addnode=...</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast), but none of Tor or I2P networks is reachable</source>
-        <translation>Norberaren transakzioen emisio pribatua eskatu da (-privatebroadcast), baina ez da ez Tor ez I2P sareetara konektatzerik lortu.</translation>
     </message>
     <message>
         <source>Prune cannot be configured with a negative value.</source>

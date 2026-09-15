@@ -2141,11 +2141,6 @@ BIP70의 광범위한 보안 결함으로 인해 모든 가맹점에서는 지�
         <translation>아웃바운드</translation>
     </message>
     <message>
-        <source>Private Broadcast</source>
-        <extracomment>Short-lived peer connection type that is used for broadcasting privacy-sensitive data.</extracomment>
-        <translation>비공개 전파</translation>
-    </message>
-    <message>
         <source>Unroutable</source>
         <translation>라우팅할 수 없습니다.</translation>
     </message>
@@ -2497,11 +2492,6 @@ BIP70의 광범위한 보안 결함으로 인해 모든 가맹점에서는 지�
     <message>
         <source>Ping Wait</source>
         <translation>핑 대기</translation>
-    </message>
-    <message>
-        <source>Private broadcast: short-lived, for broadcasting privacy-sensitive transactions</source>
-        <extracomment>Explanatory text for a short-lived outbound peer connection that is used to broadcast privacy-sensitive data (like our transactions).</extracomment>
-        <translation>비공개 전파: 개인정보 보호가 중요한 트랜잭션을 전파하기 위한 단기 연결 방식</translation>
     </message>
     <message>
         <source>Received</source>
@@ -4693,18 +4683,6 @@ Tor 네트워크에 연결하기 위한 프록시 설정이 제공되지 않았�
     <message>
         <source>Please contribute if you find %s useful. Visit %s for further information about the software.</source>
         <translation>%s가 유용하다고 생각한다면 프로젝트에 공헌해주세요. 이 소프트웨어에 대한 보다 자세한 정보는 %s를 방문해 주십시오.</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast) and -proxyrandomize is disabled. Tor circuits for private broadcast connections may be correlated to other connections over Tor. For maximum privacy set -proxyrandomize=1.</source>
-        <translation>자신의 트랜잭션을 비공개 전파하도록 요청되었습니다(-privatebroadcast). 그러나 -proxyrandomize가 비활성화되어 있습니다. 비공개 전파 연결에 사용되는 Tor 회로가 Tor를 통한 다른 연결과 연관될 수 있습니다. 최대한의 개인정보 보호를 위해 -proxyrandomize=1로 설정하십시오.</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast), but -connect is also configured. They are incompatible because the private broadcast needs to open new connections to randomly chosen Tor or I2P peers. Consider using -maxconnections=0 -addnode=... instead</source>
-        <translation>자신의 트랜잭션을 비공개 전파하도록 요청되었습니다(-privatebroadcast). 그러나 -connect도 설정되어 있습니다. 비공개 전파는 무작위로 선택된 Tor 또는 I2P 피어와 새로운 연결을 열어야 하므로 두 설정은 호환되지 않습니다. 대신 -maxconnections=0 -addnode=... 사용을 고려하십시오.</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast), but none of Tor or I2P networks is reachable</source>
-        <translation>자신의 트랜잭션을 비공개 전파하도록 요청되었습니다(-privatebroadcast). 그러나 Tor 또는 I2P 네트워크에 접근할 수 없습니다.</translation>
     </message>
     <message>
         <source>Prune cannot be configured with a negative value.</source>

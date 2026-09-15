@@ -1928,11 +1928,6 @@ Het migratieproces maakt eerst een back-up van de wallet voordat de migratie pla
         <translation>Geen</translation>
     </message>
     <message>
-        <source>Private Broadcast</source>
-        <extracomment>Short-lived peer connection type that is used for broadcasting privacy-sensitive data.</extracomment>
-        <translation>Privé Uitzending</translation>
-    </message>
-    <message>
         <source>default wallet</source>
         <translation>standaard portemonnee</translation>
     </message>
@@ -2165,11 +2160,6 @@ Het migratieproces maakt eerst een back-up van de wallet voordat de migratie pla
     <message>
         <source>Ping Wait</source>
         <translation>Pingwachttijd</translation>
-    </message>
-    <message>
-        <source>Private broadcast: short-lived, for broadcasting privacy-sensitive transactions</source>
-        <extracomment>Explanatory text for a short-lived outbound peer connection that is used to broadcast privacy-sensitive data (like our transactions).</extracomment>
-        <translation>Privé uitzending: kortdurend, voor het verzenden van privacy-gevoelige transacties</translation>
     </message>
     <message>
         <source>Received</source>
@@ -4146,18 +4136,6 @@ Kan mislukte migratie niet opschonen</translation>
     <message>
         <source>Please contribute if you find %s useful. Visit %s for further information about the software.</source>
         <translation>Gelieve bij te dragen als je %s nuttig vindt. Bezoek %s voor meer informatie over de software.</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast) and -proxyrandomize is disabled. Tor circuits for private broadcast connections may be correlated to other connections over Tor. For maximum privacy set -proxyrandomize=1.</source>
-        <translation>Privé-verzending van eigen transacties aangevraagd (-privatebroadcast) en -proxyrandomize is uitgeschakeld. Tor-circuits voor privé-verzendverbindingen kunnen worden gekoppeld aan andere verbindingen via Tor. Stel voor maximale privacy -proxyrandomize=1 in.</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast), but -connect is also configured. They are incompatible because the private broadcast needs to open new connections to randomly chosen Tor or I2P peers. Consider using -maxconnections=0 -addnode=... instead</source>
-        <translation>Privé-verzending van eigen transacties aangevraagd (-privatebroadcast), maar -connect is ook ingesteld. Die zijn niet compatibel, omdat privé-uitzending nieuwe verbindingen moet kunnen openen naar willekeurig gekozen Tor- of I2P-peers. Overweeg in plaats daarvan -maxconnections=0 -addnode=... te gebruiken.</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast), but none of Tor or I2P networks is reachable</source>
-        <translation>Privé-verzending van eigen transacties aangevraagd (-privatebroadcast), maar geen van de Tor- of I2P-netwerken is bereikbaar.</translation>
     </message>
     <message>
         <source>Prune cannot be configured with a negative value.</source>

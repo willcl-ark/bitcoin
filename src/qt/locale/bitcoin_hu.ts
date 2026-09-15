@@ -2118,11 +2118,6 @@ If you are receiving this error you should request the merchant provide a BIP21 
         <translation>Kimenő</translation>
     </message>
     <message>
-        <source>Private Broadcast</source>
-        <extracomment>Short-lived peer connection type that is used for broadcasting privacy-sensitive data.</extracomment>
-        <translation>Privát közzététel</translation>
-    </message>
-    <message>
         <source>Unroutable</source>
         <translation>Nem átirányítható</translation>
     </message>
@@ -2485,11 +2480,6 @@ If you are receiving this error you should request the merchant provide a BIP21 
     <message>
         <source>Ping Wait</source>
         <translation>Ping Várakozás</translation>
-    </message>
-    <message>
-        <source>Private broadcast: short-lived, for broadcasting privacy-sensitive transactions</source>
-        <extracomment>Explanatory text for a short-lived outbound peer connection that is used to broadcast privacy-sensitive data (like our transactions).</extracomment>
-        <translation>Privát közzététel: rövid élettartamú, adatvédelmi szempontból érzékeny tranzakciók közzétételéhez.</translation>
     </message>
     <message>
         <source>Received</source>
@@ -4693,18 +4683,6 @@ A tárca biztonsági mentésének visszaállítása sikertelen.</translation>
     <message>
         <source>Please contribute if you find %s useful. Visit %s for further information about the software.</source>
         <translation>Kérjük támogasson ha hasznosnak találta a %s-t. Az alábbi linken további információt találhat a szoftverről: %s.</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast) and -proxyrandomize is disabled. Tor circuits for private broadcast connections may be correlated to other connections over Tor. For maximum privacy set -proxyrandomize=1.</source>
-        <translation>Saját tranzakciók privát közzététele kérve (-privatebroadcast), de a -proxyrandomize ki van kapcsolva. A privát közzétételi kapcsolatokhoz használt Tor-áramkörök összekapcsolhatók más Tor-kapcsolatokkal. A maximális adatvédelem érdekében állítsa be a -proxyrandomize=1 értéket.</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast), but -connect is also configured. They are incompatible because the private broadcast needs to open new connections to randomly chosen Tor or I2P peers. Consider using -maxconnections=0 -addnode=... instead</source>
-        <translation>Saját tranzakciók privát közzététele kérve (-privatebroadcast), de a -connect is konfigurálva van. Ezek nem kompatibilisek, mert a privát közzétételnek új kapcsolatokat kell nyitnia véletlenszerűen választott Tor vagy I2P partnerek felé. Fontolja meg inkább a -maxconnections=0 -addnode=... használatát.</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast), but none of Tor or I2P networks is reachable</source>
-        <translation>Saját tranzakciók privát közzététele kérve (-privatebroadcast), de sem a Tor, sem az I2P hálózat nem érhető el.</translation>
     </message>
     <message>
         <source>Prune cannot be configured with a negative value.</source>

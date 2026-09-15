@@ -803,11 +803,6 @@ Wenn Sie diese Fehlermeldung erhalten, sollten Sie den Händler bitten, einen BI
         <translation>Ausgehend</translation>
     </message>
     <message>
-        <source>Private Broadcast</source>
-        <extracomment>Short-lived peer connection type that is used for broadcasting privacy-sensitive data.</extracomment>
-        <translation>Private Rundsendung</translation>
-    </message>
-    <message>
         <source>Unroutable</source>
         <translation>Nicht weiterleitbar</translation>
     </message>
@@ -994,11 +989,6 @@ Wenn Sie diese Fehlermeldung erhalten, sollten Sie den Händler bitten, einen BI
         <source>Outbound Manual: added using RPC %1 or %2/%3 configuration options</source>
         <extracomment>Explanatory text for an outbound peer connection that was established manually through one of several methods. The numbered arguments are stand-ins for the methods available to establish manual connections.</extracomment>
         <translation>Ausgehend Manuell: durch die RPC %1 oder %2/%3 Konfigurationsoptionen hinzugefügt</translation>
-    </message>
-    <message>
-        <source>Private broadcast: short-lived, for broadcasting privacy-sensitive transactions</source>
-        <extracomment>Explanatory text for a short-lived outbound peer connection that is used to broadcast privacy-sensitive data (like our transactions).</extracomment>
-        <translation>Private Rundsendung: kurzlebig, zur Rundsendung von datenschutzsensiblen Transaktionen</translation>
     </message>
     <message>
         <source>The BIP324 session ID string in hex.</source>
@@ -1988,18 +1978,6 @@ Berechnet: %s, erwartet: %s</translation>
     <message>
         <source>Outbound connections restricted to i2p (-onlynet=i2p) but -i2psam is not provided</source>
         <translation>Ausgehende Verbindungen sind auf i2p (-onlynet=i2p) beschränkt, aber -i2psam ist nicht angegeben</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast) and -proxyrandomize is disabled. Tor circuits for private broadcast connections may be correlated to other connections over Tor. For maximum privacy set -proxyrandomize=1.</source>
-        <translation>Private Rundsendung eigener Transaktionen angefordert (-privatebroadcast) und -proxyrandomize ist deaktiviert. Tor-Circuits für private Rundsendungsverbindungen können mit anderen Verbindungen über Tor korreliert werden. Für maximale Privatsphäre setzen Sie -proxyrandomize=1.</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast), but -connect is also configured. They are incompatible because the private broadcast needs to open new connections to randomly chosen Tor or I2P peers. Consider using -maxconnections=0 -addnode=... instead</source>
-        <translation>Private Rundsendung eigener Transaktionen angefordert (-privatebroadcast), aber -connect ist ebenfalls konfiguriert. Diese sind inkompatibel, weil die private Rundsendung neue Verbindungen zu zufällig ausgewählten Tor- oder I2P-Peers öffnen muss. Erwäge die Verwendung von -maxconnections=0 -addnode=... stattdessen</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast), but none of Tor or I2P networks is reachable</source>
-        <translation>Private Rundsendung eigener Transaktionen (-privatebroadcast), aber keines der Tor- oder I2P-Netzwerke ist erreichbar</translation>
     </message>
     <message>
         <source>Prune mode is incompatible with -reindex-chainstate. Use full -reindex instead.</source>

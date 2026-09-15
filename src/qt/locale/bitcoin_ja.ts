@@ -2162,11 +2162,6 @@ BIP70には広範なセキュリティー上の問題があるので、ウォレ
         <translation>外向き</translation>
     </message>
     <message>
-        <source>Private Broadcast</source>
-        <extracomment>Short-lived peer connection type that is used for broadcasting privacy-sensitive data.</extracomment>
-        <translation>プライベートブロードキャスト</translation>
-    </message>
-    <message>
         <source>Unroutable</source>
         <translation>ルーティング不可能</translation>
     </message>
@@ -2525,11 +2520,6 @@ BIP70には広範なセキュリティー上の問題があるので、ウォレ
     <message>
         <source>Ping Wait</source>
         <translation>Ping待ち</translation>
-    </message>
-    <message>
-        <source>Private broadcast: short-lived, for broadcasting privacy-sensitive transactions</source>
-        <extracomment>Explanatory text for a short-lived outbound peer connection that is used to broadcast privacy-sensitive data (like our transactions).</extracomment>
-        <translation>プライベートブロードキャスト: プライバシーに配慮した取引をブロードキャストするためもので、短命</translation>
     </message>
     <message>
         <source>Received</source>
@@ -4789,18 +4779,6 @@ Unable to restore backup of wallet.</source>
     <message>
         <source>Please contribute if you find %s useful. Visit %s for further information about the software.</source>
         <translation>%s が有用だと感じられた方はぜひプロジェクトへの貢献をお願いします。ソフトウェアのより詳細な情報については %s をご覧ください。</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast) and -proxyrandomize is disabled. Tor circuits for private broadcast connections may be correlated to other connections over Tor. For maximum privacy set -proxyrandomize=1.</source>
-        <translation>自身のトランザクションのプライベートブロードキャスト（-privatebroadcast）が要求されており、-proxyrandomize が無効になっています。プライベートブロードキャスト接続用のTor回線が、Tor経由の他の接続と関連付けられる可能性があります。最大限のプライバシーを確保するには、-proxyrandomize=1 を設定してください。</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast), but -connect is also configured. They are incompatible because the private broadcast needs to open new connections to randomly chosen Tor or I2P peers. Consider using -maxconnections=0 -addnode=... instead</source>
-        <translation>自身のトランザクションのプライベートブロードキャスト（-privatebroadcast）が要求されていますが、-connect も設定されています。プライベートブロードキャストはランダムに選択されたTorまたはI2Pピアへの新しい接続を開く必要があるため、これらは互換性がありません。代わりに -maxconnections=0 -addnode=... の使用を検討してください。</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast), but none of Tor or I2P networks is reachable</source>
-        <translation>自身のトランザクションのプライベートブロードキャスト（-privatebroadcast）が要求されていますが、到達可能なTorネットワークもI2Pネットワークもありません。</translation>
     </message>
     <message>
         <source>Prune cannot be configured with a negative value.</source>

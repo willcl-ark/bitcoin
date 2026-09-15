@@ -2096,11 +2096,6 @@ Signing is only possible with addresses of the type 'legacy'.</source>
         <translation>תעבורה יוצאת</translation>
     </message>
     <message>
-        <source>Private Broadcast</source>
-        <extracomment>Short-lived peer connection type that is used for broadcasting privacy-sensitive data.</extracomment>
-        <translation>שידור פרטי</translation>
-    </message>
-    <message>
         <source>Unroutable</source>
         <translation>בלתי ניתן לניתוב</translation>
     </message>

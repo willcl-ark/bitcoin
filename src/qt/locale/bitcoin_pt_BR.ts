@@ -1997,11 +1997,6 @@ O processo de migração criará um backup da carteira antes da migração. Este
         <translation>Saída</translation>
     </message>
     <message>
-        <source>Private Broadcast</source>
-        <extracomment>Short-lived peer connection type that is used for broadcasting privacy-sensitive data.</extracomment>
-        <translation>Transmissão privada</translation>
-    </message>
-    <message>
         <source>default wallet</source>
         <translation>carteira padrão</translation>
     </message>
@@ -2296,11 +2291,6 @@ O processo de migração criará um backup da carteira antes da migração. Este
     <message>
         <source>Ping Wait</source>
         <translation>Espera de ping</translation>
-    </message>
-    <message>
-        <source>Private broadcast: short-lived, for broadcasting privacy-sensitive transactions</source>
-        <extracomment>Explanatory text for a short-lived outbound peer connection that is used to broadcast privacy-sensitive data (like our transactions).</extracomment>
-        <translation>Transmissão privada: de curta duração, para transmissão de transações confidenciais</translation>
     </message>
     <message>
         <source>Received</source>
@@ -4255,18 +4245,6 @@ Impossível restaurar backup da carteira.</translation>
     <message>
         <source>Please contribute if you find %s useful. Visit %s for further information about the software.</source>
         <translation>Por favor contribua se você entender que %s é útil. Visite %s para mais informações sobre o software.</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast) and -proxyrandomize is disabled. Tor circuits for private broadcast connections may be correlated to other connections over Tor. For maximum privacy set -proxyrandomize=1.</source>
-        <translation>Transmissão privada das suas próprias transações solicitada (-privatebroadcast) e -proxyrandomize desativado. Os circuitos Tor para ligações de transmissão privada podem estar correlacionados com outras ligações através do Tor. Para máxima privacidade, defina -proxyrandomize=1.</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast), but -connect is also configured. They are incompatible because the private broadcast needs to open new connections to randomly chosen Tor or I2P peers. Consider using -maxconnections=0 -addnode=... instead</source>
-        <translation>Transmissão privada das próprias transações solicitada (-privatebroadcast), mas -connect também está configurado. Eles são incompatíveis porque a transmissão privada precisa abrir novas conexões com pares Tor ou I2P escolhidos aleatoriamente. Considere usar -maxconnections=0 -addnode=... em vez disso</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast), but none of Tor or I2P networks is reachable</source>
-        <translation>Transmissão privada das próprias transações solicitada (-privatebroadcast), mas nenhuma das redes Tor ou I2P está acessível</translation>
     </message>
     <message>
         <source>Prune cannot be configured with a negative value.</source>

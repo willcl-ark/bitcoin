@@ -2160,11 +2160,6 @@ If you are receiving this error you should request the merchant provide a BIP21 
         <translation>Sortant</translation>
     </message>
     <message>
-        <source>Private Broadcast</source>
-        <extracomment>Short-lived peer connection type that is used for broadcasting privacy-sensitive data.</extracomment>
-        <translation>Diffusion privée</translation>
-    </message>
-    <message>
         <source>Unroutable</source>
         <translation>Non routable</translation>
     </message>
@@ -2523,11 +2518,6 @@ If you are receiving this error you should request the merchant provide a BIP21 
     <message>
         <source>Ping Wait</source>
         <translation>Attente du ping</translation>
-    </message>
-    <message>
-        <source>Private broadcast: short-lived, for broadcasting privacy-sensitive transactions</source>
-        <extracomment>Explanatory text for a short-lived outbound peer connection that is used to broadcast privacy-sensitive data (like our transactions).</extracomment>
-        <translation>Diffusion privée : de courte durée, pour diffuser des transactions sensibles en termes de confidentialité</translation>
     </message>
     <message>
         <source>Received</source>
@@ -4733,18 +4723,6 @@ Impossible de restaurer la sauvegarde du portefeuille</translation>
     <message>
         <source>Please contribute if you find %s useful. Visit %s for further information about the software.</source>
         <translation>Si vous trouvez %s utile, vous pouvez y contribuer. Pour de plus de précisions sur le logiciel, rendez-vous sur %s.</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast) and -proxyrandomize is disabled. Tor circuits for private broadcast connections may be correlated to other connections over Tor. For maximum privacy set -proxyrandomize=1.</source>
-        <translation>La diffusion privée de vos propres transactions est demandée (-privatebroadcast) et -proxyrandomize est désactivé. Les circuits Tor pour les connexions de diffusion privée peuvent être mis en corrélation à d’autres connexions sur le réseau Tor. Pour une confidentialité maximale, définissez -proxyrandomize=1.</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast), but -connect is also configured. They are incompatible because the private broadcast needs to open new connections to randomly chosen Tor or I2P peers. Consider using -maxconnections=0 -addnode=... instead</source>
-        <translation>Une diffusion privée des vos propres transactions a été demandée (-privatebroadcast), mais -connect est aussi configuré. Ces arguments sont incompatibles, car la diffusion privée nécessite d’ouvrir de nouvelles connexions vers des pairs Tor ou I2P choisis au hasard. Envisagez de plutôt utiliser -maxconnections=0 -addnode=...</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast), but none of Tor or I2P networks is reachable</source>
-        <translation>La diffusion privée de vos propres transactions est demandée (-privatebroadcast), mais les réseaux Tor et I2P sont inaccessibles</translation>
     </message>
     <message>
         <source>Prune cannot be configured with a negative value.</source>

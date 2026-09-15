@@ -2198,11 +2198,6 @@ If you are receiving this error you should request the merchant provide a BIP21 
         <translation>Вихідний</translation>
     </message>
     <message>
-        <source>Private Broadcast</source>
-        <extracomment>Short-lived peer connection type that is used for broadcasting privacy-sensitive data.</extracomment>
-        <translation>Приватне розповсюдження</translation>
-    </message>
-    <message>
         <source>Unroutable</source>
         <translation>Немає маршруту</translation>
     </message>
@@ -2561,11 +2556,6 @@ If you are receiving this error you should request the merchant provide a BIP21 
     <message>
         <source>Ping Wait</source>
         <translation>Поточна Затримка</translation>
-    </message>
-    <message>
-        <source>Private broadcast: short-lived, for broadcasting privacy-sensitive transactions</source>
-        <extracomment>Explanatory text for a short-lived outbound peer connection that is used to broadcast privacy-sensitive data (like our transactions).</extracomment>
-        <translation>Приватне розповсюдження: короткочасне, для розповсюдження транзакцій, чутливих до конфіденційності</translation>
     </message>
     <message>
         <source>Received</source>
@@ -4843,18 +4833,6 @@ Unable to restore backup of wallet.</source>
     <message>
         <source>Please contribute if you find %s useful. Visit %s for further information about the software.</source>
         <translation>Будь ласка, зробіть внесок, якщо ви знаходите %s корисним. Відвідайте %s для отримання додаткової інформації про програмне забезпечення.</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast) and -proxyrandomize is disabled. Tor circuits for private broadcast connections may be correlated to other connections over Tor. For maximum privacy set -proxyrandomize=1.</source>
-        <translation>Запитано приватне розповсюдження власних транзакцій (-privatebroadcast), а параметр -proxyrandomize вимкнено. Ланцюжки Tor для з'єднань приватного розповсюдження можуть бути пов'язані з іншими з'єднаннями через Tor. Для максимальної конфіденційності встановіть -proxyrandomize=1.</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast), but -connect is also configured. They are incompatible because the private broadcast needs to open new connections to randomly chosen Tor or I2P peers. Consider using -maxconnections=0 -addnode=... instead</source>
-        <translation>Запитано приватне розповсюдження власних транзакцій (-privatebroadcast), але також налаштовано -connect. Вони несумісні, оскільки приватне розповсюдження потребує відкриття нових з'єднань із випадково обраними учасниками через Tor або I2P. Замість цього розгляньте можливість використання -maxconnections=0 -addnode=...</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast), but none of Tor or I2P networks is reachable</source>
-        <translation>Запитано приватне розповсюдження власних транзакцій (-privatebroadcast), але жодна з мереж Tor або I2P недоступна.</translation>
     </message>
     <message>
         <source>Prune cannot be configured with a negative value.</source>

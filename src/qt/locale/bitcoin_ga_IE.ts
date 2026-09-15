@@ -2147,11 +2147,6 @@ Má tá an earráid seo á fáil agat ba cheart duit iarraidh ar an díoltóir U
         <translation>Amach</translation>
     </message>
     <message>
-        <source>Private Broadcast</source>
-        <extracomment>Short-lived peer connection type that is used for broadcasting privacy-sensitive data.</extracomment>
-        <translation>Craoladh Príobháideach</translation>
-    </message>
-    <message>
         <source>Unroutable</source>
         <translation>Dothreoraithe</translation>
     </message>
@@ -2514,11 +2509,6 @@ Má tá an earráid seo á fáil agat ba cheart duit iarraidh ar an díoltóir U
     <message>
         <source>Ping Wait</source>
         <translation>Feitheamh Ping</translation>
-    </message>
-    <message>
-        <source>Private broadcast: short-lived, for broadcasting privacy-sensitive transactions</source>
-        <extracomment>Explanatory text for a short-lived outbound peer connection that is used to broadcast privacy-sensitive data (like our transactions).</extracomment>
-        <translation>Craoladh príobháideach: gearrshaolach, le haghaidh craoladh idirbheart íogair ó thaobh príobháideachta de</translation>
     </message>
     <message>
         <source>Received</source>
@@ -4777,18 +4767,6 @@ Ní féidir cúltaca an sparán a chur ar ais.</translation>
     <message>
         <source>Please contribute if you find %s useful. Visit %s for further information about the software.</source>
         <translation>Tabhair le do thoil má fhaigheann tú %s úsáideach. Tabhair cuairt ar %s chun tuilleadh faisnéise a fháil faoin bogearraí.</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast) and -proxyrandomize is disabled. Tor circuits for private broadcast connections may be correlated to other connections over Tor. For maximum privacy set -proxyrandomize=1.</source>
-        <translation>Tá craoladh príobháideach d'idirbhearta féin a iarradh (-privatebroadcast) agus -proxyrandomize díchumasaithe. Féadfar ciorcaid Tor le haghaidh naisc chraolta príobháideacha a chomhghaolú le naisc eile thar Tor. Chun príobháideacht uasta a shocrú, socraítear -proxyrandomize=1.</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast), but -connect is also configured. They are incompatible because the private broadcast needs to open new connections to randomly chosen Tor or I2P peers. Consider using -maxconnections=0 -addnode=... instead</source>
-        <translation>Iarradh craoladh príobháideach ar idirbhearta féin (-privatebroadcast), ach tá -connect cumraithe freisin. Níl siad comhoiriúnach mar ní mór don chraoladh príobháideach naisc nua a oscailt chuig piaraí Tor nó I2P a roghnaítear go randamach. Smaoinigh ar -maxconnections=0 -addnode=... a úsáid ina ionad.</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast), but none of Tor or I2P networks is reachable</source>
-        <translation>Iarradh craoladh príobháideach ar idirbhearta féin (-privatebroadcast), ach níl aon cheann de líonraí Tor ná I2P inrochtana</translation>
     </message>
     <message>
         <source>Prune cannot be configured with a negative value.</source>

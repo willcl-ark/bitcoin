@@ -2061,11 +2061,6 @@ Proces migrace vytvoří zálohu peněženky před samotnou migrací. Tento zál
         <translation>Žádné</translation>
     </message>
     <message>
-        <source>Private Broadcast</source>
-        <extracomment>Short-lived peer connection type that is used for broadcasting privacy-sensitive data.</extracomment>
-        <translation>Soukromý broadcast</translation>
-    </message>
-    <message>
         <source>default wallet</source>
         <translation>výchozí peněženka</translation>
     </message>
@@ -2342,11 +2337,6 @@ Proces migrace vytvoří zálohu peněženky před samotnou migrací. Tento zál
     <message>
         <source>Ping Wait</source>
         <translation>Doba čekání na odezvu</translation>
-    </message>
-    <message>
-        <source>Private broadcast: short-lived, for broadcasting privacy-sensitive transactions</source>
-        <extracomment>Explanatory text for a short-lived outbound peer connection that is used to broadcast privacy-sensitive data (like our transactions).</extracomment>
-        <translation>Soukromý broadcast: krátkodobé spojení pro přenos citlivých transakcí</translation>
     </message>
     <message>
         <source>Received</source>
@@ -4482,18 +4472,6 @@ Ověřuji peněženku.</translation>
     <message>
         <source>Please contribute if you find %s useful. Visit %s for further information about the software.</source>
         <translation>Prosíme, zapoj se nebo přispěj, pokud ti %s přijde užitečný. Více informací o programu je na %s.</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast) and -proxyrandomize is disabled. Tor circuits for private broadcast connections may be correlated to other connections over Tor. For maximum privacy set -proxyrandomize=1.</source>
-        <translation>Je požadován soukromý broadcast vlastních transakcí (-privatebroadcast) a parametr -proxyrandomize je vypnutý. Okruhy Tor pro spojení soukromých broadcastů mohou souviset s dalšími spojeními přes Tor. Pro dosažení maximální úrovně soukromí nastav -proxyrandomize=1.</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast), but -connect is also configured. They are incompatible because the private broadcast needs to open new connections to randomly chosen Tor or I2P peers. Consider using -maxconnections=0 -addnode=... instead</source>
-        <translation>Je požadován soukromý broadcast vlastních transakcí (-privatebroadcast), ale parametr -connect je rovněž nastaven. Tato kombinace parametrů není možná, protože soukromý broadcast potřebuje otevřít nová spojení k náhodně vybraným protějškům přes Tor nebo I2P sítě. Zvaž místo toho použití parametrů -maxconnections=0 -addnode=...</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast), but none of Tor or I2P networks is reachable</source>
-        <translation>Je požadován soukromý broadcast vlastních transakcí (-privatebroadcast), ale žádná síť typu Tor nebo I2P není dostupná</translation>
     </message>
     <message>
         <source>Prune cannot be configured with a negative value.</source>

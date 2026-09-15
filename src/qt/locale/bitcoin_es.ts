@@ -1212,11 +1212,6 @@ Si recibes este error, debes solicitar al comerciante que te proporcione un URI 
         <translation>Saliente</translation>
     </message>
     <message>
-        <source>Private Broadcast</source>
-        <extracomment>Short-lived peer connection type that is used for broadcasting privacy-sensitive data.</extracomment>
-        <translation>Transmisión privada</translation>
-    </message>
-    <message>
         <source>Unroutable</source>
         <translation>No se puede enrutar</translation>
     </message>
@@ -1371,11 +1366,6 @@ Si recibes este error, debes solicitar al comerciante que te proporcione un URI 
     <message>
         <source>Permissions</source>
         <translation>Permisos</translation>
-    </message>
-    <message>
-        <source>Private broadcast: short-lived, for broadcasting privacy-sensitive transactions</source>
-        <extracomment>Explanatory text for a short-lived outbound peer connection that is used to broadcast privacy-sensitive data (like our transactions).</extracomment>
-        <translation>Transmisión privada: de corta duración, para transmitir transacciones sensibles en materia de privacidad.</translation>
     </message>
     <message>
         <source>Session ID</source>
@@ -2483,10 +2473,6 @@ No se puede restaurar la copia de seguridad del monedero.</translation>
     <message>
         <source>Outbound connections restricted to i2p (-onlynet=i2p) but -i2psam is not provided</source>
         <translation>Las conexiones salientes están restringidas a i2p (-onlynet=i2p), pero no se proporciona -i2psam.</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast) and -proxyrandomize is disabled. Tor circuits for private broadcast connections may be correlated to other connections over Tor. For maximum privacy set -proxyrandomize=1.</source>
-        <translation>Se ha solicitado el envío privado de transacciones propias (-privatebroadcast) y -proxyrandomize está desactivado. Los circuitos de Tor utilizados para las conexiones de envío privado podrían correlacionarse con otras conexiones a través de Tor. Para obtener la máxima privacidad, configure -proxyrandomize=1.</translation>
     </message>
     <message>
         <source>Prune mode is incompatible with -reindex-chainstate. Use full -reindex instead.</source>

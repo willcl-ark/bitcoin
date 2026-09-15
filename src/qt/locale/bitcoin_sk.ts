@@ -2125,11 +2125,6 @@ Ak ste dostali túto chybu mali by ste požiadať obchodníka o URI kompatibiln�
         <translation>Odchádzajúce</translation>
     </message>
     <message>
-        <source>Private Broadcast</source>
-        <extracomment>Short-lived peer connection type that is used for broadcasting privacy-sensitive data.</extracomment>
-        <translation>Súkromné vysielanie</translation>
-    </message>
-    <message>
         <source>Unroutable</source>
         <translation>Nesmerovateľné</translation>
     </message>
@@ -2492,11 +2487,6 @@ Ak ste dostali túto chybu mali by ste požiadať obchodníka o URI kompatibiln�
     <message>
         <source>Ping Wait</source>
         <translation>Čakanie na odozvu</translation>
-    </message>
-    <message>
-        <source>Private broadcast: short-lived, for broadcasting privacy-sensitive transactions</source>
-        <extracomment>Explanatory text for a short-lived outbound peer connection that is used to broadcast privacy-sensitive data (like our transactions).</extracomment>
-        <translation>Súkromné vysielanie: krátkodobé pre vyslanie citlivých transakcií</translation>
     </message>
     <message>
         <source>Received</source>
@@ -4728,18 +4718,6 @@ Nepodarilo sa obnoviť zálohu peňaženky.</translation>
     <message>
         <source>Please contribute if you find %s useful. Visit %s for further information about the software.</source>
         <translation>Keď si myslíte, že %s je užitočný, podporte nás. Pre viac informácií o software navštívte %s.</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast) and -proxyrandomize is disabled. Tor circuits for private broadcast connections may be correlated to other connections over Tor. For maximum privacy set -proxyrandomize=1.</source>
-        <translation>Bolo požadované súkromné vysielanie vlastných transakcií (-privatebroadcast) ale voľba -proxyrandomize je vypnutá. Okruhy Tor circuits pre spojenia súkromného vysielania môžu byť korelované na iné prepojenia cez Tor. Pre maximálne súkromie nastavte -proxyrandomize=1.</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast), but -connect is also configured. They are incompatible because the private broadcast needs to open new connections to randomly chosen Tor or I2P peers. Consider using -maxconnections=0 -addnode=... instead</source>
-        <translation>Bolo požadované súkromné vysielanie vlastných transakcií  (-privatebroadcast), ale je nastavený aj parameter -connect. Tieto sú nekompatibilné, pretože súkromné vysielanie potrebuje otvárať nové spojenia k náhodne vybraným partnerom Tor alebo I2P. Zvážte namiesto toho použitie -maxconnections=0 -addnode=...</translation>
-    </message>
-    <message>
-        <source>Private broadcast of own transactions requested (-privatebroadcast), but none of Tor or I2P networks is reachable</source>
-        <translation>Bolo požadované súkromné vysielanie vlastných transakcií  (-privatebroadcast), ale nie sú dostupné siete Tor alebo I2P</translation>
     </message>
     <message>
         <source>Prune cannot be configured with a negative value.</source>
