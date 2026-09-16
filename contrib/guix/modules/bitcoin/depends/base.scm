@@ -68,7 +68,7 @@
 
 (define (capnp-sources)
   (list (source (string-append "capnproto-cxx-" %capnp-version ".tar.gz")
-                (string-append "https://capnproto.org/capnproto-c++-"
+                (string-append "https://capnproto.org//capnproto-c++-"
                                %capnp-version ".tar.gz")
                 %capnp-source-hash)))
 
@@ -112,7 +112,7 @@
       "3500400"
       (list (source
              "sqlite-autoconf-3500400.tar.gz"
-             "https://sqlite.org/2025/sqlite-autoconf-3500400.tar.gz"
+             "https://sqlite.org/2025//sqlite-autoconf-3500400.tar.gz"
              "a3db587a1b92ee5ddac2f66b3edb41b26f9c867275782d46c3a088977d6a5b18"))
       #:patches (list (patch "sqlite/autosetup-fixup.patch" 1))
       #:configure
@@ -219,7 +219,7 @@
       "5.3"
       (list (source
              "systemtap-5.3.tar.gz"
-             "https://sourceware.org/ftp/systemtap/releases/systemtap-5.3.tar.gz"
+             "https://sourceware.org/ftp/systemtap/releases//systemtap-5.3.tar.gz"
              "966a360fb73a4b65a8d0b51b389577b3c4f92a327e84aae58682103e8c65a69a"))
       #:patches
       (list
@@ -237,7 +237,7 @@
       "4.1.1"
       (list (source
              "qrencode-4.1.1.tar.gz"
-             "https://fukuchi.org/works/qrencode/qrencode-4.1.1.tar.gz"
+             "https://fukuchi.org/works/qrencode//qrencode-4.1.1.tar.gz"
              "da448ed4f52aba6bcb0cd48cac0dd51b8692bccc4cd127431402fca6f8171e8e"))
       #:patches (list (patch "qrencode/cmake_fixups.patch" 1))
       #:configure
