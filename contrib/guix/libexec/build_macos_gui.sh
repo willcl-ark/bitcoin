@@ -8,9 +8,6 @@ set -o errexit -o pipefail
 # shellcheck source=setup.sh
 source "$(dirname "${BASH_SOURCE[0]}")/setup.sh"
 
-# Setup toolchain
-llvm_toolchain
-
 mkdir -p "$DISTSRC"
 (
     cd "$DISTSRC"

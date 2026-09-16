@@ -389,101 +389,96 @@ EOF
         read -ra _guix_common_flags <<< "$ADDITIONAL_GUIX_COMMON_FLAGS"
         read -ra _guix_env_flags <<< "$ADDITIONAL_GUIX_ENVIRONMENT_FLAGS"
 
-        mkdir -p "$(dirname "$(profiledir_for_host "${host}_depends")")"
-        depends_store="$(
-            time-machine build \
-                --file="${PWD}/contrib/guix/manifest_depends.scm" \
-                --root="$(profiledir_for_host "${host}_depends")" \
-                --cores="$JOBS" \
-                --max-jobs=1 \
-                --keep-failed \
-                --fallback \
-                ${SUBSTITUTE_URLS:+--substitute-urls="$SUBSTITUTE_URLS"} \
-                "${_guix_common_flags[@]}"
-        )"
-        if [ "$(printf '%s\n' "$depends_store" | wc -l)" -ne 1 ] || [ ! -e "$depends_store" ]; then
-            echo "ERR: expected one dependency store output, got: ${depends_store}"
-            exit 1
-        fi
-
-        depends_expose_opts=()
-        while IFS= read -r requisite; do
-            depends_expose_opts+=( --expose="$requisite" )
-        done < <(guix gc --requisites "$depends_store")
-        depends_expose_opts+=(
-            --expose="${depends_store}/prefix=/bitcoin/depends/${HOST}"
-        )
         case "$HOST" in
-            *darwin*)
-                if [ ! -d "${depends_store}/sdk" ]; then
-                    echo "ERR: expected Darwin dependency store SDK at ${depends_store}/sdk"
-                    exit 1
-                fi
-                depends_expose_opts+=(
-                    --expose="${depends_store}/sdk=/bitcoin/depends/SDKs/Xcode-26.1.1-17B100-extracted-SDK-with-libcxx-headers"
+            *linux*) platform=linux ;;
+            *darwin*) platform=macos ;;
+            *mingw*) platform=win ;;
+            *) echo "ERR: unsupported host: ${HOST}"; exit 1 ;;
+        esac
+        for stage in build gui; do
+            stage_suffix=""
+            if [ "$stage" = "gui" ]; then stage_suffix=_gui; fi
+            stage_script="contrib/guix/libexec/build_${platform}${stage_suffix}.sh"
+            stage_profile="$(profiledir_for_host "${HOST}${stage_suffix}")"
+
+            mkdir -p "$(dirname "$(profiledir_for_host "${host}_depends_${stage}")")"
+            depends_store="$(
+                GUIX_BUILD_STAGE="$stage" time-machine build \
+                    --file="${PWD}/contrib/guix/manifest_depends.scm" \
+                    --root="$(profiledir_for_host "${host}_depends_${stage}")" \
+                    --cores="$JOBS" \
+                    --max-jobs=1 \
+                    --keep-failed \
+                    --fallback \
+                    ${SUBSTITUTE_URLS:+--substitute-urls="$SUBSTITUTE_URLS"} \
+                    "${_guix_common_flags[@]}"
+            )"
+            if [ "$(printf '%s\n' "$depends_store" | wc -l)" -ne 1 ] || [ ! -e "$depends_store" ]; then
+                echo "ERR: expected one dependency store output for ${stage}, got: ${depends_store}"
+                exit 1
+            fi
+
+            depends_expose_opts=()
+            while IFS= read -r requisite; do
+                depends_expose_opts+=( --expose="$requisite" )
+            done < <(guix gc --requisites "$depends_store")
+            depends_expose_opts+=(
+                --expose="${depends_store}/prefix=/bitcoin/depends/${HOST}"
+            )
+            case "$HOST" in
+                *darwin*)
+                    if [ ! -d "${depends_store}/sdk" ]; then
+                        echo "ERR: expected Darwin dependency store SDK at ${depends_store}/sdk"
+                        exit 1
+                    fi
+                    depends_expose_opts+=(
+                        --expose="${depends_store}/sdk=/bitcoin/depends/SDKs/Xcode-26.1.1-17B100-extracted-SDK-with-libcxx-headers"
+                    )
+                    ;;
+            esac
+
+            manifest_opts=(
+                --manifest="${PWD}/contrib/guix/manifest_build.scm"
+            )
+            if [ "$stage" = "gui" ]; then
+                manifest_opts+=(
+                    --manifest="${PWD}/contrib/guix/manifest_gui.scm"
                 )
-                ;;
-        esac
+            fi
 
-        shell_opts=(
-            --manifest="${PWD}/contrib/guix/manifest_build.scm"
-            --container
-            --writable-root
-            --pure
-            --no-cwd
-            --share="$PWD=/bitcoin"
-            --share="$DISTSRC_BASE=/distsrc-base"
-            --share="$OUTDIR_BASE=/outdir-base"
-            --expose="$(git rev-parse --git-common-dir)"
-            "${depends_expose_opts[@]}"
-            --cores="$JOBS"
-            --keep-failed
-            --fallback
-            --link-profile
-            ${SUBSTITUTE_URLS:+--substitute-urls="$SUBSTITUTE_URLS"}
-            "${_guix_common_flags[@]}" "${_guix_env_flags[@]}"
-            -- env HOST="$host" \
-                DISTNAME="$DISTNAME"
-                JOBS="$JOBS"
-                SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:?unable to determine value}"
-                ${V:+V=1}
-                DISTSRC="$(distsrc_for_host "$HOST" "" /distsrc-base)"
-                OUTDIR="$(outdir_for_host "$HOST" "" /outdir-base)"
-                DIST_ARCHIVE_BASE=/outdir-base/dist-archive
-        )
+            shell_opts=(
+                "${manifest_opts[@]}"
+                --container
+                --writable-root
+                --pure
+                --no-cwd
+                --share="$PWD=/bitcoin"
+                --share="$DISTSRC_BASE=/distsrc-base"
+                --share="$OUTDIR_BASE=/outdir-base"
+                --expose="$(git rev-parse --git-common-dir)"
+                "${depends_expose_opts[@]}"
+                --cores="$JOBS"
+                --keep-failed
+                --fallback
+                --link-profile
+                ${SUBSTITUTE_URLS:+--substitute-urls="$SUBSTITUTE_URLS"}
+                "${_guix_common_flags[@]}" "${_guix_env_flags[@]}"
+                -- env HOST="$host" \
+                    GUIX_BUILD_STAGE="$stage"
+                    TOOLCHAIN_ENVIRONMENT="${depends_store}/environment"
+                    DISTNAME="$DISTNAME"
+                    JOBS="$JOBS"
+                    SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:?unable to determine value}"
+                    ${V:+V=1}
+                    DISTSRC="$(distsrc_for_host "$HOST" "" /distsrc-base)"
+                    OUTDIR="$(outdir_for_host "$HOST" "" /outdir-base)"
+                    DIST_ARCHIVE_BASE=/outdir-base/dist-archive
+            )
 
-        case "$HOST" in
-            *linux*)
-            time-machine shell --root="$(profiledir_for_host "${HOST}")" \
-                                    "${shell_opts[@]}" \
-                                    bash -c "cd /bitcoin && bash contrib/guix/libexec/build_linux.sh"
-
-            time-machine shell --manifest="${PWD}/contrib/guix/manifest_gui.scm" \
-                                    --root="$(profiledir_for_host "${HOST}"_gui)" \
-                                    "${shell_opts[@]}" \
-                                    bash -c "cd /bitcoin && bash contrib/guix/libexec/build_linux_gui.sh"
-            ;;
-            *darwin*)
-            time-machine shell --root="$(profiledir_for_host "${HOST}")" \
-                                    "${shell_opts[@]}" \
-                                    bash -c "cd /bitcoin && bash contrib/guix/libexec/build_macos.sh"
-
-            time-machine shell --manifest="${PWD}/contrib/guix/manifest_gui.scm" \
-                                    --root="$(profiledir_for_host "${HOST}"_gui)" \
-                                    "${shell_opts[@]}" \
-                                    bash -c "cd /bitcoin && bash contrib/guix/libexec/build_macos_gui.sh"
-            ;;
-            *mingw*)
-            time-machine shell --root="$(profiledir_for_host "${HOST}")" \
-                                    "${shell_opts[@]}" \
-                                    bash -c "cd /bitcoin && bash contrib/guix/libexec/build_win.sh"
-
-            time-machine shell --manifest="${PWD}/contrib/guix/manifest_gui.scm" \
-                                    --root="$(profiledir_for_host "${HOST}"_gui)" \
-                                    "${shell_opts[@]}" \
-                                    bash -c "cd /bitcoin && bash contrib/guix/libexec/build_win_gui.sh"
-            ;;
-        esac
+            GUIX_BUILD_STAGE="$stage" time-machine shell --root="$stage_profile" \
+                                      "${shell_opts[@]}" \
+                                      bash -c "cd /bitcoin && bash ${stage_script}"
+        done
     )
 
 done

@@ -13,14 +13,32 @@
   #:use-module (guix download)
   #:use-module (guix gexp)
   #:use-module (guix git-download)
+  #:use-module ((guix grafts) #:select (%graft?))
   #:use-module (guix packages)
+  #:use-module (guix records)
   #:use-module ((guix utils) #:select (substitute-keyword-arguments))
+  #:use-module (ice-9 match)
+  #:use-module (srfi srfi-1)
   #:export (glibc-2.31
             linux-base-gcc
             make-bitcoin-cross-toolchain
             make-mingw-pthreads-cross-toolchain
             mingw-w64-base-gcc
+            toolchain
+            toolchain?
+            toolchain-packages
+            toolchain-environment
+            build-toolchain
+            gui-toolchain
+            release-toolchain
+            toolchain-environment-file
             target-toolchain-packages))
+
+(define-record-type* <toolchain>
+  toolchain make-toolchain
+  toolchain?
+  (packages toolchain-packages)
+  (environment toolchain-environment))
 
 (define %guix-directory
   (dirname (dirname (dirname (or (search-path %load-path "bitcoin/toolchains.scm")
@@ -277,3 +295,253 @@ chain for " target " development."))
                libcxx ;; 19.1.7
                lld-19))
         (else '())))
+
+(define (toolchain-entry-package entry)
+  (cond ((package? entry) entry)
+        ((and (pair? entry) (package? (car entry))) (car entry))
+        ((and (pair? entry) (string? (car entry)) (pair? (cdr entry)))
+         (cadr entry))
+        (else (error "unknown toolchain input entry" entry))))
+
+(define (toolchain-entry-output entry)
+  (cond ((package? entry) "out")
+        ((and (pair? entry) (package? (car entry)))
+         (if (pair? (cdr entry)) (cadr entry) "out"))
+        ((and (pair? entry) (string? (car entry)))
+         (if (and (pair? (cddr entry)) (string? (caddr entry)))
+             (caddr entry)
+             "out"))
+        (else (error "unknown toolchain input entry" entry))))
+
+(define (toolchain-package-output entries name output)
+  (let ((entry (find (lambda (entry)
+                       (and (string=? (package-name (toolchain-entry-package entry)) name)
+                            (string=? (toolchain-entry-output entry) output)))
+                     entries)))
+    (if entry
+        (gexp-input (toolchain-entry-package entry) output)
+        (error "missing toolchain package output" name output))))
+
+(define (toolchain-package entries name)
+  (toolchain-package-output entries name "out"))
+
+(define (toolchain-package-by-name entries predicate)
+  (let ((entry (find (lambda (entry)
+                       (predicate (package-name (toolchain-entry-package entry))))
+                     entries)))
+    (if entry
+        (toolchain-entry-package entry)
+        (error "missing toolchain package"))))
+
+(define (cross-toolchain-inputs package)
+  (package-propagated-inputs package))
+
+(define (toolchain-input-closure package)
+  (let loop ((entries (cross-toolchain-inputs package))
+             (seen '())
+             (result '()))
+    (match entries
+      (() (reverse result))
+      ((entry rest ...)
+       (let* ((package (toolchain-entry-package entry))
+              (key (cons package
+                         (toolchain-entry-output entry))))
+         (if (member key seen)
+             (loop rest seen result)
+             (loop (append (cross-toolchain-inputs package) rest)
+                   (cons key seen)
+                   (cons entry result))))))))
+
+(define (linux-dynamic-linker target)
+  (case target
+    ((x86_64-linux-gnu) "/lib64/ld-linux-x86-64.so.2")
+    ((arm-linux-gnueabihf) "/lib/ld-linux-armhf.so.3")
+    ((aarch64-linux-gnu) "/lib/ld-linux-aarch64.so.1")
+    ((riscv64-linux-gnu) "/lib/ld-linux-riscv64-lp64d.so.1")
+    ((powerpc64-linux-gnu) "/lib64/ld64.so.1")
+    ((powerpc64le-linux-gnu) "/lib64/ld64.so.2")
+    (else (error "unknown Linux target dynamic linker" target))))
+
+(define* (toolchain-environment-file target packages)
+  (define (gcc-lib-directory-gexp cross-gcc-lib)
+    #~(let* ((parent (string-append #$cross-gcc-lib "/lib/gcc/" #$target))
+             (entries (scandir parent
+                               (lambda (entry)
+                                 (not (member entry '("." "..")))))))
+        (if (null? entries)
+            (error "missing GCC library directory" parent)
+            (string-append parent "/" (car entries)))))
+  (define (environment-file assignments)
+    (with-parameters ((%graft? (%graft?)))
+      (computed-file
+       (string-append "bitcoin-" target "-toolchain-env")
+       #~(begin
+           (use-modules (ice-9 ftw))
+           (define (validate-search-path name value)
+             (for-each
+              (lambda (path)
+                (when (and (not (string-null? path))
+                           (not (file-is-directory? path)))
+                  (error "missing toolchain search path directory" name path)))
+              (string-split value #\:)))
+           (define (write-export port name value)
+             (when (member name '("CROSS_C_INCLUDE_PATH"
+                                  "CROSS_CPLUS_INCLUDE_PATH"
+                                  "CROSS_LIBRARY_PATH"))
+               (validate-search-path name value))
+             (format port "export ~a='~a'~%" name value))
+           (call-with-output-file #$output
+             (lambda (port)
+               (write-export port "GUIX_LD_WRAPPER_DISABLE_RPATH" "yes")
+               #$@assignments))))))
+  (define (assignment name value)
+    #~(write-export port #$name #$value))
+  (cond ((string-contains target "-linux-")
+         (let* ((native-gcc (toolchain-package packages "gcc-toolchain"))
+                (native-gcc-static (toolchain-package-output packages "gcc-toolchain" "static"))
+                (cross-toolchain
+                 (toolchain-package-by-name packages
+                                            (lambda (name)
+                                              (string=? name (string-append target "-toolchain")))))
+                (cross-inputs (toolchain-input-closure cross-toolchain))
+                (cross-glibc (toolchain-package cross-inputs
+                                                (string-append "glibc-cross-" target)))
+                (cross-glibc-static
+                 (toolchain-package-output cross-inputs
+                                           (string-append "glibc-cross-" target)
+                                           "static"))
+                (cross-kernel
+                 (toolchain-package cross-inputs
+                                    (string-append "linux-libre-headers-cross-" target)))
+                (cross-gcc (toolchain-package cross-inputs
+                                              (string-append "gcc-cross-" target)))
+                (cross-gcc-lib
+                 (toolchain-package-output cross-inputs
+                                           (string-append "gcc-cross-" target)
+                                           "lib"))
+                (gcc-lib-dir (gcc-lib-directory-gexp cross-gcc-lib))
+                (cross-c-include-path
+                 #~(string-append #$gcc-lib-dir "/include:"
+                                  #$gcc-lib-dir "/include-fixed:"
+                                  #$cross-glibc "/include:"
+                                  #$cross-kernel "/include"))
+                (cross-cplus-include-path
+                 #~(string-append #$cross-gcc "/include/c++:"
+                                  #$cross-gcc "/include/c++/" #$target ":"
+                                  #$cross-gcc "/include/c++/backward:"
+                                  #$cross-c-include-path)))
+           (environment-file
+            (list
+             (assignment "build_CC"
+                         #~(string-append #$native-gcc "/bin/gcc -isystem "
+                                          #$native-gcc "/include"))
+             (assignment "build_CXX"
+                         #~(string-append #$native-gcc "/bin/g++ -isystem "
+                                          #$native-gcc "/include/c++ -isystem "
+                                          #$native-gcc "/include"))
+             (assignment "LIBRARY_PATH"
+                         #~(string-append #$native-gcc "/lib:"
+                                          #$native-gcc-static "/lib"))
+             (assignment "CROSS_C_INCLUDE_PATH" cross-c-include-path)
+             (assignment "CROSS_CPLUS_INCLUDE_PATH" cross-cplus-include-path)
+             (assignment "CROSS_LIBRARY_PATH"
+                         #~(string-append #$cross-gcc-lib "/lib:"
+                                          #$gcc-lib-dir ":"
+                                          #$cross-glibc "/lib:"
+                                          #$cross-glibc-static "/lib"))
+             (assignment "GUIX_DYNAMIC_LINKER"
+                         (linux-dynamic-linker (string->symbol target)))))))
+        ((string-suffix? "-mingw32" target)
+         (let* ((native-gcc (toolchain-package packages "gcc-toolchain"))
+                (cross-toolchain
+                 (toolchain-package-by-name
+                  packages
+                  (lambda (name)
+                    (string=? name (string-append target "-posix-toolchain")))))
+                (cross-inputs (toolchain-input-closure cross-toolchain))
+                (cross-glibc
+                 (toolchain-package-by-name
+                  cross-inputs
+                  (lambda (name)
+                    (and (string-prefix? "mingw-w64-" name)
+                         (string-suffix? "-winpthreads" name)))))
+                (cross-glibc (gexp-input cross-glibc))
+                (cross-gcc (toolchain-package cross-inputs
+                                              (string-append "gcc-cross-" target)))
+                (cross-gcc-lib
+                 (toolchain-package-output cross-inputs
+                                           (string-append "gcc-cross-" target)
+                                           "lib"))
+                (gcc-lib-dir (gcc-lib-directory-gexp cross-gcc-lib))
+                (cross-c-include-path
+                 #~(string-append #$gcc-lib-dir "/include:"
+                                  #$gcc-lib-dir "/include-fixed:"
+                                  #$cross-glibc "/include"))
+                (cross-cplus-include-path
+                 #~(string-append #$cross-gcc "/include/c++:"
+                                  #$cross-gcc "/include/c++/" #$target ":"
+                                  #$cross-gcc "/include/c++/backward:"
+                                  #$cross-c-include-path)))
+           (environment-file
+            (list
+             (assignment "build_CC"
+                         #~(string-append #$native-gcc "/bin/gcc -isystem "
+                                          #$native-gcc "/include"))
+             (assignment "build_CXX"
+                         #~(string-append #$native-gcc "/bin/g++ -isystem "
+                                          #$native-gcc "/include/c++ -isystem "
+                                          #$native-gcc "/include"))
+             (assignment "CROSS_C_INCLUDE_PATH" cross-c-include-path)
+             (assignment "CROSS_CPLUS_INCLUDE_PATH" cross-cplus-include-path)
+             (assignment "CROSS_LIBRARY_PATH"
+                         #~(string-append #$cross-gcc-lib "/lib:"
+                                          #$gcc-lib-dir ":"
+                                          #$cross-glibc "/lib"))))))
+        ((string-contains target "darwin")
+         (let ((clang-toolchain (toolchain-package packages "clang-toolchain"))
+               (libcxx (toolchain-package packages "libcxx")))
+           (environment-file
+            (list
+             (assignment "build_CC"
+                         #~(string-append #$clang-toolchain "/bin/clang -isystem "
+                                          #$clang-toolchain "/include"))
+             (assignment "build_CXX"
+                         #~(string-append #$clang-toolchain "/bin/clang++"
+                                          " -stdlib=libc++ -isystem "
+                                          #$libcxx "/include/c++/v1 -isystem "
+                                          #$clang-toolchain "/include"))
+             (assignment "build_LDFLAGS"
+                         #~(string-append "-fuse-ld=lld -rtlib=compiler-rt"
+                                          " -unwindlib=libunwind -L"
+                                          #$libcxx "/lib -Wl,-rpath,"
+                                          #$libcxx "/lib"))
+             (assignment "build_AR"
+                         #~(string-append #$clang-toolchain "/bin/llvm-ar"))
+             (assignment "build_RANLIB"
+                         #~(string-append #$clang-toolchain "/bin/llvm-ranlib"))
+             (assignment "build_OBJDUMP"
+                         #~(string-append #$clang-toolchain "/bin/llvm-objdump"))
+             (assignment "build_NM"
+                         #~(string-append #$clang-toolchain "/bin/llvm-nm"))
+             (assignment "build_STRIP"
+                         #~(string-append #$clang-toolchain "/bin/llvm-strip"))))))
+        (else
+         (error "unknown target toolchain environment" target))))
+
+(define (target-toolchain target)
+  (let ((packages (target-toolchain-packages target)))
+    (toolchain
+     (packages packages)
+     (environment (toolchain-environment-file target packages)))))
+
+(define (build-toolchain target)
+  (target-toolchain target))
+
+(define (gui-toolchain target)
+  (target-toolchain target))
+
+(define (release-toolchain target stage)
+  (case stage
+    ((build) (build-toolchain target))
+    ((gui) (gui-toolchain target))
+    (else (error "unknown Guix build stage" stage))))

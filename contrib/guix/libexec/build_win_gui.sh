@@ -8,9 +8,6 @@ set -o errexit -o pipefail
 # shellcheck source=setup.sh
 source "$(dirname "${BASH_SOURCE[0]}")/setup.sh"
 
-# setup mingw-w64 toolchain
-mingw_w64_toolchain
-
 # CFLAGS
 HOST_CFLAGS="-O2 -g"
 HOST_CFLAGS+=$(find /gnu/store -maxdepth 1 -mindepth 1 -type d -exec echo -n " -ffile-prefix-map={}=/usr" \;)

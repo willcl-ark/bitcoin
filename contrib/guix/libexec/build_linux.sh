@@ -8,9 +8,6 @@ set -o errexit -o pipefail
 # shellcheck source=setup.sh
 source "$(dirname "${BASH_SOURCE[0]}")/setup.sh"
 
-# setup gcc toolchain
-gcc_toolchain
-
 # CFLAGS
 HOST_CFLAGS="-O2 -g"
 HOST_CFLAGS+=$(find /gnu/store -maxdepth 1 -mindepth 1 -type d -exec echo -n " -ffile-prefix-map={}=/usr" \;)
@@ -24,7 +21,7 @@ case "$HOST" in
 esac
 
 # LDFLAGS
-HOST_LDFLAGS="-Wl,--as-needed -Wl,--dynamic-linker=$(glibc_dynamic_linker "$HOST") -Wl,-O2"
+HOST_LDFLAGS="-Wl,--as-needed -Wl,--dynamic-linker=${GUIX_DYNAMIC_LINKER} -Wl,-O2"
 
 # Use LINK_WARNING_AS_ERROR when using CMake 4.x
 case "$HOST" in
@@ -42,7 +39,7 @@ mkdir -p "$DISTSRC"
     # Configure this DISTSRC for $HOST
     env CFLAGS="${HOST_CFLAGS}" CXXFLAGS="${HOST_CXXFLAGS}" LDFLAGS="${HOST_LDFLAGS}" \
     cmake -S . -B build \
-          --toolchain "${BASEPREFIX}/${HOST}/toolchain-base.cmake" \
+          --toolchain "${BASEPREFIX}/${HOST}/toolchain.cmake" \
           -DBUILD_BENCH=OFF \
           -DBUILD_FUZZ_BINARY=OFF \
           -DBUILD_GUI=OFF \

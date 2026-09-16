@@ -8,9 +8,6 @@ set -o errexit -o pipefail
 # shellcheck source=setup.sh
 source "$(dirname "${BASH_SOURCE[0]}")/setup.sh"
 
-# setup mingw-w64 toolchain
-mingw_w64_toolchain
-
 # CFLAGS
 HOST_CFLAGS="-O2 -g"
 HOST_CFLAGS+=$(find /gnu/store -maxdepth 1 -mindepth 1 -type d -exec echo -n " -ffile-prefix-map={}=/usr" \;)
@@ -33,7 +30,7 @@ mkdir -p "$DISTSRC"
     # Configure this DISTSRC for $HOST
     env CFLAGS="${HOST_CFLAGS}" CXXFLAGS="${HOST_CXXFLAGS}" LDFLAGS="${HOST_LDFLAGS}" \
     cmake -S . -B build \
-          --toolchain "${BASEPREFIX}/${HOST}/toolchain-base.cmake" \
+          --toolchain "${BASEPREFIX}/${HOST}/toolchain.cmake" \
           -DBUILD_BENCH=OFF \
           -DBUILD_FUZZ_BINARY=OFF \
           -DBUILD_GUI=OFF \

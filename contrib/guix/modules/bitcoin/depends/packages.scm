@@ -7,6 +7,7 @@
   #:use-module (bitcoin depends base)
   #:use-module (bitcoin depends gui)
   #:use-module (bitcoin depends qt)
+  #:use-module (bitcoin toolchains)
   #:use-module (guix utils)
   #:use-module (srfi srfi-1)
   #:export (release-recipes release-packages))
@@ -30,7 +31,9 @@
              (base-recipes target build))
      (if gui? (append (gui-recipes target build) (qt-recipes target build)) '()))))
 
-(define* (release-packages target #:key gui? sdk (system (%current-system)))
+(define* (release-packages target #:key gui? sdk
+                          (toolchain (release-toolchain target (if gui? 'gui 'build)))
+                          (system (%current-system)))
   "Return the selected package graph; dependencies are separate store builds."
   (let* ((recipes (release-recipes target #:gui? gui? #:system system))
          (build (build-triplet system))
@@ -43,7 +46,7 @@
         (sort (delete-duplicates (append direct (append-map closure direct))) string<?)))
     (define (package-for name)
       (or (assoc-ref cache name)
-          (let ((package (depends-package (recipe name) target build
+          (let ((package (depends-package (recipe name) target build toolchain
                                           (map package-for (closure name))
                                           #:sdk sdk)))
             (set! cache (acons name package cache))

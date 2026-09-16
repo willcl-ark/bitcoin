@@ -8,9 +8,6 @@ set -o errexit -o pipefail
 # shellcheck source=setup.sh
 source "$(dirname "${BASH_SOURCE[0]}")/setup.sh"
 
-# setup gcc toolchain
-gcc_toolchain
-
 # CFLAGS
 HOST_CFLAGS="-O2 -g"
 HOST_CFLAGS+=$(find /gnu/store -maxdepth 1 -mindepth 1 -type d -exec echo -n " -ffile-prefix-map={}=/usr" \;)
@@ -24,7 +21,7 @@ case "$HOST" in
 esac
 
 # LDFLAGS
-HOST_LDFLAGS="-Wl,--as-needed -Wl,--dynamic-linker=$(glibc_dynamic_linker "$HOST") -Wl,-O2"
+HOST_LDFLAGS="-Wl,--as-needed -Wl,--dynamic-linker=${GUIX_DYNAMIC_LINKER} -Wl,-O2"
 
 mkdir -p "$DISTSRC"
 (

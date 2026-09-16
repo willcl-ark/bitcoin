@@ -5,6 +5,7 @@
 (define-module (bitcoin depends assembly)
   #:use-module (bitcoin depends)
   #:use-module (bitcoin depends packages)
+  #:use-module (bitcoin toolchains)
   #:use-module (guix packages)
   #:use-module (guix gexp)
   #:use-module (guix modules)
@@ -17,9 +18,11 @@
    (string-append (dirname (search-path %load-path "bitcoin/depends/assembly.scm"))
                   "/../../../../..")))
 
-(define* (depends-assembly target #:key sdk (system (%current-system)))
-  (let ((packages (map cdr (release-packages target #:gui? #t #:sdk sdk #:system system)))
-        (profile (depends-profile target))
+(define* (depends-assembly target #:key (stage 'build) sdk (system (%current-system)))
+  (let* ((toolchain (release-toolchain target stage))
+         (packages (map cdr (release-packages target #:gui? (eq? stage 'gui)
+                                             #:toolchain toolchain #:sdk sdk #:system system)))
+         (profile (depends-profile target toolchain))
         (build (cond ((string=? system "x86_64-linux") "x86_64-pc-linux-gnu")
                      ((string=? system "aarch64-linux") "aarch64-unknown-linux-gnu")
                      (else (error "unsupported release build system" system)))))
@@ -59,6 +62,8 @@
                      '((cc . "gcc") (cxx . "g++"))))
                (else '())))
             (mkdir-p prefix)
+            (copy-file #$(toolchain-environment toolchain)
+                       (string-append #$output "/environment"))
             ;; Copying payloads alone would not keep the individual package
             ;; outputs reachable from this assembly's garbage-collector root.
             (mkdir (string-append #$output "/packages"))
@@ -69,20 +74,17 @@
              '#$(map package-name packages)
              (list #$@packages))
             (when #$sdk (symlink #$sdk (string-append #$output "/sdk")))
-            (for-each
-             (lambda (gui?)
-               (let* ((substitutions (depends-toolchain-substitutions #$target #$build gui? #:tools tools))
-                      (template (call-with-input-file
-                                    #$(local-file (string-append %root "/depends/toolchain.cmake.in"))
-                                  get-string-all))
-                      (text (fold (lambda (entry text)
-                                    (string-replace-substring text (car entry) (cdr entry)))
-                                  template substitutions)))
-                 (call-with-output-file
-                     (string-append prefix (if gui? "/toolchain.cmake" "/toolchain-base.cmake"))
-                   (lambda (port) (display text port)))))
-             '(#f #t)))))
+            (let* ((substitutions (depends-toolchain-substitutions
+                                   #$target #$build #$(eq? stage 'gui) #:tools tools))
+                   (template (call-with-input-file
+                                 #$(local-file (string-append %root "/depends/toolchain.cmake.in"))
+                               get-string-all))
+                   (text (fold (lambda (entry text)
+                                 (string-replace-substring text (car entry) (cdr entry)))
+                               template substitutions)))
+              (call-with-output-file (string-append prefix "/toolchain.cmake")
+                (lambda (port) (display text port)))))))
       (home-page "https://bitcoincore.org")
       (synopsis "Bitcoin Core release dependency prefix")
-      (description "The shared dependency package set for both release build stages.")
+      (description "The dependency prefix for a release stage's selected toolchain.")
       (license #f))))

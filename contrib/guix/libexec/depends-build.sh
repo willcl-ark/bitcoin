@@ -9,14 +9,14 @@ export LC_ALL=C.UTF-8 TZ=UTC
 umask 0022
 
 source "${GUIX_ENVIRONMENT}/etc/profile"
-source "$toolchain_script"
 unset LIBRARY_PATH CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH OBJC_INCLUDE_PATH OBJCPLUS_INCLUDE_PATH
 export HOST="$target"
+source "$toolchain_script"
 
 case "$target" in
-    *linux*) gcc_toolchain; system_name=Linux ;;
-    *mingw32) mingw_w64_toolchain; system_name=Windows ;;
-    *darwin) llvm_toolchain; system_name=Darwin ;;
+    *linux*) system_name=Linux ;;
+    *mingw32) system_name=Windows ;;
+    *darwin) system_name=Darwin ;;
     *) echo "Unsupported depends target: $target" >&2; exit 1 ;;
 esac
 

@@ -73,18 +73,33 @@ target in `HOSTS`, the script first runs the pinned Guix with
 `contrib/guix/manifest_depends.scm`. The same time-machine pin is used for
 evaluating the dependency manifest and for building its derivations.
 
-Each target gets one dependency store output rooted under
-`guix-build-<version>/var/profiles/<host>_depends`. That output contains the
-combined GUI dependency superset under `prefix/`, including both
-`toolchain.cmake` and `toolchain-base.cmake`. The non-GUI and GUI final build
-containers consume the same dependency output; it is not installed as part of
-the Guix shell profile, so it does not change the shell's search paths.
-References under `packages/` keep each package output reachable from this root
-for reuse after garbage collection.
+Each target gets two dependency store outputs rooted under
+`guix-build-<version>/var/profiles/<host>_depends_build` and
+`guix-build-<version>/var/profiles/<host>_depends_gui`. The build-stage output
+contains the non-GUI dependency graph under `prefix/`; the GUI-stage output
+contains the full GUI graph. Package derivations are still shared by Guix when
+their inputs are identical, so common dependency packages are reused instead of
+rebuilt merely because they appear in both stages. References under `packages/`
+keep each package output reachable from the stage root for reuse after garbage
+collection.
 
 Before each final build container runs, `guix-build` exposes the full dependency
 store closure reported by `guix gc --requisites`. Inside the container, the
-store output's `prefix/` directory is mounted read-only at `depends/<host>`.
+current stage output's `prefix/` directory is mounted read-only at
+`depends/<host>`. The non-GUI final build runs before the GUI final build, and
+the historical final Guix shell profile roots remain
+`guix-build-<version>/var/profiles/<host>` and
+`guix-build-<version>/var/profiles/<host>_gui`.
+
+`build-toolchain` and `gui-toolchain` in `modules/bitcoin/toolchains.scm` select
+each stage's compiler packages and generated environment together. Their defaults
+are identical. Both dependency builders and final build containers consume that
+selected environment. Change these definitions to select a different toolchain;
+`manifest_gui.scm` adds utilities, not an alternative compiler.
+
+Each prefix contains a `toolchain.cmake` with its stage's feature selection.
+Compiler environment setup is generated from Scheme and stored alongside the
+prefix as `environment`; release shell scripts only source that file.
 
 For macOS targets, the extracted SDK is declared as an input to the dependency
 manifest. The final build containers mount that store SDK at the fixed

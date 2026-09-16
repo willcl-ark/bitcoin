@@ -8,9 +8,6 @@ set -o errexit -o pipefail
 # shellcheck source=setup.sh
 source "$(dirname "${BASH_SOURCE[0]}")/setup.sh"
 
-# Setup toolchain
-llvm_toolchain
-
 mkdir -p "$DISTSRC"
 (
     cd "$DISTSRC"
@@ -20,7 +17,7 @@ mkdir -p "$DISTSRC"
 
     # Configure this DISTSRC for $HOST
     env cmake -S . -B build \
-          --toolchain "${BASEPREFIX}/${HOST}/toolchain-base.cmake" \
+          --toolchain "${BASEPREFIX}/${HOST}/toolchain.cmake" \
           -DBUILD_BENCH=OFF \
           -DBUILD_FUZZ_BINARY=OFF \
           -DBUILD_GUI=OFF \

@@ -3,6 +3,8 @@
 ;;; file COPYING or https://opensource.org/license/mit.
 
 (define-module (bitcoin depends)
+  #:use-module (bitcoin manifests)
+  #:use-module (bitcoin toolchains)
   #:use-module (guix packages)
   #:use-module (guix profiles)
   #:use-module (guix gexp)
@@ -12,7 +14,6 @@
   #:use-module (guix grafts)
   #:use-module (guix base16)
   #:use-module (guix utils)
-  #:use-module ((guix ui) #:select (make-user-module))
   #:use-module (guix build-system trivial)
   #:use-module (srfi srfi-1)
   #:use-module (ice-9 match)
@@ -33,26 +34,16 @@
   (let ((entry (assq field recipe)))
     (if entry (cdr entry) default)))
 
-(define (depends-profile target)
-  ;; These are the same manifests and profile options as `time-machine shell'.
-  (let ((previous (getenv "HOST"))
-        (graft? (%graft?)))
+(define (depends-profile target toolchain)
+  ;; Keep dependency build utilities independent of the consuming stage so
+  ;; identical toolchains produce identical inputs for shared packages.
+  (let ((graft? (%graft?)))
     (with-parameters ((%graft? graft?))
-    (dynamic-wind
-      (lambda () (setenv "HOST" target))
-      (lambda ()
-        (profile
-          (content
-           (concatenate-manifests
-            (map (lambda (file)
-                   (save-module-excursion
-                    (lambda ()
-                      (set-current-module (make-user-module '((guix profiles) (gnu))))
-                      (primitive-load (string-append %guix-directory "/" file)))))
-                 '("manifest_build.scm" "manifest_gui.scm"))))
-          (allow-collisions? #t)))
-      (lambda ()
-        (if previous (setenv "HOST" previous) (unsetenv "HOST")))))))
+      (profile
+        (content (concatenate-manifests
+                  (list (build-manifest target (toolchain-packages toolchain))
+                        (gui-manifest target))))
+        (allow-collisions? #t)))))
 
 (define (recipe-source source)
   (match source
@@ -63,7 +54,7 @@
        (file-name name)
        (sha256 (base16-string->bytevector hash))))))
 
-(define* (depends-package recipe target build-triplet dependencies #:key sdk)
+(define* (depends-package recipe target build-triplet toolchain dependencies #:key sdk)
   "Build RECIPE with already built DEPENDENCIES at the release depends prefix."
   (define (field key default) (recipe-field recipe key default))
   (let* ((name (field 'name #f))
@@ -73,13 +64,13 @@
          (local (field 'local-source #f))
          ;; A trivial builder normally lowers its inputs without grafts. The
          ;; release shell uses the caller's graft policy, which we must retain.
-         (environment (depends-profile target))
+         (environment (depends-profile target toolchain))
          (script
           (mixed-text-file
            (string-append name "-build.sh")
            "set -eo pipefail\n"
            "export GUIX_ENVIRONMENT=" environment "\n"
-           "toolchain_script=" (local-file (string-append %guix-directory "/libexec/toolchain.sh")) "\n"
+           "toolchain_script=" (toolchain-environment toolchain) "\n"
            (assignment "target" target)
            (assignment "build_triplet" build-triplet)
            (assignment "native" (if (field 'native? #f) "1" "0"))
