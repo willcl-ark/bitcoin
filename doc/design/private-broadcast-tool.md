@@ -33,8 +33,8 @@ that correlates the job with other traffic through the same Tor daemon (see Limi
 
 ## Compared with `-privatebroadcast` before this change
 
-The entry points stay (`sendrawtransaction` and the `getprivatebroadcastinfo` and
-`abortprivatebroadcast` RPCs); what runs behind them is new.
+The entry points stay (`sendrawtransaction`, now also `submitpackage`, and the
+`getprivatebroadcastinfo` and `abortprivatebroadcast` RPCs); what runs behind them is new.
 
 | | Before (in `CConnman` and `PeerManager`) | Now (a job) |
 |---|---|---|
@@ -46,7 +46,7 @@ The entry points stay (`sendrawtransaction` and the `getprivatebroadcastinfo` an
 | Retries | re-sent to new peers until seen back in the node's mempool (after 1 min), up to 1,000 times | none after an announcement; the schedule is drawn at job start and nothing seen on the network changes it |
 | Duration | open-ended | every job's network work ends within 568 s |
 | Peer profile | `NODE_NONE`, no wtxid relay, announces by txid | `NODE_WITNESS`, protocol 70017, requires wtxid relay (BIP339) and announces by wtxid |
-| Packages | no | one parent and its child, in the program |
+| Packages | no | one parent and its child |
 | Without a node | no | the `bitcoin-privbcast` program |
 
 Read down the right column, this is a smaller feature: no I2P, no peers that speak only the
@@ -185,9 +185,10 @@ and it works out which is which.
   recipient accepted the package; a PONG means only that the recipient processed what we sent.
   A recipient older than Core 28 asks for the parent, rejects it alone and keeps the child as an
   orphan only until we disconnect.
-- Serving a second transaction on request happens only in package mode, so a recipient that
-  asks for the parent learns the sender used package mode. That the two transactions belong
-  together is already visible on the chain.
+- Serving a second transaction on request happens only in package mode (this tool given two
+  transactions, or `submitpackage` under `-privatebroadcast`), so a recipient that asks for the
+  parent learns the sender used package mode. That the two transactions belong together is
+  already visible on the chain.
 
 ## Using it
 
@@ -224,8 +225,8 @@ one). Nothing at the SOCKS interface can detect this; Tor accepts the credential
 
 ## Inside the node
 
-With `-privatebroadcast`, `sendrawtransaction` queues a job that runs this code in the node's
-process. The job still uses none of the node's peer machinery: no address
+With `-privatebroadcast`, `sendrawtransaction` and `submitpackage` queue a job that runs this
+code in the node's process. The job still uses none of the node's peer machinery: no address
 manager, connection manager, peer manager or ban list. Its discovery, schedule and wire profile
 are the tool's. The transaction does not enter the node's mempool until it comes back from the
 network, and the node then treats it like any other. Submitting the same transaction again
