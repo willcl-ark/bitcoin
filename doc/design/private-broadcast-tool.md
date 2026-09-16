@@ -5,11 +5,12 @@ identity, its IP address or its onion address. Everything else here serves that.
 
 `bitcoin-privbcast` announces one final transaction, or one parent and its child, to a small,
 bounded set of peers over Tor, and then stops: at most 24 connections, all over within ten
-minutes, nothing kept afterwards. It is a separate program from `bitcoind`, and that separation
-is the design. Two rules make it. The tool touches no node state, so nothing a recipient sees
-at the P2P layer can be tied to a node. Its schedule is drawn before the first connection and
-never moved by anything a peer does, so nothing the network does can steer it. The tool does
-not promise delivery, does not hide that a job ran, and does not retry on its own.
+minutes, nothing kept afterwards. It runs as a separate program, and the same code runs inside
+`bitcoind` as `-privatebroadcast`, replacing the connection-manager-based implementation. Two
+rules make it. A job touches no node state, so nothing a recipient sees at the P2P layer can be
+tied to the node. Its schedule is drawn before the first connection and never moved by anything
+a peer does, so nothing the network does can steer it. The tool does not promise delivery, does
+not hide that a job ran, and does not retry on its own.
 
 ## Who sees what
 
@@ -29,6 +30,34 @@ Every party sees a Tor circuit and never the sender.
 
 Not claimed: that a job ran at all, that it ran from a release with this profile, and anything
 that correlates the job with other traffic through the same Tor daemon (see Limits).
+
+## Compared with `-privatebroadcast` before this change
+
+The entry points stay (`sendrawtransaction` and the `getprivatebroadcastinfo` and
+`abortprivatebroadcast` RPCs); what runs behind them is new.
+
+| | Before (in `CConnman` and `PeerManager`) | Now (a job) |
+|---|---|---|
+| Peers | from the node's address manager | discovered per job: the release DNS seeds resolved through Tor (`RESOLVE`), plus onion peers from the release fixed-seed list |
+| Networks | Tor, I2P, IPv4/IPv6 through the proxy | Tor only: onion peers, and IPv4/IPv6 peers through Tor exits |
+| Transport | v2 or v1 | v2 (BIP324) only |
+| Connections at once | 3 per transaction when it is submitted (all private broadcasts share a cap of 64), each up to 3 min | 3 at start, never more than 6 (one per slot) |
+| Connections in total | more with every re-send | at most 24: 6 slots, each a first peer and up to 3 backups |
+| Retries | re-sent to new peers until seen back in the node's mempool (after 1 min), up to 1,000 times | none after an announcement; the schedule is drawn at job start and nothing seen on the network changes it |
+| Duration | open-ended | every job's network work ends within 568 s |
+| Peer profile | `NODE_NONE`, no wtxid relay, announces by txid | `NODE_WITNESS`, protocol 70017, requires wtxid relay (BIP339) and announces by wtxid |
+| Packages | no | one parent and its child, in the program |
+| Without a node | no | the `bitcoin-privbcast` program |
+
+Read down the right column, this is a smaller feature: no I2P, no peers that speak only the
+old transport, no reach into the node's address manager, and no re-sending when the transaction
+does not come back. Each is given up for the two rules below, and for a bounded cost with a
+clear outcome: at most 24 connections, over within 568 s, and a report of every attempt.
+
+**Delivery depends on recipients; privacy does not.** A recipient that turns out to be hostile
+learns nothing more about the sender's IP address or long-term identity than an honest one does.
+Choosing recipients at random, across three paths, is for robustness: a recipient that drops the
+transaction, or an exit that interferes with it, costs one slot, not the job.
 
 ## The principle
 
@@ -59,7 +88,8 @@ One connection, one fixed profile. The tool sends a VERSION with constant fields
 peer's VERSION with WTXIDRELAY and VERACK, announces the transaction by wtxid, serves it
 exactly once when asked for it by wtxid, sends one PING, and closes on the matching PONG. The
 protocol version is Core's current one, so the profile tracks the release rather than marking
-the tool; the user agent is a constant that no node sends (see bitcoin/bitcoin#27509). It
+the tool; the user agent is the one the previous implementation sent (a constant other than the
+node's own, see bitcoin/bitcoin#27509), kept so this change adds no second profile. It
 needs a peer that is at protocol 70016 or later, offers `NODE_WITNESS`, accepts relay and sends
 WTXIDRELAY before its VERACK; any other peer is left before anything is announced. Every other
 message is read and ignored; the tool never answers it. A peer that declines the transaction,
@@ -192,6 +222,38 @@ stream on a circuit that also carries other traffic through the same SocksPort, 
 node's own connections and whatever they reveal about it (its advertised onion address, for
 one). Nothing at the SOCKS interface can detect this; Tor accepts the credentials either way.
 
+## Inside the node
+
+With `-privatebroadcast`, `sendrawtransaction` queues a job that runs this code in the node's
+process. The job still uses none of the node's peer machinery: no address
+manager, connection manager, peer manager or ban list. Its discovery, schedule and wire profile
+are the tool's. The transaction does not enter the node's mempool until it comes back from the
+network, and the node then treats it like any other. Submitting the same transaction again
+queues another job, including one the node's mempool already holds; jobs are not deduplicated.
+
+Node settings that choose peers (`-onlynet`, `-dnsseed`, `-fixedseeds`, `-connect`, `-seednode`,
+`-addnode`) do not apply to jobs. A node with `-onlynet=onion` still gets exit-path connections:
+the fixed-seed onions alone age with the release (see Limits), Tor hides the user's address on
+either path, and an exit can only drop or alter its own connection, which no job depends on.
+There is no switch, for the same reason there are no other knobs.
+
+What a job does share:
+
+- **The proxy.** The node's Tor proxy, trusted as the node's other proxy settings are. Every
+  stream carries fresh credentials whatever `-proxyrandomize` says.
+- **The queue.** At most two jobs run at once, in submission order. A job ends when its last
+  connection ends, so a recipient that holds a connection open can delay when the next queued
+  job starts. That is a link between two of this node's transactions, not a node identifier.
+- **An observation.** When the node's mempool first sees the transaction, which is recorded in
+  the report and never fed back into a job.
+- **The log.** `debug.log` records job progress only with `-debug=privatebroadcast`. SOCKS
+  failures mentioning a destination only appear with `-debug=proxy` or `-debug=net`.
+- **The process.** Shutdown and `setnetworkactive false` cancel jobs.
+
+Wallet sends are not private broadcasts: the wallet submits to the node's mempool and
+rebroadcasts from there, which a private broadcast must not do. Making them private is a
+separate change.
+
 ## Limits
 
 - The tool and the node still share a host and, usually, a Tor daemon. Load, Tor's own
@@ -205,5 +267,13 @@ one). Nothing at the SOCKS interface can detect this; Tor accepts the credential
   its paths without an exit.
 - Recipients can recognise the release by its profile and probe it. They learn that
   someone used the tool, not who.
+- Discovery does not exclude the node's own addresses; a filter on node state is the coupling
+  rule 1 forbids. A job that draws the node's own onion or IP makes the node one of that job's
+  first relayers rather than none of them.
 - Tor's own timing and reachability vary between users; the schedule fixes when the tool
   acts, not how fast the network answers.
+- A job stops when its schedule ends and never retries on its own: retrying because the
+  transaction did not come back would act on exactly the signal a network adversary controls.
+  To censor a job, an adversary must control or silence every slot's recipients and backups,
+  onion slots included. The remedy is another job, submitted by the user after watching
+  `getmempoolentry`; it discovers and schedules independently.
