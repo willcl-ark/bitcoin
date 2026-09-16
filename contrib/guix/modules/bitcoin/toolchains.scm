@@ -319,7 +319,10 @@ chain for " target " development."))
                             (string=? (toolchain-entry-output entry) output)))
                      entries)))
     (if entry
-        (gexp-input (toolchain-entry-package entry) output)
+        ;; Keep the output selector on the package reference itself. Nesting a
+        ;; gexp-input inside another ungexp loses its output in the input list
+        ;; with the pinned Guix, even though the expanded path is correct.
+        #~(ungexp (toolchain-entry-package entry) output)
         (error "missing toolchain package output" name output))))
 
 (define (toolchain-package entries name)
