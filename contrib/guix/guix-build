@@ -21,7 +21,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/libexec/prelude.bash"
 # Required non-builtin commands should be invocable
 ################
 
-check_tools cat mkdir make getent curl git guix
+check_tools cat mkdir make getent git guix
 
 ################
 # GUIX_BUILD_OPTIONS should be empty
@@ -132,6 +132,8 @@ for host in $HOSTS; do
             OSX_SDK="$(make -C "${PWD}/depends" --no-print-directory HOST="$host" print-OSX_SDK | sed 's@^[^=]\+=@@g')"
             if [ -e "$OSX_SDK" ]; then
                 echo "Found macOS SDK at '${OSX_SDK}', using..."
+                GUIX_DEPENDS_SDK="$OSX_SDK"
+                export GUIX_DEPENDS_SDK
                 break
             else
                 echo "macOS SDK does not exist at '${OSX_SDK}', please place the extracted, untarred SDK there to perform darwin builds, or define SDK_PATH environment variable. Exiting..."
@@ -221,19 +223,6 @@ fi
 # environment)
 JOBS="${JOBS:-$(nproc)}"
 
-# Usage: host_to_commonname HOST
-#
-#   HOST: The current platform triple we're building for
-#
-host_to_commonname() {
-    case "$1" in
-        *darwin*) echo osx ;;
-        *mingw*)  echo win ;;
-        *linux*)  echo linux ;;
-        *)        exit 1 ;;
-    esac
-}
-
 # Determine the reference time used for determinism (overridable by environment)
 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-$(git -c log.showSignature=false log --format=%at -1)}"
 
@@ -282,13 +271,6 @@ mkdir -p "$VAR_BASE"
 # Make sure an output directory exists for our builds
 OUTDIR_BASE="${OUTDIR_BASE:-${VERSION_BASE}/output}"
 mkdir -p "$OUTDIR_BASE"
-
-# Download the depends sources now as we won't have internet access in the build
-# container
-for host in $HOSTS; do
-    make -C "${PWD}/depends" -j"$JOBS" download-"$(host_to_commonname "$host")" ${V:+V=1} ${SOURCES_PATH:+SOURCES_PATH="$SOURCES_PATH"}
-done
-
 
 #########
 # BUILD #
@@ -381,15 +363,13 @@ EOF
         #     container so that we have something to build. '/bitcoin' was
         #     chosen arbitrarily.
         #
-        #   ${SOURCES_PATH:+--share="$SOURCES_PATH"}
+        #   --expose=SPEC     expose read-only host file system according to
+        #                      SPEC
         #
-        #                     make the downloaded depends sources path available
-        #                     inside the isolated container
-        #
-        #     The isolated container has no network access as it's in a
-        #     different network namespace from the main machine, so we have to
-        #     make the downloaded depends sources available to it. The sources
-        #     should have been downloaded prior to this invocation.
+        #     The dependency tree is built as a separate store output before
+        #     entering the final build containers.  Exposing its full closure
+        #     lets the final build materialize that tree without installing it
+        #     into the Guix shell profile.
         #
         #   --keep-failed     keep build tree of failed builds
         #
@@ -409,6 +389,39 @@ EOF
         read -ra _guix_common_flags <<< "$ADDITIONAL_GUIX_COMMON_FLAGS"
         read -ra _guix_env_flags <<< "$ADDITIONAL_GUIX_ENVIRONMENT_FLAGS"
 
+        mkdir -p "$(dirname "$(profiledir_for_host "${host}_depends")")"
+        depends_store="$(
+            time-machine build \
+                --file="${PWD}/contrib/guix/manifest_depends.scm" \
+                --root="$(profiledir_for_host "${host}_depends")" \
+                --cores="$JOBS" \
+                --max-jobs=1 \
+                --keep-failed \
+                --fallback \
+                ${SUBSTITUTE_URLS:+--substitute-urls="$SUBSTITUTE_URLS"} \
+                "${_guix_common_flags[@]}"
+        )"
+        if [ "$(printf '%s\n' "$depends_store" | wc -l)" -ne 1 ] || [ ! -e "$depends_store" ]; then
+            echo "ERR: expected one dependency store output, got: ${depends_store}"
+            exit 1
+        fi
+
+        depends_expose_opts=()
+        while IFS= read -r requisite; do
+            depends_expose_opts+=( --expose="$requisite" )
+        done < <(guix gc --requisites "$depends_store")
+        case "$HOST" in
+            *darwin*)
+                if [ ! -d "${depends_store}/sdk" ]; then
+                    echo "ERR: expected Darwin dependency store SDK at ${depends_store}/sdk"
+                    exit 1
+                fi
+                depends_expose_opts+=(
+                    --expose="${depends_store}/sdk=/bitcoin/depends/SDKs/Xcode-26.1.1-17B100-extracted-SDK-with-libcxx-headers"
+                )
+                ;;
+        esac
+
         shell_opts=(
             --manifest="${PWD}/contrib/guix/manifest_build.scm"
             --container
@@ -419,9 +432,7 @@ EOF
             --share="$DISTSRC_BASE=/distsrc-base"
             --share="$OUTDIR_BASE=/outdir-base"
             --expose="$(git rev-parse --git-common-dir)"
-            ${SOURCES_PATH:+--share="$SOURCES_PATH"}
-            ${BASE_CACHE:+--share="$BASE_CACHE"}
-            ${SDK_PATH:+--share="$SDK_PATH"}
+            "${depends_expose_opts[@]}"
             --cores="$JOBS"
             --keep-failed
             --fallback
@@ -430,12 +441,10 @@ EOF
             "${_guix_common_flags[@]}" "${_guix_env_flags[@]}"
             -- env HOST="$host" \
                 DISTNAME="$DISTNAME"
+                DEPENDS_STORE="$depends_store"
                 JOBS="$JOBS"
                 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:?unable to determine value}"
                 ${V:+V=1}
-                ${SOURCES_PATH:+SOURCES_PATH="$SOURCES_PATH"}
-                ${BASE_CACHE:+BASE_CACHE="$BASE_CACHE"}
-                ${SDK_PATH:+SDK_PATH="$SDK_PATH"}
                 DISTSRC="$(distsrc_for_host "$HOST" "" /distsrc-base)"
                 OUTDIR="$(outdir_for_host "$HOST" "" /outdir-base)"
                 DIST_ARCHIVE_BASE=/outdir-base/dist-archive

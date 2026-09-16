@@ -16,6 +16,8 @@ Conservatively, you will need:
 - 16GB of free disk space on the partition that /gnu/store will reside in
 - 8GB of free disk space **per platform triple** you're planning on building
   (see the `HOSTS` [environment variable description][env-vars-list])
+- support for unprivileged user namespaces, since the Guix dependency builds
+  create nested Linux containers inside the Guix build sandbox
 
 # Installation and Setup
 
@@ -64,6 +66,54 @@ following from the top of a clean repository:
 ./contrib/guix/guix-build
 ```
 
+## Dependency builds
+
+`guix-build` builds the release dependency tree as Guix store outputs. For each
+target in `HOSTS`, the script first runs the pinned Guix with
+`contrib/guix/manifest_depends.scm`. The same time-machine pin is used for
+evaluating the dependency manifest and for building its derivations.
+
+Each target gets one dependency store output rooted under
+`guix-build-<version>/var/profiles/<host>_depends`. That output contains the
+combined GUI dependency superset under `prefix/`, including both
+`toolchain.cmake` and `toolchain-base.cmake`. The non-GUI and GUI final build
+containers consume the same dependency output; it is not installed as part of
+the Guix shell profile, so it does not change the shell's search paths.
+References under `packages/` keep each package output reachable from this root
+for reuse after garbage collection.
+
+Before each final build container runs, `guix-build` exposes the full dependency
+store closure reported by `guix gc --requisites`. Inside the container, the
+dependency tree is copied from the store output into `depends/<host>`.
+
+For macOS targets, the extracted SDK is declared as an input to the dependency
+manifest. The final build containers mount that store SDK at the fixed
+`/bitcoin/depends/SDKs/Xcode-...-extracted-SDK-with-libcxx-headers` path used by
+the generated toolchain files.
+
+This workflow is experimental. It is intended to replace the dependency build
+done inside the final containers, but exact parity with the historical
+Make-built dependency tree has not been fully validated yet. The ordinary
+`depends/` Make workflow outside of `guix-build` is unchanged.
+
+The Scheme recipes describe the default release configuration. Changes to
+depends sources, patches, flags or package selection must also be reflected in
+`contrib/guix/modules/bitcoin/depends/`. Run the focused checks from the repository
+root using the same pinned Guix:
+
+```sh
+(
+    source contrib/guix/libexec/prelude.bash
+    for check in contrib/guix/tests/*.scm; do
+        JOBS=1 time-machine repl -L contrib/guix/modules -- "$check" || exit 1
+    done
+    bash contrib/guix/tests/materialize-depends.sh
+)
+```
+
+These check package selection, Qt metadata, toolchain substitutions and prefix
+assembly. They do not replace dependency-payload and release-artifact comparisons.
+
 ## Codesigning build outputs
 
 The `guix-codesign` command attaches codesignatures (produced by codesigners) to
@@ -93,7 +143,7 @@ env DETACHED_SIGS_REPO=<path/to/bitcoin-detached-sigs> ./contrib/guix/guix-codes
 ## Cleaning intermediate work directories
 
 By default, `guix-build` leaves all intermediate files or "work directories"
-(e.g. `depends/work`, `guix-build-*/distsrc-*`) intact at the end of a build so
+(e.g. `depends/<host>`, `guix-build-*/distsrc-*`) intact at the end of a build so
 that they are available to the user (to aid in debugging, etc.). However, these
 directories usually take up a large amount of disk space. Therefore, a
 `guix-clean` convenience script is provided which cleans the current `git`
@@ -102,6 +152,9 @@ worktree to save disk space:
 ```
 ./contrib/guix/guix-clean
 ```
+
+`guix-clean` preserves the recorded Guix profile directory, which contains the
+garbage collector roots for the build and dependency store outputs.
 
 ## Gathering shasums of build outputs
 
@@ -145,21 +198,22 @@ env GUIX_SIGS_REPO=<path/to/guix.sigs> ./contrib/guix/guix-verify
 
 ## Common `guix-build` invocation patterns and examples
 
-### Keeping caches and SDKs outside of the worktree
+### Keeping the macOS SDK outside of the worktree
 
-If you perform a lot of builds and have a bunch of worktrees, you may find it
-more efficient to keep the depends tree's download cache, build cache, and SDKs
-outside of the worktrees to avoid duplicate downloads and unnecessary builds. To
-help with this situation, the `guix-build` script honours the `SOURCES_PATH`,
-`BASE_CACHE`, and `SDK_PATH` environment variables so that you can do something
-like:
+If you perform macOS builds from multiple worktrees, you can keep the extracted
+SDK outside of the worktree and point `guix-build` at its parent directory with
+`SDK_PATH`:
 
 ```sh
-env SOURCES_PATH="$HOME/depends-SOURCES_PATH" BASE_CACHE="$HOME/depends-BASE_CACHE" SDK_PATH="$HOME/macOS-SDKs" ./contrib/guix/guix-build
+env SDK_PATH="$HOME/macOS-SDKs" ./contrib/guix/guix-build
 ```
 
-Note that the paths that these environment variables point to **must be
-directories**, and **NOT symlinks to directories**.
+Note that this path **must be a directory**, and **NOT a symlink to a
+directory**.
+
+`SOURCES_PATH` and `BASE_CACHE` are still recognized by the ordinary
+`depends/` Make workflow, but `guix-build` no longer uses them to download or
+cache dependency packages.
 
 See the [recognized environment variables][env-vars-list] section for more
 details.
@@ -182,10 +236,9 @@ details.
 Depending on your system's RAM capacity, you may want to decrease the number of
 threads used to decrease RAM usage or vice versa.
 
-By default, the scripts under `./contrib/guix` will invoke all `guix` build
-commands with `--cores="$JOBS"`. Note that `$JOBS` defaults to `$(nproc)` if not
-specified. However, astute manual readers will also notice that `guix` build
-commands also accept a `--max-jobs=` flag (which defaults to 1 if unspecified).
+By default, the scripts under `./contrib/guix` invoke Guix build commands with
+`--cores="$JOBS"`. Note that `$JOBS` defaults to `$(nproc)` if not specified.
+The dependency-store build also passes `--max-jobs=1`.
 
 Here is the difference between `--cores=` and `--max-jobs=`:
 
@@ -201,8 +254,8 @@ Here is the difference between `--cores=` and `--max-jobs=`:
   - controls how many derivations can be built in parallel
   - defaults to 1
 
-Therefore, the default is for `guix` build commands to build one derivation at a
-time, utilizing `$JOBS` threads.
+Therefore, the default is for Guix to build one derivation at a time, using up
+to `$JOBS` threads for that derivation.
 
 Specifying the `$JOBS` environment variable will only modify `--cores=`, but you
 can also modify the value for `--max-jobs=` by specifying
@@ -238,30 +291,12 @@ details.
   riscv64-linux-gnu powerpc64-linux-gnu powerpc64le-linux-gnu
   x86\_64-w64-mingw32 x86\_64-apple-darwin arm64-apple-darwin")_
 
-* _**SOURCES_PATH**_
-
-  Set the depends tree download cache for sources. This is passed through to the
-  depends tree. Setting this to the same directory across multiple builds of the
-  depends tree can eliminate unnecessary redownloading of package sources.
-
-  The path that this environment variable points to **must be a directory**, and
-  **NOT a symlink to a directory**.
-
-* _**BASE_CACHE**_
-
-  Set the root directory for cached built packages. Non-GUI and GUI builds use
-  the `GUIX/BUILD` and `GUIX/GUI` subdirectories, respectively, so their caches do
-  not evict each other's packages. Setting this to the same directory across
-  multiple Guix builds can eliminate unnecessary building of packages.
-
-  The path that this environment variable points to **must be a directory**, and
-  **NOT a symlink to a directory**.
-
 * _**SDK_PATH**_
 
-  Set the path where _extracted_ SDKs can be found. This is passed through to
-  the depends tree. Note that this should be set to the _parent_ directory of
-  the actual SDK (e.g. `SDK_PATH=$HOME/Downloads/macOS-SDKs` instead of
+  Set the path where _extracted_ SDKs can be found. This is used to locate the
+  SDK that is imported as a dependency manifest input. Note that this should be
+  set to the _parent_ directory of the actual SDK (e.g.
+  `SDK_PATH=$HOME/Downloads/macOS-SDKs` instead of
   `$HOME/Downloads/macOS-SDKs/Xcode-26.1.1-17B100-extracted-SDK-with-libcxx-headers`).
 
   The path that this environment variable points to **must be a directory**, and

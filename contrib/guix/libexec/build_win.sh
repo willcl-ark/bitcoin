@@ -11,16 +11,9 @@ source "$(dirname "${BASH_SOURCE[0]}")/setup.sh"
 # setup mingw-w64 toolchain
 mingw_w64_toolchain
 
-BASE_CACHE="${BASE_CACHE:-$PWD/depends/built}/GUIX/BUILD"
-
-# Build the depends tree
-make -C depends --jobs="$JOBS" HOST="$HOST" \
-                                   ${V:+V=1} \
-                                   ${SOURCES_PATH+SOURCES_PATH="$SOURCES_PATH"} \
-                                   ${BASE_CACHE+BASE_CACHE="$BASE_CACHE"} \
-                                   ${build_CC+build_CC="$build_CC"} \
-                                   ${build_CXX+build_CXX="$build_CXX"} \
-                                   NO_QT=1
+# shellcheck source=materialize-depends.sh
+source "$(dirname "${BASH_SOURCE[0]}")/materialize-depends.sh"
+materialize_depends
 
 # CFLAGS
 HOST_CFLAGS="-O2 -g"
@@ -44,7 +37,7 @@ mkdir -p "$DISTSRC"
     # Configure this DISTSRC for $HOST
     env CFLAGS="${HOST_CFLAGS}" CXXFLAGS="${HOST_CXXFLAGS}" LDFLAGS="${HOST_LDFLAGS}" \
     cmake -S . -B build \
-          --toolchain "${BASEPREFIX}/${HOST}/toolchain.cmake" \
+          --toolchain "${BASEPREFIX}/${HOST}/toolchain-base.cmake" \
           -DBUILD_BENCH=OFF \
           -DBUILD_FUZZ_BINARY=OFF \
           -DBUILD_GUI=OFF \

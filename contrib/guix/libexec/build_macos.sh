@@ -11,23 +11,9 @@ source "$(dirname "${BASH_SOURCE[0]}")/setup.sh"
 # Setup toolchain
 llvm_toolchain
 
-BASE_CACHE="${BASE_CACHE:-$PWD/depends/built}/GUIX/BUILD"
-
-# Build the depends tree
-make -C depends --jobs="$JOBS" HOST="$HOST" \
-                                   ${V:+V=1} \
-                                   ${SOURCES_PATH+SOURCES_PATH="$SOURCES_PATH"} \
-                                   ${BASE_CACHE+BASE_CACHE="$BASE_CACHE"} \
-                                   ${SDK_PATH+SDK_PATH="$SDK_PATH"} \
-                                   ${build_CC+build_CC="$build_CC"} \
-                                   ${build_CXX+build_CXX="$build_CXX"} \
-                                   ${build_LDFLAGS+build_LDFLAGS="$build_LDFLAGS"} \
-                                   ${build_AR+build_AR="$build_AR"} \
-                                   ${build_RANLIB+build_RANLIB="$build_RANLIB"} \
-                                   ${build_OBJDUMP+build_OBJDUMP="$build_OBJDUMP"} \
-                                   ${build_NM+build_NM="$build_NM"} \
-                                   ${build_STRIP+build_STRIP="$build_STRIP"} \
-                                   NO_QT=1
+# shellcheck source=materialize-depends.sh
+source "$(dirname "${BASH_SOURCE[0]}")/materialize-depends.sh"
+materialize_depends
 
 mkdir -p "$DISTSRC"
 (
@@ -38,7 +24,7 @@ mkdir -p "$DISTSRC"
 
     # Configure this DISTSRC for $HOST
     env cmake -S . -B build \
-          --toolchain "${BASEPREFIX}/${HOST}/toolchain.cmake" \
+          --toolchain "${BASEPREFIX}/${HOST}/toolchain-base.cmake" \
           -DBUILD_BENCH=OFF \
           -DBUILD_FUZZ_BINARY=OFF \
           -DBUILD_GUI=OFF \
