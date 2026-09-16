@@ -366,9 +366,14 @@
      (shell-arguments (qt-cmake-options os cross? arch)))))
 
 (define (native-qt-configure build-os)
-  (let ((env (if (eq? build-os 'darwin)
-                 "env CC=\"${build_CC}\" CXX=\"${build_CXX}\" OBJC=\"${build_CC}\" OBJCXX=\"${build_CXX}\""
-                 "env CC=\"${build_CC}\" CXX=\"${build_CXX}\"")))
+  ;; native_qt.mk invokes Qt's configure directly, without the generic CMake
+  ;; wrapper's flags. Do not leak the target Qt environment into native tools.
+  (let ((env (string-append
+              "env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS"
+              " CC=\"${build_CC}\" CXX=\"${build_CXX}\""
+              (if (eq? build-os 'darwin)
+                  " OBJC=\"${build_CC}\" OBJCXX=\"${build_CXX}\""
+                  ""))))
     (string-append
      "cd qtbase\n"
      env " ./configure -top-level \\\n    "

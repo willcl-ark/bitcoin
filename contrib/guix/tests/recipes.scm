@@ -195,6 +195,10 @@
            (assoc-ref (recipe-by-name cross-darwin-recipes "qt") 'configure)
            "-DCMAKE_SYSTEM_PROCESSOR=aarch64")
           "Darwin Qt must use the canonical aarch64 processor name")
+  (assert (string-contains
+           (assoc-ref (recipe-by-name cross-darwin-recipes "native_qt") 'configure)
+           "env -u CFLAGS -u CXXFLAGS -u CPPFLAGS -u LDFLAGS")
+          "native Qt must not inherit target compiler flags")
   (assert (equal? (map (lambda (recipe) (assoc-ref recipe 'name))
                        cross-windows-recipes)
                   '("native_qt" "qt"))
