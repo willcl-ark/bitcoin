@@ -11,10 +11,6 @@ source "$(dirname "${BASH_SOURCE[0]}")/setup.sh"
 # Setup toolchain
 llvm_toolchain
 
-# shellcheck source=materialize-depends.sh
-source "$(dirname "${BASH_SOURCE[0]}")/materialize-depends.sh"
-materialize_depends
-
 mkdir -p "$DISTSRC"
 (
     cd "$DISTSRC"

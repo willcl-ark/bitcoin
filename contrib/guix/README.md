@@ -84,7 +84,7 @@ for reuse after garbage collection.
 
 Before each final build container runs, `guix-build` exposes the full dependency
 store closure reported by `guix gc --requisites`. Inside the container, the
-dependency tree is copied from the store output into `depends/<host>`.
+store output's `prefix/` directory is mounted read-only at `depends/<host>`.
 
 For macOS targets, the extracted SDK is declared as an input to the dependency
 manifest. The final build containers mount that store SDK at the fixed
@@ -107,7 +107,6 @@ root using the same pinned Guix:
     for check in contrib/guix/tests/*.scm; do
         JOBS=1 time-machine repl -L contrib/guix/modules -- "$check" || exit 1
     done
-    bash contrib/guix/tests/materialize-depends.sh
 )
 ```
 

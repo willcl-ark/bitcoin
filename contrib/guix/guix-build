@@ -367,9 +367,9 @@ EOF
         #                      SPEC
         #
         #     The dependency tree is built as a separate store output before
-        #     entering the final build containers.  Exposing its full closure
-        #     lets the final build materialize that tree without installing it
-        #     into the Guix shell profile.
+        #     entering the final build containers. Exposing its full closure
+        #     lets native tools run without installing the dependency tree into
+        #     the Guix shell profile.
         #
         #   --keep-failed     keep build tree of failed builds
         #
@@ -410,6 +410,9 @@ EOF
         while IFS= read -r requisite; do
             depends_expose_opts+=( --expose="$requisite" )
         done < <(guix gc --requisites "$depends_store")
+        depends_expose_opts+=(
+            --expose="${depends_store}/prefix=/bitcoin/depends/${HOST}"
+        )
         case "$HOST" in
             *darwin*)
                 if [ ! -d "${depends_store}/sdk" ]; then
@@ -441,7 +444,6 @@ EOF
             "${_guix_common_flags[@]}" "${_guix_env_flags[@]}"
             -- env HOST="$host" \
                 DISTNAME="$DISTNAME"
-                DEPENDS_STORE="$depends_store"
                 JOBS="$JOBS"
                 SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:?unable to determine value}"
                 ${V:+V=1}
