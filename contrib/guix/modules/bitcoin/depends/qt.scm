@@ -115,7 +115,8 @@
    (else (error "unsupported Qt release target" target))))
 
 (define (target-arch target)
-  (car (string-split target #\-)))
+  (let ((arch (car (string-split target #\-))))
+    (if (string=? arch "arm64") "aarch64" arch)))
 
 (define (cmake-system-name os)
   (case os

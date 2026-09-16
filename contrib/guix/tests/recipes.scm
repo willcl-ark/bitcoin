@@ -191,6 +191,10 @@
        (qt-recipes "x86_64-w64-mingw32" "x86_64-pc-linux-gnu"))
       (cross-darwin-recipes
        (qt-recipes "arm64-apple-darwin" "x86_64-pc-linux-gnu")))
+  (assert (string-contains
+           (assoc-ref (recipe-by-name cross-darwin-recipes "qt") 'configure)
+           "-DCMAKE_SYSTEM_PROCESSOR=aarch64")
+          "Darwin Qt must use the canonical aarch64 processor name")
   (assert (equal? (map (lambda (recipe) (assoc-ref recipe 'name))
                        cross-windows-recipes)
                   '("native_qt" "qt"))
