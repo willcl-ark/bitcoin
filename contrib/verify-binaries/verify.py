@@ -611,7 +611,7 @@ def verify_binaries_handler(args: argparse.Namespace) -> ReturnCode:
     return ReturnCode.SUCCESS
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         '-v', '--verbose', action='store_true',
@@ -679,7 +679,11 @@ def main():
         help="Path to a binary distribution file to verify. Can be specified multiple times for multiple files to verify."
     )
 
-    args = parser.parse_args()
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
     if args.quiet:
         log.setLevel(logging.WARNING)
 
