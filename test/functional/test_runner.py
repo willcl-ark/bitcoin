@@ -156,6 +156,7 @@ BASE_SCRIPTS = [
     # vv Tests less than 30s vv
     'wallet_deprecated_rbf.py',
     'p2p_invalid_messages.py',
+    'p2p_tcp_fin.py',
     'rpc_echo_payload.py',
     'rpc_createmultisig.py',
     'p2p_timeouts.py --v1transport',
