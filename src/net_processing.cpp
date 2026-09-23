@@ -5422,6 +5422,11 @@ bool PeerManagerImpl::ProcessMessages(CNode& node, std::atomic<bool>& interruptM
     if (maybe_peer == nullptr) return false;
     Peer& peer{*maybe_peer};
 
+    if (node.m_remote_read_eof && !node.HasMessagesToProcess()) {
+        node.fDisconnect = true;
+        return false;
+    }
+
     // For outbound connections, ensure that the initial VERSION message
     // has been sent first before processing any incoming messages
     if (!node.IsInboundConn() && !peer.m_outbound_version_message_sent) return false;
@@ -5452,12 +5457,14 @@ bool PeerManagerImpl::ProcessMessages(CNode& node, std::atomic<bool>& interruptM
 
     auto poll_result{node.PollMessage()};
     if (!poll_result) {
-        // No message to process
+        // A clean remote close leaves already received messages to process.
+        // Disconnect only after the processing queue has been drained.
+        if (node.m_remote_read_eof) node.fDisconnect = true;
         return false;
     }
 
     CNetMessage& msg{poll_result->first};
-    bool fMoreWork = poll_result->second;
+    bool fMoreWork = poll_result->second || node.m_remote_read_eof;
 
     TRACEPOINT(net, inbound_message,
         node.GetId(),

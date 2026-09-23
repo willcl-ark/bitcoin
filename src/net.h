@@ -743,6 +743,11 @@ public:
     // Setting fDisconnect to true will cause the node to be disconnected the
     // next time DisconnectNodes() runs
     std::atomic_bool fDisconnect{false};
+    /**
+     * The remote peer closed its sending side. Drain received messages before
+     * disconnecting when possible; send backpressure may pause processing, and
+     * inactivity checks may disconnect the peer first. */
+    std::atomic_bool m_remote_read_eof{false};
     CountingSemaphoreGrant<> grantOutbound;
     std::atomic<int> nRefCount{0};
 
@@ -759,6 +764,9 @@ public:
     /** Move all messages from the received queue to the processing queue. */
     void MarkReceivedMsgsForProcessing()
         EXCLUSIVE_LOCKS_REQUIRED(!m_msg_process_queue_mutex);
+
+    /** Whether complete received messages remain in the processing queue. */
+    bool HasMessagesToProcess() EXCLUSIVE_LOCKS_REQUIRED(!m_msg_process_queue_mutex);
 
     /** Poll the next message from the processing queue of this connection.
      *

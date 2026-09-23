@@ -2102,7 +2102,7 @@ Sock::EventsPerSock CConnman::GenerateWaitSockets(std::span<CNode* const> nodes)
     }
 
     for (CNode* pnode : nodes) {
-        bool select_recv = !pnode->fPauseRecv;
+        bool select_recv = !pnode->fPauseRecv && !pnode->m_remote_read_eof;
         bool select_send;
         {
             LOCK(pnode->cs_vSend);
@@ -2201,7 +2201,7 @@ void CConnman::SocketHandlerConnected(const std::vector<CNode*>& nodes,
             }
         }
 
-        if (recvSet || errorSet)
+        if ((recvSet || errorSet) && !pnode->m_remote_read_eof)
         {
             // typical socket buffer is 8K-64K
             uint8_t pchBuf[0x10000];
@@ -2235,7 +2235,8 @@ void CConnman::SocketHandlerConnected(const std::vector<CNode*>& nodes,
                 if (!pnode->fDisconnect) {
                     LogDebug(BCLog::NET, "socket closed, %s", pnode->DisconnectMsg());
                 }
-                pnode->CloseSocketDisconnect();
+                pnode->m_remote_read_eof = true;
+                WakeMessageHandler();
             }
             else if (nBytes < 0)
             {
@@ -4131,6 +4132,12 @@ void CNode::MarkReceivedMsgsForProcessing()
     m_msg_process_queue.splice(m_msg_process_queue.end(), vRecvMsg);
     m_msg_process_queue_size += nSizeAdded;
     fPauseRecv = m_msg_process_queue_size > m_recv_flood_size;
+}
+
+bool CNode::HasMessagesToProcess()
+{
+    LOCK(m_msg_process_queue_mutex);
+    return !m_msg_process_queue.empty();
 }
 
 std::optional<std::pair<CNetMessage, bool>> CNode::PollMessage()

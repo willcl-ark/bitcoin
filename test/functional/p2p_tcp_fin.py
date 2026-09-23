@@ -2,7 +2,7 @@
 # Copyright (c) 2026 The Bitcoin Core developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
-"""Test how a clean TCP EOF affects queued P2P messages."""
+"""Test that complete P2P messages are processed after a clean TCP EOF."""
 
 import socket
 
@@ -94,7 +94,7 @@ class TcpFinTest(BitcoinTestFramework):
             self.wait_for_peer_removal(peer_id)
         assert control_tx["txid"] in node.getrawmempool()
 
-        self.log.info("Check that a queued transaction is dropped after TCP FIN")
+        self.log.info("Check that queued messages and a transaction survive TCP FIN")
         sock, peer_id = self.connect_raw_peer()
         with sock:
             # A single write keeps the transaction immediately before FIN on the
@@ -103,7 +103,7 @@ class TcpFinTest(BitcoinTestFramework):
             sock.sendall(queued + frame(b"tx", bytes.fromhex(fin_tx["hex"])))
             sock.shutdown(socket.SHUT_WR)
             self.wait_for_peer_removal(peer_id)
-        assert fin_tx["txid"] not in node.getrawmempool()
+        assert fin_tx["txid"] in node.getrawmempool()
 
 
 if __name__ == "__main__":
