@@ -22,6 +22,7 @@
 #include <test/util/random.h>
 #include <test/util/setup_common.h>
 #include <test/util/validation.h>
+#include <txmempool.h>
 #include <util/strencodings.h>
 #include <util/string.h>
 #include <validation.h>
@@ -34,12 +35,79 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 using namespace std::literals;
 using namespace util::hex_literals;
 using util::ToString;
 
 BOOST_FIXTURE_TEST_SUITE(net_tests, RegTestingSetup)
+
+BOOST_FIXTURE_TEST_CASE(tcp_fin_process_queued_transactions, TestChain100Setup)
+{
+    // Mature three coinbases for the single-message and two-message cases.
+    mineBlocks(2);
+    auto& connman = static_cast<ConnmanTestMsg&>(*m_node.connman);
+    size_t coinbase_index{0};
+
+    LOCK(NetEventsInterface::g_msgproc_mutex);
+    for (const int num_messages : {0, 1, 2}) {
+        BOOST_TEST_CONTEXT("queued transactions: " << num_messages) {
+            auto peer = std::make_unique<CNode>(/*id=*/num_messages,
+                                               std::make_shared<StaticContentsSock>(""),
+                                               CAddress{},
+                                               /*nKeyedNetGroupIn=*/0,
+                                               /*nLocalHostNonceIn=*/0,
+                                               /*addrBindIn=*/CService{},
+                                               /*addrNameIn=*/"",
+                                               ConnectionType::INBOUND,
+                                               /*inbound_onion=*/false,
+                                               /*network_key=*/0);
+            connman.Handshake(*peer, /*successfully_connected=*/true,
+                              /*remote_services=*/ServiceFlags(NODE_NETWORK | NODE_WITNESS),
+                              /*local_services=*/ServiceFlags(NODE_NETWORK | NODE_WITNESS),
+                              PROTOCOL_VERSION, /*relay_txs=*/true);
+            connman.FlushSendBuffer(*peer);
+            peer->fPauseSend = false;
+            BOOST_REQUIRE(peer->fSuccessfullyConnected);
+            connman.AddTestNode(*peer);
+            // The connection manager owns registered peers, including on assertion failure.
+            CNode& node{*peer.release()};
+
+            std::vector<CTransactionRef> transactions;
+            for (int i = 0; i < num_messages; ++i) {
+                const auto& coinbase = m_coinbase_txns[coinbase_index];
+                auto tx = MakeTransactionRef(CreateValidMempoolTransaction(
+                    coinbase, /*input_vout=*/0, /*input_height=*/coinbase_index + 1,
+                    coinbaseKey, coinbase->vout[0].scriptPubKey,
+                    /*output_amount=*/coinbase->vout[0].nValue - 1000, /*submit=*/false));
+                ++coinbase_index;
+                BOOST_REQUIRE(!m_node.mempool->exists(tx->GetHash()));
+                BOOST_REQUIRE(connman.ReceiveMsgFrom(node, NetMsg::Make(NetMsgType::TX, TX_WITH_WITNESS(*tx))));
+                transactions.push_back(tx);
+            }
+
+            // Read EOF from the mock socket before running any message processing.
+            connman.SocketHandlerPublic();
+            BOOST_REQUIRE(node.m_remote_read_eof);
+            BOOST_REQUIRE(!node.fDisconnect);
+            BOOST_CHECK_EQUAL(node.HasMessagesToProcess(), num_messages != 0);
+
+            for (size_t i = 0; i < transactions.size(); ++i) {
+                BOOST_CHECK(connman.ProcessMessagesOnce(node));
+                BOOST_CHECK(m_node.mempool->exists(transactions[i]->GetHash()));
+                BOOST_CHECK_EQUAL(node.HasMessagesToProcess(), i + 1 < transactions.size());
+                BOOST_CHECK(!node.fDisconnect);
+            }
+
+            // An empty queue, either initially or after processing, permits disconnect.
+            BOOST_CHECK(!connman.ProcessMessagesOnce(node));
+            BOOST_CHECK(node.fDisconnect);
+            m_node.peerman->FinalizeNode(node);
+            connman.ClearTestNodes();
+        }
+    }
+}
 
 BOOST_AUTO_TEST_CASE(cnode_listen_port)
 {
