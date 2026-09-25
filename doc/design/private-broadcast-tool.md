@@ -206,10 +206,12 @@ transactions is already visible on-chain.
    Do not also broadcast it through the ordinary path.
 
 `send` exits with status 0 if at least one announcement was fully written, 2 if none was,
-and 1 for bad input or arguments. The JSON report has no wall-clock value and records the
-job. Progress lines on stderr are best effort: if a pipe cannot take a line, the tool drops
-it without waiting. See `-help`. Both the report and progress lines are local evidence of
-a broadcast, so store them as carefully as a wallet log.
+and 1 for bad input or arguments. Status 0 does not mean a peer requested the transaction,
+received its bytes, or accepted it. A peer can ignore the announcement after the slot has
+canceled its backups. The JSON report has no wall-clock value and records the job. Progress
+lines on stderr are best effort: if a pipe cannot take a line, the tool drops it without
+waiting. See `-help`. The report and progress lines are local evidence of the attempt, so
+store them as carefully as a wallet log.
 
 The proxy must run on this machine. A remote proxy would expose destinations and credentials
 in transit. It must accept SOCKS authentication, Tor's RESOLVE extension, and IPv6. The tool
