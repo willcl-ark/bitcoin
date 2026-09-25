@@ -68,7 +68,7 @@ the transaction, or an exit that interferes, can cost one slot without stopping 
    check from changing the node's validation and coins caches. Reading the inputs still warms
    its database and page caches, as any UTXO lookup would.
 
-2. **Peer behavior cannot change the schedule.** At job start the tool draws the time and
+2. **Peer behavior cannot change a job's schedule.** At job start the tool draws the time and
    hard lifetime limit for every connection opportunity. After discovery, it assigns all
    candidate peers before contacting any recipient. A failure before announcement permits
    only that slot's next assigned attempt, at its original time. An announcement cancels the
@@ -253,8 +253,10 @@ A job does share a few things with the node:
   the node's other proxy settings: SOCKS carries destinations and credentials in clear. Every
   stream gets fresh credentials regardless of `-proxyrandomize`.
 - **Queue.** At most two jobs run at once, in submission order. A job ends when its last
-  connection ends, so a recipient that holds a connection open can delay the next queued
-  job. That can link two of this node's transactions, though it does not identify the node.
+  connection ends, so a recipient that holds a connection open can delay the start of a
+  queued job. Its own schedule is fixed once it starts, but its start time is not independent
+  of earlier recipients. An observer of both jobs may link their transactions by this delay.
+  The link alone does not identify the node.
 - **Mempool observation.** The report records when the node's mempool first sees the
   transaction. The observation never changes the job.
 - **Log.** `debug.log` records job progress with `-debug=privatebroadcast`. SOCKS failures
