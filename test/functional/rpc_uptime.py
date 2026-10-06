@@ -21,7 +21,7 @@ class UptimeTest(BitcoinTestFramework):
         self._test_uptime()
 
     def _test_uptime(self):
-        time.sleep(1) # Do some work before checking uptime
+        self.wait_until(lambda: self.nodes[0].uptime() > 0)
         uptime_before = self.nodes[0].uptime()
         assert uptime_before > 0, "uptime should begin at app start"
 
