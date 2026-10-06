@@ -50,6 +50,7 @@ static void WalletLoadingDescriptors(benchmark::Bench& bench)
     uint64_t create_flags = WALLET_FLAG_DESCRIPTORS;
     DatabaseStatus status;
     DatabaseOptions options;
+    options.use_unsafe_sync = true;
     options.require_format = DatabaseFormat::SQLITE;
     options.require_create = true;
     bilingual_str error;
@@ -61,6 +62,7 @@ static void WalletLoadingDescriptors(benchmark::Bench& bench)
         AddTx(*wallet);
     }
 
+    options.use_unsafe_sync = false;
     options.require_create = false;
     options.require_existing = true;
 
