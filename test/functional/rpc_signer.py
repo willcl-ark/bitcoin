@@ -24,11 +24,10 @@ class RPCSignerTest(BitcoinTestFramework):
         return sys.executable + " " + path
 
     def set_test_params(self):
-        self.num_nodes = 4
+        self.num_nodes = 3
 
         self.extra_args = [
             [],
-            [f"-signer={self.mock_signer_path()}", '-keypool=10'],
             [f"-signer={self.mock_signer_path()}", '-keypool=10'],
             ["-signer=fake.py"],
         ]
@@ -56,7 +55,7 @@ class RPCSignerTest(BitcoinTestFramework):
             "CreateProcess failed: The system cannot find the file specified."
             if platform.system() == "Windows"
             else "execve failed: No such file or directory",
-            self.nodes[3].enumeratesigners,
+            self.nodes[2].enumeratesigners,
         )
 
         # Handle error thrown by script
