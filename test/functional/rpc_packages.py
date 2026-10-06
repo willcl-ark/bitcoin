@@ -15,7 +15,10 @@ from test_framework.messages import (
     MAX_BIP125_RBF_SEQUENCE,
     tx_from_hex,
 )
-from test_framework.p2p import P2PTxInvStore
+from test_framework.p2p import (
+    P2PTxInvStore,
+    p2p_lock,
+)
 from test_framework.script_util import build_malleated_tx_package
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
@@ -378,9 +381,13 @@ class RPCPackagesTest(BitcoinTestFramework):
             assert_equal(submitres_tx["vsize_bip141"], entry_info["vsize"])
             assert_equal(submitres_tx["fees"]["base"], entry_info["fees"]["base"])
 
-    def test_submit_child_with_parents(self, num_parents, partial_submit):
+    def clear_peer_invs(self, peer):
+        with p2p_lock:
+            peer.tx_invs_received.clear()
+
+    def test_submit_child_with_parents(self, num_parents, partial_submit, peer):
         node = self.nodes[0]
-        peer = node.add_p2p_connection(P2PTxInvStore())
+        self.clear_peer_invs(peer)
 
         package_txns = []
         presubmitted_wtxids = set()
@@ -432,9 +439,10 @@ class RPCPackagesTest(BitcoinTestFramework):
         assert txid_list[1] not in node.getrawmempool()
 
         self.log.info("Submitpackage valid packages with 1 child and some number of parents (or none)")
+        peer = node.add_p2p_connection(P2PTxInvStore())
         for num_parents in [0, 1, 2, 24]:
-            self.test_submit_child_with_parents(num_parents, False)
-            self.test_submit_child_with_parents(num_parents, True)
+            self.test_submit_child_with_parents(num_parents, False, peer)
+            self.test_submit_child_with_parents(num_parents, True, peer)
 
         self.log.info("Submitpackage only allows packages of 1 child with its parents")
         # Chain of 3 transactions has too many generations
@@ -452,11 +460,11 @@ class RPCPackagesTest(BitcoinTestFramework):
         # Create a transaction chain such as only the parent gets accepted (by making the child's
         # version non-standard). Make sure the parent does get broadcast.
         self.log.info("If a package is partially submitted, transactions included in mempool get broadcast")
-        peer = node.add_p2p_connection(P2PTxInvStore())
         txs = self.wallet.create_self_transfer_chain(chain_length=2)
         bad_child = tx_from_hex(txs[1]["hex"])
         bad_child.version = 0xffffffff
         hex_partial_acceptance = [txs[0]["hex"], bad_child.serialize().hex()]
+        self.clear_peer_invs(peer)
         res = node.submitpackage(hex_partial_acceptance)
         assert_equal(res["package_msg"], "transaction failed")
         first_wtxid = txs[0]["tx"].wtxid_hex
