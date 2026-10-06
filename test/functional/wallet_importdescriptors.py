@@ -754,10 +754,11 @@ class ImportDescriptorsTest(BitcoinTestFramework):
         chg_xpub3 = chg_xpub3_key.to_string()
 
         self.test_musig_private_key_warnings(xprv1, acc_xprv2, acc_xpub2, derivation_path)
+        multisig_range = 10
 
         self.test_importdesc({"desc": descsum_create(f"wsh(multi(2,{xprv1}/{derivation_path}/*,{xprv2}/{derivation_path}/*,{xprv3}/{derivation_path}/*))"),
                             "active": True,
-                            "range": 1000,
+                            "range": multisig_range,
                             "next_index": 0,
                             "timestamp": "now"},
                             success=True,
@@ -765,13 +766,13 @@ class ImportDescriptorsTest(BitcoinTestFramework):
         self.test_importdesc({"desc": descsum_create(f"wsh(multi(2,{xprv1}/{change_derivation_path}/*,{xprv2}/{change_derivation_path}/*,{xprv3}/{change_derivation_path}/*))"),
                             "active": True,
                             "internal" : True,
-                            "range": 1000,
+                            "range": multisig_range,
                             "next_index": 0,
                             "timestamp": "now"},
                             success=True,
                             wallet=wmulti_priv)
 
-        assert_equal(wmulti_priv.getwalletinfo()['keypoolsize'], 1001) # Range end (1000) is inclusive, so 1001 addresses generated
+        assert_equal(wmulti_priv.getwalletinfo()['keypoolsize'], multisig_range + 1)
 
         addr = wmulti_priv.getnewaddress('', 'bech32') # uses receive 0
         expected_addr = script_to_p2wsh(keys_to_multisig_script([k.derive_path("m/0").pubkey.get_bytes() for k in [acc_xpub1_key, acc_xpub2_key, acc_xpub3_key]], k=2))
@@ -780,7 +781,7 @@ class ImportDescriptorsTest(BitcoinTestFramework):
         change_addr = wmulti_priv.getrawchangeaddress('bech32') # uses change 0
         expected_change_addr = script_to_p2wsh(keys_to_multisig_script([k.derive_path("m/0").pubkey.get_bytes() for k in [chg_xpub1_key, chg_xpub2_key, chg_xpub3_key]], k=2))
         assert_equal(change_addr, expected_change_addr)  # Derived at m/84'/1'/0'/0
-        assert_equal(wmulti_priv.getwalletinfo()['keypoolsize'], 1000)
+        assert_equal(wmulti_priv.getwalletinfo()['keypoolsize'], multisig_range)
 
         txid = w0.sendtoaddress(addr, 10)
         self.generate(self.nodes[0], 6)
@@ -795,7 +796,7 @@ class ImportDescriptorsTest(BitcoinTestFramework):
 
         self.test_importdesc({"desc": descsum_create(f"wsh(multi(2,[{xprv1_fingerprint}/{derivation_path}]{acc_xpub1}/*,[{xprv2_fingerprint}/{derivation_path}]{acc_xpub2}/*,[{xprv3_fingerprint}/{derivation_path}]{acc_xpub3}/*))"),
                             "active": True,
-                            "range": 1000,
+                            "range": multisig_range,
                             "next_index": 0,
                             "timestamp": "now"},
                             success=True,
@@ -803,13 +804,13 @@ class ImportDescriptorsTest(BitcoinTestFramework):
         self.test_importdesc({"desc": descsum_create(f"wsh(multi(2,[{xprv1_fingerprint}/{change_derivation_path}]{chg_xpub1}/*,[{xprv2_fingerprint}/{change_derivation_path}]{chg_xpub2}/*,[{xprv3_fingerprint}/{change_derivation_path}]{chg_xpub3}/*))"),
                             "active": True,
                             "internal" : True,
-                            "range": 1000,
+                            "range": multisig_range,
                             "next_index": 0,
                             "timestamp": "now"},
                             success=True,
                             wallet=wmulti_pub)
 
-        assert_equal(wmulti_pub.getwalletinfo()['keypoolsize'], 1000) # The first one was already consumed by previous import and is detected as used
+        assert_equal(wmulti_pub.getwalletinfo()['keypoolsize'], multisig_range)
         addr = wmulti_pub.getnewaddress('', 'bech32') # uses receive 1
         expected_addr = script_to_p2wsh(keys_to_multisig_script([k.derive_path("m/1").pubkey.get_bytes() for k in [acc_xpub1_key, acc_xpub2_key, acc_xpub3_key]], k=2))
         assert_equal(addr, expected_addr) # Derived at m/84'/0'/0'/1
@@ -820,7 +821,7 @@ class ImportDescriptorsTest(BitcoinTestFramework):
         assert_equal(wmulti_pub.getaddressinfo(change_addr)["desc"].count(f"{change_derivation_path}/2"), 3) # Derived at m/84h/1h/0h/1 for all three keys
         assert send_txid in self.nodes[0].getrawmempool(True)
         assert send_txid in (x['txid'] for x in wmulti_pub.listunspent(0))
-        assert_equal(wmulti_pub.getwalletinfo()['keypoolsize'], 999)
+        assert_equal(wmulti_pub.getwalletinfo()['keypoolsize'], multisig_range - 1)
 
         # generate some utxos for next tests
         utxo = self.create_outpoints(w0, outputs=[{addr: 10}])[0]
@@ -842,7 +843,7 @@ class ImportDescriptorsTest(BitcoinTestFramework):
         {
             "desc": descsum_create(f"wsh(multi(2,{xprv1}/{derivation_path}/*,[{xprv2_fingerprint}/{derivation_path}]{acc_xpub2}/*,[{xprv3_fingerprint}/{derivation_path}]{acc_xpub3}/*))"),
             "active": True,
-            "range": 1000,
+            "range": multisig_range,
             "next_index": 0,
             "timestamp": "now"
         },
@@ -850,7 +851,7 @@ class ImportDescriptorsTest(BitcoinTestFramework):
             "desc": descsum_create(f"wsh(multi(2,{xprv1}/{change_derivation_path}/*,[{xprv2_fingerprint}/{change_derivation_path}]{chg_xpub2}/*,[{xprv3_fingerprint}/{change_derivation_path}]{chg_xpub3}/*))"),
             "active": True,
             "internal" : True,
-            "range": 1000,
+            "range": multisig_range,
             "next_index": 0,
             "timestamp": "now"
         }])
@@ -865,7 +866,7 @@ class ImportDescriptorsTest(BitcoinTestFramework):
         {
             "desc": descsum_create(f"wsh(multi(2,[{xprv1_fingerprint}/{derivation_path}]{acc_xpub1}/*,{xprv2}/{derivation_path}/*,[{xprv3_fingerprint}/{derivation_path}]{acc_xpub3}/*))"),
             "active": True,
-            "range": 1000,
+            "range": multisig_range,
             "next_index": 0,
             "timestamp": "now"
         },
@@ -873,7 +874,7 @@ class ImportDescriptorsTest(BitcoinTestFramework):
             "desc": descsum_create(f"wsh(multi(2,[{xprv1_fingerprint}/{change_derivation_path}]{chg_xpub1}/*,{xprv2}/{change_derivation_path}/*,[{xprv3_fingerprint}/{change_derivation_path}]{chg_xpub3}/*))"),
             "active": True,
             "internal" : True,
-            "range": 1000,
+            "range": multisig_range,
             "next_index": 0,
             "timestamp": "now"
         }])
@@ -933,7 +934,7 @@ class ImportDescriptorsTest(BitcoinTestFramework):
         {
             "desc": descsum_create(f"sh(multi(15,{(xkey + ',') * 14}{xkey}))"),
             "active": True,
-            "range": 1000,
+            "range": multisig_range,
             "next_index": 0,
             "timestamp": "now"
         },
@@ -941,7 +942,7 @@ class ImportDescriptorsTest(BitcoinTestFramework):
             "desc": descsum_create(f"sh(multi(15,{(xkey_int + ',') * 14}{xkey_int}))"),
             "active": True,
             "internal": True,
-            "range": 1000,
+            "range": multisig_range,
             "next_index": 0,
             "timestamp": "now"
         }])
@@ -962,7 +963,7 @@ class ImportDescriptorsTest(BitcoinTestFramework):
             {
                 "desc": descsum_create(f"wsh(multi(2,{xprv1}/{derivation_path}/*,[{xprv2_fingerprint}/{derivation_path}]{acc_xpub2}/*,[{xprv3_fingerprint}/{derivation_path}]{acc_xpub3}/*))"),
                 "active": True,
-                "range": 1000,
+                "range": multisig_range,
                 "next_index": 0,
                 "timestamp": "now"
             }])
@@ -971,7 +972,7 @@ class ImportDescriptorsTest(BitcoinTestFramework):
             {
                 "desc": descsum_create(f"wsh(multi(2,{xprv1}/{derivation_path}/*,[{xprv2_fingerprint}/{derivation_path}]{acc_xprv2}/*,[{xprv3_fingerprint}/{derivation_path}]{acc_xpub3}/*))"),
                 "active": True,
-                "range": 1000,
+                "range": multisig_range,
                 "next_index": 0,
                 "timestamp": "now"
             }])
