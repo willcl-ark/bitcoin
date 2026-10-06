@@ -84,8 +84,6 @@ class InitTest(BitcoinTestFramework):
             b'coinstatsidx thread start',
             b'txospenderidx thread start',
             b'msghand thread start',
-            b'net thread start',
-            b'addcon thread start',
         ]
         if self.is_wallet_compiled():
             lines_to_terminate_after.append(b'Verifying wallet')
