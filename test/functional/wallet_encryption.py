@@ -9,6 +9,7 @@ import subprocess
 
 from test_framework.messages import hash256
 from test_framework.test_framework import BitcoinTestFramework
+from test_framework.test_profile import profile_section
 from test_framework.util import (
     assert_raises_rpc_error,
     assert_equal,
@@ -52,7 +53,8 @@ class WalletEncryptionTest(BitcoinTestFramework):
         assert self.nodes[0].verifymessage(address, sig, msg)
 
         # Check that the timeout is right
-        time.sleep(3)
+        with profile_section("wallet_encryption.relock_observation"):
+            time.sleep(3)
         assert_raises_rpc_error(-13, "Please enter the wallet passphrase with walletpassphrase first", self.nodes[0].signmessage, address, msg)
 
         # Test wrong passphrase

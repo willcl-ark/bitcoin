@@ -10,6 +10,7 @@ import uuid
 from decimal import Decimal
 from test_framework.address import output_key_to_p2tr
 from test_framework.key import H_POINT, compute_xonly_pubkey
+from test_framework.test_profile import profile_section
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import assert_equal
 from test_framework.descriptors import descsum_create
@@ -251,9 +252,12 @@ class WalletTaprootTest(BitcoinTestFramework):
     def do_test(self, comment, pattern, privmap, treefn):
         nkeys = len(privmap)
         keys = random.sample(self.keys, nkeys * 4)
-        self.do_test_addr(comment, pattern, privmap, treefn, keys[0:nkeys])
-        self.do_test_sendtoaddress(comment, pattern, privmap, treefn, keys[0:nkeys], keys[nkeys:2*nkeys])
-        self.do_test_psbt(comment, pattern, privmap, treefn, keys[2*nkeys:3*nkeys], keys[3*nkeys:4*nkeys])
+        with profile_section(f"wallet_taproot.{comment}.address"):
+            self.do_test_addr(comment, pattern, privmap, treefn, keys[0:nkeys])
+        with profile_section(f"wallet_taproot.{comment}.spending"):
+            self.do_test_sendtoaddress(comment, pattern, privmap, treefn, keys[0:nkeys], keys[nkeys:2*nkeys])
+        with profile_section(f"wallet_taproot.{comment}.psbt"):
+            self.do_test_psbt(comment, pattern, privmap, treefn, keys[2*nkeys:3*nkeys], keys[3*nkeys:4*nkeys])
 
     def generate_test_keys(self):
         xprvs = [ExtendedPrivateKey.generate() for _ in range(0, 13)]

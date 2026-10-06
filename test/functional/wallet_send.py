@@ -9,6 +9,7 @@ from itertools import product
 
 from test_framework.descriptors import descsum_create
 from test_framework.extendedkey import ExtendedPrivateKey
+from test_framework.test_profile import profile_section
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
     assert_not_equal,
@@ -567,11 +568,12 @@ class WalletSendTest(BitcoinTestFramework):
 
         # Generate future inputs; 272 WU per input (273 when high-s).
         # Picking 1471 inputs will exceed the max standard tx weight.
-        outputs = []
-        for _ in range(1472):
-            outputs.append({wallet.getnewaddress(address_type="legacy"): 0.1})
-        self.nodes[0].send(outputs=outputs)
-        self.generate(self.nodes[0], 1)
+        with profile_section("wallet_send.weight_fixture"):
+            outputs = []
+            for _ in range(1472):
+                outputs.append({wallet.getnewaddress(address_type="legacy"): 0.1})
+            self.nodes[0].send(outputs=outputs)
+            self.generate(self.nodes[0], 1)
 
         # 1) Try to fund transaction only using the preset inputs
         inputs = wallet.listunspent()

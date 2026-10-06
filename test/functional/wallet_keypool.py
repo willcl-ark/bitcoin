@@ -7,6 +7,7 @@
 from decimal import Decimal
 
 from test_framework.test_framework import BitcoinTestFramework
+from test_framework.test_profile import profile_section
 from test_framework.descriptors import descsum_create
 from test_framework.extendedkey import ExtendedPrivateKey
 from test_framework.util import (
@@ -131,18 +132,20 @@ class KeyPoolTest(BitcoinTestFramework):
         # CScheduler relies on condition_variable::wait_until() which does not
         # guarantee accurate timing. We'll wait up to 5 seconds to execute a 1
         # second scheduled event.
-        nodes[0].wait_until(lambda: nodes[0].getwalletinfo()["unlocked_until"] == 0, timeout=5)
+        with profile_section("wallet_keypool.passphrase_timeout_wait"):
+            nodes[0].wait_until(lambda: nodes[0].getwalletinfo()["unlocked_until"] == 0, timeout=5)
 
         # drain the keypool
         for _ in range(3):
             nodes[0].getnewaddress()
         assert_raises_rpc_error(-12, "Keypool ran out", nodes[0].getnewaddress)
 
-        with WalletUnlock(nodes[0], 'test'):
-            nodes[0].keypoolrefill(100)
-            wi = nodes[0].getwalletinfo()
-            assert_equal(wi['keypoolsize_hd_internal'], 400)
-            assert_equal(wi['keypoolsize'], 400)
+        with profile_section("wallet_keypool.large_refill"):
+            with WalletUnlock(nodes[0], 'test'):
+                nodes[0].keypoolrefill(100)
+                wi = nodes[0].getwalletinfo()
+                assert_equal(wi['keypoolsize_hd_internal'], 400)
+                assert_equal(wi['keypoolsize'], 400)
 
         # create a blank wallet
         nodes[0].createwallet(wallet_name='w2', blank=True, disable_private_keys=True)

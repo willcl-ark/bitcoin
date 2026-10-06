@@ -27,6 +27,7 @@ from test_framework.messages import (
     MAX_SEQUENCE_NONFINAL,
 )
 from test_framework.test_framework import BitcoinTestFramework
+from test_framework.test_profile import profile_section
 from test_framework.util import (
     assert_equal,
     assert_fee_amount,
@@ -90,24 +91,25 @@ class BumpFeeTest(BitcoinTestFramework):
 
         self.log.info("Running tests")
         dest_address = peer_node.getnewaddress()
-        for mode in ["default", "fee_rate", "new_outputs"]:
-            test_simple_bumpfee_succeeds(self, mode, rbf_node, peer_node, dest_address)
-        self.test_invalid_parameters(rbf_node, peer_node, dest_address)
-        test_segwit_bumpfee_succeeds(self, rbf_node, dest_address)
-        test_nonrbf_bumpfee_succeeds(self, peer_node, dest_address)
-        test_notmine_bumpfee(self, rbf_node, peer_node, dest_address)
-        test_bumpfee_with_descendant_fails(self, rbf_node, rbf_node_address, dest_address)
-        test_bumpfee_with_abandoned_descendant_succeeds(self, rbf_node, rbf_node_address, dest_address)
-        test_dust_to_fee(self, rbf_node, dest_address)
-        test_watchonly_psbt(self, peer_node, rbf_node, dest_address)
-        test_rebumping(self, rbf_node, dest_address)
-        test_rebumping_not_replaceable(self, rbf_node, dest_address)
-        test_bumpfee_already_spent(self, rbf_node, dest_address)
-        test_unconfirmed_not_spendable(self, rbf_node, rbf_node_address)
-        test_bumpfee_metadata(self, rbf_node, dest_address)
-        test_locked_wallet_fails(self, rbf_node, dest_address)
-        test_change_script_match(self, rbf_node, dest_address)
-        test_maxtxfee_fails(self, rbf_node, dest_address)
+        with profile_section("wallet_bumpfee.basic_cases"):
+            for mode in ["default", "fee_rate", "new_outputs"]:
+                test_simple_bumpfee_succeeds(self, mode, rbf_node, peer_node, dest_address)
+            self.test_invalid_parameters(rbf_node, peer_node, dest_address)
+            test_segwit_bumpfee_succeeds(self, rbf_node, dest_address)
+            test_nonrbf_bumpfee_succeeds(self, peer_node, dest_address)
+            test_notmine_bumpfee(self, rbf_node, peer_node, dest_address)
+            test_bumpfee_with_descendant_fails(self, rbf_node, rbf_node_address, dest_address)
+            test_bumpfee_with_abandoned_descendant_succeeds(self, rbf_node, rbf_node_address, dest_address)
+            test_dust_to_fee(self, rbf_node, dest_address)
+            test_watchonly_psbt(self, peer_node, rbf_node, dest_address)
+            test_rebumping(self, rbf_node, dest_address)
+            test_rebumping_not_replaceable(self, rbf_node, dest_address)
+            test_bumpfee_already_spent(self, rbf_node, dest_address)
+            test_unconfirmed_not_spendable(self, rbf_node, rbf_node_address)
+            test_bumpfee_metadata(self, rbf_node, dest_address)
+            test_locked_wallet_fails(self, rbf_node, dest_address)
+            test_change_script_match(self, rbf_node, dest_address)
+            test_maxtxfee_fails(self, rbf_node, dest_address)
         # These tests wipe out a number of utxos that are expected in other tests
         test_small_output_with_feerate_succeeds(self, rbf_node, dest_address)
         test_no_more_inputs_fails(self, rbf_node, dest_address)
@@ -119,7 +121,8 @@ class BumpFeeTest(BitcoinTestFramework):
         # Context independent tests
         test_feerate_checks_replaced_outputs(self, rbf_node, peer_node)
         test_bumpfee_with_feerate_ignores_walletincrementalrelayfee(self, rbf_node, peer_node)
-        test_bumpfee_uncomputable_cluster(self, rbf_node, dest_address)
+        with profile_section("wallet_bumpfee.uncomputable_cluster"):
+            test_bumpfee_uncomputable_cluster(self, rbf_node, dest_address)
 
     def test_invalid_parameters(self, rbf_node, peer_node, dest_address):
         self.log.info('Test invalid parameters')

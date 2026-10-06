@@ -6,6 +6,7 @@
 
 from test_framework.descriptors import descsum_create
 from test_framework.psbt import PSBT, PSBT_IN_SHA256
+from test_framework.test_profile import profile_section
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import assert_equal
 
@@ -372,30 +373,31 @@ class WalletMiniscriptTest(BitcoinTestFramework):
                 desc.get("sha256_preimages"),
             )
 
-        # Test we can sign for a max-size TapMiniscript. Recompute the maximum accepted size
-        # for a TapMiniscript (see cpp file for details). Then pad a simple pubkey check up
-        # to the maximum size. Make sure we can import and spend this script.
-        leeway_weight = (4 + 4 + 1 + 36 + 4 + 1 + 1 + 8 + 1 + 1 + 33) * 4 + 2
-        max_tapmini_size = 400_000 - 3 - (1 + 65) * 1_000 - 3 - (33 + 32 * 128) - leeway_weight - 5
-        padding = max_tapmini_size - 33 - 1
-        ms = f"pk({TPRVS[0]}/*)"
-        ms = "n" * padding + ":" + ms
-        desc = f"tr({PUBKEYS[0]},{ms})"
-        self.signing_test(desc, None, None, 1, 3, None)
-        # This was really the maximum size, one more byte and we can't import it.
-        ms = "n" + ms
-        desc = f"tr({PUBKEYS[0]},{ms})"
-        res = self.ms_wo_wallet.importdescriptors(
-            [
-                {
-                    "desc": descsum_create(desc),
-                    "active": False,
-                    "timestamp": "now",
-                }
-            ]
-        )[0]
-        assert_equal(res["success"], False)
-        assert "is not a valid descriptor function" in res["error"]["message"]
+        with profile_section("wallet_miniscript.maximum_tapminiscript"):
+            # Test we can sign for a max-size TapMiniscript. Recompute the maximum accepted size
+            # for a TapMiniscript (see cpp file for details). Then pad a simple pubkey check up
+            # to the maximum size. Make sure we can import and spend this script.
+            leeway_weight = (4 + 4 + 1 + 36 + 4 + 1 + 1 + 8 + 1 + 1 + 33) * 4 + 2
+            max_tapmini_size = 400_000 - 3 - (1 + 65) * 1_000 - 3 - (33 + 32 * 128) - leeway_weight - 5
+            padding = max_tapmini_size - 33 - 1
+            ms = f"pk({TPRVS[0]}/*)"
+            ms = "n" * padding + ":" + ms
+            desc = f"tr({PUBKEYS[0]},{ms})"
+            self.signing_test(desc, None, None, 1, 3, None)
+            # This was really the maximum size, one more byte and we can't import it.
+            ms = "n" + ms
+            desc = f"tr({PUBKEYS[0]},{ms})"
+            res = self.ms_wo_wallet.importdescriptors(
+                [
+                    {
+                        "desc": descsum_create(desc),
+                        "active": False,
+                        "timestamp": "now",
+                    }
+                ]
+            )[0]
+            assert_equal(res["success"], False)
+            assert "is not a valid descriptor function" in res["error"]["message"]
 
 
 if __name__ == "__main__":

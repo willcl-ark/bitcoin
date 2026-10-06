@@ -55,6 +55,7 @@ import itertools
 
 from test_framework.blocktools import COINBASE_MATURITY
 from test_framework.test_framework import BitcoinTestFramework
+from test_framework.test_profile import profile_section
 from test_framework.descriptors import (
     descsum_create,
     descsum_check,
@@ -301,7 +302,8 @@ class AddressTypeTest(BitcoinTestFramework):
                 for utxo in self.nodes[to_node].listunspent():
                     if utxo['address'] == addresses[to_node][0]:
                         found = True
-                        self.test_desc(to_node, addresses[to_node][0], multisig, addresses[to_node][1], utxo)
+                        with profile_section("wallet_address_types.descriptor_roundtrip"):
+                            self.test_desc(to_node, addresses[to_node][0], multisig, addresses[to_node][1], utxo)
                         break
                 assert found
 

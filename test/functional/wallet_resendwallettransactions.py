@@ -11,6 +11,7 @@ from test_framework.blocktools import (
 from test_framework.messages import DEFAULT_MEMPOOL_EXPIRY_HOURS
 from test_framework.p2p import P2PTxInvStore
 from test_framework.test_framework import BitcoinTestFramework
+from test_framework.test_profile import profile_section
 from test_framework.util import (
     assert_equal,
     assert_raises_rpc_error,
@@ -82,44 +83,45 @@ class ResendWalletTransactionsTest(BitcoinTestFramework):
         # We cannot predict the ordering in mapWallet of parent and child, so
         # try a few times to get both.
         evict_time = 0
-        for _ in range(10):
-            child_inputs = [{"txid": txid, "vout": 0}]
-            child_txid = node.sendall(recipients=[addr], inputs=child_inputs)["txid"]
-            # Get the child tx's info for manual bumping
-            entry_time = node.getmempoolentry(child_txid)["time"]
+        with profile_section("wallet_resend.parent_child_rebroadcast_loop"):
+            for _ in range(10):
+                child_inputs = [{"txid": txid, "vout": 0}]
+                child_txid = node.sendall(recipients=[addr], inputs=child_inputs)["txid"]
+                # Get the child tx's info for manual bumping
+                entry_time = node.getmempoolentry(child_txid)["time"]
 
-            # tx must be at least 5 minutes older than the last block to be rebroadcast
-            block_time = entry_time + 5 * 60 + 1
-            node.setmocktime(block_time)
-            block = create_block(int(node.getbestblockhash(), 16), height=node.getblockcount() + 1, ntime=block_time)
-            block.solve()
-            node.submitblock(block.serialize().hex())
-            # Set correct m_best_block_time, which is used in ResubmitWalletTransactions
-            node.syncwithvalidationinterfacequeue()
+                # tx must be at least 5 minutes older than the last block to be rebroadcast
+                block_time = entry_time + 5 * 60 + 1
+                node.setmocktime(block_time)
+                block = create_block(int(node.getbestblockhash(), 16), height=node.getblockcount() + 1, ntime=block_time)
+                block.solve()
+                node.submitblock(block.serialize().hex())
+                # Set correct m_best_block_time, which is used in ResubmitWalletTransactions
+                node.syncwithvalidationinterfacequeue()
 
-            evict_time = block_time + 60 * 60 * DEFAULT_MEMPOOL_EXPIRY_HOURS + 5
-            # Flush out currently scheduled resubmit attempt now so that there can't be one right between eviction and check.
-            with node.assert_debug_log(['resubmit 2 unconfirmed transactions'], timeout=2):
-                node.setmocktime(evict_time)
-                node.mockscheduler(60)
+                evict_time = block_time + 60 * 60 * DEFAULT_MEMPOOL_EXPIRY_HOURS + 5
+                # Flush out currently scheduled resubmit attempt now so that there can't be one right between eviction and check.
+                with node.assert_debug_log(['resubmit 2 unconfirmed transactions'], timeout=2):
+                    node.setmocktime(evict_time)
+                    node.mockscheduler(60)
 
-            # Evict these txs from the mempool
-            indep_send = node.send(outputs=[{node.getnewaddress(): 1}], inputs=[indep_utxo])
-            node.getmempoolentry(indep_send["txid"])
-            assert_raises_rpc_error(-5, "Transaction not in mempool", node.getmempoolentry, txid)
-            assert_raises_rpc_error(-5, "Transaction not in mempool", node.getmempoolentry, child_txid)
+                # Evict these txs from the mempool
+                indep_send = node.send(outputs=[{node.getnewaddress(): 1}], inputs=[indep_utxo])
+                node.getmempoolentry(indep_send["txid"])
+                assert_raises_rpc_error(-5, "Transaction not in mempool", node.getmempoolentry, txid)
+                assert_raises_rpc_error(-5, "Transaction not in mempool", node.getmempoolentry, child_txid)
 
-            # Rebroadcast and check that parent and child are both in the mempool
-            with node.assert_debug_log(['resubmit 2 unconfirmed transactions'], timeout=2):
-                node.setmocktime(evict_time + RESEND_TIMER_LIMIT)
-                node.mockscheduler(60)
-            node.getmempoolentry(txid)
-            node.getmempoolentry(child_txid)
+                # Rebroadcast and check that parent and child are both in the mempool
+                with node.assert_debug_log(['resubmit 2 unconfirmed transactions'], timeout=2):
+                    node.setmocktime(evict_time + RESEND_TIMER_LIMIT)
+                    node.mockscheduler(60)
+                node.getmempoolentry(txid)
+                node.getmempoolentry(child_txid)
 
-            # clear mempool
-            self.generate(node, 1, sync_fun=self.no_op)
-            parent_utxo, indep_utxo = node.listunspent()[:2]
-            txid = node.send(outputs=[{addr: 1}], inputs=[parent_utxo])["txid"]
+                # clear mempool
+                self.generate(node, 1, sync_fun=self.no_op)
+                parent_utxo, indep_utxo = node.listunspent()[:2]
+                txid = node.send(outputs=[{addr: 1}], inputs=[parent_utxo])["txid"]
 
         self.log.info("Test rebroadcast of transactions received by others")
         # clear mempool

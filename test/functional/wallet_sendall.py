@@ -7,6 +7,7 @@
 from decimal import Decimal, getcontext
 
 from test_framework.messages import SEQUENCE_FINAL
+from test_framework.test_profile import profile_section
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
     assert_equal,
@@ -507,13 +508,14 @@ class SendallTest(BitcoinTestFramework):
     def sendall_fails_with_transaction_too_large(self):
         self.log.info("Test that sendall fails if resulting transaction is too large")
 
-        # Force the wallet to bulk-generate the addresses we'll need
-        self.wallet.keypoolrefill(1600)
+        with profile_section("wallet_sendall.weight_fixture"):
+            # Force the wallet to bulk-generate the addresses we'll need
+            self.wallet.keypoolrefill(1600)
 
-        # create many inputs
-        outputs = {self.wallet.getnewaddress(): 0.000025 for _ in range(1600)}
-        self.def_wallet.sendmany(amounts=outputs)
-        self.generate(self.nodes[0], 1)
+            # create many inputs
+            outputs = {self.wallet.getnewaddress(): 0.000025 for _ in range(1600)}
+            self.def_wallet.sendmany(amounts=outputs)
+            self.generate(self.nodes[0], 1)
 
         assert_raises_rpc_error(
                 -4,
