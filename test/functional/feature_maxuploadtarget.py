@@ -29,7 +29,7 @@ from test_framework.util import (
 from test_framework.wallet import MiniWallet
 
 
-UPLOAD_TARGET_MB = 800
+UPLOAD_TARGET_MB = 600
 
 
 class TestP2PConn(P2PInterface):
@@ -97,6 +97,7 @@ class MaxUploadTest(BitcoinTestFramework):
 
         # We'll be requesting this new block too
         big_new_block = self.nodes[0].getbestblockhash()
+        new_block_size = self.nodes[0].getblock(big_new_block, True)['size']
         big_new_block = int(big_new_block, 16)
 
         # p2p_conns[0] will test what happens if we just keep requesting the
@@ -131,9 +132,10 @@ class MaxUploadTest(BitcoinTestFramework):
 
         # Requesting the current block on p2p_conns[1] should succeed indefinitely,
         # even when over the max upload target.
-        # We'll try 800 times
+        # Request the recent block enough times to exceed the total target.
         getdata_request.inv = [CInv(MSG_BLOCK, big_new_block)]
-        for i in range(800):
+        new_block_requests = max_bytes_per_day // new_block_size + 1
+        for i in range(new_block_requests):
             p2p_conns[1].send_and_ping(getdata_request)
             assert_equal(p2p_conns[1].block_receive_map[big_new_block], i+1)
 
