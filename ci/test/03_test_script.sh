@@ -197,6 +197,10 @@ if [ "$RUN_UNIT_TESTS" = "true" ]; then
 fi
 
 if [ "$RUN_FUNCTIONAL_TESTS" = "true" ]; then
+  TEST_RUNNER_PROFILE=()
+  if [[ "${BITCOIN_TEST_PROFILE:-}" == "1" ]]; then
+    TEST_RUNNER_PROFILE=(--profiledir "${BASE_BUILD_DIR}/test-profiles")
+  fi
   # parses TEST_RUNNER_EXTRA as an array which allows for multiple arguments such as TEST_RUNNER_EXTRA='--exclude "rpc_bind.py --ipv6"'
   eval "TEST_RUNNER_EXTRA=($TEST_RUNNER_EXTRA)"
   LD_LIBRARY_PATH="${DEPENDS_DIR}/${HOST}/lib" \
@@ -207,6 +211,7 @@ if [ "$RUN_FUNCTIONAL_TESTS" = "true" ]; then
     --combinedlogslen=99999999 \
     --timeout-factor="${TEST_RUNNER_TIMEOUT_FACTOR}" \
     "${TEST_RUNNER_EXTRA[@]}" \
+    "${TEST_RUNNER_PROFILE[@]}" \
     --quiet \
     --failfast
 fi

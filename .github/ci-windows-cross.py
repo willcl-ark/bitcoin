@@ -105,6 +105,11 @@ def prepare_tests():
 def run_functional_tests():
     workspace = Path.cwd()
     num_procs = str(os.process_cpu_count())
+    if os.environ.get("BITCOIN_TEST_PROFILE") == "1":
+        os.environ.setdefault(
+            "BITCOIN_TEST_PROFILE_DIR",
+            str(workspace / "test-profiles"),
+        )
     test_runner_cmd = [
         sys.executable,
         str(workspace / "test" / "functional" / "test_runner.py"),

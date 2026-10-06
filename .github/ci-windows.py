@@ -178,6 +178,11 @@ def run_tests(ci_type):
             os.environ[var] = str(release_bin / exe)
 
         os.environ["QT_ASSUME_STDERR_HAS_CONSOLE"] = "1"
+        if os.environ.get("BITCOIN_TEST_PROFILE") == "1":
+            os.environ.setdefault(
+                "BITCOIN_TEST_PROFILE_DIR",
+                str(workspace / "test-profiles"),
+            )
         ctest_cmd = [
             "ctest",
             "--test-dir",

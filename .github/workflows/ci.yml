@@ -19,6 +19,7 @@ concurrency:
 
 env:
   CI_FAILFAST_TEST_LEAVE_DANGLING: 1  # GHA does not care about dangling processes and setting this variable avoids killing the CI script itself on error
+  BITCOIN_TEST_PROFILE: 1
 
 defaults:
   run:
@@ -185,6 +186,14 @@ jobs:
         env:
           FILE_ENV: ${{ matrix.file-env }}
 
+      - name: Upload functional test profiles
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: test-profiles-${{ github.job }}-${{ matrix.job-type }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ github.workspace }}/repo_archive/**/test-profiles/**/*.json
+          if-no-files-found: ignore
+
       - name: Save Ccache cache
         uses: actions/cache/save@v5
         if: github.event_name != 'pull_request' && github.ref_name == github.event.repository.default_branch && steps.ccache-cache.outputs.cache-hit != 'true'
@@ -288,6 +297,14 @@ jobs:
           TEST_RUNNER_EXTRA: "--timeout-factor=${{ env.TEST_RUNNER_TIMEOUT_FACTOR }} ${{ case(github.event_name == 'pull_request', '', '--extended') }}"
         run: |
           py -3 .github/ci-windows.py ${{ matrix.job-type }} run_tests
+
+      - name: Upload functional test profiles
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: test-profiles-${{ github.job }}-${{ matrix.job-type }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-profiles/**/*.json
+          if-no-files-found: ignore
 
   record-frozen-commit:
     # Record frozen commit, so that the native tests on cross-builds can run on
@@ -398,6 +415,14 @@ jobs:
           TEST_RUNNER_EXTRA: "--timeout-factor=${{ env.TEST_RUNNER_TIMEOUT_FACTOR }} ${{ case(github.event_name == 'pull_request', '', '--extended') }}"
         run: |
           py -3 .github/ci-windows-cross.py run_functional_tests
+
+      - name: Upload functional test profiles
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: test-profiles-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-profiles/**/*.json
+          if-no-files-found: ignore
 
   ci-matrix:
     name: ${{ matrix.name }}
@@ -558,6 +583,14 @@ jobs:
 
       - name: CI script
         run: ./ci/test_run_all.sh
+
+      - name: Upload functional test profiles
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: test-profiles-${{ github.job }}-${{ strategy.job-index }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.BASE_BUILD_DIR }}/test-profiles/**/*.json
+          if-no-files-found: ignore
 
       - name: Save caches
         uses: ./.github/actions/cache/save
