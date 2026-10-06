@@ -12,6 +12,7 @@ from test_framework.messages import (
 from test_framework.util import (
     assert_approx,
     assert_equal,
+    assert_greater_than,
 )
 
 
@@ -159,22 +160,25 @@ class WalletGroupTest(BitcoinTestFramework):
         self.sync_all()
         self.generate(self.nodes[0], 1)
 
-        self.log.info("Fill a wallet with 10,000 outputs corresponding to the same scriptPubKey")
-        for _ in range(5):
-            raw_tx = self.nodes[0].createrawtransaction([{"txid":"0"*64, "vout":0}], [{addr2[0]: 0.05}])
-            tx = tx_from_hex(raw_tx)
-            tx.vin = []
-            tx.vout = [tx.vout[0]] * 2000
-            funded_tx = self.nodes[0].fundrawtransaction(tx.serialize().hex(), options={'fee_rate': self.fee_rate})
-            signed_tx = self.nodes[0].signrawtransactionwithwallet(funded_tx['hex'])
-            self.nodes[0].sendrawtransaction(signed_tx['hex'])
-            self.generate(self.nodes[0], 1)
+        self.log.info("Fill a wallet with many outputs corresponding to the same scriptPubKey")
+        num_same_spk_outputs = 250
+        raw_tx = self.nodes[0].createrawtransaction([{"txid": "0" * 64, "vout": 0}], [{addr2[0]: 0.05}])
+        tx = tx_from_hex(raw_tx)
+        tx.vin = []
+        tx.vout = [tx.vout[0]] * num_same_spk_outputs
+        funded_tx = self.nodes[0].fundrawtransaction(tx.serialize().hex(), options={'fee_rate': self.fee_rate})
+        signed_tx = self.nodes[0].signrawtransactionwithwallet(funded_tx['hex'])
+        self.nodes[0].sendrawtransaction(signed_tx['hex'])
+        self.generate(self.nodes[0], 1)
 
         # Check that we can create a transaction that only requires ~100 of our
         # utxos, without pulling in all outputs and creating a transaction that
         # is way too big.
         self.log.info("Test creating txn that only requires ~100 of our UTXOs without pulling in all outputs")
-        assert self.nodes[2].sendtoaddress(address=addr2[0], amount=5, fee_rate=self.fee_rate)
+        txid = self.nodes[2].sendtoaddress(address=addr2[0], amount=5, fee_rate=self.fee_rate)
+        tx = self.nodes[2].getrawtransaction(txid, True)
+        assert_greater_than(len(tx["vin"]), 100)
+        assert len(tx["vin"]) < num_same_spk_outputs
 
 
 if __name__ == '__main__':
