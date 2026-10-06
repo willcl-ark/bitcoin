@@ -11,6 +11,7 @@ testing.
 import os
 
 from .authproxy import AuthServiceProxy
+from .test_profile import enabled as profile_enabled, profile_section
 from typing import Optional
 
 REFERENCE_FILENAME = 'rpc_interface.txt'
@@ -47,7 +48,12 @@ class AuthServiceProxyWrapper():
         called to a file.
 
         """
-        return_val = self.auth_service_proxy_instance.__call__(*args, **kwargs)
+        if profile_enabled():
+            rpc_method = self.auth_service_proxy_instance._service_name or "<unknown>"
+            with profile_section(f"rpc.{rpc_method}"):
+                return_val = self.auth_service_proxy_instance.__call__(*args, **kwargs)
+        else:
+            return_val = self.auth_service_proxy_instance.__call__(*args, **kwargs)
         self._log_call()
         return return_val
 

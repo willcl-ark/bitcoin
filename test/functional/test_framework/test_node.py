@@ -30,6 +30,12 @@ from .authproxy import (
 from . import coverage
 from .messages import NODE_P2P_V2
 from .p2p import P2P_SERVICES, P2P_SUBVERSION
+from .test_profile import (
+    enabled as profile_enabled,
+    profile,
+    profile_section,
+    record_duration,
+)
 from .util import (
     MAX_NODES,
     assert_equal,
@@ -246,6 +252,7 @@ class TestNode():
             assert self.rpc_connected and self._rpc is not None, self._node_msg("Error: no RPC connection")
             return getattr(self._rpc, name)
 
+    @profile("TestNode.start")
     def start(self, extra_args=None, *, cwd=None, stdout=None, stderr=None, env=None, **kwargs):
         """Start the node."""
         if extra_args is None:
@@ -351,6 +358,7 @@ class TestNode():
                 *extra_args
             )
 
+    @profile("TestNode.wait_for_rpc_connection")
     def wait_for_rpc_connection(self, *, wait_for_import=True):
         """Sets up an RPC connection to the bitcoind process. Returns False if unable to connect."""
         # Poll at a rate of four times per second
@@ -362,7 +370,10 @@ class TestNode():
             suppressed_errors[category] += 1
             return (category, repr(e))
 
+        profile_is_enabled = profile_enabled()
         for _ in range(poll_per_s * self.rpc_timeout):
+            if profile_is_enabled:
+                record_duration("TestNode.wait_for_rpc_connection.polls", 0, calls=1)
             if self.process.poll() is not None:
                 # Attach abrupt shutdown error/s to the exception message
                 self.stderr.seek(0)
@@ -442,21 +453,29 @@ class TestNode():
                 if "No RPC credentials" not in str(e):
                     raise
                 latest_error = suppress_error("missing_credentials", e)
+            if profile_is_enabled:
+                record_duration("TestNode.wait_for_rpc_connection.sleep", 1.0 / poll_per_s)
             time.sleep(1.0 / poll_per_s)
         self._raise_assertion_error(f"Unable to connect to bitcoind after {self.rpc_timeout}s (ignored errors: {dict(suppressed_errors)!s}{'' if latest_error is None else f', latest: {latest_error[0]!r}/{latest_error[1]}'})")
 
+    @profile("TestNode.wait_for_cookie_credentials")
     def wait_for_cookie_credentials(self):
         """Ensures auth cookie credentials can be read, e.g. for testing CLI with -rpcwait before RPC connection is up."""
         self.log.debug("Waiting for cookie credentials")
         # Poll at a rate of four times per second.
         poll_per_s = 4
+        profile_is_enabled = profile_enabled()
         for _ in range(poll_per_s * self.rpc_timeout):
+            if profile_is_enabled:
+                record_duration("TestNode.wait_for_cookie_credentials.polls", 0, calls=1)
             try:
                 get_auth_cookie(self.datadir_path, self.chain_dir)
                 self.log.debug("Cookie credentials successfully retrieved")
                 return
             except ValueError:  # cookie file not found and no rpcuser or rpcpassword; bitcoind is still starting
                 pass            # so we continue polling until RPC credentials are retrieved
+            if profile_is_enabled:
+                record_duration("TestNode.wait_for_cookie_credentials.sleep", 1.0 / poll_per_s)
             time.sleep(1.0 / poll_per_s)
         self._raise_assertion_error("Unable to retrieve cookie credentials after {}s".format(self.rpc_timeout))
 
@@ -496,6 +515,7 @@ class TestNode():
     def version_is_at_least(self, ver):
         return self.version is None or self.version >= ver
 
+    @profile("TestNode.stop_node")
     def stop_node(self, expected_stderr='', *, wait=0, wait_until_stopped=True):
         """Stop the node."""
         if not self.running:
@@ -557,6 +577,7 @@ class TestNode():
         self.log.debug("Node stopped")
         return True
 
+    @profile("TestNode.wait_until_stopped")
     def wait_until_stopped(self, *, timeout=BITCOIND_PROC_WAIT_TIMEOUT, expect_error=False, **kwargs):
         if "expected_ret_code" not in kwargs:
             kwargs["expected_ret_code"] = 1 if expect_error else 0  # Whether node shutdown return EXIT_FAILURE or EXIT_SUCCESS
@@ -673,22 +694,26 @@ class TestNode():
 
         yield
 
-        while True:
-            with open(self.debug_log_path, "rb") as dl:
-                dl.seek(prev_size)
-                log = dl.read()
+        profile_is_enabled = profile_enabled()
+        with profile_section("TestNode.busy_wait_for_debug_log"):
+            while True:
+                if profile_is_enabled:
+                    record_duration("TestNode.busy_wait_for_debug_log.polls", 0, calls=1)
+                with open(self.debug_log_path, "rb") as dl:
+                    dl.seek(prev_size)
+                    log = dl.read()
 
-            while remaining_expected and remaining_expected[-1] in log:
-                remaining_expected.pop()
-            if not remaining_expected:
-                return
+                while remaining_expected and remaining_expected[-1] in log:
+                    remaining_expected.pop()
+                if not remaining_expected:
+                    return
 
-            if time.time() >= time_end:
-                print_log = " - " + "\n - ".join(log.decode("utf8", errors="replace").splitlines())
-                break
+                if time.time() >= time_end:
+                    print_log = " - " + "\n - ".join(log.decode("utf8", errors="replace").splitlines())
+                    break
 
-            # No sleep here because we want to detect the message fragment as fast as
-            # possible.
+                # No sleep here because we want to detect the message fragment as fast as
+                # possible.
 
         remaining_expected = [e for e in remaining_expected if e not in log]
         self._raise_assertion_error(f'Expected message(s) {remaining_expected!s} '
@@ -989,8 +1014,13 @@ class TestNodeCLI():
             p_args = p_args[:base_arg_pos] + ['-stdin']
 
         self.log.debug("Running bitcoin-cli {}".format(p_args[2:]))
+        start = time.perf_counter()
         process = subprocess.Popen(p_args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         cli_stdout, cli_stderr = process.communicate(input=stdin_data)
+        elapsed = time.perf_counter() - start
+        record_duration("TestNodeCLI.send_cli", elapsed)
+        if clicommand is not None:
+            record_duration(f"TestNodeCLI.command.{clicommand}", elapsed)
         returncode = process.poll()
         if returncode:
             match = re.match(r'error code: ([-0-9]+)\nerror message:\n(.*)', cli_stderr)

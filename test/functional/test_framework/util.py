@@ -22,6 +22,7 @@ import time
 import types
 
 from .descriptors import descsum_create
+from .test_profile import enabled as profile_enabled, profile, record_duration
 from collections.abc import Callable
 from typing import Optional, Union
 
@@ -402,6 +403,7 @@ def satoshi_round(amount: Union[int, float, str], *, rounding: str) -> Decimal:
     return Decimal(amount).quantize(SATOSHI_PRECISION, rounding=rounding)
 
 
+@profile("util.ensure_for")
 def ensure_for(*, duration, f, check_interval=0.2):
     """Check if the predicate keeps returning True for duration.
 
@@ -415,14 +417,20 @@ def ensure_for(*, duration, f, check_interval=0.2):
         check_interval = duration
     time_end = time.time() + duration
     predicate_source = "''''\n" + inspect.getsource(f) + "'''"
+    profile_is_enabled = profile_enabled()
     while True:
+        if profile_is_enabled:
+            record_duration("util.ensure_for.polls", 0)
         if not f():
             raise AssertionError(f"Predicate {predicate_source} became false within {duration} seconds")
         if time.time() > time_end:
             return
+        if profile_is_enabled:
+            record_duration("util.ensure_for.sleep", check_interval)
         time.sleep(check_interval)
 
 
+@profile("util.wait_until")
 def wait_until_helper_internal(predicate, *, timeout=60, lock=None, timeout_factor=1.0, check_interval=0.05):
     """Sleep until the predicate resolves to be True.
 
@@ -434,8 +442,11 @@ def wait_until_helper_internal(predicate, *, timeout=60, lock=None, timeout_fact
     """
     timeout = timeout * timeout_factor
     time_end = time.time() + timeout
+    profile_is_enabled = profile_enabled()
 
     while time.time() < time_end:
+        if profile_is_enabled:
+            record_duration("util.wait_until.polls", 0)
         if lock:
             with lock:
                 if predicate():
@@ -443,6 +454,8 @@ def wait_until_helper_internal(predicate, *, timeout=60, lock=None, timeout_fact
         else:
             if predicate():
                 return
+        if profile_is_enabled:
+            record_duration("util.wait_until.sleep", check_interval)
         time.sleep(check_interval)
 
     # Print the cause of the timeout

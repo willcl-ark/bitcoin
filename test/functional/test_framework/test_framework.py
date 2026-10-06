@@ -26,6 +26,14 @@ from .address import create_deterministic_address_bcrt1_p2tr_op_true
 from . import coverage
 from .messages import CAddress
 from .p2p import NetworkThread
+from .test_profile import (
+    enabled as profile_enabled,
+    profile_function,
+    profile_section,
+    record_duration,
+    set_metadata as set_profile_metadata,
+    write_profile,
+)
 from .test_node import TestNode
 from .util import (
     Binaries,
@@ -80,6 +88,14 @@ class BitcoinTestMetaClass(type):
             if '__init__' in dct or 'main' in dct:
                 raise TypeError("BitcoinTestFramework subclasses may not override "
                                 "'__init__' or 'main'")
+            for name, value in list(dct.items()):
+                profile_name = f"test_method.{clsname}.{name}"
+                if isinstance(value, staticmethod):
+                    dct[name] = staticmethod(profile_function(profile_name, value.__func__))
+                elif isinstance(value, classmethod):
+                    dct[name] = classmethod(profile_function(profile_name, value.__func__))
+                elif callable(value) and not name.startswith("__"):
+                    dct[name] = profile_function(profile_name, value)
 
         return super().__new__(cls, clsname, bases, dct)
 
@@ -102,6 +118,7 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
 
     def __init__(self, test_file) -> None:
         """Sets test framework defaults. Do not override this method. Instead, override the set_test_params() method"""
+        set_profile_metadata(test_file=os.path.abspath(test_file), test_name=os.path.basename(test_file))
         self.chain: str = 'regtest'
         self.setup_clean_chain: bool = False
         self.noban_tx_relay: bool = False
@@ -138,11 +155,14 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         assert hasattr(self, "num_nodes"), "Test must set self.num_nodes in set_test_params()"
 
         try:
-            self.setup()
+            with profile_section("framework.setup"):
+                self.setup()
             if self.options.test_methods:
-                self.run_test_methods()
+                with profile_section("framework.run_test_methods"):
+                    self.run_test_methods()
             else:
-                self.run_test()
+                with profile_section("framework.run_test"):
+                    self.run_test()
 
         except SkipTest as e:
             self.log.warning("Test Skipped: %s" % e.message)
@@ -156,7 +176,15 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
             self.log.exception("Unexpected exception:")
             self.success = TestStatus.FAILED
         finally:
-            exit_code = self.shutdown()
+            exit_code = TEST_EXIT_FAILED
+            try:
+                with profile_section("framework.shutdown"):
+                    exit_code = self.shutdown()
+            finally:
+                write_profile(
+                    status=self.success.name.lower(),
+                    exit_code=exit_code,
+                )
             sys.exit(exit_code)
 
     def run_test_methods(self):
@@ -222,6 +250,13 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
             self.options.v2transport=False
 
         PortSeed.n = self.options.port_seed
+        set_profile_metadata(
+            configfile=self.options.configfile,
+            port_seed=self.options.port_seed,
+            timeout_factor=self.options.timeout_factor,
+            use_cli=self.options.usecli,
+            v2transport=self.options.v2transport,
+        )
 
     def get_binaries(self, bin_dir=None):
         return Binaries(self.binary_paths, bin_dir, use_valgrind=self.options.valgrind)
@@ -257,6 +292,12 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
 
         random.seed(seed)
         self.log.info("PRNG seed is: {}".format(seed))
+        set_profile_metadata(
+            chain=self.chain,
+            num_nodes=self.num_nodes,
+            tmpdir=self.options.tmpdir,
+            randomseed=seed,
+        )
 
         self.log.debug('Setting up network thread')
         self.network_thread = NetworkThread()
@@ -705,12 +746,17 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         rpc_connections = nodes or self.nodes
         timeout = int(timeout * self.options.timeout_factor)
         stop_time = time.time() + timeout
+        profile_is_enabled = profile_enabled()
         while time.time() <= stop_time:
+            if profile_is_enabled:
+                record_duration("framework.sync_blocks.polls", 0, calls=1)
             best_hash = [x.getbestblockhash() for x in rpc_connections]
             if best_hash.count(best_hash[0]) == len(rpc_connections):
                 return
             # Check that each peer has at least one connection
             assert (all([len(x.getpeerinfo()) for x in rpc_connections]))
+            if profile_is_enabled:
+                record_duration("framework.sync_blocks.sleep", wait)
             time.sleep(wait)
         raise AssertionError("Block sync timed out after {}s:{}".format(
             timeout,
@@ -725,15 +771,25 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         rpc_connections = nodes or self.nodes
         timeout = int(timeout * self.options.timeout_factor)
         stop_time = time.time() + timeout
+        profile_is_enabled = profile_enabled()
         while time.time() <= stop_time:
+            if profile_is_enabled:
+                record_duration("framework.sync_mempools.polls", 0, calls=1)
             pool = [set(r.getrawmempool()) for r in rpc_connections]
             if pool.count(pool[0]) == len(rpc_connections):
                 if flush_scheduler:
-                    for r in rpc_connections:
-                        r.syncwithvalidationinterfacequeue()
+                    if profile_is_enabled:
+                        with profile_section("framework.sync_mempools.flush_scheduler"):
+                            for r in rpc_connections:
+                                r.syncwithvalidationinterfacequeue()
+                    else:
+                        for r in rpc_connections:
+                            r.syncwithvalidationinterfacequeue()
                 return
             # Check that each peer has at least one connection
             assert (all([len(x.getpeerinfo()) for x in rpc_connections]))
+            if profile_is_enabled:
+                record_duration("framework.sync_mempools.sleep", wait)
             time.sleep(wait)
         raise AssertionError("Mempool sync timed out after {}s:{}".format(
             timeout,

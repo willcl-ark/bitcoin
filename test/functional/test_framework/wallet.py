@@ -34,6 +34,7 @@ from test_framework.messages import (
     CTxOut,
     hash256,
 )
+from test_framework.test_profile import profile
 from test_framework.script import (
     CScript,
     OP_NOP,
@@ -130,6 +131,7 @@ class MiniWallet:
     def get_balance(self):
         return sum(u['value'] for u in self._utxos)
 
+    @profile("miniwallet.rescan_utxos")
     def rescan_utxos(self, *, include_mempool=True):
         """Drop all utxos and rescan the utxo set"""
         self._utxos = []
@@ -196,6 +198,7 @@ class MiniWallet:
         else:
             assert False
 
+    @profile("miniwallet.generate")
     def generate(self, num_blocks, **kwargs):
         """Generate blocks with coinbase outputs to the internal address, and call rescan_utxos"""
         blocks = self._test_node.generatetodescriptor(num_blocks, self.get_descriptor(), **kwargs)
@@ -257,12 +260,14 @@ class MiniWallet:
             self._utxos = []
         return utxos
 
+    @profile("miniwallet.send_self_transfer")
     def send_self_transfer(self, *, from_node, **kwargs):
         """Call create_self_transfer and send the transaction."""
         tx = self.create_self_transfer(**kwargs)
         self.sendrawtransaction(from_node=from_node, tx_hex=tx['hex'])
         return tx
 
+    @profile("miniwallet.send_to")
     def send_to(self, *, from_node, scriptPubKey, amount, fee=1000):
         """
         Create and send a tx with an output to a given scriptPubKey/amount,
@@ -390,6 +395,7 @@ class MiniWallet:
 
         return tx
 
+    @profile("miniwallet.sendrawtransaction")
     def sendrawtransaction(self, *, from_node, tx_hex, maxfeerate=0, **kwargs):
         txid = from_node.sendrawtransaction(hexstring=tx_hex, maxfeerate=maxfeerate, **kwargs)
         self.scan_tx(from_node.decoderawtransaction(tx_hex))
