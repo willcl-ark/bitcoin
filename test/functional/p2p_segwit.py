@@ -80,6 +80,7 @@ from test_framework.script_util import (
     script_to_p2wsh_script,
 )
 from test_framework.test_framework import BitcoinTestFramework
+from test_framework.test_profile import profile_section
 from test_framework.util import (
     assert_not_equal,
     assert_greater_than_or_equal,
@@ -1595,69 +1596,71 @@ class SegWitTest(BitcoinTestFramework):
         # Ensure that we've tested a situation where we use SIGHASH_SINGLE with
         # an input index > number of outputs.
         NUM_SIGHASH_TESTS = 500
-        temp_utxos = []
-        tx = CTransaction()
-        tx.vin.append(CTxIn(COutPoint(prev_utxo.sha256, prev_utxo.n), b""))
-        split_value = prev_utxo.nValue // NUM_SIGHASH_TESTS
-        for _ in range(NUM_SIGHASH_TESTS):
-            tx.vout.append(CTxOut(split_value, script_pubkey))
-        tx.wit.vtxinwit.append(CTxInWitness())
-        sign_p2pk_witness_input(witness_script, tx, 0, SIGHASH_ALL, prev_utxo.nValue, key)
-        for i in range(NUM_SIGHASH_TESTS):
-            temp_utxos.append(UTXO(tx.txid_int, i, split_value))
+        with profile_section("segwit.sighash_split_utxos"):
+            temp_utxos = []
+            tx = CTransaction()
+            tx.vin.append(CTxIn(COutPoint(prev_utxo.sha256, prev_utxo.n), b""))
+            split_value = prev_utxo.nValue // NUM_SIGHASH_TESTS
+            for _ in range(NUM_SIGHASH_TESTS):
+                tx.vout.append(CTxOut(split_value, script_pubkey))
+            tx.wit.vtxinwit.append(CTxInWitness())
+            sign_p2pk_witness_input(witness_script, tx, 0, SIGHASH_ALL, prev_utxo.nValue, key)
+            for i in range(NUM_SIGHASH_TESTS):
+                temp_utxos.append(UTXO(tx.txid_int, i, split_value))
 
-        block = self.build_next_block()
-        self.update_witness_block_with_transactions(block, [tx])
-        test_witness_block(self.nodes[0], self.test_node, block, accepted=True)
+            block = self.build_next_block()
+            self.update_witness_block_with_transactions(block, [tx])
+            test_witness_block(self.nodes[0], self.test_node, block, accepted=True)
 
         block = self.build_next_block()
         used_sighash_single_out_of_bounds = False
-        for i in range(NUM_SIGHASH_TESTS):
-            # Ping regularly to keep the connection alive
-            if (not i % 100):
-                self.test_node.sync_with_ping()
-            # Choose random number of inputs to use.
-            num_inputs = random.randint(1, 10)
-            # Create a slight bias for producing more utxos
-            num_outputs = random.randint(1, 11)
-            random.shuffle(temp_utxos)
-            assert len(temp_utxos) > num_inputs
-            tx = CTransaction()
-            total_value = 0
-            for i in range(num_inputs):
-                tx.vin.append(CTxIn(COutPoint(temp_utxos[i].sha256, temp_utxos[i].n), b""))
-                tx.wit.vtxinwit.append(CTxInWitness())
-                total_value += temp_utxos[i].nValue
-            split_value = total_value // num_outputs
-            for _ in range(num_outputs):
-                tx.vout.append(CTxOut(split_value, script_pubkey))
-            for i in range(num_inputs):
-                # Now try to sign each input, using a random hashtype.
-                anyonecanpay = 0
-                if random.randint(0, 1):
-                    anyonecanpay = SIGHASH_ANYONECANPAY
-                hashtype = random.randint(1, 3) | anyonecanpay
-                sign_p2pk_witness_input(witness_script, tx, i, hashtype, temp_utxos[i].nValue, key)
-                if (hashtype == SIGHASH_SINGLE and i >= num_outputs):
-                    used_sighash_single_out_of_bounds = True
-            for i in range(num_outputs):
-                temp_utxos.append(UTXO(tx.txid_int, i, split_value))
-            temp_utxos = temp_utxos[num_inputs:]
+        with profile_section("segwit.sighash_random_transactions"):
+            for i in range(NUM_SIGHASH_TESTS):
+                # Ping regularly to keep the connection alive
+                if (not i % 100):
+                    self.test_node.sync_with_ping()
+                # Choose random number of inputs to use.
+                num_inputs = random.randint(1, 10)
+                # Create a slight bias for producing more utxos
+                num_outputs = random.randint(1, 11)
+                random.shuffle(temp_utxos)
+                assert len(temp_utxos) > num_inputs
+                tx = CTransaction()
+                total_value = 0
+                for i in range(num_inputs):
+                    tx.vin.append(CTxIn(COutPoint(temp_utxos[i].sha256, temp_utxos[i].n), b""))
+                    tx.wit.vtxinwit.append(CTxInWitness())
+                    total_value += temp_utxos[i].nValue
+                split_value = total_value // num_outputs
+                for _ in range(num_outputs):
+                    tx.vout.append(CTxOut(split_value, script_pubkey))
+                for i in range(num_inputs):
+                    # Now try to sign each input, using a random hashtype.
+                    anyonecanpay = 0
+                    if random.randint(0, 1):
+                        anyonecanpay = SIGHASH_ANYONECANPAY
+                    hashtype = random.randint(1, 3) | anyonecanpay
+                    sign_p2pk_witness_input(witness_script, tx, i, hashtype, temp_utxos[i].nValue, key)
+                    if (hashtype == SIGHASH_SINGLE and i >= num_outputs):
+                        used_sighash_single_out_of_bounds = True
+                for i in range(num_outputs):
+                    temp_utxos.append(UTXO(tx.txid_int, i, split_value))
+                temp_utxos = temp_utxos[num_inputs:]
 
-            block.vtx.append(tx)
+                block.vtx.append(tx)
 
-            # Test the block periodically, if we're close to maxblocksize
-            if block.get_weight() > MAX_BLOCK_WEIGHT - 4000:
+                # Test the block periodically, if we're close to maxblocksize
+                if block.get_weight() > MAX_BLOCK_WEIGHT - 4000:
+                    self.update_witness_block_with_transactions(block, [])
+                    test_witness_block(self.nodes[0], self.test_node, block, accepted=True)
+                    block = self.build_next_block()
+
+            if (not used_sighash_single_out_of_bounds):
+                self.log.info("WARNING: this test run didn't attempt SIGHASH_SINGLE with out-of-bounds index value")
+            # Test the transactions we've added to the block
+            if (len(block.vtx) > 1):
                 self.update_witness_block_with_transactions(block, [])
                 test_witness_block(self.nodes[0], self.test_node, block, accepted=True)
-                block = self.build_next_block()
-
-        if (not used_sighash_single_out_of_bounds):
-            self.log.info("WARNING: this test run didn't attempt SIGHASH_SINGLE with out-of-bounds index value")
-        # Test the transactions we've added to the block
-        if (len(block.vtx) > 1):
-            self.update_witness_block_with_transactions(block, [])
-            test_witness_block(self.nodes[0], self.test_node, block, accepted=True)
 
         # Now test witness version 0 P2PKH transactions
         pubkeyhash = hash160(pubkey)

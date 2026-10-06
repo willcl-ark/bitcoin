@@ -37,6 +37,7 @@ from test_framework.util import (
     assert_equal,
 )
 from test_framework.test_framework import BitcoinTestFramework
+from test_framework.test_profile import profile_section
 from test_framework.wallet import (
     MiniWallet,
     MiniWalletMode,
@@ -650,24 +651,27 @@ class OrphanHandlingTest(BitcoinTestFramework):
         peer_doser = node.add_p2p_connection(P2PInterface())
 
         # Each of the num_peers peers creates a distinct set of orphans
-        large_orphans = [create_large_orphan() for _ in range(60)]
+        with profile_section("orphan.maximal_package.create_large_orphans"):
+            large_orphans = [create_large_orphan() for _ in range(60)]
 
         # Check to make sure these are orphans, within max standard size (to be accepted into the orphanage)
-        for large_orphan in large_orphans:
-            testres = node.testmempoolaccept([large_orphan.serialize().hex()])
-            assert not testres[0]["allowed"]
-            assert_equal(testres[0]["reject-reason"], "missing-inputs")
+        with profile_section("orphan.maximal_package.testmempoolaccept_large_orphans"):
+            for large_orphan in large_orphans:
+                testres = node.testmempoolaccept([large_orphan.serialize().hex()])
+                assert not testres[0]["allowed"]
+                assert_equal(testres[0]["reject-reason"], "missing-inputs")
 
         num_individual_dosers = 20
         self.log.info(f"Connect {num_individual_dosers} peers and send a very large orphan from each one")
         # This test assumes that unrequested transactions are processed (skipping inv and
         # getdata steps because they require going through request delays)
         # Connect 20 peers and have each of them send a large orphan.
-        for large_orphan in large_orphans[:num_individual_dosers]:
-            peer_doser_individual = node.add_p2p_connection(P2PInterface())
-            peer_doser_individual.send_and_ping(msg_tx(large_orphan))
-            node.bumpmocktime(NONPREF_PEER_TX_DELAY + TXID_RELAY_DELAY + 1)
-            peer_doser_individual.wait_for_getdata([large_orphan.vin[0].prevout.hash])
+        with profile_section("orphan.maximal_package.individual_dosers"):
+            for large_orphan in large_orphans[:num_individual_dosers]:
+                peer_doser_individual = node.add_p2p_connection(P2PInterface())
+                peer_doser_individual.send_and_ping(msg_tx(large_orphan))
+                node.bumpmocktime(NONPREF_PEER_TX_DELAY + TXID_RELAY_DELAY + 1)
+                peer_doser_individual.wait_for_getdata([large_orphan.vin[0].prevout.hash])
 
         # Make sure that these transactions are going through the orphan handling codepaths.
         # Subsequent rounds will not wait for getdata because the time mocking will cause the
@@ -696,8 +700,9 @@ class OrphanHandlingTest(BitcoinTestFramework):
         self.wait_until(lambda: "getdata" in peer_normal.last_message and parent_txid_int in [inv.hash for inv in peer_normal.last_message.get("getdata").inv])
 
         self.log.info("Send another round of very large orphans from a DoSy peer")
-        for large_orphan in large_orphans[num_individual_dosers:]:
-            peer_doser.send_and_ping(msg_tx(large_orphan))
+        with profile_section("orphan.maximal_package.final_doser_round"):
+            for large_orphan in large_orphans[num_individual_dosers:]:
+                peer_doser.send_and_ping(msg_tx(large_orphan))
 
         self.log.info("Provide the top ancestor. The whole package should be re-evaluated after enough time.")
         peer_normal.send_and_ping(msg_tx(ancestor_package[0]["tx"]))

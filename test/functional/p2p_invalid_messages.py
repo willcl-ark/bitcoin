@@ -27,6 +27,7 @@ from test_framework.p2p import (
     P2PInterface,
 )
 from test_framework.test_framework import BitcoinTestFramework
+from test_framework.test_profile import profile_section
 from test_framework.util import (
     assert_equal,
 )
@@ -334,17 +335,20 @@ class InvalidMessagesTest(BitcoinTestFramework):
         assert_equal(len(msg_at_size.serialize()), MAX_PROTOCOL_MESSAGE_LENGTH)
 
         self.log.info("(a) Send 80 messages, each of maximum valid data size (4MB)")
-        for _ in range(80):
-            conn.send_without_ping(msg_at_size)
+        with profile_section("invalid_messages.resource_exhaustion.send_junk"):
+            for _ in range(80):
+                conn.send_without_ping(msg_at_size)
 
         # Check that, even though the node is being hammered by nonsense from one
         # connection, it can still service other peers in a timely way.
         self.log.info("(b) Check node still services peers in a timely way")
-        for _ in range(20):
-            conn2.sync_with_ping(timeout=2)
+        with profile_section("invalid_messages.resource_exhaustion.peer_service"):
+            for _ in range(20):
+                conn2.sync_with_ping(timeout=2)
 
         self.log.info("(c) Wait for node to drop junk messages, while remaining connected")
-        conn.sync_with_ping(timeout=400)
+        with profile_section("invalid_messages.resource_exhaustion.drain_junk"):
+            conn.sync_with_ping(timeout=400)
 
         # Despite being served up a bunch of nonsense, the peers should still be connected.
         assert conn.is_connected

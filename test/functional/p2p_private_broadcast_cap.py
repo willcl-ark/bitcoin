@@ -7,6 +7,7 @@ rejected (the queue is not modified), rather than evicting existing entries.
 """
 
 from test_framework.test_framework import BitcoinTestFramework
+from test_framework.test_profile import profile_section
 from test_framework.util import assert_equal, assert_raises_rpc_error
 from test_framework.wallet import MiniWallet
 
@@ -57,8 +58,9 @@ class PrivateBroadcastCapTest(BitcoinTestFramework):
 
         # Fill the queue exactly to the cap; every distinct submission succeeds.
         self.log.info(f"Filling private broadcast queue to cap ({MAX_TRANSACTIONS} txns)")
-        for child in children[:MAX_TRANSACTIONS]:
-            node.sendrawtransaction(child["hex"])
+        with profile_section("p2p_private_broadcast_cap.fill_queue"):
+            for child in children[:MAX_TRANSACTIONS]:
+                node.sendrawtransaction(child["hex"])
 
         pbinfo = node.getprivatebroadcastinfo()
         assert_equal(len(pbinfo["transactions"]), MAX_TRANSACTIONS)
@@ -70,9 +72,10 @@ class PrivateBroadcastCapTest(BitcoinTestFramework):
         # Further distinct submissions are rejected with an RPC error, and the
         # queue is left unchanged (nothing evicted to make room).
         self.log.info(f"Submitting {OVER_CAP} more; each should be rejected (queue full)")
-        for child in children[MAX_TRANSACTIONS:]:
-            assert_raises_rpc_error(-37, "Private broadcast queue is full",
-                                    node.sendrawtransaction, child["hex"])
+        with profile_section("p2p_private_broadcast_cap.over_cap_rejects"):
+            for child in children[MAX_TRANSACTIONS:]:
+                assert_raises_rpc_error(-37, "Private broadcast queue is full",
+                                        node.sendrawtransaction, child["hex"])
 
         assert_equal(pbinfo["transactions"], node.getprivatebroadcastinfo()["transactions"])
 
