@@ -13,6 +13,9 @@ from test_framework.util import (
     assert_equal,
 )
 BLOCK_TIME = 60 * 10
+TIMESTAMP_WINDOW = 2 * 60 * 60
+MTP_LAG_BLOCKS = 6
+BIRTHTIME_BLOCKS = (TIMESTAMP_WINDOW // BLOCK_TIME) + MTP_LAG_BLOCKS + 1
 
 class WalletReindexTest(BitcoinTestFramework):
     def set_test_params(self):
@@ -35,8 +38,9 @@ class WalletReindexTest(BitcoinTestFramework):
         wallet_addr = miner_wallet.getnewaddress()
         tx_id = miner_wallet.sendtoaddress(wallet_addr, 2)
 
-        # Generate 50 blocks, one every 10 min to surpass the 2 hours rescan window the wallet has
-        for _ in range(50):
+        # Generate one block every 10 minutes to surpass the two-hour rescan
+        # window after accounting for median-time-past lag.
+        for _ in range(BIRTHTIME_BLOCKS):
             self.generate(node, 1)
             self.advance_time(node, BLOCK_TIME)
 
@@ -57,7 +61,7 @@ class WalletReindexTest(BitcoinTestFramework):
 
         # Rescan the wallet to detect the missing transaction
         wallet_watch_only.rescanblockchain()
-        assert_equal(wallet_watch_only.gettransaction(tx_id)['confirmations'], 50)
+        assert_equal(wallet_watch_only.gettransaction(tx_id)['confirmations'], BIRTHTIME_BLOCKS)
         assert_equal(wallet_watch_only.getbalances()['mine']['trusted'], 2)
 
         self.log.info("Reindex ...")  # restart_node waits for it to finish
@@ -66,7 +70,7 @@ class WalletReindexTest(BitcoinTestFramework):
         # Verify the transaction is still 'confirmed' after reindex
         wallet_watch_only = node.get_wallet_rpc('watch_only')
         tx_info = wallet_watch_only.gettransaction(tx_id)
-        assert_equal(tx_info['confirmations'], 50)
+        assert_equal(tx_info['confirmations'], BIRTHTIME_BLOCKS)
 
         # Depending on the wallet type, the birth time changes.
         # For descriptors, verify the wallet updated the birth time to the transaction time
