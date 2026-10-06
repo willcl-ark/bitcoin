@@ -32,6 +32,7 @@ from test_framework.script import (
     OP_RETURN,
 )
 from test_framework.test_framework import BitcoinTestFramework
+from test_framework.test_profile import profile_section
 from test_framework.util import (
     assert_equal,
     assert_greater_than,
@@ -250,10 +251,11 @@ class RawTransactionsTest(BitcoinTestFramework):
         assert 'fee' not in gottx
         # check that verbosity 2 for a mempool tx will fallback to verbosity 1
         # Do this with a pruned chain, as a regression test for https://github.com/bitcoin/bitcoin/pull/29003
-        self.generate(self.nodes[2], 400)
-        assert_greater_than(self.nodes[2].pruneblockchain(250), 0)
-        mempool_tx = self.wallet.send_self_transfer(from_node=self.nodes[2])['txid']
-        gottx = self.nodes[2].getrawtransaction(txid=mempool_tx, verbosity=2)
+        with profile_section("rawtransaction.pruned_verbosity_fixture"):
+            self.generate(self.nodes[2], 400)
+            assert_greater_than(self.nodes[2].pruneblockchain(250), 0)
+            mempool_tx = self.wallet.send_self_transfer(from_node=self.nodes[2])['txid']
+            gottx = self.nodes[2].getrawtransaction(txid=mempool_tx, verbosity=2)
         assert 'fee' not in gottx
 
     def createrawtransaction_tests(self):

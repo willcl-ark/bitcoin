@@ -14,6 +14,7 @@ from test_framework.key import ECPubKey
 from test_framework.messages import COIN
 from test_framework.script_util import keys_to_multisig_script
 from test_framework.test_framework import BitcoinTestFramework
+from test_framework.test_profile import profile_section
 from test_framework.util import (
     assert_raises_rpc_error,
     assert_equal,
@@ -46,9 +47,10 @@ class RpcCreateMultiSigTest(BitcoinTestFramework):
 
         self.create_keys(21)  # max number of allowed keys + 1
         m_of_n = [(2, 3), (3, 3), (2, 5), (3, 5), (10, 15), (15, 15)]
-        for (sigs, keys) in m_of_n:
-            for output_type in ["bech32", "p2sh-segwit", "legacy"]:
-                self.do_multisig(keys, sigs, output_type)
+        with profile_section("createmultisig.funded_matrix"):
+            for (sigs, keys) in m_of_n:
+                for output_type in ["bech32", "p2sh-segwit", "legacy"]:
+                    self.do_multisig(keys, sigs, output_type)
 
         self.test_combinerawtransaction_preconditions()
         self.test_multisig_script_limit()
@@ -59,14 +61,15 @@ class RpcCreateMultiSigTest(BitcoinTestFramework):
         assert_raises_rpc_error(-5, "createmultisig cannot create bech32m multisig addresses", self.nodes[0].createmultisig, 2, self.pub, "bech32m")
 
         self.log.info('Check correct encoding of multisig script for all n (1..20)')
-        for nkeys in range(1, 20+1):
-            keys = [self.pub[0]]*nkeys
-            expected_ms_script = keys_to_multisig_script(keys, k=nkeys)  # simply use n-of-n
-            # note that the 'legacy' address type fails for n values larger than 15
-            # due to exceeding the P2SH size limit (520 bytes), so we use 'bech32' instead
-            # (for the purpose of this encoding test, we don't care about the resulting address)
-            res = self.nodes[0].createmultisig(nrequired=nkeys, keys=keys, address_type='bech32')
-            assert_equal(res['redeemScript'], expected_ms_script.hex())
+        with profile_section("createmultisig.encoding_matrix"):
+            for nkeys in range(1, 20+1):
+                keys = [self.pub[0]]*nkeys
+                expected_ms_script = keys_to_multisig_script(keys, k=nkeys)  # simply use n-of-n
+                # note that the 'legacy' address type fails for n values larger than 15
+                # due to exceeding the P2SH size limit (520 bytes), so we use 'bech32' instead
+                # (for the purpose of this encoding test, we don't care about the resulting address)
+                res = self.nodes[0].createmultisig(nrequired=nkeys, keys=keys, address_type='bech32')
+                assert_equal(res['redeemScript'], expected_ms_script.hex())
 
     def test_multisig_script_limit(self):
         node1 = self.nodes[1]
