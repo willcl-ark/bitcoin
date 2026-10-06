@@ -13,7 +13,6 @@
 #include <script/script.h>
 #include <sync.h>
 #include <test/util/setup_common.h>
-#include <test/util/txmempool.h>
 #include <txmempool.h>
 #include <uint256.h>
 #include <util/check.h>
@@ -26,12 +25,6 @@
 #include <utility>
 #include <vector>
 
-
-static void AddTx(const CTransactionRef& tx, const CAmount& fee, CTxMemPool& pool) EXCLUSIVE_LOCKS_REQUIRED(cs_main, pool.cs)
-{
-    LockPoints lp;
-    TryAddToMempool(pool, CTxMemPoolEntry(tx, fee, /*time=*/0, /*entry_height=*/1, /*entry_sequence=*/0, /*spends_coinbase=*/false, /*sigops_cost=*/4, lp));
-}
 
 namespace {
 class BenchCBHAST : public CBlockHeaderAndShortTxIDs
@@ -96,9 +89,18 @@ static void BlockEncodingBench(benchmark::Bench& bench, size_t n_pool, size_t n_
     // to simulate a mempool that has changed over time
     std::shuffle(refs.begin(), refs.end(), rng);
 
-    for (size_t i = 0; i < n_pool; ++i) {
-        AddTx(refs[i], /*fee=*/refs[i]->vout[0].nValue, pool);
+    {
+        auto changeset = pool.GetChangeSet();
+        for (size_t i = 0; i < n_pool; ++i) {
+            LockPoints lp;
+            changeset->StageAddition(refs[i], /*fee=*/refs[i]->vout[0].nValue,
+                                     /*time=*/0, /*entry_height=*/1, /*entry_sequence=*/0,
+                                     /*spends_coinbase=*/false, /*sigops_cost=*/4, lp);
+        }
+        assert(changeset->CheckMemPoolPolicyLimits());
+        changeset->Apply();
     }
+    assert(pool.size() == n_pool);
     for (size_t i = n_pool; i < n_pool + n_extra; ++i) {
         extratxn.emplace_back(refs[i]->GetWitnessHash(), refs[i]);
     }
