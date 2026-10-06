@@ -148,9 +148,8 @@ class TestFrameworkChacha(unittest.TestCase):
             keystream = chacha20_block(key, nonce_bytes, counter)
             self.assertEqual(hex_output, keystream.hex())
 
-    def test_fschacha20(self):
-        """FSChaCha20 test vectors."""
-        for test_vector in FSCHACHA20_TESTS:
+    def fschacha20_test_vectors(self, test_vectors):
+        for test_vector in test_vectors:
             hex_plaintext, hex_key, rekey_interval, hex_ciphertext_after_rotation = test_vector
             plaintext = bytes.fromhex(hex_plaintext)
             key = bytes.fromhex(hex_key)
@@ -160,3 +159,11 @@ class TestFrameworkChacha(unittest.TestCase):
 
             ciphertext = fsc20.crypt(plaintext)
             self.assertEqual(hex_ciphertext_after_rotation, ciphertext.hex())
+
+    def test_fschacha20(self):
+        """FSChaCha20 test vectors."""
+        self.fschacha20_test_vectors(FSCHACHA20_TESTS[:2])
+
+    def test_fschacha20_4096_rekey_interval(self):
+        """FSChaCha20 4096 rekey interval test vector."""
+        self.fschacha20_test_vectors(FSCHACHA20_TESTS[2:])
