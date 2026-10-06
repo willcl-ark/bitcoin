@@ -467,23 +467,23 @@ class TxDownloadTest(BitcoinTestFramework):
 
         # Run each test against new bitcoind instances, as setting mocktimes has long-term effects on when
         # the next trickle relay event happens.
-        for test, with_inbounds in [
-            (self.test_in_flight_max, True),
-            (self.test_inv_block, True),
-            (self.test_tx_requests, True),
-            (self.test_rejects_filter_reset, False),
-            (self.test_inv_wtxidrelay_mismatch, False),
+        for test, inbound_count_per_node in [
+            (self.test_in_flight_max, [1, 0]),
+            (self.test_inv_block, [NUM_INBOUND, NUM_INBOUND]),
+            (self.test_tx_requests, [NUM_INBOUND, 0]),
+            (self.test_rejects_filter_reset, [0, 0]),
+            (self.test_inv_wtxidrelay_mismatch, [0, 0]),
         ]:
             self.stop_nodes()
             self.start_nodes()
             self.connect_nodes(1, 0)
             # Setup the p2p connections
             self.peers = []
-            if with_inbounds:
-                for node in self.nodes:
-                    for _ in range(NUM_INBOUND):
+            if any(inbound_count_per_node):
+                for node, inbound_count in zip(self.nodes, inbound_count_per_node):
+                    for _ in range(inbound_count):
                         self.peers.append(node.add_p2p_connection(TestP2PConn()))
-                self.log.info("Nodes are setup with {} incoming connections each".format(NUM_INBOUND))
+                self.log.info("Nodes are setup with incoming connection counts {}".format(inbound_count_per_node))
             test()
 
 if __name__ == '__main__':
