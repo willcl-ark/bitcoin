@@ -53,15 +53,19 @@ class AddrTest(BitcoinTestFramework):
 
     def run_test(self):
         self.log.info('Fill peer AddrMan with a lot of records')
-        for i in range(10000):
-            first_octet = i >> 8
-            second_octet = i % 256
-            a = "{}.{}.1.1".format(first_octet, second_octet)
-            self.nodes[0].addpeeraddress(a, 8333)
+        min_addrman_size = int(MAX_ADDR_TO_SEND / (MAX_PCT_ADDR_TO_SEND / 100)) + 1
+        for start in range(0, 10000, 256):
+            for i in range(start, min(start + 256, 10000)):
+                first_octet = i >> 8
+                second_octet = i % 256
+                a = "{}.{}.1.1".format(first_octet, second_octet)
+                self.nodes[0].addpeeraddress(a, 8333)
+            if len(self.nodes[0].getnodeaddresses(0)) >= min_addrman_size:
+                break
 
         # Need to make sure we hit MAX_ADDR_TO_SEND records in the addr response later because
         # only a fraction of all known addresses can be cached and returned.
-        assert len(self.nodes[0].getnodeaddresses(0)) > int(MAX_ADDR_TO_SEND / (MAX_PCT_ADDR_TO_SEND / 100))
+        assert len(self.nodes[0].getnodeaddresses(0)) >= min_addrman_size
 
         last_response_on_local_bind = None
         last_response_on_onion_bind1 = None
