@@ -181,9 +181,8 @@ class TestFrameworkAEAD(unittest.TestCase):
             plaintext = aead_chacha20_poly1305_decrypt(key, nonce, aad, ciphertext)
             self.assertEqual(plain, plaintext)
 
-    def test_fschacha20poly1305aead(self):
-        "FSChaCha20Poly1305 AEAD test vectors."
-        for test_vector in FSAEAD_TESTS:
+    def fschacha20poly1305aead_test_vectors(self, test_vectors):
+        for test_vector in test_vectors:
             hex_plain, hex_aad, hex_key, msg_idx, hex_cipher = test_vector
             plain = bytes.fromhex(hex_plain)
             aad = bytes.fromhex(hex_aad)
@@ -201,3 +200,11 @@ class TestFrameworkAEAD(unittest.TestCase):
                 dec_aead.decrypt(b"", None)
             plaintext = dec_aead.decrypt(aad, ciphertext)
             self.assertEqual(plain, plaintext)
+
+    def test_fschacha20poly1305aead(self):
+        "FSChaCha20Poly1305 AEAD test vectors."
+        self.fschacha20poly1305aead_test_vectors(FSAEAD_TESTS[:1])
+
+    def test_fschacha20poly1305aead_60000_packets(self):
+        "FSChaCha20Poly1305 AEAD 60000-packet rekey test vector."
+        self.fschacha20poly1305aead_test_vectors(FSAEAD_TESTS[1:])
