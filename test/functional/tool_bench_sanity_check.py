@@ -16,6 +16,7 @@ from test_framework.test_profile import enabled as profile_enabled
 class BenchSanityCheck(BitcoinTestFramework):
     def set_test_params(self):
         self.num_nodes = 0  # No node/datadir needed
+        self.setup_clean_chain = True
 
     def setup_network(self):
         pass
