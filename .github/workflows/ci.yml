@@ -584,6 +584,13 @@ jobs:
       - name: CI script
         run: ./ci/test_run_all.sh
 
+      - name: Make test profiles readable
+        if: always()
+        run: |
+          if [[ -d "${BASE_BUILD_DIR}/test-profiles" ]]; then
+            sudo chmod -R a+rX "${BASE_BUILD_DIR}/test-profiles"
+          fi
+
       - name: Upload functional test profiles
         uses: actions/upload-artifact@v7
         if: always()
