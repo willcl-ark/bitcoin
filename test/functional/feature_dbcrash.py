@@ -177,7 +177,22 @@ class ChainstateWriteCrashTest(BitcoinTestFramework):
 
     def generate_small_transactions(self, node, count, utxo_list):
         FEE = 1000
+        BATCH_SIZE = 500
         num_transactions = 0
+        batch = []
+        expected_txids = []
+
+        def submit_batch():
+            if not batch:
+                return
+            responses = node.batch(batch)
+            assert_equal(len(responses), len(expected_txids))
+            for response in responses:
+                assert "error" not in response, response["error"]
+            assert_equal({response["result"] for response in responses}, set(expected_txids))
+            batch.clear()
+            expected_txids.clear()
+
         random.shuffle(utxo_list)
         while len(utxo_list) >= 2 and num_transactions < count:
             utxos_to_spend = [utxo_list.pop() for _ in range(2)]
@@ -191,8 +206,14 @@ class ChainstateWriteCrashTest(BitcoinTestFramework):
                 num_outputs=3,
                 fee_per_output=FEE // 3,
             )
-            node.sendrawtransaction(hexstring=tx["hex"], maxfeerate=0)
+            batch.append(node.sendrawtransaction.get_request(hexstring=tx["hex"], maxfeerate=0))
+            expected_txids.append(tx["txid"])
             num_transactions += 1
+            if len(batch) == BATCH_SIZE:
+                with profile_section("dbcrash.loop.submit_transaction_batch"):
+                    submit_batch()
+        with profile_section("dbcrash.loop.submit_transaction_batch"):
+            submit_batch()
 
     def run_test(self):
         self.wallet = MiniWallet(self.nodes[3])
