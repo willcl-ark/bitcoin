@@ -52,6 +52,7 @@ from test_framework.script_util import (
     script_to_p2sh_script,
 )
 from test_framework.test_framework import BitcoinTestFramework
+from test_framework.test_profile import profile_section
 from test_framework.util import (
     assert_equal,
     assert_greater_than,
@@ -187,24 +188,25 @@ class FullBlockTest(BitcoinTestFramework):
             if template.valid_in_block:
                 continue
 
-            assert template.block_reject_reason or template.reject_reason
+            with profile_section(f"feature_block.invalid_template.{TxTemplate.__name__}"):
+                assert template.block_reject_reason or template.reject_reason
 
-            self.log.info(f"Reject block with invalid tx: {TxTemplate.__name__}")
-            blockname = f"for_invalid.{TxTemplate.__name__}"
-            self.next_block(blockname)
-            badtx = template.get_tx()
-            if TxTemplate != invalid_txs.InputMissing:
-                self.sign_tx(badtx, attempt_spend_tx)
-            badblock = self.update_block(blockname, [badtx])
-            reject_reason = (template.block_reject_reason or template.reject_reason)
-            if reject_reason.startswith("mempool-script-verify-flag-failed"):
-                reject_reason = "block-script-verify-flag-failed" + reject_reason[33:]
-            self.send_blocks(
-                [badblock], success=False,
-                reject_reason=reject_reason,
-                reconnect=True, timeout=2)
+                self.log.info(f"Reject block with invalid tx: {TxTemplate.__name__}")
+                blockname = f"for_invalid.{TxTemplate.__name__}"
+                self.next_block(blockname)
+                badtx = template.get_tx()
+                if TxTemplate != invalid_txs.InputMissing:
+                    self.sign_tx(badtx, attempt_spend_tx)
+                badblock = self.update_block(blockname, [badtx])
+                reject_reason = (template.block_reject_reason or template.reject_reason)
+                if reject_reason.startswith("mempool-script-verify-flag-failed"):
+                    reject_reason = "block-script-verify-flag-failed" + reject_reason[33:]
+                self.send_blocks(
+                    [badblock], success=False,
+                    reject_reason=reject_reason,
+                    reconnect=True, timeout=2)
 
-            self.move_tip(2)
+                self.move_tip(2)
 
         # Fork like this:
         #
@@ -1294,40 +1296,41 @@ class FullBlockTest(BitcoinTestFramework):
         self.move_tip(88)
         if not self.options.skip_reorg:
             self.log.info("Test a re-org of one week's worth of blocks (1088 blocks)")
-            LARGE_REORG_SIZE = 1088
-            blocks = []
-            spend = out[32]
-            for i in range(89, LARGE_REORG_SIZE + 89):
-                b = self.next_block(i, spend)
-                tx = CTransaction()
-                script_length = (MAX_BLOCK_WEIGHT - b.get_weight() - 276) // 4
-                script_output = CScript([b'\x00' * script_length])
-                tx.vout.append(CTxOut(0, script_output))
-                tx.vin.append(CTxIn(COutPoint(b.vtx[1].txid_int, 0)))
-                b = self.update_block(i, [tx])
-                assert_equal(b.get_weight(), MAX_BLOCK_WEIGHT)
-                blocks.append(b)
-                self.save_spendable_output()
-                spend = self.get_spendable_output()
+            with profile_section("feature_block.large_reorg"):
+                LARGE_REORG_SIZE = 1088
+                blocks = []
+                spend = out[32]
+                for i in range(89, LARGE_REORG_SIZE + 89):
+                    b = self.next_block(i, spend)
+                    tx = CTransaction()
+                    script_length = (MAX_BLOCK_WEIGHT - b.get_weight() - 276) // 4
+                    script_output = CScript([b'\x00' * script_length])
+                    tx.vout.append(CTxOut(0, script_output))
+                    tx.vin.append(CTxIn(COutPoint(b.vtx[1].txid_int, 0)))
+                    b = self.update_block(i, [tx])
+                    assert_equal(b.get_weight(), MAX_BLOCK_WEIGHT)
+                    blocks.append(b)
+                    self.save_spendable_output()
+                    spend = self.get_spendable_output()
 
-            self.send_blocks(blocks, True, timeout=2440)
-            chain1_tip = i
+                self.send_blocks(blocks, True, timeout=2440)
+                chain1_tip = i
 
-            # now create alt chain of same length
-            self.move_tip(88)
-            blocks2 = []
-            for i in range(89, LARGE_REORG_SIZE + 89):
-                blocks2.append(self.next_block("alt" + str(i)))
-            self.send_blocks(blocks2, False, force_send=False)
+                # now create alt chain of same length
+                self.move_tip(88)
+                blocks2 = []
+                for i in range(89, LARGE_REORG_SIZE + 89):
+                    blocks2.append(self.next_block("alt" + str(i)))
+                self.send_blocks(blocks2, False, force_send=False)
 
-            # extend alt chain to trigger re-org
-            block = self.next_block("alt" + str(chain1_tip + 1))
-            self.send_blocks([block], True, timeout=2440)
+                # extend alt chain to trigger re-org
+                block = self.next_block("alt" + str(chain1_tip + 1))
+                self.send_blocks([block], True, timeout=2440)
 
-            # ... and re-org back to the first chain
-            self.move_tip(chain1_tip)
-            block = self.next_block(chain1_tip + 1)
-            self.send_blocks([block], False, force_send=True)
+                # ... and re-org back to the first chain
+                self.move_tip(chain1_tip)
+                block = self.next_block(chain1_tip + 1)
+                self.send_blocks([block], False, force_send=True)
             block = self.next_block(chain1_tip + 2)
             self.send_blocks([block], True, timeout=2440)
 

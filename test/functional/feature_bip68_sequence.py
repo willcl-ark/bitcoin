@@ -31,6 +31,7 @@ from test_framework.script import (
     SEQUENCE_LOCKTIME_MASK,
 )
 from test_framework.test_framework import BitcoinTestFramework
+from test_framework.test_profile import profile_section
 from test_framework.util import (
     assert_equal,
     assert_greater_than,
@@ -130,10 +131,11 @@ class BIP68Test(BitcoinTestFramework):
         # Create lots of confirmed utxos, and use them to generate lots of random
         # transactions.
         max_outputs = 50
-        while len(self.wallet.get_utxos(include_immature_coinbase=False, mark_as_spent=False)) < 200:
-            num_outputs = random.randint(1, max_outputs)
-            self.wallet.send_self_transfer_multi(from_node=self.nodes[0], num_outputs=num_outputs)
-            self.generate(self.wallet, 1)
+        with profile_section("bip68.confirmed.prepare_utxos"):
+            while len(self.wallet.get_utxos(include_immature_coinbase=False, mark_as_spent=False)) < 200:
+                num_outputs = random.randint(1, max_outputs)
+                self.wallet.send_self_transfer_multi(from_node=self.nodes[0], num_outputs=num_outputs)
+                self.generate(self.wallet, 1)
 
         utxos = self.wallet.get_utxos(include_immature_coinbase=False)
 
@@ -142,72 +144,73 @@ class BIP68Test(BitcoinTestFramework):
         # some of those inputs to be sequence locked (and randomly choose
         # between height/time locking). Small random chance of making the locks
         # all pass.
-        for _ in range(400):
-            available_utxos = len(utxos)
+        with profile_section("bip68.confirmed.random_transactions"):
+            for _ in range(400):
+                available_utxos = len(utxos)
 
-            # Randomly choose up to 10 inputs
-            num_inputs = random.randint(1, min(10, available_utxos))
-            random.shuffle(utxos)
+                # Randomly choose up to 10 inputs
+                num_inputs = random.randint(1, min(10, available_utxos))
+                random.shuffle(utxos)
 
-            # Track whether any sequence locks used should fail
-            should_pass = True
+                # Track whether any sequence locks used should fail
+                should_pass = True
 
-            # Track whether this transaction was built with sequence locks
-            using_sequence_locks = False
+                # Track whether this transaction was built with sequence locks
+                using_sequence_locks = False
 
-            tx = CTransaction()
-            tx.version = 2
-            value = 0
-            for j in range(num_inputs):
-                sequence_value = 0xfffffffe # this disables sequence locks
+                tx = CTransaction()
+                tx.version = 2
+                value = 0
+                for j in range(num_inputs):
+                    sequence_value = 0xfffffffe # this disables sequence locks
 
-                # 50% chance we enable sequence locks
-                if random.randint(0,1):
-                    using_sequence_locks = True
+                    # 50% chance we enable sequence locks
+                    if random.randint(0,1):
+                        using_sequence_locks = True
 
-                    # 10% of the time, make the input sequence value pass
-                    input_will_pass = (random.randint(1,10) == 1)
-                    sequence_value = utxos[j]["confirmations"]
-                    if not input_will_pass:
-                        sequence_value += 1
-                        should_pass = False
+                        # 10% of the time, make the input sequence value pass
+                        input_will_pass = (random.randint(1,10) == 1)
+                        sequence_value = utxos[j]["confirmations"]
+                        if not input_will_pass:
+                            sequence_value += 1
+                            should_pass = False
 
-                    # Figure out what the median-time-past was for the confirmed input
-                    # Note that if an input has N confirmations, we're going back N blocks
-                    # from the tip so that we're looking up MTP of the block
-                    # PRIOR to the one the input appears in, as per the BIP68 spec.
-                    orig_time = self.get_median_time_past(utxos[j]["confirmations"])
-                    cur_time = self.get_median_time_past(0) # MTP of the tip
+                        # Figure out what the median-time-past was for the confirmed input
+                        # Note that if an input has N confirmations, we're going back N blocks
+                        # from the tip so that we're looking up MTP of the block
+                        # PRIOR to the one the input appears in, as per the BIP68 spec.
+                        orig_time = self.get_median_time_past(utxos[j]["confirmations"])
+                        cur_time = self.get_median_time_past(0) # MTP of the tip
 
-                    # can only timelock this input if it's not too old -- otherwise use height
-                    can_time_lock = True
-                    if ((cur_time - orig_time) >> SEQUENCE_LOCKTIME_GRANULARITY) >= SEQUENCE_LOCKTIME_MASK:
-                        can_time_lock = False
+                        # can only timelock this input if it's not too old -- otherwise use height
+                        can_time_lock = True
+                        if ((cur_time - orig_time) >> SEQUENCE_LOCKTIME_GRANULARITY) >= SEQUENCE_LOCKTIME_MASK:
+                            can_time_lock = False
 
-                    # if time-lockable, then 50% chance we make this a time lock
-                    if random.randint(0,1) and can_time_lock:
-                        # Find first time-lock value that fails, or latest one that succeeds
-                        time_delta = sequence_value << SEQUENCE_LOCKTIME_GRANULARITY
-                        if input_will_pass and time_delta > cur_time - orig_time:
-                            sequence_value = ((cur_time - orig_time) >> SEQUENCE_LOCKTIME_GRANULARITY)
-                        elif (not input_will_pass and time_delta <= cur_time - orig_time):
-                            sequence_value = ((cur_time - orig_time) >> SEQUENCE_LOCKTIME_GRANULARITY)+1
-                        sequence_value |= SEQUENCE_LOCKTIME_TYPE_FLAG
-                tx.vin.append(CTxIn(COutPoint(int(utxos[j]["txid"], 16), utxos[j]["vout"]), nSequence=sequence_value))
-                value += utxos[j]["value"]*COIN
-            # Overestimate the size of the tx - signatures should be less than 120 bytes, and leave 50 for the output
-            tx_size = len(tx.serialize().hex())//2 + 120*num_inputs + 50
-            tx.vout.append(CTxOut(int(value - self.relayfee * tx_size * COIN / 1000), self.wallet.get_output_script()))
-            self.wallet.sign_tx(tx=tx)
+                        # if time-lockable, then 50% chance we make this a time lock
+                        if random.randint(0,1) and can_time_lock:
+                            # Find first time-lock value that fails, or latest one that succeeds
+                            time_delta = sequence_value << SEQUENCE_LOCKTIME_GRANULARITY
+                            if input_will_pass and time_delta > cur_time - orig_time:
+                                sequence_value = ((cur_time - orig_time) >> SEQUENCE_LOCKTIME_GRANULARITY)
+                            elif (not input_will_pass and time_delta <= cur_time - orig_time):
+                                sequence_value = ((cur_time - orig_time) >> SEQUENCE_LOCKTIME_GRANULARITY)+1
+                            sequence_value |= SEQUENCE_LOCKTIME_TYPE_FLAG
+                    tx.vin.append(CTxIn(COutPoint(int(utxos[j]["txid"], 16), utxos[j]["vout"]), nSequence=sequence_value))
+                    value += utxos[j]["value"]*COIN
+                # Overestimate the size of the tx - signatures should be less than 120 bytes, and leave 50 for the output
+                tx_size = len(tx.serialize().hex())//2 + 120*num_inputs + 50
+                tx.vout.append(CTxOut(int(value - self.relayfee * tx_size * COIN / 1000), self.wallet.get_output_script()))
+                self.wallet.sign_tx(tx=tx)
 
-            if (using_sequence_locks and not should_pass):
-                # This transaction should be rejected
-                assert_raises_rpc_error(-26, NOT_FINAL_ERROR, self.wallet.sendrawtransaction, from_node=self.nodes[0], tx_hex=tx.serialize().hex())
-            else:
-                # This raw transaction should be accepted
-                self.wallet.sendrawtransaction(from_node=self.nodes[0], tx_hex=tx.serialize().hex())
-                self.wallet.rescan_utxos()
-                utxos = self.wallet.get_utxos(include_immature_coinbase=False)
+                if (using_sequence_locks and not should_pass):
+                    # This transaction should be rejected
+                    assert_raises_rpc_error(-26, NOT_FINAL_ERROR, self.wallet.sendrawtransaction, from_node=self.nodes[0], tx_hex=tx.serialize().hex())
+                else:
+                    # This raw transaction should be accepted
+                    self.wallet.sendrawtransaction(from_node=self.nodes[0], tx_hex=tx.serialize().hex())
+                    self.wallet.rescan_utxos()
+                    utxos = self.wallet.get_utxos(include_immature_coinbase=False)
 
     # Test that sequence locks on unconfirmed inputs must have nSequence
     # height or time of 0 to be accepted.

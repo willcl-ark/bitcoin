@@ -94,6 +94,7 @@ from test_framework.script_util import (
     script_to_p2wsh_script,
 )
 from test_framework.test_framework import BitcoinTestFramework
+from test_framework.test_profile import profile_section
 from test_framework.util import (
     assert_not_equal,
     assert_raises_rpc_error,
@@ -1892,16 +1893,18 @@ class TaprootTest(BitcoinTestFramework):
         # New sub-tests not checking standardness can be added to consensus_spenders
         # to allow for increased coverage across input types.
         # See sample_spenders for a minimal example
-        consensus_spenders = sample_spenders()
-        consensus_spenders += spenders_taproot_active()
-        self.test_spenders(self.nodes[0], consensus_spenders, input_counts=[1, 2, 2, 2, 2, 3])
+        with profile_section("feature_taproot.consensus_spenders"):
+            consensus_spenders = sample_spenders()
+            consensus_spenders += spenders_taproot_active()
+            self.test_spenders(self.nodes[0], consensus_spenders, input_counts=[1, 2, 2, 2, 2, 3])
 
         # Run each test twice; once in isolation, and once combined with others. Testing in isolation
         # means that the standardness is verified in every test (as combined transactions are only standard
         # when all their inputs are standard).
-        nonstd_spenders = spenders_taproot_nonstandard()
-        self.test_spenders(self.nodes[0], nonstd_spenders, input_counts=[1])
-        self.test_spenders(self.nodes[0], nonstd_spenders, input_counts=[2, 3])
+        with profile_section("feature_taproot.nonstandard_spenders"):
+            nonstd_spenders = spenders_taproot_nonstandard()
+            self.test_spenders(self.nodes[0], nonstd_spenders, input_counts=[1])
+            self.test_spenders(self.nodes[0], nonstd_spenders, input_counts=[2, 3])
 
 
 if __name__ == '__main__':

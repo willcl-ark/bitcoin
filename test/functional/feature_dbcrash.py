@@ -33,6 +33,7 @@ from test_framework.messages import (
     COIN,
 )
 from test_framework.test_framework import BitcoinTestFramework
+from test_framework.test_profile import profile_section
 from test_framework.util import (
     assert_not_equal,
     assert_equal,
@@ -196,7 +197,8 @@ class ChainstateWriteCrashTest(BitcoinTestFramework):
     def run_test(self):
         self.wallet = MiniWallet(self.nodes[3])
         initial_height = self.nodes[3].getblockcount()
-        self.generate(self.nodes[3], COINBASE_MATURITY, sync_fun=self.no_op)
+        with profile_section("dbcrash.initial_maturity"):
+            self.generate(self.nodes[3], COINBASE_MATURITY, sync_fun=self.no_op)
 
         # Track test coverage statistics
         self.restart_counts = [0, 0, 0]  # Track the restarts for nodes 0-2
@@ -204,9 +206,10 @@ class ChainstateWriteCrashTest(BitcoinTestFramework):
 
         # Start by creating a lot of utxos on node3
         utxo_list = []
-        for _ in range(5):
-            utxo_list.extend(self.wallet.send_self_transfer_multi(from_node=self.nodes[3], num_outputs=1000)['new_utxos'])
-        self.generate(self.nodes[3], 1, sync_fun=self.no_op)
+        with profile_section("dbcrash.prepare_utxos"):
+            for _ in range(5):
+                utxo_list.extend(self.wallet.send_self_transfer_multi(from_node=self.nodes[3], num_outputs=1000)['new_utxos'])
+            self.generate(self.nodes[3], 1, sync_fun=self.no_op)
         assert_equal(len(self.nodes[3].getrawmempool()), 0)
         self.log.info(f"Prepped {len(utxo_list)} utxo entries")
 
@@ -217,7 +220,8 @@ class ChainstateWriteCrashTest(BitcoinTestFramework):
 
         self.log.debug(f"Syncing {len(block_hashes_to_sync)} blocks with other nodes")
         # Syncing the blocks could cause nodes to crash, so the test begins here.
-        self.sync_node3blocks(block_hashes_to_sync)
+        with profile_section("dbcrash.sync_initial_blocks"):
+            self.sync_node3blocks(block_hashes_to_sync)
 
         starting_tip_height = self.nodes[3].getblockcount()
 
@@ -227,7 +231,8 @@ class ChainstateWriteCrashTest(BitcoinTestFramework):
         for i in range(40):
             self.log.info(f"Iteration {i}, generating 2500 transactions {self.restart_counts}")
             # Generate a bunch of small-ish transactions
-            self.generate_small_transactions(self.nodes[3], 2500, utxo_list)
+            with profile_section("dbcrash.loop.generate_transactions"):
+                self.generate_small_transactions(self.nodes[3], 2500, utxo_list)
             # Pick a random block between current tip, and starting tip
             current_height = self.nodes[3].getblockcount()
             random_height = random.randint(starting_tip_height, current_height)
@@ -242,24 +247,28 @@ class ChainstateWriteCrashTest(BitcoinTestFramework):
             # Now generate new blocks until we pass the old tip height
             self.log.debug("Mining longer tip")
             block_hashes = []
-            while current_height + 1 > self.nodes[3].getblockcount():
-                block_hashes.extend(self.generatetoaddress(
-                    self.nodes[3],
-                    nblocks=min(10, current_height + 1 - self.nodes[3].getblockcount()),
-                    # new address to avoid mining a block that has just been invalidated
-                    address=getnewdestination()[2],
-                    sync_fun=self.no_op,
-                ))
+            with profile_section("dbcrash.loop.mine_blocks"):
+                while current_height + 1 > self.nodes[3].getblockcount():
+                    block_hashes.extend(self.generatetoaddress(
+                        self.nodes[3],
+                        nblocks=min(10, current_height + 1 - self.nodes[3].getblockcount()),
+                        # new address to avoid mining a block that has just been invalidated
+                        address=getnewdestination()[2],
+                        sync_fun=self.no_op,
+                    ))
             self.log.debug(f"Syncing {len(block_hashes)} new blocks...")
-            self.sync_node3blocks(block_hashes)
-            self.wallet.rescan_utxos()
-            utxo_list = self.wallet.get_utxos()
+            with profile_section("dbcrash.loop.sync_blocks"):
+                self.sync_node3blocks(block_hashes)
+            with profile_section("dbcrash.loop.wallet_rescan"):
+                self.wallet.rescan_utxos()
+                utxo_list = self.wallet.get_utxos()
             self.log.debug(f"MiniWallet utxo count: {len(utxo_list)}")
 
         # Check that the utxo hashes agree with node3
         # Useful side effect: each utxo cache gets flushed here, so that we
         # won't get crashes on shutdown at the end of the test.
-        self.verify_utxo_hash()
+        with profile_section("dbcrash.verify_utxo_hash"):
+            self.verify_utxo_hash()
 
         # Check the test coverage
         self.log.info(f"Restarted nodes: {self.restart_counts}; crashes on restart: {self.crashed_on_restart}")

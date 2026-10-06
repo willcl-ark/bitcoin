@@ -21,6 +21,7 @@ from test_framework.script import (
     OP_TRUE,
 )
 from test_framework.test_framework import BitcoinTestFramework
+from test_framework.test_profile import profile_section
 from test_framework.util import (
     assert_not_equal,
     assert_equal,
@@ -705,9 +706,10 @@ class EstimateFeeTest(BitcoinTestFramework):
         self.log.info("Splitting inputs so we can generate tx's")
 
         # Split two coinbases into many small utxos
-        self.start_node(0)
-        self.wallet = MiniWallet(self.nodes[0])
-        self.initial_split(self.nodes[0])
+        with profile_section("feature_fee_estimation.initial_split"):
+            self.start_node(0)
+            self.wallet = MiniWallet(self.nodes[0])
+            self.initial_split(self.nodes[0])
         self.log.info("Finished splitting")
 
         # Now we can connect the other nodes, didn't want to connect them earlier
@@ -720,7 +722,8 @@ class EstimateFeeTest(BitcoinTestFramework):
         self.sync_all()
 
         self.log.info("Testing estimates with single transactions.")
-        self.sanity_check_estimates_range()
+        with profile_section("feature_fee_estimation.single_tx_estimates"):
+            self.sanity_check_estimates_range()
 
         self.log.info("Test fees/block_policy_estimates.dat is flushed periodically")
         self.test_estimate_dat_is_flushed_periodically()
@@ -743,7 +746,8 @@ class EstimateFeeTest(BitcoinTestFramework):
         self.clear_estimates()
 
         self.log.info("Testing estimates with RBF.")
-        self.sanity_check_rbf_estimates()
+        with profile_section("feature_fee_estimation.rbf_estimates"):
+            self.sanity_check_rbf_estimates()
 
         self.clear_estimates()
         self.log.info("Test estimatesmartfee modes")

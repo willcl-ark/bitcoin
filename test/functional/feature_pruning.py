@@ -20,6 +20,7 @@ from test_framework.script import (
     OP_RETURN,
 )
 from test_framework.test_framework import BitcoinTestFramework
+from test_framework.test_profile import profile_section
 from test_framework.util import (
     assert_equal,
     assert_greater_than,
@@ -364,7 +365,8 @@ class PruneTest(BitcoinTestFramework):
         self.log.info("Warning! This test requires 4GB of disk space")
 
         self.log.info("Mining a big blockchain of 995 blocks")
-        self.create_big_chain()
+        with profile_section("feature_pruning.create_big_chain"):
+            self.create_big_chain()
         # Chain diagram key:
         # *   blocks on main chain
         # +,&,$,@ blocks on other forks
@@ -384,7 +386,8 @@ class PruneTest(BitcoinTestFramework):
         # N0=N1=N2 **...*(1020)
 
         self.log.info("Check that we'll exceed disk space target if we have a very high stale block rate")
-        self.create_chain_with_staleblocks()
+        with profile_section("feature_pruning.stale_blocks"):
+            self.create_chain_with_staleblocks()
         # Disconnect N0
         # And mine a 24 block chain on N1 and a separate 25 block chain on N0
         # N1=N2 **...*+...+(1044)
@@ -408,7 +411,8 @@ class PruneTest(BitcoinTestFramework):
         self.mainchainhash2 = self.nodes[2].getblockhash(self.mainchainheight)
 
         self.log.info("Check that we can survive a 288 block reorg still")
-        self.reorg_test()  # (1033, )
+        with profile_section("feature_pruning.reorg_test"):
+            self.reorg_test()  # (1033, )
         # Now create a 288 block reorg by mining a longer chain on N1
         # First disconnect N1
         # Then invalidate 1033 on main chain and 1032 on fork so height is 1032 on main chain
@@ -441,7 +445,8 @@ class PruneTest(BitcoinTestFramework):
         #                                  *...**(1320)
 
         self.log.info("Test that we can rerequest a block we previously pruned if needed for a reorg")
-        self.reorg_back()
+        with profile_section("feature_pruning.reorg_back"):
+            self.reorg_back()
         # Verify that N2 still has block 1033 on current chain (@), but not on main chain (*)
         # Invalidate 1033 on current chain (@) on N2 and we should be able to reorg to
         # original main chain (*), but will require redownload of some blocks

@@ -11,6 +11,7 @@
 """
 
 from test_framework.test_framework import BitcoinTestFramework
+from test_framework.test_profile import profile_section
 from test_framework.messages import MAGIC_BYTES
 from test_framework.util import (
     assert_equal,
@@ -81,15 +82,17 @@ class ReindexTest(BitcoinTestFramework):
 
     def continue_reindex_after_shutdown(self):
         node = self.nodes[0]
-        self.generate(node, 1500)
+        with profile_section("reindex.continue_after_shutdown.generate_chain"):
+            self.generate(node, 1500)
 
         # Restart node with reindex and stop reindex as soon as it starts reindexing
         self.log.info("Restarting node while reindexing..")
-        node.stop_node()
-        with node.busy_wait_for_debug_log([b'initload thread start']):
-            node.start(['-blockfilterindex', '-reindex'])
-            node.wait_for_rpc_connection(wait_for_import=False)
-        node.stop_node()
+        with profile_section("reindex.continue_after_shutdown.interrupt_reindex"):
+            node.stop_node()
+            with node.busy_wait_for_debug_log([b'initload thread start']):
+                node.start(['-blockfilterindex', '-reindex'])
+                node.wait_for_rpc_connection(wait_for_import=False)
+            node.stop_node()
 
         # Start node without the reindex flag and verify it does not wipe the indexes data again
         db_path = node.chain_path / 'indexes' / 'blockfilter' / 'basic' / 'db'
@@ -99,13 +102,16 @@ class ReindexTest(BitcoinTestFramework):
         node.stop_node()
 
     def run_test(self):
-        self.reindex(False)
-        self.reindex(True)
-        self.reindex(False)
-        self.reindex(True)
+        with profile_section("reindex.short_cycles"):
+            self.reindex(False)
+            self.reindex(True)
+            self.reindex(False)
+            self.reindex(True)
 
-        self.out_of_order()
-        self.continue_reindex_after_shutdown()
+        with profile_section("reindex.out_of_order"):
+            self.out_of_order()
+        with profile_section("reindex.continue_after_shutdown"):
+            self.continue_reindex_after_shutdown()
 
 
 if __name__ == '__main__':
