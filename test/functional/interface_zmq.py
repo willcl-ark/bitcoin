@@ -119,6 +119,7 @@ class ZMQTest (BitcoinTestFramework):
         self.wallet = MiniWallet(self.nodes[0])
         self.ctx = zmq.Context()
         try:
+            self.check_invalid_zmq_arguments()
             self.test_basic()
             if test_unix_socket():
                 self.test_basic(unix=True)
@@ -133,6 +134,10 @@ class ZMQTest (BitcoinTestFramework):
             # Destroy the ZMQ context.
             self.log.debug("Destroying ZMQ context")
             self.ctx.destroy(linger=None)
+
+    def check_invalid_zmq_arguments(self):
+        # Invalid zmq arguments don't take down the node, see #17185.
+        self.restart_node(0, ["-zmqpubrawtx=foo", "-zmqpubhashtx=bar"])
 
     # Restart node with the specified zmq notifications enabled, subscribe to
     # all of them and return the corresponding ZMQSubscriber objects.
@@ -183,9 +188,6 @@ class ZMQTest (BitcoinTestFramework):
 
     def test_basic(self, unix = False):
         self.log.info(f"Running basic test with {'ipc' if unix else 'tcp'} protocol")
-
-        # Invalid zmq arguments don't take down the node, see #17185.
-        self.restart_node(0, ["-zmqpubrawtx=foo", "-zmqpubhashtx=bar"])
 
         address = f"tcp://127.0.0.1:{self.zmq_port_base}"
 
