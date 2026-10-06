@@ -125,6 +125,9 @@ class TestFrameworkKey(unittest.TestCase):
             (b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
                 "b0e20b6e3116640286ed3a87a5713079b21f5189"),
             (b"1234567890" * 8, "9b752e45573d4b39f4dbd3323cab82bf63326bfb"),
-            (b"a" * 1000000, "52783243c1697bdbe16d37f97f68f08325dc1528")
         ]:
             self.assertEqual(ripemd160(msg).hex(), hexout)
+
+    def test_ripemd160_million_bytes(self):
+        """RIPEMD-160 million-byte test vector."""
+        self.assertEqual(ripemd160(b"a" * 1000000).hex(), "52783243c1697bdbe16d37f97f68f08325dc1528")
