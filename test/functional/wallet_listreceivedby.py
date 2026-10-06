@@ -127,8 +127,8 @@ class ReceivedByTest(BitcoinTestFramework):
         balance = self.nodes[1].getreceivedbyaddress(addr, 0)
         assert_equal(balance, Decimal("0.1"))
 
-        # Bury Tx under 10 block so it will be returned by the default getreceivedbyaddress
-        self.generate(self.nodes[1], 10)
+        # Bury Tx so it will be returned by the default getreceivedbyaddress
+        self.generate(self.nodes[1], 1)
         balance = self.nodes[1].getreceivedbyaddress(addr)
         assert_equal(balance, Decimal("0.1"))
 
@@ -170,7 +170,7 @@ class ReceivedByTest(BitcoinTestFramework):
         balance = self.nodes[1].getreceivedbylabel(label)
         assert_equal(balance, balance_by_label)
 
-        self.generate(self.nodes[1], 10)
+        self.generate(self.nodes[1], 1)
         # listreceivedbylabel should return updated received list
         assert_array_result(self.nodes[1].listreceivedbylabel(),
                             {"label": label},
