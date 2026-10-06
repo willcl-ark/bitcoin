@@ -18,6 +18,7 @@ from concurrent import futures
 import configparser
 import csv
 import datetime
+import json
 import os
 import pathlib
 import platform
@@ -41,6 +42,73 @@ MIN_FREE_SPACE = 1.1 * 1024 * 1024 * 1024
 ADDITIONAL_SPACE_PER_JOB = 100 * 1024 * 1024
 # Minimum amount of space required for --nocleanup
 MIN_NO_CLEANUP_SPACE = 12 * 1024 * 1024 * 1024
+
+PROFILE_ENV = "BITCOIN_TEST_PROFILE"
+PROFILE_DIR_ENV = "BITCOIN_TEST_PROFILE_DIR"
+PROFILE_FILE_ENV = "BITCOIN_TEST_PROFILE_FILE"
+
+
+def profile_enabled():
+    return os.getenv(PROFILE_ENV, "") == "1"
+
+
+def sanitize_profile_name(name):
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", name).strip("_")
+
+
+def print_profile_summary(profile_dir, test_results, runtime):
+    profile_files = sorted(pathlib.Path(profile_dir).rglob("*.json"))
+    if not profile_files:
+        return
+
+    timings = {}
+    profiles = []
+    for profile_file in profile_files:
+        if profile_file.name == "summary.json":
+            continue
+        try:
+            data = json.loads(profile_file.read_text(encoding="utf8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        profiles.append(data)
+        for timing in data.get("timings", []):
+            entry = timings.setdefault(timing["name"], {"calls": 0, "seconds": 0.0})
+            entry["calls"] += timing["calls"]
+            entry["seconds"] += timing["seconds"]
+            if "nanobench_seconds" in timing:
+                function_seconds = timing["seconds"]
+                nanobench_seconds = timing["nanobench_seconds"]
+                for name, seconds in [
+                    (f"{timing['name']}.nanobench", nanobench_seconds),
+                    (f"{timing['name']}.outside_nanobench", max(0.0, function_seconds - nanobench_seconds)),
+                ]:
+                    bench_entry = timings.setdefault(name, {"calls": 0, "seconds": 0.0})
+                    bench_entry["calls"] += timing["calls"]
+                    bench_entry["seconds"] += seconds
+    summary_path = pathlib.Path(profile_dir) / "summary.json"
+    summary = {
+        "version": 1,
+        "runtime_seconds": runtime,
+        "tests": [
+            {"name": result.name, "status": result.status, "seconds": result.time}
+            for result in sorted(test_results, key=lambda result: result.name)
+        ],
+        "profiles": profiles,
+        "timings": [
+            {"name": name, **timing}
+            for name, timing in sorted(timings.items(), key=lambda item: item[1]["seconds"], reverse=True)
+        ],
+    }
+    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf8")
+
+    if not timings:
+        return
+
+    print(f"\nProfile data: {summary_path}")
+    print("Profile summary (top timings by accumulated wall time):")
+    for name, timing in sorted(timings.items(), key=lambda item: item[1]["seconds"], reverse=True)[:20]:
+        print(f"{timing['seconds']:8.2f}s {timing['calls']:5d} {name}")
+    print("")
 
 # Formatting. Default colors to empty strings.
 DEFAULT, BOLD, GREEN, RED = ("", ""), ("", ""), ("", ""), ("", "")
@@ -443,8 +511,12 @@ def main():
     parser.add_argument("--nocleanup", dest="nocleanup", default=False, action="store_true",
                         help="Leave bitcoinds and test.* datadir on exit or error")
     parser.add_argument('--resultsfile', '-r', help='store test results (as CSV) to the provided file')
+    parser.add_argument('--profiledir', help='write profile JSON into this directory')
 
     args, unknown_args = parser.parse_known_args()
+    if args.profiledir:
+        os.environ[PROFILE_ENV] = "1"
+        os.environ[PROFILE_DIR_ENV] = str(pathlib.Path(args.profiledir))
     # Fail on self-check warnings before running the tests.
     fail_on_warn = True
     if not args.ansi:
@@ -628,6 +700,14 @@ def run_tests(*, test_list, build_dir, tmpdir, jobs=1, enable_coverage=False, ar
 
     cache_tmp_dir = tempfile.TemporaryDirectory(prefix="functional_test_cache")
     flags = [f"--cachedir={cache_tmp_dir.name}"] + args
+    cache_env = None
+    if profile_enabled():
+        profile_base_dir = pathlib.Path(os.environ.get(PROFILE_DIR_ENV, pathlib.Path(build_dir) / "test-profiles"))
+        profile_run_dir = profile_base_dir / f"run-{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}-{os.getpid()}"
+        os.environ[PROFILE_DIR_ENV] = str(profile_run_dir)
+        profile_run_dir.mkdir(parents=True, exist_ok=True)
+        cache_env = os.environ.copy()
+        cache_env[PROFILE_FILE_ENV] = str(profile_run_dir / "create_cache.json")
 
     if enable_coverage:
         coverage = RPCCoverage()
@@ -639,7 +719,7 @@ def run_tests(*, test_list, build_dir, tmpdir, jobs=1, enable_coverage=False, ar
     if len(test_list) > 1 and jobs > 1:
         # Populate cache
         try:
-            subprocess.check_output([sys.executable, tests_dir + 'create_cache.py'] + flags + ["--tmpdir=%s/cache" % tmpdir])
+            subprocess.check_output([sys.executable, tests_dir + 'create_cache.py'] + flags + ["--tmpdir=%s/cache" % tmpdir], env=cache_env)
         except subprocess.CalledProcessError as e:
             sys.stdout.buffer.write(e.output)
             raise
@@ -699,6 +779,8 @@ def run_tests(*, test_list, build_dir, tmpdir, jobs=1, enable_coverage=False, ar
     print_results(test_results, max_len_name, runtime)
     if results_filepath:
         write_results(test_results, results_filepath, runtime)
+    if profile_enabled():
+        print_profile_summary(os.environ[PROFILE_DIR_ENV], test_results, runtime)
 
     if coverage:
         coverage_passed = coverage.report_rpc_coverage()
@@ -767,6 +849,7 @@ class TestHandler:
         self.flags = flags
         self.jobs = {}
         self.use_term_control = use_term_control
+        self.profile_dir = pathlib.Path(os.environ[PROFILE_DIR_ENV]) if profile_enabled() else None
 
     def done(self):
         return not (self.jobs or self.test_list)
@@ -782,6 +865,11 @@ class TestHandler:
             test_argv = test.split()
             testdir = "{}/{}_{}".format(self.tmpdir, re.sub(".py$", "", test_argv[0]), portseed)
             tmpdir_arg = ["--tmpdir={}".format(testdir)]
+            env = None
+            if self.profile_dir is not None:
+                env = os.environ.copy()
+                profile_name = sanitize_profile_name(test)
+                env[PROFILE_FILE_ENV] = str(self.profile_dir / f"{profile_name}_{portseed}.json")
 
             def proc_wait(task):
                 task[2].wait()
@@ -795,6 +883,7 @@ class TestHandler:
                     text=True,
                     stdout=log_stdout,
                     stderr=log_stderr,
+                    env=env,
                 ),
                 testdir,
                 log_stdout,
