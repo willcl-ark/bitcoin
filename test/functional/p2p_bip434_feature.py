@@ -113,12 +113,13 @@ class P2PBIP434FeatureTest(BitcoinTestFramework):
         peer.wait_for_verack()
         return peer
 
-    def _expect_accept(self, payload, *, log_substring="unknown feature advertised",
+    def _expect_accept(self, payloads, *, log_substring="unknown feature advertised",
                       nversion=FEATURE_VERSION):
         peer = self._silent_peer(nversion=nversion)
-        with self.nodes[0].assert_debug_log([log_substring], timeout=2):
-            peer.send_without_ping(RawFeature(payload))
-        assert peer.is_connected, "peer disconnected after a well-formed FEATURE"
+        for payload in payloads:
+            with self.nodes[0].assert_debug_log([log_substring], timeout=2):
+                peer.send_without_ping(RawFeature(payload))
+            assert peer.is_connected, "peer disconnected after a well-formed FEATURE"
         self.nodes[0].disconnect_p2ps()
 
     def _expect_disconnect(self, payload, *, log_substring="invalid feature payload",
@@ -174,6 +175,7 @@ class P2PBIP434FeatureTest(BitcoinTestFramework):
 
     def test_feature_id_length_boundaries(self):
         self.log.info("Test feature_id length boundaries")
+        accepted_payloads = []
         for length, accept in [(0, False),
                                (3, False),
                                (MIN_FEATUREID_LENGTH, True),
@@ -181,20 +183,23 @@ class P2PBIP434FeatureTest(BitcoinTestFramework):
                                (MAX_FEATUREID_LENGTH + 1, False)]:
             payload = feature_wire(b"a" * length, b"")
             if accept:
-                self._expect_accept(payload)
+                accepted_payloads.append(payload)
             else:
                 self._expect_disconnect(payload)
+        self._expect_accept(accepted_payloads)
 
     def test_feature_data_length_boundaries(self):
         self.log.info("Test feature_data length boundaries")
+        accepted_payloads = []
         for length, accept in [(0, True),
                                (MAX_FEATUREDATA_LENGTH, True),
                                (MAX_FEATUREDATA_LENGTH + 1, False)]:
             payload = feature_wire(b"abcd", b"\x00" * length)
             if accept:
-                self._expect_accept(payload)
+                accepted_payloads.append(payload)
             else:
                 self._expect_disconnect(payload)
+        self._expect_accept(accepted_payloads)
 
     def test_trailing_bytes_disconnect(self):
         self.log.info("Test that trailing bytes after data triggers disconnect")
@@ -216,7 +221,7 @@ class P2PBIP434FeatureTest(BitcoinTestFramework):
     def test_non_ascii_feature_id_accepted(self):
         self.log.info("Test that feature_id with non-ASCII bytes is still accepted")
         # BIP says SHOULD, not MUST, on this
-        self._expect_accept(feature_wire(b"\x00\xff\x01\x7f", b""))
+        self._expect_accept([feature_wire(b"\x00\xff\x01\x7f", b"")])
 
     def test_many_features_in_handshake(self):
         self.log.info("Test multiple FEATURE advertisements")
