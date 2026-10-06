@@ -651,8 +651,8 @@ class HTTPBasicsTest (BitcoinTestFramework):
         # until the end of the test.
         for comment,                  extra_args,                                      limit in [
             ("default (16)",          ["-rpcservertimeout=0", "-rest"],                16),
-            ("-rpcmaxconnections=64", ["-rpcservertimeout=0", "-rest",
-                                       "-rpcmaxconnections=64", "-maxconnections=16"], 64)
+            ("-rpcmaxconnections=17", ["-rpcservertimeout=0", "-rest",
+                                       "-rpcmaxconnections=17", "-maxconnections=16"], 17)
         ]:
             self.log.info(f"Using connection limit: {comment}")
             self.restart_node(0, extra_args=extra_args)
