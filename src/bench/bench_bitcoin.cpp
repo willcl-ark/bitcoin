@@ -128,6 +128,11 @@ int main(int argc, char** argv)
         args.min_time = std::chrono::milliseconds(argsman.GetIntArg("-min-time", DEFAULT_MIN_TIME_MS));
         args.output_csv = argsman.GetPathArg("-output-csv");
         args.output_json = argsman.GetPathArg("-output-json");
+        const char* profile_enabled = std::getenv("BITCOIN_TEST_PROFILE");
+        const char* profile_file = std::getenv("BITCOIN_BENCH_PROFILE_FILE");
+        if (profile_enabled && std::string{profile_enabled} == "1" && profile_file && profile_file[0] != '\0') {
+            args.profile_output = fs::u8path(profile_file);
+        }
         args.regex_filter = argsman.GetArg("-filter", DEFAULT_BENCH_FILTER);
         args.sanity_check = argsman.GetBoolArg("-sanity-check", false);
         args.setup_args = parseTestSetupArgs(argsman);

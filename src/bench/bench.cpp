@@ -8,8 +8,10 @@
 #include <util/check.h>
 #include <util/fs.h>
 #include <util/time.h>
+#include <univalue.h>
 
 #include <compare>
+#include <chrono>
 #include <fstream>
 #include <functional>
 #include <iostream>
@@ -41,6 +43,41 @@ const std::function<std::string()> G_TEST_GET_FULL_NAME = []() {
 };
 
 namespace {
+
+struct ProfileResult {
+    std::string name;
+    double function_seconds;
+    double nanobench_seconds;
+    double nanobench_iterations;
+    size_t nanobench_epochs;
+};
+
+void WriteProfileResults(const std::vector<ProfileResult>& profile_results, const fs::path& profile_path)
+{
+    if (profile_results.empty() || profile_path.empty()) return;
+    if (!profile_path.parent_path().empty()) {
+        fs::create_directories(profile_path.parent_path());
+    }
+    UniValue timings{UniValue::VARR};
+    for (const auto& result : profile_results) {
+        UniValue timing{UniValue::VOBJ};
+        timing.pushKV("name", "bench." + result.name);
+        timing.pushKV("calls", 1);
+        timing.pushKV("seconds", result.function_seconds);
+        timing.pushKV("nanobench_seconds", result.nanobench_seconds);
+        timing.pushKV("nanobench_iterations", result.nanobench_iterations);
+        timing.pushKV("nanobench_epochs", result.nanobench_epochs);
+        timings.push_back(std::move(timing));
+    }
+    UniValue metadata{UniValue::VOBJ};
+    metadata.pushKV("profile_type", "bench");
+    UniValue profile{UniValue::VOBJ};
+    profile.pushKV("version", 1);
+    profile.pushKV("metadata", std::move(metadata));
+    profile.pushKV("timings", std::move(timings));
+    std::ofstream out{profile_path.std_path()};
+    out << profile.write(2) << '\n';
+}
 
 void GenerateTemplateResults(const std::vector<ankerl::nanobench::Result>& benchmarkResults, const fs::path& file, const char* tpl)
 {
@@ -90,6 +127,7 @@ void BenchRunner::RunAll(const Args& args)
     };
 
     std::vector<ankerl::nanobench::Result> benchmarkResults;
+    std::vector<ProfileResult> profile_results;
     for (const auto& [name, func] : benchmarks()) {
 
         if (!std::regex_match(name, baseMatch, reFilter)) {
@@ -114,6 +152,8 @@ void BenchRunner::RunAll(const Args& args)
             bench.minEpochTime(min_time_ns / bench.epochs());
         }
 
+        const auto result_start{bench.results().size()};
+        const auto start{args.profile_output.empty() ? SteadyClock::time_point{} : SteadyClock::now()};
         if (args.asymptote.empty()) {
             func(bench);
         } else {
@@ -127,12 +167,32 @@ void BenchRunner::RunAll(const Args& args)
         if (!bench.results().empty()) {
             benchmarkResults.push_back(bench.results().back());
         }
+        if (!args.profile_output.empty() && bench.results().size() > result_start) {
+            const auto function_seconds{std::chrono::duration<double>(SteadyClock::now() - start).count()};
+            double nanobench_seconds{0.0};
+            double nanobench_iterations{0.0};
+            size_t nanobench_epochs{0};
+            for (size_t i{result_start}; i < bench.results().size(); ++i) {
+                const auto& result{bench.results()[i]};
+                nanobench_seconds += result.sumProduct(ankerl::nanobench::Result::Measure::iterations, ankerl::nanobench::Result::Measure::elapsed);
+                nanobench_iterations += result.sum(ankerl::nanobench::Result::Measure::iterations);
+                nanobench_epochs += result.size();
+            }
+            profile_results.push_back({
+                .name = name,
+                .function_seconds = function_seconds,
+                .nanobench_seconds = nanobench_seconds,
+                .nanobench_iterations = nanobench_iterations,
+                .nanobench_epochs = nanobench_epochs,
+            });
+        }
     }
 
     GenerateTemplateResults(benchmarkResults, args.output_csv, "# Benchmark, evals, iterations, total, min, max, median\n"
                                                                "{{#result}}{{name}}, {{epochs}}, {{average(iterations)}}, {{sumProduct(iterations, elapsed)}}, {{minimum(elapsed)}}, {{maximum(elapsed)}}, {{median(elapsed)}}\n"
                                                                "{{/result}}");
     GenerateTemplateResults(benchmarkResults, args.output_json, ankerl::nanobench::templates::json());
+    WriteProfileResults(profile_results, args.profile_output);
 }
 
 } // namespace benchmark

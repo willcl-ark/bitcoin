@@ -48,6 +48,7 @@ struct Args {
     std::vector<double> asymptote;
     fs::path output_csv;
     fs::path output_json;
+    fs::path profile_output;
     std::string regex_filter;
     std::vector<std::string> setup_args;
 };

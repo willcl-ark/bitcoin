@@ -6,8 +6,11 @@
 """
 import shlex
 import subprocess
+import os
+from pathlib import Path
 
 from test_framework.test_framework import BitcoinTestFramework
+from test_framework.test_profile import enabled as profile_enabled
 
 
 class BenchSanityCheck(BitcoinTestFramework):
@@ -32,8 +35,15 @@ class BenchSanityCheck(BitcoinTestFramework):
             f"-filter={self.options.bench}",
             "-sanity-check",
         ]
+        env = None
+        if profile_enabled():
+            profile_path = Path(os.getenv("BITCOIN_TEST_PROFILE_FILE") or
+                                Path.cwd() / "test-profiles" / f"{Path(__file__).name}.json").with_suffix(".bench.json")
+            profile_path.parent.mkdir(parents=True, exist_ok=True)
+            env = os.environ.copy()
+            env["BITCOIN_BENCH_PROFILE_FILE"] = str(profile_path)
         self.log.info(f"Starting: {shlex.join(cmd)}")
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, env=env)
         self.log.info("Success!")
 
 
