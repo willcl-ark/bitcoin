@@ -13,6 +13,7 @@ import time
 
 from test_framework.blocktools import create_empty_fork
 from test_framework.test_framework import BitcoinTestFramework
+from test_framework.test_profile import profile_section
 from test_framework.util import assert_equal, assert_greater_than_or_equal, assert_raises_rpc_error
 from test_framework.wallet import MiniWallet
 from test_framework.mempool_util import DEFAULT_CLUSTER_LIMIT
@@ -204,11 +205,14 @@ class MempoolUpdateFromBlockTest(BitcoinTestFramework):
 
     def run_test(self):
         # Mine in batches of 25 to test multi-block reorg under chain limits
-        self.transaction_graph_test(size=DEFAULT_CLUSTER_LIMIT, n_tx_to_mine=[25, 50, 75])
+        with profile_section("mempool_updatefromblock.transaction_graph"):
+            self.transaction_graph_test(size=DEFAULT_CLUSTER_LIMIT, n_tx_to_mine=[25, 50, 75])
 
-        self.test_max_disconnect_pool_bytes()
+        with profile_section("mempool_updatefromblock.max_disconnect_pool_bytes"):
+            self.test_max_disconnect_pool_bytes()
 
-        self.test_chainlimits_exceeded()
+        with profile_section("mempool_updatefromblock.chainlimits_exceeded"):
+            self.test_chainlimits_exceeded()
 
 if __name__ == '__main__':
     MempoolUpdateFromBlockTest(__file__).main()

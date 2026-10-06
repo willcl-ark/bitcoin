@@ -25,6 +25,7 @@ from test_framework.script_util import (
     script_to_p2wsh_script,
 )
 from test_framework.test_framework import BitcoinTestFramework
+from test_framework.test_profile import profile_section
 from test_framework.test_node import TestNode
 from test_framework.util import (
     assert_equal,
@@ -125,18 +126,20 @@ class DustRelayFeeTest(BitcoinTestFramework):
         )
 
         # test default (no parameter), disabled (=0) and a bunch of arbitrary dust fee rates [sat/kvB]
-        for dustfee_sat_kvb in (DUST_RELAY_TX_FEE, 0, 1, 66, 500, 1337, 12345, 21212, 333333):
-            dustfee_btc_kvb = dustfee_sat_kvb / Decimal(COIN)
-            if dustfee_sat_kvb == DUST_RELAY_TX_FEE:
-                self.log.info(f"Test default dust limit setting ({dustfee_sat_kvb} sat/kvB)...")
-            else:
-                dust_parameter = f"-dustrelayfee={dustfee_btc_kvb:.8f}"
-                self.log.info(f"Test dust limit setting {dust_parameter} ({dustfee_sat_kvb} sat/kvB)...")
-                self.restart_node(0, extra_args=[dust_parameter, "-permitbaremultisig"])
+        with profile_section("dust.relay_fee_sweep"):
+            for dustfee_sat_kvb in (DUST_RELAY_TX_FEE, 0, 1, 66, 500, 1337, 12345, 21212, 333333):
+                dustfee_btc_kvb = dustfee_sat_kvb / Decimal(COIN)
+                if dustfee_sat_kvb == DUST_RELAY_TX_FEE:
+                    self.log.info(f"Test default dust limit setting ({dustfee_sat_kvb} sat/kvB)...")
+                else:
+                    dust_parameter = f"-dustrelayfee={dustfee_btc_kvb:.8f}"
+                    self.log.info(f"Test dust limit setting {dust_parameter} ({dustfee_sat_kvb} sat/kvB)...")
+                    self.restart_node(0, extra_args=[dust_parameter, "-permitbaremultisig"])
 
-            for output_script, description in output_scripts:
-                self.test_dust_output(self.nodes[0], dustfee_btc_kvb, output_script, description)
-            self.generate(self.nodes[0], 1)
+                with profile_section("dust.output_script_matrix"):
+                    for output_script, description in output_scripts:
+                        self.test_dust_output(self.nodes[0], dustfee_btc_kvb, output_script, description)
+                self.generate(self.nodes[0], 1)
 
 
 if __name__ == '__main__':
