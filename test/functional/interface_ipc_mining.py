@@ -778,9 +778,7 @@ class IPCMiningTest(BitcoinTestFramework):
             ctx, mining = await make_mining_ctx(self)
             opts = self.capnp_modules['mining'].BlockCreateOptions()
 
-            # Mine blocks 1-17 to exercise the boundary at height 16, where the
-            # internal scriptSig padding is no longer needed.
-            for height in range(1, 18):
+            async def submit_ipc_block(height):
                 async with AsyncExitStack() as stack:
                     # Disable cooldown to avoid hanging in the IBD loop on a fresh chain
                     template = await mining_create_block_template(mining, stack, ctx, opts, cooldown=False)
@@ -797,6 +795,13 @@ class IPCMiningTest(BitcoinTestFramework):
                     assert_equal(result.reason, "")
                     assert_equal(result.debug, "")
                     assert_equal(node.getblockcount(), height)
+
+            # Exercise the first low block and the boundary at height 16. The
+            # heights in between use the same IPC padding rule.
+            await submit_ipc_block(1)
+            self.generate(node, 14, sync_fun=self.no_op)
+            await submit_ipc_block(16)
+            await submit_ipc_block(17)
 
         asyncio.run(capnp.run(async_routine()))
 
