@@ -275,10 +275,8 @@ void ClearLocal()
 }
 
 // learn a new local address
-bool AddLocal(const CService& addr_, int nScore, bool add_even_if_unreachable)
+bool AddLocal(const CService& addr, int nScore, bool add_even_if_unreachable)
 {
-    CService addr{MaybeFlipIPv6toCJDNS(addr_)};
-
     if (!addr.IsRoutable())
         return false;
 
@@ -416,7 +414,7 @@ CNode* CConnman::ConnectNode(CAddress addrConnect,
             // If the connection is made by name, it can be the case that the name resolves to more than one address.
             // We don't want to connect any more of them if we are already connected to one
             for (const auto& r : resolved) {
-                addrConnect = CAddress{MaybeFlipIPv6toCJDNS(r), NODE_NONE};
+                addrConnect = CAddress{r, NODE_NONE};
                 if (!addrConnect.IsValid()) {
                     LogDebug(BCLog::NET, "Resolver returned invalid address %s for %s\n", addrConnect.ToStringAddrPort(), pszDest);
                     return nullptr;
@@ -1767,11 +1765,9 @@ void CConnman::AcceptConnection(const ListenSocket& hListenSocket) {
     CService addr;
     if (!addr.SetSockAddr((const struct sockaddr*)&sockaddr, len)) {
         LogWarning("Unknown socket family\n");
-    } else {
-        addr = MaybeFlipIPv6toCJDNS(addr);
     }
 
-    const CService addr_bind{MaybeFlipIPv6toCJDNS(GetBindAddress(*sock))};
+    const CService addr_bind{GetBindAddress(*sock)};
 
     NetPermissionFlags permission_flags = NetPermissionFlags::None;
     hListenSocket.AddSocketPermissionFlags(permission_flags);
@@ -3033,7 +3029,7 @@ std::vector<AddedNodeInfo> CConnman::GetAddedNodeInfo(bool include_connected) co
     }
 
     for (const auto& addr : lAddresses) {
-        CService service{MaybeFlipIPv6toCJDNS(LookupNumeric(addr.m_added_node, GetDefaultPort(addr.m_added_node)))};
+        CService service{LookupNumeric(addr.m_added_node, GetDefaultPort(addr.m_added_node))};
         AddedNodeInfo addedNode{addr, CService(), false, false};
         if (service.IsValid()) {
             // strAddNode is an IP:port
@@ -3531,10 +3527,8 @@ uint16_t CConnman::GetDefaultPort(const std::string& addr) const
     return a.SetSpecial(addr) ? GetDefaultPort(a.GetNetwork()) : m_params.GetDefaultPort();
 }
 
-bool CConnman::Bind(const CService& addr_, unsigned int flags, NetPermissionFlags permissions)
+bool CConnman::Bind(const CService& addr, unsigned int flags, NetPermissionFlags permissions)
 {
-    const CService addr{MaybeFlipIPv6toCJDNS(addr_)};
-
     bilingual_str strError;
     if (!BindListenPort(addr, strError, permissions)) {
         if ((flags & BF_REPORT_ERROR) && m_client_interface) {

@@ -23,6 +23,7 @@
 #include <logging.h>
 #include <net.h>
 #include <net_processing.h>
+#include <netaddress.h>
 #include <netbase.h>
 #include <netgroup.h>
 #include <node/block_template_manager.h>
@@ -151,6 +152,7 @@ BasicTestingSetup::BasicTestingSetup(const ChainType chainType, TestOpts opts)
     fListen = true;
     SetRPCWarmupStarting();
     g_reachable_nets.Reset();
+    g_cjdns_enabled = false;
     ClearLocal();
 
     m_node.shutdown_signal = &m_interrupt;

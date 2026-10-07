@@ -205,7 +205,7 @@ std::string PCPResultString(uint8_t result_code)
         std::memcpy(wrapped_addr.data(), IPV4_IN_IPV6_PREFIX.data(), IPV4_IN_IPV6_PREFIX.size());
         std::memcpy(wrapped_addr.data() + IPV4_IN_IPV6_PREFIX.size(), &addr4, ADDR_IPV4_SIZE);
         return true;
-    } else if (addr.IsIPv6()) {
+    } else if (addr.IsIPv6() || addr.IsCJDNS()) {
         struct in6_addr addr6;
         if (!addr.GetIn6Addr(&addr6)) return false;
         std::memcpy(wrapped_addr.data(), &addr6, ADDR_IPV6_SIZE);

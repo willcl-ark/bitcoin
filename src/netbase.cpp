@@ -841,7 +841,6 @@ CSubNet LookupSubNet(const std::string& subnet_str)
     std::optional<CNetAddr> addr{LookupHost(str_addr, /*fAllowLookup=*/false)};
 
     if (addr.has_value()) {
-        addr = static_cast<CNetAddr>(MaybeFlipIPv6toCJDNS(CService{addr.value(), /*port=*/0}));
         if (slash_pos != subnet_str.npos) {
             const std::string netmask_str{subnet_str.substr(slash_pos + 1)};
             if (const auto netmask{ToIntegral<uint8_t>(netmask_str)}) {
@@ -956,15 +955,6 @@ bool IsBadPort(uint16_t port)
         return true;
     }
     return false;
-}
-
-CService MaybeFlipIPv6toCJDNS(const CService& service)
-{
-    CService ret{service};
-    if (ret.IsIPv6() && ret.HasCJDNSPrefix() && g_reachable_nets.Contains(NET_CJDNS)) {
-        ret.m_net = NET_CJDNS;
-    }
-    return ret;
 }
 
 CService GetBindAddress(const Sock& sock)

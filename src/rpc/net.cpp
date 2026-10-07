@@ -835,7 +835,7 @@ static RPCMethod setban()
     if (!isSubnet) {
         const std::optional<CNetAddr> addr{LookupHost(subnet_arg, false)};
         if (addr.has_value()) {
-            netAddr = static_cast<CNetAddr>(MaybeFlipIPv6toCJDNS(CService{addr.value(), /*port=*/0}));
+            netAddr = addr.value();
         }
     } else {
         subNet = LookupSubNet(subnet_arg);
@@ -1071,7 +1071,7 @@ static RPCMethod addpeeraddress()
     bool success{false};
 
     CService service{net_addr.value(), port};
-    CAddress address{MaybeFlipIPv6toCJDNS(service), ServiceFlags{NODE_NETWORK | NODE_WITNESS}};
+    CAddress address{service, ServiceFlags{NODE_NETWORK | NODE_WITNESS}};
     address.nTime = Now<NodeSeconds>();
     // The source address is set equal to the address. This is equivalent to the peer
     // announcing itself.

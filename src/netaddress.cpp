@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <ios>
 #include <iterator>
@@ -23,6 +24,8 @@
 
 using util::ContainsNUL;
 using util::HasPrefix;
+
+std::atomic<bool> g_cjdns_enabled{false};
 
 CNetAddr::BIP155Network CNetAddr::GetBIP155Network() const
 {
@@ -297,6 +300,10 @@ CNetAddr::CNetAddr(const struct in_addr& ipv4Addr)
 CNetAddr::CNetAddr(const struct in6_addr& ipv6Addr, const uint32_t scope)
 {
     SetLegacyIPv6({reinterpret_cast<const uint8_t*>(&ipv6Addr), sizeof(ipv6Addr)});
+    // Keep this out of SetLegacyIPv6(): wire addresses retain their encoded network.
+    if (g_cjdns_enabled && IsIPv6() && HasCJDNSPrefix()) {
+        m_net = NET_CJDNS;
+    }
     m_scope_id = scope;
 }
 
@@ -966,7 +973,9 @@ static inline int NetmaskBits(uint8_t x)
 
 CSubNet::CSubNet(const CNetAddr& addr, const CNetAddr& mask) : CSubNet()
 {
-    valid = (addr.IsIPv4() || addr.IsIPv6()) && addr.m_net == mask.m_net;
+    // A netmask is a bit pattern; fc00:: is an IPv6 /6 mask even with CJDNS enabled.
+    valid = (addr.IsIPv4() && mask.IsIPv4()) ||
+            (addr.IsIPv6() && (mask.IsIPv6() || mask.IsCJDNS()));
     if (!valid) {
         return;
     }

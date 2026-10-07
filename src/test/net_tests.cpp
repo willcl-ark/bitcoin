@@ -981,8 +981,8 @@ BOOST_AUTO_TEST_CASE(advertise_local_address)
     BOOST_REQUIRE(addr_i2p.IsValid());
     BOOST_REQUIRE(addr_i2p.IsI2P());
 
-    CService service_cjdns{Lookup("fc00:3344:5566:7788:9900:aabb:ccdd:eeff", 8333, false).value(), NODE_NONE};
-    CAddress addr_cjdns{MaybeFlipIPv6toCJDNS(service_cjdns), NODE_NONE};
+    g_cjdns_enabled = true;
+    CAddress addr_cjdns{Lookup("fc00:3344:5566:7788:9900:aabb:ccdd:eeff", 8333, false).value(), NODE_NONE};
     BOOST_REQUIRE(addr_cjdns.IsValid());
     BOOST_REQUIRE(addr_cjdns.IsCJDNS());
 

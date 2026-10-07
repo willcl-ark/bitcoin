@@ -15,6 +15,7 @@
 #include <util/string.h>
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <ios>
 #include <string>
@@ -81,6 +82,9 @@ inline constexpr std::array<uint8_t, 6> INTERNAL_IN_IPV6_PREFIX{
 /// All CJDNS addresses start with 0xFC. See
 /// https://github.com/cjdelisle/cjdns/blob/master/doc/Whitepaper.md#pulling-it-all-together
 inline constexpr uint8_t CJDNS_PREFIX{0xFC};
+
+/** Interpret OS IPv6 addresses in fc00::/8 as CJDNS. Configured during startup. */
+extern std::atomic<bool> g_cjdns_enabled;
 
 /// Size of IPv4 address (in bytes).
 inline constexpr size_t ADDR_IPV4_SIZE = 4;
@@ -207,6 +211,7 @@ public:
     std::vector<unsigned char> GetAddrBytes() const;
     int GetReachabilityFrom(const CNetAddr& paddrPartner) const;
 
+    /** Construct from an OS IPv6 address, classifying fc00::/8 as CJDNS if enabled. */
     explicit CNetAddr(const struct in6_addr& pipv6Addr, uint32_t scope = 0);
     bool GetIn6Addr(struct in6_addr* pipv6Addr) const;
 
@@ -566,7 +571,6 @@ public:
     }
 
     friend class CServiceHash;
-    friend CService MaybeFlipIPv6toCJDNS(const CService& service);
 };
 
 class CServiceHash

@@ -745,7 +745,7 @@ util::Expected<void, std::string> HTTPServer::BindAndStartListening(const CServi
 
     // some systems don't have IPV6_V6ONLY but are always v6only; others do have the option
     // and enable it by default or not. Try to enable it, if possible.
-    if (to.IsIPv6()) {
+    if (to.GetSAFamily() == AF_INET6) {
 #ifdef IPV6_V6ONLY
         if (sock->SetSockOpt(IPPROTO_IPV6, IPV6_V6ONLY, &SOCKET_OPTION_TRUE, sizeof(SOCKET_OPTION_TRUE)) == SOCKET_ERROR) {
             LogDebug(BCLog::HTTP,

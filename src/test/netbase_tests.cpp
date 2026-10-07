@@ -80,6 +80,27 @@ BOOST_AUTO_TEST_CASE(netbase_properties)
     BOOST_CHECK(CreateInternal("FD6B:88C0:8724:edb1:8e4:3588:e546:35ca").IsInternal());
     BOOST_CHECK(CreateInternal("bar.com").IsInternal());
 
+    g_cjdns_enabled = true;
+    const CService cjdns{LookupNumeric("[fc00::1]:8333")};
+    BOOST_CHECK(cjdns.IsCJDNS());
+    BOOST_CHECK(ResolveIP("fd00::1").IsRFC4193());
+
+    // Socket addresses use the same classification as lookups.
+    sockaddr_storage socket_address{};
+    socklen_t size{sizeof(socket_address)};
+    auto* sa{reinterpret_cast<sockaddr*>(&socket_address)};
+    BOOST_REQUIRE(cjdns.GetSockAddr(sa, &size));
+    CService from_socket;
+    BOOST_REQUIRE(from_socket.SetSockAddr(sa, size));
+    BOOST_CHECK(from_socket == cjdns);
+
+    // Legacy wire addresses and IPv6 netmasks must not be reinterpreted as CJDNS.
+    CNetAddr legacy;
+    legacy.SetLegacyIPv6(cjdns.GetAddrBytes());
+    BOOST_CHECK(legacy.IsIPv6());
+    BOOST_CHECK(!legacy.IsRoutable());
+    BOOST_CHECK(LookupSubNet("2001::/fc00::") == LookupSubNet("2001::/6"));
+    g_cjdns_enabled = false;
 }
 
 bool static TestSplitHost(const std::string& test, const std::string& host, uint16_t port, bool validPort=true)

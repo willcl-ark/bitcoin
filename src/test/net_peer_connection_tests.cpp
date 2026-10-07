@@ -50,7 +50,7 @@ void AddPeer(NodeId& id, std::vector<CNode*>& nodes, PeerManager& peerman, Connm
     CAddress addr{};
 
     if (address.has_value()) {
-        addr = CAddress{MaybeFlipIPv6toCJDNS(LookupNumeric(address.value(), Params().GetDefaultPort())), NODE_NONE};
+        addr = CAddress{LookupNumeric(address.value(), Params().GetDefaultPort()), NODE_NONE};
     } else if (onion_peer) {
         auto tor_addr{m_rng.randbytes(ADDR_TORV3_SIZE)};
         BOOST_REQUIRE(addr.SetSpecial(OnionToString(tor_addr)));
@@ -112,6 +112,7 @@ BOOST_FIXTURE_TEST_CASE(test_addnode_getaddednodeinfo_and_connection_detection, 
     AddPeer(id, nodes, *peerman, *connman, ConnectionType::INBOUND);
 
     // Add a CJDNS peer connection.
+    g_cjdns_enabled = true;
     AddPeer(id, nodes, *peerman, *connman, ConnectionType::INBOUND, /*onion_peer=*/false,
             /*address=*/"[fc00:3344:5566:7788:9900:aabb:ccdd:eeff]:1234");
     BOOST_CHECK(nodes.back()->IsInboundConn());
