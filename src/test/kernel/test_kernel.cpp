@@ -1084,6 +1084,30 @@ BOOST_AUTO_TEST_CASE(btck_chainman_mainnet_tests)
     chainman_reindex_chainstate_test(test_directory);
 }
 
+BOOST_AUTO_TEST_CASE(btck_block_tree_reader_network)
+{
+    auto test_directory{TestDirectory{"block_tree_reader_network"}};
+    auto notifications{std::make_shared<TestKernelNotifications>()};
+    auto context{create_context(notifications, ChainType::MAINNET)};
+    {
+        auto chainman{create_chainman(
+            test_directory, /*reindex=*/false, /*wipe_chainstate=*/false,
+            /*chainstate_db_in_memory=*/false, context)};
+        BOOST_REQUIRE(chainman->ImportBlocks({}));
+    }
+
+    const auto data_dir{PathToString(test_directory.m_directory)};
+    const auto blocks_dir{PathToString(test_directory.m_directory / "blocks")};
+    BlockTreeReader reader{context, data_dir, blocks_dir};
+    BOOST_REQUIRE_EQUAL(reader.CountEntries(), 1);
+    BOOST_CHECK_EQUAL(reader.GetEntry(0).GetHeight(), 0);
+
+    // Mainnet headers satisfy regtest's proof-of-work limit, so check genesis too.
+    auto regtest_context{create_context(notifications, ChainType::REGTEST)};
+    BOOST_CHECK_EXCEPTION(BlockTreeReader(regtest_context, data_dir, blocks_dir),
+                          std::runtime_error, HasReason{"failed to instantiate btck object"});
+}
+
 BOOST_AUTO_TEST_CASE(btck_block_hash_tests)
 {
     std::array<std::byte, 32> test_hash;

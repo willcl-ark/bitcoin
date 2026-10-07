@@ -506,6 +506,9 @@ struct BlockTreeReader {
             throw std::runtime_error("Failed to load block index");
         }
         m_entries = m_blockman.GetAllBlockIndices();
+        if (!m_entries.empty() && !m_blockman.LookupBlockIndex(m_context->m_chainparams->GetConsensus().hashGenesisBlock)) {
+            throw std::runtime_error("Incorrect or no genesis block found. Wrong datadir for network?");
+        }
         for (const CBlockIndex* entry : m_entries) {
             if (entry->nStatus == 0) {
                 throw std::runtime_error("Block index contains an incomplete entry");
