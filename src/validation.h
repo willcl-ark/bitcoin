@@ -1295,6 +1295,17 @@ public:
      */
     bool ProcessNewBlock(const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked, bool* new_block) LOCKS_EXCLUDED(cs_main);
 
+    /** Check and store a block body without activating its candidate chain.
+     * Rejections emit BlockChecked with the same attribution as ProcessNewBlock.
+     */
+    bool AdmitNewBlock(const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked, bool* new_block) LOCKS_EXCLUDED(cs_main);
+
+    /** Activate accepted candidates on the current and historical chainstates.
+     * Supplied bodies remain owned by the caller for this call and may be reused
+     * by grouped validation or its canonical serial fallback.
+     */
+    bool ActivateNewBlocks(std::span<const std::shared_ptr<const CBlock>> blocks = {}) LOCKS_EXCLUDED(cs_main);
+
     /**
      * Process incoming block headers.
      *
