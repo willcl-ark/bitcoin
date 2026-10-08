@@ -36,6 +36,7 @@
 
 class CBlock;
 class ThreadPool;
+class CoinsViewBatch;
 
 /**
  * A UTXO entry.
@@ -135,6 +136,8 @@ private:
     CoinsCachePair* m_prev{nullptr};
     CoinsCachePair* m_next{nullptr};
     uint8_t m_flags{0};
+    //! A provisional placeholder is not evidence of absence in the base view.
+    bool m_confirmed_unknown{false};
 
     //! Adding a flag requires a reference to the sentinel of the flagged pair linked list.
     static void AddFlags(uint8_t flags, CoinsCachePair& pair, CoinsCachePair& sentinel) noexcept
@@ -152,7 +155,10 @@ private:
     }
 
 public:
-    Coin coin; // The actual cached data.
+    Coin coin; // The actual confirmed cached data.
+
+    bool IsConfirmedUnknown() const noexcept { return m_confirmed_unknown; }
+    void SetConfirmedUnknown(bool unknown) noexcept { m_confirmed_unknown = unknown; }
 
     enum Flags {
         /**
@@ -475,6 +481,8 @@ public:
 class CCoinsViewCache : public CCoinsViewBacked
 {
 private:
+    friend class CoinsViewBatch;
+    CoinsViewBatch* m_active_batch{nullptr};
     const bool m_deterministic;
     const SaltedCoinsCacheHasher m_partition_hasher;
 
@@ -515,6 +523,13 @@ protected:
 
 public:
     CCoinsViewCache(CCoinsView* in_base, bool deterministic = false);
+    ~CCoinsViewCache() override { Assert(!m_active_batch); }
+
+    void SetBackend(CCoinsView& in_view)
+    {
+        Assert(!m_active_batch);
+        CCoinsViewBacked::SetBackend(in_view);
+    }
 
     /**
      * By deleting the copy constructor, we prevent accidentally using it when one intends to create a cache on top of a base cache.

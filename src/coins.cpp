@@ -35,7 +35,7 @@ CoinsViewEmpty& CoinsViewEmpty::Get()
 std::optional<Coin> CCoinsViewCache::PeekCoin(const COutPoint& outpoint) const
 {
     auto& coins{GetStorage(outpoint).coins};
-    if (auto it{coins.find(outpoint)}; it != coins.end()) {
+    if (auto it{coins.find(outpoint)}; it != coins.end() && !it->second.IsConfirmedUnknown()) {
         return it->second.coin.IsSpent() ? std::nullopt : std::optional{it->second.coin};
     }
     return base->PeekCoin(outpoint);
@@ -65,15 +65,16 @@ std::optional<Coin> CCoinsViewCache::FetchCoinFromBase(const COutPoint& outpoint
 CCoinsMap::iterator CCoinsViewCache::FetchCoin(CoinsCacheStorage& storage, const COutPoint& outpoint) const
 {
     const auto [ret, inserted] = storage.coins.try_emplace(outpoint);
-    if (inserted) {
+    if (inserted || ret->second.IsConfirmedUnknown()) {
         if (auto coin{FetchCoinFromBase(outpoint)}) {
             ret->second.coin = std::move(*coin);
             storage.coins_usage += ret->second.coin.DynamicMemoryUsage();
             Assert(!ret->second.coin.IsSpent());
-        } else {
+        } else if (inserted) {
             storage.coins.erase(ret);
             return storage.coins.end();
         }
+        ret->second.SetConfirmedUnknown(false);
     }
     return ret;
 }
@@ -86,6 +87,7 @@ std::optional<Coin> CCoinsViewCache::GetCoin(const COutPoint& outpoint) const
 }
 
 void CCoinsViewCache::AddCoin(const COutPoint &outpoint, Coin&& coin, bool possible_overwrite) {
+    Assert(!m_active_batch);
     auto& storage{GetStorage(outpoint)};
     assert(!coin.IsSpent());
     if (coin.out.scriptPubKey.IsUnspendable()) return;
@@ -130,6 +132,7 @@ void CCoinsViewCache::AddCoin(const COutPoint &outpoint, Coin&& coin, bool possi
 }
 
 void CCoinsViewCache::EmplaceCoinInternalDANGER(const COutPoint& outpoint, Coin&& coin) {
+    Assert(!m_active_batch);
     auto& storage{GetStorage(outpoint)};
     const auto mem_usage{coin.DynamicMemoryUsage()};
     auto [it, inserted] = storage.coins.try_emplace(outpoint, std::move(coin));
@@ -152,6 +155,7 @@ void AddCoins(CCoinsViewCache& cache, const CTransaction &tx, int nHeight, bool 
 }
 
 bool CCoinsViewCache::SpendCoin(const COutPoint &outpoint, Coin* moveout) {
+    Assert(!m_active_batch);
     auto& storage{GetStorage(outpoint)};
     auto it{FetchCoin(storage, outpoint)};
     if (it == storage.coins.end()) return false;
@@ -207,11 +211,13 @@ uint256 CCoinsViewCache::GetBestBlock() const {
 
 void CCoinsViewCache::SetBestBlock(const uint256& in_block_hash)
 {
+    Assert(!m_active_batch);
     m_block_hash = in_block_hash;
 }
 
 void CCoinsViewCache::BatchWrite(CoinsViewCacheCursor& cursor, const uint256& in_block_hash)
 {
+    Assert(!m_active_batch);
     for (auto it{cursor.Begin()}; it != cursor.End(); it = cursor.NextAndMaybeErase(*it)) {
         if (!it->second.IsDirty()) { // TODO a cursor can only contain dirty entries
             continue;
@@ -284,6 +290,7 @@ void CCoinsViewCache::BatchWrite(CoinsViewCacheCursor& cursor, const uint256& in
 
 void CCoinsViewCache::Flush(bool reallocate_cache)
 {
+    Assert(!m_active_batch);
     auto cursor{CoinsViewCacheCursor(m_storage, /*will_erase=*/true)};
     base->BatchWrite(cursor, m_block_hash);
     for (auto& storage : m_storage) {
@@ -296,6 +303,7 @@ void CCoinsViewCache::Flush(bool reallocate_cache)
 
 void CCoinsViewCache::Sync()
 {
+    Assert(!m_active_batch);
     auto cursor{CoinsViewCacheCursor(m_storage, /*will_erase=*/false)};
     base->BatchWrite(cursor, m_block_hash);
     for (const auto& storage : m_storage) {
@@ -309,6 +317,7 @@ void CCoinsViewCache::Sync()
 
 void CCoinsViewCache::Reset() noexcept
 {
+    Assert(!m_active_batch);
     for (auto& storage : m_storage) {
         storage.coins.clear();
         storage.coins_usage = 0;
@@ -319,6 +328,7 @@ void CCoinsViewCache::Reset() noexcept
 
 void CCoinsViewCache::Uncache(const COutPoint& hash)
 {
+    Assert(!m_active_batch);
     auto& storage{GetStorage(hash)};
     CCoinsMap::iterator it = storage.coins.find(hash);
     if (it != storage.coins.end() && !it->second.IsDirty()) {
@@ -378,6 +388,7 @@ std::vector<const Coin*> CCoinsViewCache::ResolveInputs(const CTransaction& tx) 
 
 void CCoinsViewCache::ReallocateCache()
 {
+    Assert(!m_active_batch);
     for (auto& storage : m_storage) {
         assert(storage.coins.empty());
         storage.~CoinsCacheStorage();
