@@ -1857,6 +1857,7 @@ CoinsViews::CoinsViews(DBParams db_params, CoinsViewOptions options)
 void CoinsViews::InitCache(int32_t prevoutfetch_threads)
 {
     AssertLockHeld(::cs_main);
+    m_thread_pool->Stop();
     m_cacheview = std::make_unique<CCoinsViewCache>(&m_catcherview);
     if (prevoutfetch_threads > 0) {
         m_thread_pool->Start(prevoutfetch_threads);
