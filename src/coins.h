@@ -568,6 +568,14 @@ public:
     //! Check whether all prevouts of the transaction are present in the UTXO set represented by this view
     bool HaveInputs(const CTransaction& tx) const;
 
+    /**
+     * Resolve transaction inputs in vin order. Missing or spent inputs are
+     * nullptr; coinbase transactions return an empty vector. Returned pointers
+     * borrow coins from this cache and are invalidated by cache mutation,
+     * eviction, or reset. Callers must finish reading them before mutating it.
+     */
+    std::vector<const Coin*> ResolveInputs(const CTransaction& tx) const;
+
     //! Run an internal sanity check on the cache data structure. */
     void SanityCheck() const;
 

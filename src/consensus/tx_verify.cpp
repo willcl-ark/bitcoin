@@ -129,24 +129,25 @@ unsigned int GetLegacySigOpCount(const CTransaction& tx)
     return nSigOps;
 }
 
-unsigned int GetP2SHSigOpCount(const CTransaction& tx, const CCoinsViewCache& inputs)
+unsigned int GetP2SHSigOpCount(const CTransaction& tx, std::span<const Coin* const> inputs)
 {
     if (tx.IsCoinBase())
         return 0;
 
+    assert(inputs.size() == tx.vin.size());
     unsigned int nSigOps = 0;
     for (unsigned int i = 0; i < tx.vin.size(); i++)
     {
-        const Coin& coin = inputs.AccessCoin(tx.vin[i].prevout);
-        assert(!coin.IsSpent());
-        const CTxOut &prevout = coin.out;
+        assert(inputs[i] != nullptr);
+        assert(!inputs[i]->IsSpent());
+        const CTxOut& prevout = inputs[i]->out;
         if (prevout.scriptPubKey.IsPayToScriptHash())
             nSigOps += prevout.scriptPubKey.GetSigOpCount(tx.vin[i].scriptSig);
     }
     return nSigOps;
 }
 
-int64_t GetTransactionSigOpCost(const CTransaction& tx, const CCoinsViewCache& inputs, script_verify_flags flags)
+int64_t GetTransactionSigOpCost(const CTransaction& tx, std::span<const Coin* const> inputs, script_verify_flags flags)
 {
     int64_t nSigOps = GetLegacySigOpCount(tx) * WITNESS_SCALE_FACTOR;
 
@@ -157,29 +158,28 @@ int64_t GetTransactionSigOpCost(const CTransaction& tx, const CCoinsViewCache& i
         nSigOps += GetP2SHSigOpCount(tx, inputs) * WITNESS_SCALE_FACTOR;
     }
 
+    assert(inputs.size() == tx.vin.size());
     for (unsigned int i = 0; i < tx.vin.size(); i++)
     {
-        const Coin& coin = inputs.AccessCoin(tx.vin[i].prevout);
-        assert(!coin.IsSpent());
-        const CTxOut &prevout = coin.out;
+        assert(inputs[i] != nullptr);
+        assert(!inputs[i]->IsSpent());
+        const CTxOut& prevout = inputs[i]->out;
         nSigOps += CountWitnessSigOps(tx.vin[i].scriptSig, prevout.scriptPubKey, tx.vin[i].scriptWitness, flags);
     }
     return nSigOps;
 }
 
-bool Consensus::CheckTxInputs(const CTransaction& tx, TxValidationState& state, const CCoinsViewCache& inputs, int nSpendHeight, CAmount& txfee)
+bool Consensus::CheckTxInputs(const CTransaction& tx, TxValidationState& state, std::span<const Coin* const> inputs, int nSpendHeight, CAmount& txfee)
 {
     // are the actual inputs available?
-    if (!inputs.HaveInputs(tx)) {
+    if (inputs.size() != tx.vin.size() || std::any_of(inputs.begin(), inputs.end(), [](const Coin* coin) { return coin == nullptr || coin->IsSpent(); })) {
         return state.Invalid(TxValidationResult::TX_MISSING_INPUTS, "bad-txns-inputs-missingorspent",
                          strprintf("%s: inputs missing/spent", __func__));
     }
 
     CAmount nValueIn = 0;
     for (unsigned int i = 0; i < tx.vin.size(); ++i) {
-        const COutPoint &prevout = tx.vin[i].prevout;
-        const Coin& coin = inputs.AccessCoin(prevout);
-        assert(!coin.IsSpent());
+        const Coin& coin = *inputs[i];
 
         // If prev is coinbase, check that it's matured
         if (coin.IsCoinBase() && nSpendHeight - coin.nHeight < COINBASE_MATURITY) {

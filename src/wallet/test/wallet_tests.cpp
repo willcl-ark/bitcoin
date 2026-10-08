@@ -75,7 +75,7 @@ static bool BroadcastTestSimpleSpend(interfaces::Chain& chain, ChainstateManager
 {
     const auto tx_ref{MakeTransactionRef(tx)};
     const auto tx_sigops = WITH_LOCK(::cs_main, return GetTransactionSigOpCost(
-                                                    *tx_ref, chainman.ActiveChainstate().CoinsTip(), STANDARD_SCRIPT_VERIFY_FLAGS));
+                                                    *tx_ref, chainman.ActiveChainstate().CoinsTip().ResolveInputs(*tx_ref), STANDARD_SCRIPT_VERIFY_FLAGS));
     const auto tx_vsize{GetVirtualTransactionSize(*tx_ref, tx_sigops, nBytesPerSigOp)};
     const auto tx_feerate{CFeeRate{DEFAULT_TRANSACTION_MAXFEE, static_cast<int32_t>(tx_vsize)}};
     // TestSimpleSpend pays a high fee; use a limit just above its feerate.

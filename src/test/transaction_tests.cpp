@@ -1051,7 +1051,7 @@ BOOST_AUTO_TEST_CASE(max_standard_legacy_sigops)
     AddCoins(coins, CTransaction(tx_create), 0, false);
 
     // 2490 sigops is below the limit.
-    BOOST_CHECK_EQUAL(GetP2SHSigOpCount(CTransaction(tx_max_sigops), coins), 2490);
+    BOOST_CHECK_EQUAL(GetP2SHSigOpCount(CTransaction(tx_max_sigops), coins.ResolveInputs(CTransaction(tx_max_sigops))), 2490);
     BOOST_CHECK(::ValidateInputsStandardness(CTransaction(tx_max_sigops), coins).IsValid());
 
     // Adding one more input will bump this to 2505, hitting the limit.
@@ -1063,7 +1063,7 @@ BOOST_AUTO_TEST_CASE(max_standard_legacy_sigops)
     tx_max_sigops.vin.emplace_back(prev_txid, p2sh_inputs_count, CScript() << ToByteVector(max_sigops_redeem_script));
     AddCoins(coins, CTransaction(tx_create), 0, false);
     BOOST_CHECK_GT((p2sh_inputs_count + 1) * MAX_P2SH_SIGOPS, MAX_TX_LEGACY_SIGOPS);
-    auto legacy_sigops_count = GetP2SHSigOpCount(CTransaction(tx_max_sigops), coins);
+    auto legacy_sigops_count = GetP2SHSigOpCount(CTransaction(tx_max_sigops), coins.ResolveInputs(CTransaction(tx_max_sigops)));
     BOOST_CHECK_EQUAL(legacy_sigops_count, 2505);
     std::string reject_reason("bad-txns-nonstandard-inputs");
     std::string sigop_limit_reject_debug_message("non-witness sigops exceed bip54 limit");
@@ -1159,7 +1159,7 @@ BOOST_AUTO_TEST_CASE(checktxinputs_invalid_transactions_test)
 
         TxValidationState state;
         CAmount txfee{0};
-        BOOST_CHECK(!Consensus::CheckTxInputs(CTransaction{mtx}, state, inputs, spend_height, txfee));
+        BOOST_CHECK(!Consensus::CheckTxInputs(CTransaction{mtx}, state, inputs.ResolveInputs(CTransaction{mtx}), spend_height, txfee));
         BOOST_CHECK(state.IsInvalid());
         BOOST_CHECK_EQUAL(state.GetResult(), expected_result);
         BOOST_CHECK_EQUAL(state.GetRejectReason(), expected_reason);
@@ -1182,6 +1182,20 @@ BOOST_AUTO_TEST_CASE(checktxinputs_invalid_transactions_test)
                   /*coinbase=*/true,
                   /*spend_height=*/COINBASE_MATURITY,
                   TxValidationResult::TX_PREMATURE_SPEND, /*expected_reason=*/"bad-txns-premature-spend-of-coinbase");
+
+    CCoinsViewCache inputs{&CoinsViewEmpty::Get()};
+    const COutPoint existing{Txid::FromUint256(uint256::ONE), 0};
+    const COutPoint missing{Txid::FromUint256(uint256::ONE), 1};
+    inputs.AddCoin(existing, Coin{{COIN, CScript() << OP_TRUE}, /*nHeightIn=*/1, /*fCoinBaseIn=*/true}, /*possible_overwrite=*/false);
+    CMutableTransaction mtx;
+    mtx.vin.emplace_back(existing);
+    mtx.vin.emplace_back(missing);
+    mtx.vout.emplace_back(0, CScript() << OP_TRUE);
+    TxValidationState state;
+    CAmount txfee{0};
+    const CTransaction tx{mtx};
+    BOOST_CHECK(!Consensus::CheckTxInputs(tx, state, inputs.ResolveInputs(tx), COINBASE_MATURITY - 1, txfee));
+    BOOST_CHECK_EQUAL(state.GetRejectReason(), "bad-txns-inputs-missingorspent");
 }
 
 BOOST_AUTO_TEST_CASE(isfinaltx_sequences_test)
