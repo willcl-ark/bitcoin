@@ -2289,6 +2289,46 @@ script_verify_flags GetBlockScriptFlags(const CBlockIndex& block_index, const Ch
 }
 
 
+/** Check input-dependent transaction rules without changing the coins view. */
+static bool CheckBlockTransactionInputs(const CTransaction& tx, BlockValidationState& state,
+                                        std::span<const Coin* const> input_coins, const CBlockIndex& index,
+                                        int lock_time_flags, script_verify_flags script_flags,
+                                        CAmount& fees, int64_t& sigops_cost, std::vector<int>& prev_heights)
+{
+    if (!tx.IsCoinBase()) {
+        CAmount txfee{0};
+        TxValidationState tx_state;
+        if (!Consensus::CheckTxInputs(tx, tx_state, input_coins, index.nHeight, txfee)) {
+            // Any transaction validation failure when connecting is a block consensus failure.
+            return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS,
+                                 tx_state.GetRejectReason(),
+                                 tx_state.GetDebugMessage() + " in transaction " + tx.GetHash().ToString());
+        }
+        fees += txfee;
+        if (!MoneyRange(fees)) {
+            return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-txns-accumulated-fee-outofrange",
+                                 "accumulated fee in the block out of range");
+        }
+
+        // BIP68 sequence locks depend on the heights of the spent coins.
+        prev_heights.resize(tx.vin.size());
+        for (size_t j{0}; j < tx.vin.size(); ++j) {
+            prev_heights[j] = input_coins[j]->nHeight;
+        }
+        if (!SequenceLocks(tx, lock_time_flags, prev_heights, index)) {
+            return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-txns-nonfinal",
+                                 "contains a non-BIP68-final transaction " + tx.GetHash().ToString());
+        }
+    }
+
+    // Count legacy, P2SH and witness sigops under this block's script flags.
+    sigops_cost += GetTransactionSigOpCost(tx, input_coins, script_flags);
+    if (sigops_cost > MAX_BLOCK_SIGOPS_COST) {
+        return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-blk-sigops", "too many sigops");
+    }
+    return true;
+}
+
 /** Apply the effects of this block (with given index) on the UTXO set represented by coins.
  *  Validity checks that depend on the UTXO set are also done; ConnectBlock()
  *  can fail if those validity checks fail (among other reasons). */
@@ -2528,46 +2568,8 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
 
         nInputs += tx.vin.size();
 
-        if (!tx.IsCoinBase())
-        {
-            CAmount txfee = 0;
-            TxValidationState tx_state;
-            if (!Consensus::CheckTxInputs(tx, tx_state, input_coins, pindex->nHeight, txfee)) {
-                // Any transaction validation failure in ConnectBlock is a block consensus failure
-                state.Invalid(BlockValidationResult::BLOCK_CONSENSUS,
-                              tx_state.GetRejectReason(),
-                              tx_state.GetDebugMessage() + " in transaction " + tx.GetHash().ToString());
-                break;
-            }
-            nFees += txfee;
-            if (!MoneyRange(nFees)) {
-                state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-txns-accumulated-fee-outofrange",
-                              "accumulated fee in the block out of range");
-                break;
-            }
-
-            // Check that transaction is BIP68 final
-            // BIP68 lock checks (as opposed to nLockTime checks) must
-            // be in ConnectBlock because they require the UTXO set
-            prevheights.resize(tx.vin.size());
-            for (size_t j = 0; j < tx.vin.size(); j++) {
-                prevheights[j] = input_coins[j]->nHeight;
-            }
-
-            if (!SequenceLocks(tx, nLockTimeFlags, prevheights, *pindex)) {
-                state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-txns-nonfinal",
-                              "contains a non-BIP68-final transaction " + tx.GetHash().ToString());
-                break;
-            }
-        }
-
-        // GetTransactionSigOpCost counts 3 types of sigops:
-        // * legacy (always)
-        // * p2sh (when P2SH enabled in flags and excludes coinbase)
-        // * witness (when witness enabled in flags and excludes coinbase)
-        nSigOpsCost += GetTransactionSigOpCost(tx, input_coins, flags);
-        if (nSigOpsCost > MAX_BLOCK_SIGOPS_COST) {
-            state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-blk-sigops", "too many sigops");
+        if (!CheckBlockTransactionInputs(tx, state, input_coins, *pindex, nLockTimeFlags, flags,
+                                         nFees, nSigOpsCost, prevheights)) {
             break;
         }
 
