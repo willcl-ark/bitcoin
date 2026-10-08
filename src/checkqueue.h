@@ -5,6 +5,7 @@
 #ifndef BITCOIN_CHECKQUEUE_H
 #define BITCOIN_CHECKQUEUE_H
 
+#include <memusage.h>
 #include <sync.h>
 #include <tinyformat.h>
 #include <util/log.h>
@@ -196,6 +197,16 @@ public:
         for (std::thread& t : m_worker_threads) {
             t.join();
         }
+    }
+
+    /** Retained queue storage plus the fixed worker and master check batches.
+     * Script payloads owned by queued checks are accounted by their caller.
+     */
+    size_t DynamicMemoryUsage() EXCLUSIVE_LOCKS_REQUIRED(!m_mutex)
+    {
+        LOCK(m_mutex);
+        return memusage::DynamicUsage(queue) +
+               (m_worker_threads.size() + 1) * memusage::MallocUsage(nBatchSize * sizeof(T));
     }
 
     bool HasThreads() const { return !m_worker_threads.empty(); }

@@ -41,6 +41,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -784,9 +785,13 @@ public:
      */
     bool ActivateBestChain(
         BlockValidationState& state,
-        std::shared_ptr<const CBlock> pblock = nullptr)
+        std::shared_ptr<const CBlock> pblock = nullptr,
+        std::span<const std::shared_ptr<const CBlock>> retained_blocks = {})
         EXCLUSIVE_LOCKS_REQUIRED(!m_chainstate_mutex)
-        LOCKS_EXCLUDED(::cs_main);
+            LOCKS_EXCLUDED(::cs_main);
+
+    //! Whether this ordinary deep-IBD chainstate can prepare a group of blocks.
+    bool CanValidateBatch() const EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     // Block (dis)connection on a given view:
     DisconnectResult DisconnectBlock(const CBlock& block, const CBlockIndex* pindex, CCoinsViewCache& view)
@@ -865,7 +870,19 @@ public:
     std::pair<int, int> GetPruneRange(int last_height_can_prune) const EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
 protected:
-    bool ActivateBestChainStep(BlockValidationState& state, CBlockIndex& index_most_work, const std::shared_ptr<const CBlock>& pblock, bool& fInvalidFound, std::vector<ConnectedBlock>& connected_blocks) EXCLUSIVE_LOCKS_REQUIRED(cs_main, m_mempool->cs);
+    bool ActivateBestChainStep(BlockValidationState& state, CBlockIndex& index_most_work, const std::shared_ptr<const CBlock>& pblock, bool& fInvalidFound, std::vector<ConnectedBlock>& connected_blocks, std::span<const std::shared_ptr<const CBlock>> retained_blocks) EXCLUSIVE_LOCKS_REQUIRED(cs_main, m_mempool->cs);
+    void LogScriptCheckReason(const char* reason, const CBlockIndex& index) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    enum class BatchConnectResult { CONNECTED,
+                                    FALLBACK,
+                                    ERROR };
+    BatchConnectResult ConnectTipBatch(
+        BlockValidationState& state,
+        std::span<CBlockIndex* const> indices,
+        const std::shared_ptr<const CBlock>& pblock,
+        std::span<const std::shared_ptr<const CBlock>> retained_blocks,
+        std::vector<ConnectedBlock>& connected_blocks,
+        DisconnectedBlockTransactions& disconnectpool,
+        size_t& attempted_blocks) EXCLUSIVE_LOCKS_REQUIRED(cs_main, m_mempool->cs);
     bool ConnectTip(
         BlockValidationState& state,
         CBlockIndex* pindexNew,

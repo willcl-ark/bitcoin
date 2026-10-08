@@ -11,12 +11,14 @@
 #include <chain.h>
 #include <checkqueue.h>
 #include <clientversion.h>
+#include <coins_batch.h>
 #include <consensus/amount.h>
 #include <consensus/consensus.h>
 #include <consensus/merkle.h>
 #include <consensus/tx_check.h>
 #include <consensus/tx_verify.h>
 #include <consensus/validation.h>
+#include <core_memusage.h>
 #include <cuckoocache.h>
 #include <flatfile.h>
 #include <hash.h>
@@ -70,6 +72,9 @@
 #include <cassert>
 #include <chrono>
 #include <deque>
+#include <exception>
+#include <future>
+#include <limits>
 #include <numeric>
 #include <optional>
 #include <ranges>
@@ -2289,101 +2294,11 @@ script_verify_flags GetBlockScriptFlags(const CBlockIndex& block_index, const Ch
 }
 
 
-/** Check input-dependent transaction rules without changing the coins view. */
-static bool CheckBlockTransactionInputs(const CTransaction& tx, BlockValidationState& state,
-                                        std::span<const Coin* const> input_coins, const CBlockIndex& index,
-                                        int lock_time_flags, script_verify_flags script_flags,
-                                        CAmount& fees, int64_t& sigops_cost, std::vector<int>& prev_heights)
-{
-    if (!tx.IsCoinBase()) {
-        CAmount txfee{0};
-        TxValidationState tx_state;
-        if (!Consensus::CheckTxInputs(tx, tx_state, input_coins, index.nHeight, txfee)) {
-            // Any transaction validation failure when connecting is a block consensus failure.
-            return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS,
-                                 tx_state.GetRejectReason(),
-                                 tx_state.GetDebugMessage() + " in transaction " + tx.GetHash().ToString());
-        }
-        fees += txfee;
-        if (!MoneyRange(fees)) {
-            return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-txns-accumulated-fee-outofrange",
-                                 "accumulated fee in the block out of range");
-        }
-
-        // BIP68 sequence locks depend on the heights of the spent coins.
-        prev_heights.resize(tx.vin.size());
-        for (size_t j{0}; j < tx.vin.size(); ++j) {
-            prev_heights[j] = input_coins[j]->nHeight;
-        }
-        if (!SequenceLocks(tx, lock_time_flags, prev_heights, index)) {
-            return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-txns-nonfinal",
-                                 "contains a non-BIP68-final transaction " + tx.GetHash().ToString());
-        }
-    }
-
-    // Count legacy, P2SH and witness sigops under this block's script flags.
-    sigops_cost += GetTransactionSigOpCost(tx, input_coins, script_flags);
-    if (sigops_cost > MAX_BLOCK_SIGOPS_COST) {
-        return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-blk-sigops", "too many sigops");
-    }
-    return true;
-}
-
-/** Apply the effects of this block (with given index) on the UTXO set represented by coins.
- *  Validity checks that depend on the UTXO set are also done; ConnectBlock()
- *  can fail if those validity checks fail (among other reasons). */
-bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, CBlockIndex* pindex,
-                               CCoinsViewCache& view, bool fJustCheck)
+static const char* GetBlockScriptCheckReason(const CBlockIndex& index, const ChainstateManager& chainman) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
 {
     AssertLockHeld(cs_main);
-    assert(pindex);
-
-    uint256 block_hash{block.GetHash()};
-    assert(*pindex->phashBlock == block_hash);
-
-    const auto time_start{SteadyClock::now()};
-    const CChainParams& params{m_chainman.GetParams()};
-
-    // Check it again in case a previous version let a bad block in
-    // NOTE: We don't currently (re-)invoke ContextualCheckBlock() or
-    // ContextualCheckBlockHeader() here. This means that if we add a new
-    // consensus rule that is enforced in one of those two functions, then we
-    // may have let in a block that violates the rule prior to updating the
-    // software, and we would NOT be enforcing the rule here. Fully solving
-    // upgrade from one software version to the next after a consensus rule
-    // change is potentially tricky and issue-specific (see NeedsRedownload()
-    // for one approach that was used for BIP 141 deployment).
-    // Also, currently the rule against blocks more than 2 hours in the future
-    // is enforced in ContextualCheckBlockHeader(); we wouldn't want to
-    // re-enforce that rule here (at least until we make it impossible for
-    // the clock to go backward).
-    if (!CheckBlock(block, state, params.GetConsensus(), !fJustCheck, !fJustCheck)) {
-        if (state.GetResult() == BlockValidationResult::BLOCK_MUTATED) {
-            // We don't write down blocks to disk if they may have been
-            // corrupted, so this should be impossible unless we're having hardware
-            // problems.
-            return FatalError(m_chainman.GetNotifications(), state, _("Corrupt block found indicating potential hardware failure."));
-        }
-        LogError("%s: Consensus::CheckBlock: %s\n", __func__, state.ToString());
-        return false;
-    }
-
-    // verify that the view's current state corresponds to the previous block
-    uint256 hashPrevBlock = pindex->pprev == nullptr ? uint256() : pindex->pprev->GetBlockHash();
-    assert(hashPrevBlock == view.GetBestBlock());
-
-    m_chainman.num_blocks_total++;
-
-    // Special case for the genesis block, skipping connection of its transactions
-    // (its coinbase is unspendable)
-    if (block_hash == params.GetConsensus().hashGenesisBlock) {
-        if (!fJustCheck)
-            view.SetBestBlock(pindex->GetBlockHash());
-        return true;
-    }
-
     const char* script_check_reason;
-    if (m_chainman.AssumedValidBlock().IsNull()) {
+    if (chainman.AssumedValidBlock().IsNull()) {
         script_check_reason = "assumevalid=0 (always verify)";
     } else {
         constexpr int64_t TWO_WEEKS_IN_SECONDS{60 * 60 * 24 * 7 * 2};
@@ -2392,16 +2307,16 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
         //  relative to a piece of software is an objective fact these defaults can be easily reviewed.
         // This setting doesn't force the selection of any particular chain but makes validating some faster by
         //  effectively caching the result of part of the verification.
-        BlockMap::const_iterator it{m_blockman.m_block_index.find(m_chainman.AssumedValidBlock())};
-        if (it == m_blockman.m_block_index.end()) {
+        BlockMap::const_iterator it{chainman.m_blockman.m_block_index.find(chainman.AssumedValidBlock())};
+        if (it == chainman.m_blockman.m_block_index.end()) {
             script_check_reason = "assumevalid hash not in headers";
-        } else if (it->second.GetAncestor(pindex->nHeight) != pindex) {
-            script_check_reason = (pindex->nHeight > it->second.nHeight) ? "block height above assumevalid height" : "block not in assumevalid chain";
-        } else if (m_chainman.m_best_header->GetAncestor(pindex->nHeight) != pindex) {
+        } else if (it->second.GetAncestor(index.nHeight) != &index) {
+            script_check_reason = (index.nHeight > it->second.nHeight) ? "block height above assumevalid height" : "block not in assumevalid chain";
+        } else if (chainman.m_best_header->GetAncestor(index.nHeight) != &index) {
             script_check_reason = "block not in best header chain";
-        } else if (m_chainman.m_best_header->nChainWork < m_chainman.MinimumChainWork()) {
+        } else if (chainman.m_best_header->nChainWork < chainman.MinimumChainWork()) {
             script_check_reason = "best header chainwork below minimumchainwork";
-        } else if (GetBlockProofEquivalentTime(*m_chainman.m_best_header, *pindex, *m_chainman.m_best_header, params.GetConsensus()) <= TWO_WEEKS_IN_SECONDS) {
+        } else if (GetBlockProofEquivalentTime(*chainman.m_best_header, index, *chainman.m_best_header, chainman.GetConsensus()) <= TWO_WEEKS_IN_SECONDS) {
             script_check_reason = "block too recent relative to best header";
         } else {
             // This block is a member of the assumed verified chain and an ancestor of the best header.
@@ -2422,13 +2337,11 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
         }
     }
 
-    const auto time_1{SteadyClock::now()};
-    m_chainman.time_check += time_1 - time_start;
-    LogDebug(BCLog::BENCH, "    - Sanity checks: %.2fms [%.2fs (%.2fms/blk)]\n",
-             Ticks<MillisecondsDouble>(time_1 - time_start),
-             Ticks<SecondsDouble>(m_chainman.time_check),
-             Ticks<MillisecondsDouble>(m_chainman.time_check) / m_chainman.num_blocks_total);
+    return script_check_reason;
+}
 
+static bool ShouldEnforceBIP30(const CBlockIndex& index, const Consensus::Params& consensus)
+{
     // Do not allow blocks that contain transactions which 'overwrite' older transactions,
     // unless those are already completely spent.
     // If such overwrites are allowed, coinbases and transactions depending upon those
@@ -2439,7 +2352,7 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
     // Now that the whole chain is irreversibly beyond that time it is applied to all blocks except the
     // two in the chain that violate it. This prevents exploiting the issue against nodes during their
     // initial block download.
-    bool fEnforceBIP30 = !IsBIP30Repeat(*pindex);
+    bool fEnforceBIP30 = !IsBIP30Repeat(index);
 
     // Once BIP34 activated it was not possible to create new duplicate coinbases and thus other than starting
     // with the 2 existing duplicate coinbase pairs, not possible to create overwriting txs.  But by the
@@ -2496,15 +2409,147 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
     // testnet3 has no blocks before the BIP34 height with indicated heights
     // post BIP34 before approximately height 486,000,000. After block
     // 1,983,702 testnet3 starts doing unnecessary BIP30 checking again.
-    assert(pindex->pprev);
-    CBlockIndex* pindexBIP34height = pindex->pprev->GetAncestor(params.GetConsensus().BIP34Height);
+    assert(index.pprev);
+    CBlockIndex* pindexBIP34height = index.pprev->GetAncestor(consensus.BIP34Height);
     //Only continue to enforce if we're below BIP34 activation height or the block hash at that height doesn't correspond.
-    fEnforceBIP30 = fEnforceBIP30 && (!pindexBIP34height || !(pindexBIP34height->GetBlockHash() == params.GetConsensus().BIP34Hash));
+    fEnforceBIP30 = fEnforceBIP30 && (!pindexBIP34height || !(pindexBIP34height->GetBlockHash() == consensus.BIP34Hash));
 
     // TODO: Remove BIP30 checking from block height 1,983,702 on, once we have a
     // consensus change that ensures coinbases at those heights cannot
     // duplicate earlier coinbases.
-    if (fEnforceBIP30 || pindex->nHeight >= BIP34_IMPLIES_BIP30_LIMIT) {
+    return fEnforceBIP30 || index.nHeight >= BIP34_IMPLIES_BIP30_LIMIT;
+}
+
+/** Check input-dependent transaction rules without changing the coins view. */
+static bool CheckBlockTransactionInputs(const CTransaction& tx, BlockValidationState& state,
+                                        std::span<const Coin* const> input_coins, const CBlockIndex& index,
+                                        int lock_time_flags, script_verify_flags script_flags,
+                                        CAmount& fees, int64_t& sigops_cost, std::vector<int>& prev_heights)
+{
+    if (!tx.IsCoinBase()) {
+        CAmount txfee{0};
+        TxValidationState tx_state;
+        if (!Consensus::CheckTxInputs(tx, tx_state, input_coins, index.nHeight, txfee)) {
+            // Any transaction validation failure when connecting is a block consensus failure.
+            return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS,
+                                 tx_state.GetRejectReason(),
+                                 tx_state.GetDebugMessage() + " in transaction " + tx.GetHash().ToString());
+        }
+        fees += txfee;
+        if (!MoneyRange(fees)) {
+            return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-txns-accumulated-fee-outofrange",
+                                 "accumulated fee in the block out of range");
+        }
+
+        // BIP68 sequence locks depend on the heights of the spent coins.
+        prev_heights.resize(tx.vin.size());
+        for (size_t j{0}; j < tx.vin.size(); ++j) {
+            prev_heights[j] = input_coins[j]->nHeight;
+        }
+        if (!SequenceLocks(tx, lock_time_flags, prev_heights, index)) {
+            return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-txns-nonfinal",
+                                 "contains a non-BIP68-final transaction " + tx.GetHash().ToString());
+        }
+    }
+
+    // Count legacy, P2SH and witness sigops under this block's script flags.
+    sigops_cost += GetTransactionSigOpCost(tx, input_coins, script_flags);
+    if (sigops_cost > MAX_BLOCK_SIGOPS_COST) {
+        return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-blk-sigops", "too many sigops");
+    }
+    return true;
+}
+
+void Chainstate::LogScriptCheckReason(const char* script_check_reason, const CBlockIndex& index)
+{
+    AssertLockHeld(cs_main);
+    const bool fScriptChecks{script_check_reason != nullptr};
+    const kernel::ChainstateRole role{GetRole()};
+    if (script_check_reason != m_last_script_check_reason_logged && role.validated && !role.historical) {
+        if (fScriptChecks) {
+            LogInfo("Enabling script verification at block #%d (%s): %s.",
+                    index.nHeight, index.GetBlockHash().ToString(), script_check_reason);
+        } else {
+            LogInfo("Disabling script verification at block #%d (%s).",
+                    index.nHeight, index.GetBlockHash().ToString());
+        }
+        m_last_script_check_reason_logged = script_check_reason;
+    }
+}
+
+static void CheckBlockReward(const CBlock& block, BlockValidationState& state, int height,
+                             CAmount fees, const Consensus::Params& consensus)
+{
+    const CAmount reward{fees + GetBlockSubsidy(height, consensus)};
+    if (block.vtx[0]->GetValueOut() > reward && state.IsValid()) {
+        state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-cb-amount",
+                      strprintf("coinbase pays too much (actual=%d vs limit=%d)", block.vtx[0]->GetValueOut(), reward));
+    }
+}
+
+/** Apply the effects of this block (with given index) on the UTXO set represented by coins.
+ *  Validity checks that depend on the UTXO set are also done; ConnectBlock()
+ *  can fail if those validity checks fail (among other reasons). */
+bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, CBlockIndex* pindex,
+                              CCoinsViewCache& view, bool fJustCheck)
+{
+    AssertLockHeld(cs_main);
+    assert(pindex);
+
+    uint256 block_hash{block.GetHash()};
+    assert(*pindex->phashBlock == block_hash);
+
+    const auto time_start{SteadyClock::now()};
+    const CChainParams& params{m_chainman.GetParams()};
+
+    // Check it again in case a previous version let a bad block in
+    // NOTE: We don't currently (re-)invoke ContextualCheckBlock() or
+    // ContextualCheckBlockHeader() here. This means that if we add a new
+    // consensus rule that is enforced in one of those two functions, then we
+    // may have let in a block that violates the rule prior to updating the
+    // software, and we would NOT be enforcing the rule here. Fully solving
+    // upgrade from one software version to the next after a consensus rule
+    // change is potentially tricky and issue-specific (see NeedsRedownload()
+    // for one approach that was used for BIP 141 deployment).
+    // Also, currently the rule against blocks more than 2 hours in the future
+    // is enforced in ContextualCheckBlockHeader(); we wouldn't want to
+    // re-enforce that rule here (at least until we make it impossible for
+    // the clock to go backward).
+    if (!CheckBlock(block, state, params.GetConsensus(), !fJustCheck, !fJustCheck)) {
+        if (state.GetResult() == BlockValidationResult::BLOCK_MUTATED) {
+            // We don't write down blocks to disk if they may have been
+            // corrupted, so this should be impossible unless we're having hardware
+            // problems.
+            return FatalError(m_chainman.GetNotifications(), state, _("Corrupt block found indicating potential hardware failure."));
+        }
+        LogError("%s: Consensus::CheckBlock: %s\n", __func__, state.ToString());
+        return false;
+    }
+
+    // verify that the view's current state corresponds to the previous block
+    uint256 hashPrevBlock = pindex->pprev == nullptr ? uint256() : pindex->pprev->GetBlockHash();
+    assert(hashPrevBlock == view.GetBestBlock());
+
+    m_chainman.num_blocks_total++;
+
+    // Special case for the genesis block, skipping connection of its transactions
+    // (its coinbase is unspendable)
+    if (block_hash == params.GetConsensus().hashGenesisBlock) {
+        if (!fJustCheck)
+            view.SetBestBlock(pindex->GetBlockHash());
+        return true;
+    }
+
+    const char* script_check_reason{GetBlockScriptCheckReason(*pindex, m_chainman)};
+
+    const auto time_1{SteadyClock::now()};
+    m_chainman.time_check += time_1 - time_start;
+    LogDebug(BCLog::BENCH, "    - Sanity checks: %.2fms [%.2fs (%.2fms/blk)]\n",
+             Ticks<MillisecondsDouble>(time_1 - time_start),
+             Ticks<SecondsDouble>(m_chainman.time_check),
+             Ticks<MillisecondsDouble>(m_chainman.time_check) / m_chainman.num_blocks_total);
+
+    if (ShouldEnforceBIP30(*pindex, params.GetConsensus())) {
         for (const auto& tx : block.vtx) {
             for (size_t o = 0; o < tx->vout.size(); o++) {
                 if (view.HaveCoin(COutPoint(tx->GetHash(), o))) {
@@ -2532,17 +2577,7 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
              Ticks<MillisecondsDouble>(m_chainman.time_forks) / m_chainman.num_blocks_total);
 
     const bool fScriptChecks{!!script_check_reason};
-    const kernel::ChainstateRole role{GetRole()};
-    if (script_check_reason != m_last_script_check_reason_logged && role.validated && !role.historical) {
-        if (fScriptChecks) {
-            LogInfo("Enabling script verification at block #%d (%s): %s.",
-                    pindex->nHeight, block_hash.ToString(), script_check_reason);
-        } else {
-            LogInfo("Disabling script verification at block #%d (%s).",
-                    pindex->nHeight, block_hash.ToString());
-        }
-        m_last_script_check_reason_logged = script_check_reason;
-    }
+    LogScriptCheckReason(script_check_reason, *pindex);
 
     CBlockUndo blockundo;
 
@@ -2609,11 +2644,7 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
              Ticks<SecondsDouble>(m_chainman.time_connect),
              Ticks<MillisecondsDouble>(m_chainman.time_connect) / m_chainman.num_blocks_total);
 
-    CAmount blockReward = nFees + GetBlockSubsidy(pindex->nHeight, params.GetConsensus());
-    if (block.vtx[0]->GetValueOut() > blockReward && state.IsValid()) {
-        state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-cb-amount",
-                      strprintf("coinbase pays too much (actual=%d vs limit=%d)", block.vtx[0]->GetValueOut(), blockReward));
-    }
+    CheckBlockReward(block, state, pindex->nHeight, nFees, params.GetConsensus());
     if (control) {
         auto parallel_result = control->Complete();
         if (parallel_result.has_value() && state.IsValid()) {
@@ -3013,6 +3044,354 @@ struct ConnectedBlock {
  *
  * The block is added to connected_blocks if connection succeeds.
  */
+static bool IsDeepValidationBlock(const CBlockIndex& index, const ChainstateManager& chainman)
+{
+    AssertLockHeld(cs_main);
+    const CBlockIndex* best_header{chainman.m_best_header};
+    return index.Time() < Now<NodeSeconds>() - chainman.m_options.max_tip_age &&
+           best_header && best_header->GetAncestor(index.nHeight) == &index &&
+           GetBlockProofEquivalentTime(*best_header, index, *best_header, chainman.GetConsensus()) > 14 * 24 * 60 * 60;
+}
+
+bool Chainstate::CanValidateBatch() const
+{
+    AssertLockHeld(cs_main);
+    return m_chainman.IsInitialBlockDownload() && this == &m_chainman.CurrentChainstate() &&
+           !m_from_snapshot_blockhash && !TargetBlockHash() && !m_chainman.HistoricalChainstate() &&
+           m_coins_views && m_coins_views->m_cacheview && m_coins_views->m_thread_pool->WorkersCount() >= 2 &&
+           m_chain.Tip() && m_chain.Height() > 0 && IsDeepValidationBlock(*m_chain.Tip(), m_chainman);
+}
+
+static std::shared_ptr<const CBlock> FindRetainedBlock(
+    const CBlockIndex& index, const std::shared_ptr<const CBlock>& pblock,
+    std::span<const std::shared_ptr<const CBlock>> retained_blocks)
+{
+    if (pblock && pblock->GetHash() == index.GetBlockHash()) {
+        return pblock;
+    }
+    for (const auto& block : retained_blocks) {
+        if (block->GetHash() == index.GetBlockHash()) {
+            return block;
+        }
+    }
+    return {};
+}
+
+namespace {
+struct BatchBlockContext {
+    const char* script_check_reason;
+    int lock_time_flags;
+    script_verify_flags script_flags;
+};
+
+struct BatchBlockResult {
+    BlockValidationState state;
+    std::vector<PrecomputedTransactionData> txdata;
+    CAmount fees{0};
+    int64_t sigops_cost{0};
+};
+
+size_t BatchValidationMemory(std::span<const CoinsViewBatch::BlockDescriptor> blocks,
+                             std::span<const BatchBlockContext> contexts,
+                             const CoinsViewBatch* batch = nullptr)
+{
+    size_t usage{memusage::MallocUsage(blocks.size() * (sizeof(BatchBlockContext) + sizeof(BatchBlockResult) + sizeof(std::future<void>)))};
+    for (size_t b{0}; b < blocks.size(); ++b) {
+        size_t max_inputs{0};
+        for (size_t t{0}; t < blocks[b].block->vtx.size(); ++t) {
+            const CTransaction& tx{*blocks[b].block->vtx[t]};
+            max_inputs = std::max(max_inputs, tx.vin.size());
+            if (tx.IsCoinBase() || !contexts[b].script_check_reason) {
+                continue;
+            }
+            usage += memusage::MallocUsage(tx.vin.size() * (sizeof(CTxOut) + 4 * sizeof(CScriptCheck)));
+            if (batch) {
+                for (const Coin* coin : batch->Inputs(b, t)) {
+                    // Both precomputed data and script checks retain spent-output scripts.
+                    usage += 2 * memusage::DynamicUsage(coin->out.scriptPubKey);
+                }
+            }
+        }
+        usage += memusage::MallocUsage(max_inputs * sizeof(int));
+        if (contexts[b].script_check_reason) {
+            usage += memusage::MallocUsage(blocks[b].block->vtx.size() * sizeof(PrecomputedTransactionData));
+        }
+    }
+    return usage;
+}
+} // namespace
+
+Chainstate::BatchConnectResult Chainstate::ConnectTipBatch(
+    BlockValidationState& state, std::span<CBlockIndex* const> indices,
+    const std::shared_ptr<const CBlock>& pblock,
+    std::span<const std::shared_ptr<const CBlock>> retained_blocks,
+    std::vector<ConnectedBlock>& connected_blocks, DisconnectedBlockTransactions& disconnectpool,
+    size_t& attempted_blocks)
+{
+    AssertLockHeld(cs_main);
+    if (m_mempool) AssertLockHeld(m_mempool->cs);
+    attempted_blocks = 0;
+    if (!CanValidateBatch() || indices.size() < 2 || GetCoinsCacheSizeState() != CoinsCacheSizeState::OK) {
+        return BatchConnectResult::FALLBACK;
+    }
+    const auto time_start{SteadyClock::now()};
+    const Consensus::Params& consensus{m_chainman.GetConsensus()};
+    const size_t cache_usage{CoinsTip().DynamicMemoryUsage() + m_chainman.GetCheckQueue().DynamicMemoryUsage()};
+    if (cache_usage >= m_coinstip_cache_size_bytes) {
+        return BatchConnectResult::FALLBACK;
+    }
+    const size_t allowance{std::min(m_coinstip_cache_size_bytes / 4, (m_coinstip_cache_size_bytes - cache_usage) / 2)};
+    // Reserve one decoded maximum-size block and its temporary disk buffer before reading.
+    // Small caches use serial disk connection; retained network bodies have exact accounting.
+    // Empty witness stack elements can expand into vector objects while decoding.
+    constexpr size_t READ_HEADROOM{64 * MAX_BLOCK_SERIALIZED_SIZE};
+    size_t body_usage{0};
+    for (const auto& block : retained_blocks)
+        body_usage += sizeof(CBlock) + RecursiveDynamicUsage(*block);
+    if (pblock && std::find(retained_blocks.begin(), retained_blocks.end(), pblock) == retained_blocks.end()) {
+        body_usage += sizeof(CBlock) + RecursiveDynamicUsage(*pblock);
+    }
+    if (body_usage >= allowance) {
+        return BatchConnectResult::FALLBACK;
+    }
+    std::vector<CoinsViewBatch::BlockDescriptor> blocks;
+    std::vector<BatchBlockContext> contexts;
+    blocks.reserve(std::min<size_t>(indices.size(), 8));
+    contexts.reserve(blocks.capacity());
+    try {
+        for (CBlockIndex* index : indices.first(std::min<size_t>(indices.size(), 8))) {
+            if (!IsDeepValidationBlock(*index, m_chainman)) {
+                break;
+            }
+            std::shared_ptr<const CBlock> block{FindRetainedBlock(*index, pblock, retained_blocks)};
+            if (!block) {
+                if (allowance - body_usage < READ_HEADROOM) {
+                    break;
+                }
+                auto loaded{std::make_shared<CBlock>()};
+                if (!m_blockman.ReadBlock(*loaded, *index)) {
+                    FatalError(m_chainman.GetNotifications(), state, _("Failed to read block."));
+                    return BatchConnectResult::ERROR;
+                }
+                body_usage += sizeof(CBlock) + RecursiveDynamicUsage(*loaded);
+                block = std::move(loaded);
+            }
+            if (body_usage >= allowance) {
+                break;
+            }
+            BlockValidationState block_state;
+            if (!CheckBlock(*block, block_state, m_chainman.GetConsensus())) {
+                if (block_state.GetResult() == BlockValidationResult::BLOCK_MUTATED) {
+                    FatalError(m_chainman.GetNotifications(), state, _("Corrupt block found indicating potential hardware failure."));
+                    return BatchConnectResult::ERROR;
+                }
+                attempted_blocks = blocks.size() + 1;
+                return BatchConnectResult::FALLBACK;
+            }
+            blocks.push_back({std::move(block), index->nHeight, ShouldEnforceBIP30(*index, m_chainman.GetConsensus())});
+            contexts.push_back({GetBlockScriptCheckReason(*index, m_chainman),
+                                DeploymentActiveAt(*index, m_chainman, Consensus::DEPLOYMENT_CSV) ? static_cast<int>(LOCKTIME_VERIFY_SEQUENCE) : 0,
+                                GetBlockScriptFlags(*index, m_chainman)});
+        }
+        if (blocks.size() < 2) {
+            return BatchConnectResult::FALLBACK;
+        }
+        const auto time_loaded{SteadyClock::now()};
+        const auto shrink_group{[&] {
+            const auto& last{blocks.back().block};
+            if (last != pblock && std::find(retained_blocks.begin(), retained_blocks.end(), last) == retained_blocks.end()) {
+                body_usage -= sizeof(CBlock) + RecursiveDynamicUsage(*last);
+            }
+            blocks.pop_back();
+            contexts.pop_back();
+        }};
+        const size_t workers{m_coins_views->m_thread_pool->WorkersCount()};
+        const size_t read_headroom{workers * (2 * MAX_SCRIPT_SIZE + sizeof(Coin) + 256)};
+        while (blocks.size() >= 2) {
+            const size_t validation_usage{BatchValidationMemory(blocks, contexts)};
+            if (body_usage + validation_usage + read_headroom >= allowance ||
+                CoinsViewBatch::EstimateScratch(CoinsTip(), blocks) > allowance - body_usage - validation_usage - read_headroom) {
+                shrink_group();
+                continue;
+            }
+            attempted_blocks = blocks.size();
+            bool retry_smaller{false};
+            SteadyClock::time_point time_prepared, time_checked, time_scripts, time_undo_written, time_promoted;
+            {
+                CoinsViewBatch batch{CoinsTip(), blocks, allowance - body_usage - validation_usage - read_headroom};
+                const auto prepared{batch.Prepare(*m_coins_views->m_thread_pool)};
+                if (prepared == CoinsViewBatch::PrepareResult::INTERRUPTED) {
+                    state.Error("Block input preparation interrupted");
+                    return BatchConnectResult::ERROR;
+                }
+                if (prepared != CoinsViewBatch::PrepareResult::READY) {
+                    LogDebug(BCLog::BENCH, "IBD batch fallback: blocks=%u prepare=%.2fms\n", blocks.size(), Ticks<MillisecondsDouble>(SteadyClock::now() - time_start));
+                    return BatchConnectResult::FALLBACK;
+                }
+                if (body_usage + batch.DynamicMemoryUsage() + BatchValidationMemory(blocks, contexts, &batch) + read_headroom > allowance) {
+                    retry_smaller = true;
+                } else {
+                    time_prepared = SteadyClock::now();
+                    std::vector<BatchBlockResult> results(blocks.size());
+                    std::optional<CCheckQueueControl<CScriptCheck>> control;
+                    std::vector<std::future<void>> futures;
+                    futures.reserve(blocks.size());
+                    bool interrupted{false};
+                    for (size_t b{0}; b < blocks.size(); ++b) {
+                        if (contexts[b].script_check_reason) results[b].txdata.resize(blocks[b].block->vtx.size());
+                    }
+                    for (size_t b{0}; b < blocks.size(); ++b) {
+                        auto submitted{m_coins_views->m_thread_pool->Submit([&, b] {
+                            auto& result{results[b]};
+                            const auto& block{*blocks[b].block};
+                            size_t max_inputs{0};
+                            for (const auto& tx : block.vtx) {
+                                max_inputs = std::max(max_inputs, tx->vin.size());
+                            }
+                            std::vector<int> prev_heights;
+                            prev_heights.reserve(max_inputs);
+                            for (size_t t{0}; t < block.vtx.size(); ++t) {
+                                const CTransaction& tx{*block.vtx[t]};
+                                const auto inputs{batch.Inputs(b, t)};
+                                if (!CheckBlockTransactionInputs(tx, result.state, inputs, *indices[b], contexts[b].lock_time_flags,
+                                                                 contexts[b].script_flags, result.fees, result.sigops_cost, prev_heights)) return;
+                                if (!tx.IsCoinBase() && contexts[b].script_check_reason) {
+                                    std::vector<CTxOut> spent_outputs;
+                                    spent_outputs.reserve(inputs.size());
+                                    for (const Coin* coin : inputs) {
+                                        spent_outputs.emplace_back(coin->out);
+                                    }
+                                    result.txdata[t].Init(tx, std::move(spent_outputs));
+                                }
+                            }
+                            CheckBlockReward(block, result.state, indices[b]->nHeight, result.fees, consensus);
+                        })};
+                        if (!submitted) {
+                            interrupted = true;
+                            break;
+                        }
+                        futures.emplace_back(std::move(*submitted));
+                    }
+                    std::exception_ptr exception;
+                    for (auto& future : futures) {
+                        try {
+                            future.get();
+                        } catch (...) {
+                            if (!exception) exception = std::current_exception();
+                        }
+                    }
+                    if (exception) std::rethrow_exception(exception);
+                    if (interrupted) {
+                        state.Error("Block validation interrupted");
+                        return BatchConnectResult::ERROR;
+                    }
+                    if (std::any_of(results.begin(), results.end(), [](const auto& result) { return !result.state.IsValid(); })) {
+                        LogDebug(BCLog::BENCH, "IBD batch fallback: blocks=%u checks=%.2fms total=%.2fms\n", blocks.size(), Ticks<MillisecondsDouble>(SteadyClock::now() - time_prepared), Ticks<MillisecondsDouble>(SteadyClock::now() - time_start));
+                        return BatchConnectResult::FALLBACK;
+                    }
+                    time_checked = SteadyClock::now();
+                    if (std::any_of(contexts.begin(), contexts.end(), [](const auto& context) { return context.script_check_reason != nullptr; })) {
+                        control.emplace(m_chainman.GetCheckQueue());
+                        for (size_t b{0}; b < blocks.size(); ++b) {
+                            if (!contexts[b].script_check_reason) {
+                                continue;
+                            }
+                            for (size_t t{1}; t < blocks[b].block->vtx.size(); ++t) {
+                                // Provisional inputs must never fall back to a confirmed-view lookup.
+                                assert(results[b].txdata[t].m_spent_outputs_ready);
+                                assert(results[b].txdata[t].m_spent_outputs.size() == blocks[b].block->vtx[t]->vin.size());
+                                std::vector<CScriptCheck> checks;
+                                TxValidationState tx_state;
+                                const bool prepared_scripts{CheckInputScripts(*blocks[b].block->vtx[t], tx_state, CoinsTip(), contexts[b].script_flags,
+                                                                              false, false, results[b].txdata[t], m_chainman.m_validation_cache, &checks)};
+                                assert(prepared_scripts);
+                                control->Add(std::move(checks));
+                            }
+                        }
+                        if (control->Complete().has_value()) {
+                            LogDebug(BCLog::BENCH, "IBD batch fallback: blocks=%u scripts=%.2fms total=%.2fms\n", blocks.size(), Ticks<MillisecondsDouble>(SteadyClock::now() - time_checked), Ticks<MillisecondsDouble>(SteadyClock::now() - time_start));
+                            return BatchConnectResult::FALLBACK;
+                        }
+                    }
+                    time_scripts = SteadyClock::now();
+                    if (m_chainman.m_interrupt) {
+                        state.Error("Block validation interrupted");
+                        return BatchConnectResult::ERROR;
+                    }
+                    if (!CanValidateBatch()) {
+                        return BatchConnectResult::FALLBACK;
+                    }
+                    // No block status, confirmed coins or callbacks change until all checks pass.
+                    for (size_t b{0}; b < blocks.size(); ++b) {
+                        if (!m_blockman.WriteBlockUndo(batch.Undo(b), state, *indices[b])) {
+                            return BatchConnectResult::ERROR;
+                        }
+                    }
+                    time_undo_written = SteadyClock::now();
+                    for (size_t b{0}; b < blocks.size(); ++b) {
+                        if (!indices[b]->IsValid(BLOCK_VALID_SCRIPTS)) {
+                            indices[b]->RaiseValidity(BLOCK_VALID_SCRIPTS);
+                            m_blockman.m_dirty_blockindex.insert(indices[b]);
+                        }
+                    }
+                    batch.Commit(indices[blocks.size() - 1]->GetBlockHash());
+                    m_chain.SetTip(*indices[blocks.size() - 1]);
+                    time_promoted = SteadyClock::now();
+                }
+            } // All provisional material, worker results and script checks are released before flushing.
+            if (retry_smaller) {
+                shrink_group();
+                continue;
+            }
+            for (size_t b{0}; b < blocks.size(); ++b) {
+                if (m_mempool) {
+                    m_mempool->removeForBlock(blocks[b].block->vtx);
+                    disconnectpool.removeForBlock(blocks[b].block->vtx);
+                }
+            }
+            m_chainman.UpdateIBDStatus();
+            const auto time_before_flush{SteadyClock::now()};
+            if (!FlushStateToDisk(state, FlushStateMode::IF_NEEDED)) {
+                return BatchConnectResult::ERROR;
+            }
+            const auto time_flushed{SteadyClock::now()};
+            for (size_t b{0}; b < blocks.size(); ++b) {
+                if (m_chainman.m_options.signals) {
+                    m_chainman.m_options.signals->BlockChecked(blocks[b].block, {});
+                }
+                LogScriptCheckReason(contexts[b].script_check_reason, *indices[b]);
+                UpdateTip(indices[b]);
+                connected_blocks.emplace_back(indices[b], std::move(blocks[b].block));
+            }
+            const auto time_finished{SteadyClock::now()};
+            m_chainman.num_blocks_total += blocks.size();
+            m_chainman.time_check += time_loaded - time_start;
+            m_chainman.time_forks += time_prepared - time_loaded;
+            m_chainman.time_connect += time_checked - time_prepared;
+            m_chainman.time_verify += time_scripts - time_prepared;
+            m_chainman.time_undo += time_undo_written - time_scripts;
+            m_chainman.time_index += time_promoted - time_undo_written;
+            m_chainman.time_connect_total += time_promoted - time_start;
+            m_chainman.time_chainstate += time_flushed - time_before_flush;
+            m_chainman.time_post_connect += time_before_flush - time_promoted + time_finished - time_flushed;
+            m_chainman.time_total += time_finished - time_start;
+            LogDebug(BCLog::BENCH, "IBD batch: blocks=%u first=%d last=%d prepare=%.2fms checks=%.2fms scripts=%.2fms promote=%.2fms flush=%.2fms postprocess=%.2fms total=%.2fms\n",
+                     blocks.size(), indices.front()->nHeight, indices[blocks.size() - 1]->nHeight,
+                     Ticks<MillisecondsDouble>(time_prepared - time_start), Ticks<MillisecondsDouble>(time_checked - time_prepared),
+                     Ticks<MillisecondsDouble>(time_scripts - time_checked), Ticks<MillisecondsDouble>(time_promoted - time_scripts),
+                     Ticks<MillisecondsDouble>(time_flushed - time_before_flush),
+                     Ticks<MillisecondsDouble>(time_before_flush - time_promoted + time_finished - time_flushed),
+                     Ticks<MillisecondsDouble>(time_finished - time_start));
+            return BatchConnectResult::CONNECTED;
+        }
+        attempted_blocks = 0;
+        return BatchConnectResult::FALLBACK;
+    } catch (const std::exception& e) {
+        FatalError(m_chainman.GetNotifications(), state, strprintf(_("System error while validating blocks: %s"), e.what()));
+        return BatchConnectResult::ERROR;
+    }
+}
+
 bool Chainstate::ConnectTip(
     BlockValidationState& state,
     CBlockIndex* pindexNew,
@@ -3200,7 +3579,7 @@ void Chainstate::PruneBlockIndexCandidates() {
  *
  * @returns true unless a system error occurred
  */
-bool Chainstate::ActivateBestChainStep(BlockValidationState& state, CBlockIndex& index_most_work, const std::shared_ptr<const CBlock>& pblock, bool& fInvalidFound, std::vector<ConnectedBlock>& connected_blocks)
+bool Chainstate::ActivateBestChainStep(BlockValidationState& state, CBlockIndex& index_most_work, const std::shared_ptr<const CBlock>& pblock, bool& fInvalidFound, std::vector<ConnectedBlock>& connected_blocks, std::span<const std::shared_ptr<const CBlock>> retained_blocks)
 {
     AssertLockHeld(cs_main);
     if (m_mempool) AssertLockHeld(m_mempool->cs);
@@ -3243,9 +3622,26 @@ bool Chainstate::ActivateBestChainStep(BlockValidationState& state, CBlockIndex&
         }
         nHeight = nTargetHeight;
 
-        // Connect new blocks.
+        size_t serial_fallback_remaining{0};
+        if (!fBlocksDisconnected && vpindexToConnect.size() > 1 && CanValidateBatch()) {
+            std::vector<CBlockIndex*> batch_indices(vpindexToConnect.rbegin(), vpindexToConnect.rend());
+            const auto batch_result{ConnectTipBatch(state, batch_indices, pblock, retained_blocks,
+                                                    connected_blocks, disconnectpool, serial_fallback_remaining)};
+            if (batch_result == BatchConnectResult::ERROR) {
+                MaybeUpdateMempoolForReorg(disconnectpool, false);
+                return false;
+            }
+            if (batch_result == BatchConnectResult::CONNECTED) {
+                PruneBlockIndexCandidates();
+                fContinue = false;
+                break;
+            }
+        }
+
+        // Connect new blocks. A failed speculative group uses this canonical
+        // path through the attempted prefix to diagnose its first invalid block.
         for (CBlockIndex* pindexConnect : vpindexToConnect | std::views::reverse) {
-            if (!ConnectTip(state, pindexConnect, pindexConnect == &index_most_work ? pblock : std::shared_ptr<const CBlock>(), connected_blocks, disconnectpool)) {
+            if (!ConnectTip(state, pindexConnect, FindRetainedBlock(*pindexConnect, pblock, retained_blocks), connected_blocks, disconnectpool)) {
                 if (state.IsInvalid()) {
                     // The block violates a consensus rule.
                     if (state.GetResult() != BlockValidationResult::BLOCK_MUTATED) {
@@ -3264,7 +3660,8 @@ bool Chainstate::ActivateBestChainStep(BlockValidationState& state, CBlockIndex&
                 }
             } else {
                 PruneBlockIndexCandidates();
-                if (!pindexOldTip || m_chain.Tip()->nChainWork > pindexOldTip->nChainWork) {
+                if (serial_fallback_remaining > 0) --serial_fallback_remaining;
+                if (serial_fallback_remaining == 0 && (!pindexOldTip || m_chain.Tip()->nChainWork > pindexOldTip->nChainWork)) {
                     // We're in a better position than we were. Return temporarily to release the lock.
                     fContinue = false;
                     break;
@@ -3332,7 +3729,8 @@ static void LimitValidationInterfaceQueue(ValidationSignals& signals) LOCKS_EXCL
     }
 }
 
-bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<const CBlock> pblock)
+bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<const CBlock> pblock,
+                                   std::span<const std::shared_ptr<const CBlock>> retained_blocks)
 {
     AssertLockNotHeld(m_chainstate_mutex);
 
@@ -3395,10 +3793,10 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                 // in case snapshot validation is completed during ActivateBestChainStep, the
                 // result of GetRole() changes from BACKGROUND to NORMAL.
                const ChainstateRole chainstate_role{this->GetRole()};
-                if (!ActivateBestChainStep(state, *pindexMostWork, pblock && pblock->GetHash() == pindexMostWork->GetBlockHash() ? pblock : nullBlockPtr, fInvalidFound, connected_blocks)) {
-                    // A system error occurred
-                    return false;
-                }
+               if (!ActivateBestChainStep(state, *pindexMostWork, pblock && pblock->GetHash() == pindexMostWork->GetBlockHash() ? pblock : nullBlockPtr, fInvalidFound, connected_blocks, retained_blocks)) {
+                   // A system error occurred
+                   return false;
+               }
                 blocks_connected = true;
 
                 if (fInvalidFound) {
