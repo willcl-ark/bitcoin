@@ -45,6 +45,7 @@ FUZZ_TARGET(banman, .init = initialize_banman)
 {
     SeedRandomStateForTest(SeedRand::ZEROS);
     FuzzedDataProvider fuzzed_data_provider{buffer.data(), buffer.size()};
+    g_cjdns_enabled = fuzzed_data_provider.ConsumeBool();
     FakeNodeClock clock{ConsumeTime(fuzzed_data_provider)};
     fs::path banlist_file = gArgs.GetDataDirNet() / "fuzzed_banlist";
 
@@ -71,13 +72,11 @@ FUZZ_TARGET(banman, .init = initialize_banman)
                 fuzzed_data_provider,
                 [&] {
                     CNetAddr net_addr{ConsumeNetAddr(fuzzed_data_provider)};
-                    if (!net_addr.IsCJDNS() || !net_addr.IsValid()) {
-                        const std::optional<CNetAddr>& addr{LookupHost(net_addr.ToStringAddr(), /*fAllowLookup=*/false)};
-                        if (addr.has_value() && addr->IsValid()) {
-                            net_addr = *addr;
-                        } else {
-                            contains_invalid = true;
-                        }
+                    const std::optional<CNetAddr>& addr{LookupHost(net_addr.ToStringAddr(), /*fAllowLookup=*/false)};
+                    if (addr.has_value() && addr->IsValid()) {
+                        net_addr = *addr;
+                    } else {
+                        contains_invalid = true;
                     }
                     auto ban_time_offset = ConsumeBanTimeOffset(fuzzed_data_provider);
                     auto since_unix_epoch = fuzzed_data_provider.ConsumeBool();
