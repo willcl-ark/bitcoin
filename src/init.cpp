@@ -1620,6 +1620,13 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     // 2.2. -onlynet=cjdns is given
     g_cjdns_enabled = g_reachable_nets.Contains(NET_CJDNS);
 
+    if (!onlynets.empty() && std::all_of(onlynets.begin(), onlynets.end(), [](const auto& net) {
+            return ParseNetwork(net) == NET_CJDNS;
+        })) {
+        LogWarning("Outbound connections are restricted to CJDNS only. CJDNS has fewer peers than Tor or IP networks, "
+                   "which can make this node more susceptible to eclipse attacks when it has few peers.\n");
+    }
+
     /* Start the RPC server already.  It will be started in "warmup" mode
      * and not really process calls already (but it will signify connections
      * that the server is there and will be ready later).  Warmup mode will
