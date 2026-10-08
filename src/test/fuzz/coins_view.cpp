@@ -22,14 +22,15 @@
 #include <util/hasher.h>
 #include <util/threadpool.h>
 
-#include <cassert>
 #include <algorithm>
+#include <cassert>
 #include <cstdint>
 #include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
 #include <ranges>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -57,10 +58,12 @@ private:
     std::vector<CacheCoinSnapshot> ComputeCacheCoinsSnapshot() const
     {
         std::vector<CacheCoinSnapshot> snapshot;
-        snapshot.reserve(cacheCoins.size());
+        snapshot.reserve(GetCacheSize());
 
-        for (const auto& [outpoint, entry] : cacheCoins) {
-            snapshot.emplace_back(outpoint, entry.IsDirty(), entry.IsFresh(), entry.coin);
+        for (const auto& storage : m_storage) {
+            for (const auto& [outpoint, entry] : storage.coins) {
+                snapshot.emplace_back(outpoint, entry.IsDirty(), entry.IsFresh(), entry.coin);
+            }
         }
 
         std::ranges::sort(snapshot, std::less<>{}, &CacheCoinSnapshot::outpoint);
@@ -234,11 +237,7 @@ void TestCoinsView(FuzzedDataProvider& fuzzed_data_provider, CCoinsViewCache& co
                 random_mutable_transaction = *opt_mutable_transaction;
             },
             [&] {
-                CoinsCachePair sentinel{};
-                sentinel.second.SelfRef(sentinel);
-                size_t dirty_count{0};
-                CCoinsMapMemoryResource resource;
-                CCoinsMap coins_map{0, SaltedCoinsCacheHasher{/*deterministic=*/true}, CCoinsMap::key_equal{}, &resource};
+                CoinsCacheStorage storage{/*deterministic=*/true};
                 LIMITED_WHILE (good_data && fuzzed_data_provider.ConsumeBool(), 10'000) {
                     CCoinsCacheEntry coins_cache_entry;
                     if (fuzzed_data_provider.ConsumeBool()) {
@@ -254,12 +253,12 @@ void TestCoinsView(FuzzedDataProvider& fuzzed_data_provider, CCoinsViewCache& co
                     // Avoid setting FRESH for an outpoint that already exists unspent in the parent view.
                     bool fresh{!coins_view_cache.PeekCoin(random_out_point) && fuzzed_data_provider.ConsumeBool()};
                     bool dirty{fresh || fuzzed_data_provider.ConsumeBool()};
-                    auto it{coins_map.emplace(random_out_point, std::move(coins_cache_entry)).first};
-                    if (dirty) CCoinsCacheEntry::SetDirty(*it, sentinel);
-                    if (fresh) CCoinsCacheEntry::SetFresh(*it, sentinel);
-                    dirty_count += dirty;
+                    auto it{storage.coins.emplace(random_out_point, std::move(coins_cache_entry)).first};
+                    if (dirty) CCoinsCacheEntry::SetDirty(*it, storage.sentinel);
+                    if (fresh) CCoinsCacheEntry::SetFresh(*it, storage.sentinel);
+                    storage.dirty_count += dirty;
                 }
-                auto cursor{CoinsViewCacheCursor(dirty_count, sentinel, coins_map, /*will_erase=*/true)};
+                auto cursor{CoinsViewCacheCursor(std::span{&storage, 1}, /*will_erase=*/true)};
                 uint256 best_block{coins_view_cache.GetBestBlock()};
                 if (fuzzed_data_provider.ConsumeBool()) best_block = ConsumeUInt256(fuzzed_data_provider);
                 // Set best block hash to non-null to satisfy the assertion in CCoinsViewDB::BatchWrite().

@@ -18,12 +18,13 @@
 #include <util/check.h>
 #include <util/strencodings.h>
 
+#include <boost/test/unit_test.hpp>
+
 #include <map>
+#include <span>
 #include <string>
 #include <variant>
 #include <vector>
-
-#include <boost/test/unit_test.hpp>
 
 using namespace util::hex_literals;
 
@@ -75,11 +76,14 @@ public:
     void SelfTest(bool sanity_check = true) const
     {
         // Manually recompute the dynamic usage of the whole data, and compare it.
-        size_t ret = memusage::DynamicUsage(cacheCoins);
-        size_t count = 0;
-        for (const auto& entry : cacheCoins) {
-            ret += entry.second.coin.DynamicMemoryUsage();
-            ++count;
+        size_t ret{0};
+        size_t count{0};
+        for (const auto& storage : m_storage) {
+            ret += memusage::DynamicUsage(storage.coins);
+            for (const auto& entry : storage.coins) {
+                ret += entry.second.coin.DynamicMemoryUsage();
+                ++count;
+            }
         }
         BOOST_CHECK_EQUAL(GetCacheSize(), count);
         BOOST_CHECK_EQUAL(DynamicMemoryUsage(), ret);
@@ -88,10 +92,19 @@ public:
         }
     }
 
-    CCoinsMap& map() const { return cacheCoins; }
-    CoinsCachePair& sentinel() const { return m_sentinel; }
-    size_t& usage() const { return cachedCoinsUsage; }
-    size_t& dirty() const { return m_dirty_count; }
+    CCoinsMap& map(const COutPoint& outpoint = COutPoint{}) const { return GetStorage(outpoint).coins; }
+    CoinsCachePair& sentinel() const { return GetStorage(COutPoint{}).sentinel; }
+    size_t& usage() const { return GetStorage(COutPoint{}).coins_usage; }
+    size_t& dirty() const { return GetStorage(COutPoint{}).dirty_count; }
+
+    COutPoint OutpointInPartition(size_t partition) const
+    {
+        COutPoint outpoint{Txid::FromUint256(uint256::ONE), 0};
+        while (&GetStorage(outpoint) != &m_storage.at(partition)) {
+            ++outpoint.n;
+        }
+        return outpoint;
+    }
 };
 
 } // namespace
@@ -186,7 +199,7 @@ void SimulationTest(CCoinsView* base, bool fake_best_block)
                     (coin.IsSpent() ? added_an_entry : updated_an_entry) = true;
                     coin = newcoin;
                 }
-                if (COutPoint op(txid, 0); !stack.back()->map().contains(op) && !newcoin.out.scriptPubKey.IsUnspendable() && m_rng.randbool()) {
+                if (COutPoint op(txid, 0); !stack.back()->map(op).contains(op) && !newcoin.out.scriptPubKey.IsUnspendable() && m_rng.randbool()) {
                     stack.back()->EmplaceCoinInternalDANGER(op, std::move(newcoin));
                 } else {
                     stack.back()->AddCoin(op, std::move(newcoin), /*possible_overwrite=*/!coin.IsSpent() || m_rng.randbool());
@@ -638,15 +651,12 @@ static MaybeCoin GetCoinsMapEntry(const CCoinsMap& map, const COutPoint& outp = 
 
 static void WriteCoinsViewEntry(CCoinsView& view, const MaybeCoin& cache_coin)
 {
-    CoinsCachePair sentinel{};
-    sentinel.second.SelfRef(sentinel);
-    CCoinsMapMemoryResource resource;
-    CCoinsMap map{0, CCoinsMap::hasher{}, CCoinsMap::key_equal{}, &resource};
-    if (cache_coin) InsertCoinsMapEntry(map, sentinel, *cache_coin);
-    size_t dirty_count{cache_coin && cache_coin->IsDirty()};
-    auto cursor{CoinsViewCacheCursor(dirty_count, sentinel, map, /*will_erase=*/true)};
+    CoinsCacheStorage storage;
+    if (cache_coin) InsertCoinsMapEntry(storage.coins, storage.sentinel, *cache_coin);
+    storage.dirty_count = cache_coin && cache_coin->IsDirty();
+    auto cursor{CoinsViewCacheCursor(std::span{&storage, 1}, /*will_erase=*/true)};
     view.BatchWrite(cursor, {});
-    BOOST_CHECK_EQUAL(dirty_count, 0U);
+    BOOST_CHECK_EQUAL(storage.dirty_count, 0U);
 }
 
 class SingleEntryCacheTest
@@ -913,13 +923,13 @@ void TestFlushBehavior(
     view->AddCoin(outp, Coin(coin), false);
 
     cache_usage = view->DynamicMemoryUsage();
-    cache_size = view->map().size();
+    cache_size = view->GetCacheSize();
 
     // `base` shouldn't have coin (no flush yet) but `view` should have cached it.
     BOOST_CHECK(!base.HaveCoin(outp));
     BOOST_CHECK(view->HaveCoin(outp));
 
-    BOOST_CHECK_EQUAL(GetCoinsMapEntry(view->map(), outp), CoinEntry(coin.out.nValue, CoinEntry::State::DIRTY_FRESH));
+    BOOST_CHECK_EQUAL(GetCoinsMapEntry(view->map(outp), outp), CoinEntry(coin.out.nValue, CoinEntry::State::DIRTY_FRESH));
 
     // --- 2. Flushing all caches (without erasing)
     //
@@ -927,11 +937,11 @@ void TestFlushBehavior(
 
     // CoinsMap usage should be unchanged since we didn't erase anything.
     BOOST_CHECK_EQUAL(cache_usage, view->DynamicMemoryUsage());
-    BOOST_CHECK_EQUAL(cache_size, view->map().size());
+    BOOST_CHECK_EQUAL(cache_size, view->GetCacheSize());
 
     // --- 3. Ensuring the entry still exists in the cache and has been written to parent
     //
-    BOOST_CHECK_EQUAL(GetCoinsMapEntry(view->map(), outp), CoinEntry(coin.out.nValue, CoinEntry::State::CLEAN)); // State should have been wiped.
+    BOOST_CHECK_EQUAL(GetCoinsMapEntry(view->map(outp), outp), CoinEntry(coin.out.nValue, CoinEntry::State::CLEAN)); // State should have been wiped.
 
     // Both views should now have the coin.
     BOOST_CHECK(base.HaveCoin(outp));
@@ -945,13 +955,13 @@ void TestFlushBehavior(
         // Memory does not necessarily go down due to the map using a memory pool
         BOOST_TEST(view->DynamicMemoryUsage() <= cache_usage);
         // Size of the cache must go down though
-        BOOST_TEST(view->map().size() < cache_size);
+        BOOST_TEST(view->GetCacheSize() < cache_size);
 
         // --- 5. Ensuring the entry is no longer in the cache
         //
-        BOOST_CHECK(!GetCoinsMapEntry(view->map(), outp));
+        BOOST_CHECK(!GetCoinsMapEntry(view->map(outp), outp));
         view->AccessCoin(outp);
-        BOOST_CHECK_EQUAL(GetCoinsMapEntry(view->map(), outp), CoinEntry(coin.out.nValue, CoinEntry::State::CLEAN));
+        BOOST_CHECK_EQUAL(GetCoinsMapEntry(view->map(outp), outp), CoinEntry(coin.out.nValue, CoinEntry::State::CLEAN));
     }
 
     // Can't overwrite an entry without specifying that an overwrite is
@@ -965,7 +975,7 @@ void TestFlushBehavior(
     BOOST_CHECK(view->SpendCoin(outp));
 
     // The coin should be in the cache, but spent and marked dirty.
-    BOOST_CHECK_EQUAL(GetCoinsMapEntry(view->map(), outp), SPENT_DIRTY);
+    BOOST_CHECK_EQUAL(GetCoinsMapEntry(view->map(outp), outp), SPENT_DIRTY);
     BOOST_CHECK(!view->HaveCoin(outp)); // Coin should be considered spent in `view`.
     BOOST_CHECK(base.HaveCoin(outp));  // But coin should still be unspent in `base`.
 
@@ -1016,7 +1026,7 @@ void TestFlushBehavior(
     all_caches[0]->AddCoin(outp, std::move(coin), false);
 
     // Coin should be FRESH in the cache.
-    BOOST_CHECK_EQUAL(GetCoinsMapEntry(all_caches[0]->map(), outp), CoinEntry(coin_val, CoinEntry::State::DIRTY_FRESH));
+    BOOST_CHECK_EQUAL(GetCoinsMapEntry(all_caches[0]->map(outp), outp), CoinEntry(coin_val, CoinEntry::State::DIRTY_FRESH));
     // Base shouldn't have seen coin.
     BOOST_CHECK(!base.HaveCoin(outp));
 
@@ -1024,7 +1034,7 @@ void TestFlushBehavior(
     all_caches[0]->Sync();
 
     // Ensure there is no sign of the coin after spend/flush.
-    BOOST_CHECK(!GetCoinsMapEntry(all_caches[0]->map(), outp));
+    BOOST_CHECK(!GetCoinsMapEntry(all_caches[0]->map(outp), outp));
     BOOST_CHECK(!all_caches[0]->HaveCoinInCache(outp));
     BOOST_CHECK(!base.HaveCoin(outp));
 }
@@ -1176,6 +1186,64 @@ BOOST_AUTO_TEST_CASE(ccoins_reset_guard)
     // Flush should be a no-op after reset.
     cache.Flush();
     BOOST_CHECK_EQUAL(cache.GetDirtyCount(), 0U);
+}
+
+BOOST_AUTO_TEST_CASE(ccoins_partition_lifecycle)
+{
+    CCoinsViewCacheTest parent{&CoinsViewEmpty::Get()};
+    CCoinsViewCacheTest cache{&parent};
+    const auto first{cache.OutpointInPartition(0)};
+    const auto last{cache.OutpointInPartition(COINS_CACHE_PARTITIONS - 1)};
+    const Coin coin{CTxOut{1, CScript{} << std::vector<unsigned char>(CScriptBase::STATIC_SIZE + 1)}, 1, false};
+
+    // Empty cursors and empty lists between populated partitions must work.
+    cache.Sync();
+    cache.Flush();
+    cache.AddCoin(first, Coin{coin}, false);
+    cache.AddCoin(last, Coin{coin}, false);
+    BOOST_CHECK_EQUAL(cache.GetDirtyCount(), 2U);
+    cache.Sync();
+    cache.SelfTest();
+    BOOST_CHECK_EQUAL(cache.GetCacheSize(), 2U);
+    BOOST_CHECK_EQUAL(cache.GetDirtyCount(), 0U);
+    BOOST_CHECK_EQUAL(parent.AccessCoin(first), coin);
+    BOOST_CHECK_EQUAL(parent.AccessCoin(last), coin);
+
+    cache.SpendCoin(first);
+    cache.Sync();
+    cache.SelfTest();
+    BOOST_CHECK_EQUAL(cache.GetCacheSize(), 1U);
+    BOOST_CHECK(!parent.HaveCoin(first));
+    cache.Flush(/*reallocate_cache=*/false);
+    cache.SelfTest();
+    BOOST_CHECK_EQUAL(cache.GetCacheSize(), 0U);
+
+    // Exercise every partition, then reset without changing the parent.
+    {
+        const auto reset_guard{cache.CreateResetGuard()};
+        for (size_t i{0}; i < COINS_CACHE_PARTITIONS; ++i) {
+            cache.AddCoin(cache.OutpointInPartition(i), Coin{coin}, /*possible_overwrite=*/true);
+        }
+        BOOST_CHECK_EQUAL(cache.GetCacheSize(), COINS_CACHE_PARTITIONS);
+        BOOST_CHECK_EQUAL(cache.GetDirtyCount(), COINS_CACHE_PARTITIONS);
+        cache.SelfTest();
+    }
+    cache.SelfTest();
+    BOOST_CHECK_EQUAL(cache.GetCacheSize(), 0U);
+    BOOST_CHECK_EQUAL(cache.GetDirtyCount(), 0U);
+    BOOST_CHECK(!parent.HaveCoin(first));
+    BOOST_CHECK_EQUAL(parent.AccessCoin(last), coin);
+
+    for (size_t i{0}; i < COINS_CACHE_PARTITIONS; ++i) {
+        cache.AddCoin(cache.OutpointInPartition(i), Coin{coin}, /*possible_overwrite=*/true);
+    }
+    cache.Flush();
+    cache.SelfTest();
+    BOOST_CHECK_EQUAL(cache.GetCacheSize(), 0U);
+    BOOST_CHECK_EQUAL(cache.GetDirtyCount(), 0U);
+    for (size_t i{0}; i < COINS_CACHE_PARTITIONS; ++i) {
+        BOOST_CHECK_EQUAL(parent.AccessCoin(cache.OutpointInPartition(i)), coin);
+    }
 }
 
 BOOST_AUTO_TEST_CASE(ccoins_peekcoin)

@@ -21,6 +21,7 @@
 #include <util/not_null.h>
 #include <util/overflow.h>
 
+#include <array>
 #include <atomic>
 #include <cassert>
 #include <cstdint>
@@ -28,6 +29,7 @@
 #include <future>
 #include <memory>
 #include <optional>
+#include <span>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -273,6 +275,23 @@ using CCoinsMap = std::unordered_map<COutPoint,
 
 using CCoinsMapMemoryResource = CCoinsMap::allocator_type::ResourceType;
 
+//! Each partition owns its allocator, flagged-entry list and accounting.
+inline constexpr size_t COINS_CACHE_PARTITIONS{16};
+struct CoinsCacheStorage {
+    // Divide the original 256 KiB pool chunk across all partitions.
+    CCoinsMapMemoryResource memory_resource{262144 / COINS_CACHE_PARTITIONS};
+    CoinsCachePair sentinel{};
+    CCoinsMap coins;
+    size_t coins_usage{0};
+    size_t dirty_count{0};
+
+    explicit CoinsCacheStorage(bool deterministic = false)
+        : coins{0, SaltedCoinsCacheHasher{deterministic}, CCoinsMap::key_equal{}, &memory_resource}
+    {
+        sentinel.second.SelfRef(sentinel);
+    }
+};
+
 /** Cursor for iterating over CoinsView state */
 class CCoinsViewCursor
 {
@@ -307,47 +326,67 @@ private:
  */
 struct CoinsViewCacheCursor
 {
-    //! If will_erase is not set, iterating through the cursor will erase spent coins from the map,
-    //! and other coins will be unflagged (removing them from the linked list).
-    //! If will_erase is set, the underlying map and linked list will not be modified,
-    //! as the caller is expected to wipe the entire map anyway.
-    //! This is an optimization compared to erasing all entries as the cursor iterates them when will_erase is set.
-    //! Calling CCoinsMap::clear() afterwards is faster because a CoinsCachePair cannot be coerced back into a
-    //! CCoinsMap::iterator to be erased, and must therefore be looked up again by key in the CCoinsMap before being erased.
-    CoinsViewCacheCursor(size_t& dirty_count LIFETIMEBOUND,
-                         CoinsCachePair& sentinel LIFETIMEBOUND,
-                         CCoinsMap& map LIFETIMEBOUND,
-                         bool will_erase) noexcept
-        : m_dirty_count(dirty_count), m_sentinel(sentinel), m_map(map), m_will_erase(will_erase) {}
+    //! Flush leaves entries in place for a subsequent clear; Sync erases spent
+    //! entries and clears the flags of retained entries.
+    CoinsViewCacheCursor(std::span<CoinsCacheStorage> storage LIFETIMEBOUND, bool will_erase) noexcept
+        : m_storage{storage}, m_will_erase{will_erase} {}
 
-    inline CoinsCachePair* Begin() const noexcept { return m_sentinel.second.Next(); }
-    inline CoinsCachePair* End() const noexcept { return &m_sentinel; }
-
-    //! Return the next entry after current, possibly erasing current
-    inline CoinsCachePair* NextAndMaybeErase(CoinsCachePair& current) noexcept
+    CoinsCachePair* Begin() noexcept
     {
+        m_partition = 0;
+        return FirstEntry();
+    }
+    CoinsCachePair* End() const noexcept { return nullptr; }
+
+    //! Return the next entry after current, possibly erasing current.
+    CoinsCachePair* NextAndMaybeErase(CoinsCachePair& current) noexcept
+    {
+        auto& storage{m_storage[m_partition]};
         const auto next_entry{current.second.Next()};
-        Assume(TrySub(m_dirty_count, current.second.IsDirty()));
-        // If we are not going to erase the cache, we must still erase spent entries.
-        // Otherwise, clear the state of the entry.
+        Assume(TrySub(storage.dirty_count, current.second.IsDirty()));
         if (!m_will_erase) {
             if (current.second.coin.IsSpent()) {
-                assert(current.second.coin.DynamicMemoryUsage() == 0); // scriptPubKey was already cleared in SpendCoin
-                m_map.erase(current.first);
+                assert(current.second.coin.DynamicMemoryUsage() == 0);
+                storage.coins.erase(current.first);
             } else {
                 current.second.SetClean();
             }
         }
-        return next_entry;
+        if (next_entry != &storage.sentinel) return next_entry;
+        ++m_partition;
+        return FirstEntry();
     }
 
-    inline bool WillErase(CoinsCachePair& current) const noexcept { return m_will_erase || current.second.coin.IsSpent(); }
-    size_t GetDirtyCount() const noexcept { return m_dirty_count; }
-    size_t GetTotalCount() const noexcept { return m_map.size(); }
+    bool WillErase(CoinsCachePair& current) const noexcept { return m_will_erase || current.second.coin.IsSpent(); }
+    size_t GetDirtyCount() const noexcept
+    {
+        size_t count{0};
+        for (const auto& storage : m_storage) {
+            count += storage.dirty_count;
+        }
+        return count;
+    }
+    size_t GetTotalCount() const noexcept
+    {
+        size_t count{0};
+        for (const auto& storage : m_storage) {
+            count += storage.coins.size();
+        }
+        return count;
+    }
+
 private:
-    size_t& m_dirty_count;
-    CoinsCachePair& m_sentinel;
-    CCoinsMap& m_map;
+    CoinsCachePair* FirstEntry() noexcept
+    {
+        while (m_partition < m_storage.size()) {
+            auto& sentinel{m_storage[m_partition].sentinel};
+            if (auto* entry{sentinel.second.Next()}; entry != &sentinel) return entry;
+            ++m_partition;
+        }
+        return End();
+    }
+    std::span<CoinsCacheStorage> m_storage;
+    size_t m_partition{0};
     bool m_will_erase;
 };
 
@@ -437,6 +476,7 @@ class CCoinsViewCache : public CCoinsViewBacked
 {
 private:
     const bool m_deterministic;
+    const SaltedCoinsCacheHasher m_partition_hasher;
 
     //! Force a reallocation of the cache map. This is required when downsizing
     //! the cache because the map's allocator may be hanging onto a lot of
@@ -446,10 +486,10 @@ private:
     void ReallocateCache();
 
     /**
-     * @note this is marked const, but may actually append to `cacheCoins`, increasing
+     * @note this is marked const, but may actually append to the cache, increasing
      * memory usage.
      */
-    CCoinsMap::iterator FetchCoin(const COutPoint &outpoint) const;
+    CCoinsMap::iterator FetchCoin(CoinsCacheStorage& storage, const COutPoint& outpoint) const;
 
 protected:
     /**
@@ -457,15 +497,12 @@ protected:
      * declared as "const".
      */
     mutable uint256 m_block_hash;
-    mutable CCoinsMapMemoryResource m_cache_coins_memory_resource{};
-    /* The starting sentinel of the flagged entry circular doubly linked list. */
-    mutable CoinsCachePair m_sentinel;
-    mutable CCoinsMap cacheCoins;
+    mutable std::array<CoinsCacheStorage, COINS_CACHE_PARTITIONS> m_storage;
 
-    /* Cached dynamic memory usage for the inner Coin objects. */
-    mutable size_t cachedCoinsUsage{0};
-    /* Running count of dirty Coin cache entries. */
-    mutable size_t m_dirty_count{0};
+    CoinsCacheStorage& GetStorage(const COutPoint& outpoint) const
+    {
+        return m_storage[m_partition_hasher(outpoint) % COINS_CACHE_PARTITIONS];
+    }
 
     /**
      * Discard all modifications made to this cache without flushing to the base view.
@@ -518,7 +555,7 @@ public:
     void AddCoin(const COutPoint& outpoint, Coin&& coin, bool possible_overwrite);
 
     /**
-     * Emplace a coin into cacheCoins without performing any checks, marking
+     * Emplace a coin into the cache without performing any checks, marking
      * the emplaced coin as dirty.
      *
      * NOT FOR GENERAL USE. Used only when loading coins from a UTXO snapshot.
@@ -560,7 +597,7 @@ public:
     unsigned int GetCacheSize() const;
 
     //! Number of dirty cache entries (transaction outputs)
-    size_t GetDirtyCount() const noexcept { return m_dirty_count; }
+    size_t GetDirtyCount() const noexcept;
 
     //! Calculate the size of the cache (in bytes)
     size_t DynamicMemoryUsage() const;
