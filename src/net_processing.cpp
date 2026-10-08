@@ -133,6 +133,10 @@ static const unsigned int MAX_INV_SZ = 50000;
 static const unsigned int MAX_GETDATA_SZ = 1000;
 /** Number of blocks that can be requested at any given time from a single peer. */
 static const int MAX_BLOCKS_IN_TRANSIT_PER_PEER = 16;
+/** Maximum number of deep-IBD blocks admitted before activating them together. */
+static constexpr size_t MAX_IBD_BLOCKS_TO_ADMIT{8};
+/** Maximum body memory retained for a deep-IBD activation group. */
+static constexpr size_t MAX_IBD_BLOCK_ADMISSION_MEMORY{32 * 1024 * 1024};
 /** Default time during which a peer must stall block download progress before being disconnected.
  * the actual timeout is increased temporarily if peers are disconnected for hitting the timeout */
 static constexpr auto BLOCK_STALLING_TIMEOUT_DEFAULT{2s};
@@ -855,6 +859,10 @@ private:
     ChainstateManager& m_chainman;
     CTxMemPool& m_mempool;
 
+    /** Bodies accepted during the current deep-IBD message batch. */
+    std::vector<std::shared_ptr<const CBlock>> m_admitted_ibd_blocks GUARDED_BY(g_msgproc_mutex);
+    size_t m_admitted_ibd_memory GUARDED_BY(g_msgproc_mutex){0};
+
     /** Synchronizes tx download including TxRequestTracker, rejection filters, and TxOrphanage.
      * Lock invariants:
      * - A txhash (txid or wtxid) in m_txrequest is not also in m_orphanage.
@@ -1053,6 +1061,9 @@ private:
 
     /** Process a new block. Perform any post-processing housekeeping */
     void ProcessBlock(CNode& node, const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked);
+
+    /** Activate blocks accepted by the bounded deep-IBD admission path. */
+    void ActivateAdmittedBlocks() EXCLUSIVE_LOCKS_REQUIRED(g_msgproc_mutex);
 
     /** Process compact block txns  */
     void ProcessCompactBlockTxns(CNode& pfrom, Peer& peer, const BlockTransactions& block_transactions)
@@ -3682,7 +3693,33 @@ void PeerManagerImpl::ProcessGetCFCheckPt(CNode& node, Peer& peer, DataStream& v
 void PeerManagerImpl::ProcessBlock(CNode& node, const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked)
 {
     bool new_block{false};
-    m_chainman.ProcessNewBlock(block, force_processing, min_pow_checked, &new_block);
+    const bool can_batch{WITH_LOCK(cs_main, return m_chainman.ActiveChainstate().CanValidateBatch())};
+    if (!can_batch) ActivateAdmittedBlocks();
+
+    size_t body_memory{0};
+    size_t memory_limit{0};
+    if (can_batch) {
+        body_memory = sizeof(*block) + RecursiveDynamicUsage(*block);
+        memory_limit = WITH_LOCK(cs_main, return std::min(MAX_IBD_BLOCK_ADMISSION_MEMORY,
+            m_chainman.ActiveChainstate().m_coinstip_cache_size_bytes / 4));
+        if (!m_admitted_ibd_blocks.empty() &&
+            (body_memory > memory_limit || m_admitted_ibd_memory > memory_limit - body_memory)) {
+            ActivateAdmittedBlocks();
+        }
+    }
+
+    bool accepted;
+    if (can_batch) {
+        const auto start{SteadyClock::now()};
+        accepted = m_chainman.AdmitNewBlock(block, force_processing, min_pow_checked, &new_block);
+        LogDebug(BCLog::BENCH, "IBD block admission: peer=%d block=%s accepted=%d new=%d time=%.2fms\n",
+                 node.GetId(), block->GetHash().ToString(), accepted, new_block,
+                 Ticks<MillisecondsDouble>(SteadyClock::now() - start));
+    } else {
+        accepted = m_chainman.ProcessNewBlock(block, force_processing, min_pow_checked, &new_block);
+    }
+    if (!new_block && !m_admitted_ibd_blocks.empty()) ActivateAdmittedBlocks();
+
     if (new_block) {
         node.m_last_block_time = GetTime<std::chrono::seconds>();
         // In case this block came from a different peer than we requested
@@ -3693,6 +3730,56 @@ void PeerManagerImpl::ProcessBlock(CNode& node, const std::shared_ptr<const CBlo
     } else {
         LOCK(cs_main);
         mapBlockSource.erase(block->GetHash());
+    }
+
+    if (can_batch && accepted && new_block) {
+        m_admitted_ibd_blocks.push_back(block);
+        m_admitted_ibd_memory += body_memory;
+        if (m_admitted_ibd_blocks.size() >= MAX_IBD_BLOCKS_TO_ADMIT || body_memory > memory_limit) {
+            ActivateAdmittedBlocks();
+        }
+    } else if (!m_admitted_ibd_blocks.empty()) {
+        ActivateAdmittedBlocks();
+    }
+}
+
+void PeerManagerImpl::ActivateAdmittedBlocks()
+{
+    AssertLockHeld(g_msgproc_mutex);
+    if (m_admitted_ibd_blocks.empty()) return;
+
+    std::vector<std::shared_ptr<const CBlock>> blocks;
+    blocks.swap(m_admitted_ibd_blocks);
+    m_admitted_ibd_memory = 0;
+    const auto start{SteadyClock::now()};
+    m_chainman.ActivateNewBlocks(blocks);
+    LogDebug(BCLog::BENCH, "IBD block activation: blocks=%u time=%.2fms\n",
+             static_cast<unsigned int>(blocks.size()), Ticks<MillisecondsDouble>(SteadyClock::now() - start));
+
+    if (util::log::ShouldDebugLog(BCLog::BENCH)) {
+        // This is a block-index/request snapshot; a body can also still be
+        // queued in an inbound message and therefore not appear as stored or
+        // in flight.
+        int next_height{-1};
+        bool next_body_stored{false};
+        size_t next_body_requests{0};
+        {
+            LOCK(cs_main);
+            const CBlockIndex* tip{m_chainman.ActiveChain().Tip()};
+            const CBlockIndex* best_header{m_chainman.m_best_header};
+            if (tip && best_header && best_header->nHeight > tip->nHeight &&
+                best_header->GetAncestor(tip->nHeight) == tip) {
+                const CBlockIndex* next{best_header->GetAncestor(tip->nHeight + 1)};
+                next_height = next->nHeight;
+                next_body_stored = next->nStatus & BLOCK_HAVE_DATA;
+                next_body_requests = mapBlocksInFlight.count(next->GetBlockHash());
+            }
+        }
+        if (next_height >= 0) {
+            LogDebug(BCLog::BENCH, "IBD next block body: height=%d body=%s requests=%u\n",
+                     next_height, next_body_stored ? "stored" : "missing",
+                     static_cast<unsigned int>(next_body_requests));
+        }
     }
 }
 
@@ -3832,6 +3919,10 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
                                      const std::atomic<bool>& interruptMsgProc)
 {
     AssertLockHeld(g_msgproc_mutex);
+
+    if (msg_type != NetMsgType::BLOCK && msg_type != NetMsgType::CMPCTBLOCK && msg_type != NetMsgType::BLOCKTXN) {
+        ActivateAdmittedBlocks();
+    }
 
     LogDebug(BCLog::NET, "received: %s (%u bytes) peer=%d\n", SanitizeString(msg_type), vRecv.size(), pfrom.GetId());
 
@@ -5422,6 +5513,7 @@ bool PeerManagerImpl::ProcessMessages(CNode& node, std::atomic<bool>& interruptM
     AssertLockNotHeld(m_tx_download_mutex);
     AssertLockHeld(g_msgproc_mutex);
 
+    // Admitted blocks are always activated before ProcessMessages returns.
     PeerRef maybe_peer{GetPeerRef(node.GetId())};
     if (maybe_peer == nullptr) return false;
     Peer& peer{*maybe_peer};
@@ -5460,41 +5552,70 @@ bool PeerManagerImpl::ProcessMessages(CNode& node, std::atomic<bool>& interruptM
         return false;
     }
 
-    CNetMessage& msg{poll_result->first};
-    bool fMoreWork = poll_result->second;
+    bool fMoreWork{poll_result->second};
+    for (size_t processed{0};; ++processed) {
+        CNetMessage& msg{poll_result->first};
+        const bool more_messages{poll_result->second};
 
-    TRACEPOINT(net, inbound_message,
-        node.GetId(),
-        node.m_addr_name.c_str(),
-        node.ConnectionTypeAsString().c_str(),
-        msg.m_type.c_str(),
-        msg.m_recv.size(),
-        msg.m_recv.data()
-    );
+        TRACEPOINT(net, inbound_message,
+            node.GetId(),
+            node.m_addr_name.c_str(),
+            node.ConnectionTypeAsString().c_str(),
+            msg.m_type.c_str(),
+            msg.m_recv.size(),
+            msg.m_recv.data()
+        );
 
-    if (m_opts.capture_messages) {
-        CaptureMessage(node.addr, msg.m_type, MakeUCharSpan(msg.m_recv), /*is_incoming=*/true);
+        if (m_opts.capture_messages) {
+            CaptureMessage(node.addr, msg.m_type, MakeUCharSpan(msg.m_recv), /*is_incoming=*/true);
+        }
+
+        bool exception_caught{false};
+        try {
+            ProcessMessage(peer, node, msg.m_type, msg.m_recv, msg.m_time, interruptMsgProc);
+            if (interruptMsgProc) {
+                fMoreWork = false;
+                break;
+            }
+        } catch (const std::exception& e) {
+            exception_caught = true;
+            LogDebug(BCLog::NET, "%s(%s, %u bytes): Exception '%s' (%s) caught\n", __func__, SanitizeString(msg.m_type), msg.m_message_size, e.what(), typeid(e).name());
+        } catch (...) {
+            exception_caught = true;
+            LogDebug(BCLog::NET, "%s(%s, %u bytes): Unknown exception caught\n", __func__, SanitizeString(msg.m_type), msg.m_message_size);
+        }
+
+        if (exception_caught || node.fDisconnect || node.fPauseSend ||
+            m_admitted_ibd_blocks.empty() || !more_messages ||
+            processed + 1 >= MAX_IBD_BLOCKS_TO_ADMIT) break;
+        poll_result = node.PollMessage();
+        if (!poll_result) {
+            fMoreWork = false;
+            break;
+        }
+        fMoreWork = poll_result->second;
     }
 
     try {
-        ProcessMessage(peer, node, msg.m_type, msg.m_recv, msg.m_time, interruptMsgProc);
-        if (interruptMsgProc) return false;
-        {
-            LOCK(peer.m_getdata_requests_mutex);
-            if (!peer.m_getdata_requests.empty()) fMoreWork = true;
-        }
-        // Does this peer have an orphan ready to reconsider?
-        // (Note: we may have provided a parent for an orphan provided
-        //  by another peer that was already processed; in that case,
-        //  the extra work may not be noticed, possibly resulting in an
-        //  unnecessary 100ms delay)
-        LOCK(m_tx_download_mutex);
-        if (m_txdownloadman.HaveMoreWork(peer.m_id)) fMoreWork = true;
+        ActivateAdmittedBlocks();
     } catch (const std::exception& e) {
-        LogDebug(BCLog::NET, "%s(%s, %u bytes): Exception '%s' (%s) caught\n", __func__, SanitizeString(msg.m_type), msg.m_message_size, e.what(), typeid(e).name());
+        LogDebug(BCLog::NET, "%s: Exception '%s' (%s) caught\n", __func__, e.what(), typeid(e).name());
     } catch (...) {
-        LogDebug(BCLog::NET, "%s(%s, %u bytes): Unknown exception caught\n", __func__, SanitizeString(msg.m_type), msg.m_message_size);
+        LogDebug(BCLog::NET, "%s: Unknown exception caught\n", __func__);
     }
+    if (interruptMsgProc) return false;
+
+    {
+        LOCK(peer.m_getdata_requests_mutex);
+        if (!peer.m_getdata_requests.empty()) fMoreWork = true;
+    }
+    // Does this peer have an orphan ready to reconsider?
+    // (Note: we may have provided a parent for an orphan provided
+    //  by another peer that was already processed; in that case,
+    //  the extra work may not be noticed, possibly resulting in an
+    //  unnecessary 100ms delay)
+    LOCK(m_tx_download_mutex);
+    if (m_txdownloadman.HaveMoreWork(peer.m_id)) fMoreWork = true;
 
     return fMoreWork;
 }
