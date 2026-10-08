@@ -3039,12 +3039,6 @@ struct ConnectedBlock {
     std::shared_ptr<const CBlock> pblock;
 };
 
-/**
- * Connect a new block to m_chain. block_to_connect is either nullptr or a pointer to a CBlock
- * corresponding to pindexNew, to bypass loading it again from disk.
- *
- * The block is added to connected_blocks if connection succeeds.
- */
 static bool IsDeepValidationBlock(const CBlockIndex& index, const ChainstateManager& chainman)
 {
     AssertLockHeld(cs_main);
@@ -3132,14 +3126,24 @@ Chainstate::BatchConnectResult Chainstate::ConnectTipBatch(
     AssertLockHeld(cs_main);
     if (m_mempool) AssertLockHeld(m_mempool->cs);
     attempted_blocks = 0;
-    if (!CanValidateBatch() || indices.size() < 2 || GetCoinsCacheSizeState() != CoinsCacheSizeState::OK) {
+    if (!CanValidateBatch() || indices.size() < 2) {
         return BatchConnectResult::FALLBACK;
     }
     const auto time_start{SteadyClock::now()};
+    const size_t workers{m_coins_views->m_thread_pool->WorkersCount()};
+    const auto fallback{[&](const char* reason) {
+        LogDebug(BCLog::BENCH, "IBD batch fallback: candidates=%u attempted=%u workers=%u reason=%s total=%.2fms\n",
+                 std::min<size_t>(indices.size(), 8), attempted_blocks, workers, reason,
+                 Ticks<MillisecondsDouble>(SteadyClock::now() - time_start));
+        return BatchConnectResult::FALLBACK;
+    }};
+    if (GetCoinsCacheSizeState() != CoinsCacheSizeState::OK) {
+        return fallback("cache-pressure");
+    }
     const Consensus::Params& consensus{m_chainman.GetConsensus()};
     const size_t cache_usage{CoinsTip().DynamicMemoryUsage() + m_chainman.GetCheckQueue().DynamicMemoryUsage()};
     if (cache_usage >= m_coinstip_cache_size_bytes) {
-        return BatchConnectResult::FALLBACK;
+        return fallback("confirmed-cache-and-queue-budget");
     }
     const size_t allowance{std::min(m_coinstip_cache_size_bytes / 4, (m_coinstip_cache_size_bytes - cache_usage) / 2)};
     // Reserve one decoded maximum-size block and its temporary disk buffer before reading.
@@ -3153,20 +3157,23 @@ Chainstate::BatchConnectResult Chainstate::ConnectTipBatch(
         body_usage += sizeof(CBlock) + RecursiveDynamicUsage(*pblock);
     }
     if (body_usage >= allowance) {
-        return BatchConnectResult::FALLBACK;
+        return fallback("retained-body-budget");
     }
     std::vector<CoinsViewBatch::BlockDescriptor> blocks;
     std::vector<BatchBlockContext> contexts;
     blocks.reserve(std::min<size_t>(indices.size(), 8));
     contexts.reserve(blocks.capacity());
     try {
+        const char* admission_limit{"too-few-bodies"};
         for (CBlockIndex* index : indices.first(std::min<size_t>(indices.size(), 8))) {
             if (!IsDeepValidationBlock(*index, m_chainman)) {
+                admission_limit = "header-or-tip-age-boundary";
                 break;
             }
             std::shared_ptr<const CBlock> block{FindRetainedBlock(*index, pblock, retained_blocks)};
             if (!block) {
                 if (allowance - body_usage < READ_HEADROOM) {
+                    admission_limit = "body-read-budget";
                     break;
                 }
                 auto loaded{std::make_shared<CBlock>()};
@@ -3178,6 +3185,7 @@ Chainstate::BatchConnectResult Chainstate::ConnectTipBatch(
                 block = std::move(loaded);
             }
             if (body_usage >= allowance) {
+                admission_limit = "decoded-body-budget";
                 break;
             }
             BlockValidationState block_state;
@@ -3187,7 +3195,7 @@ Chainstate::BatchConnectResult Chainstate::ConnectTipBatch(
                     return BatchConnectResult::ERROR;
                 }
                 attempted_blocks = blocks.size() + 1;
-                return BatchConnectResult::FALLBACK;
+                return fallback("body-checks");
             }
             blocks.push_back({std::move(block), index->nHeight, ShouldEnforceBIP30(*index, m_chainman.GetConsensus())});
             contexts.push_back({GetBlockScriptCheckReason(*index, m_chainman),
@@ -3195,7 +3203,7 @@ Chainstate::BatchConnectResult Chainstate::ConnectTipBatch(
                                 GetBlockScriptFlags(*index, m_chainman)});
         }
         if (blocks.size() < 2) {
-            return BatchConnectResult::FALLBACK;
+            return fallback(admission_limit);
         }
         const auto time_loaded{SteadyClock::now()};
         const auto shrink_group{[&] {
@@ -3206,7 +3214,6 @@ Chainstate::BatchConnectResult Chainstate::ConnectTipBatch(
             blocks.pop_back();
             contexts.pop_back();
         }};
-        const size_t workers{m_coins_views->m_thread_pool->WorkersCount()};
         const size_t read_headroom{workers * (2 * MAX_SCRIPT_SIZE + sizeof(Coin) + 256)};
         while (blocks.size() >= 2) {
             const size_t validation_usage{BatchValidationMemory(blocks, contexts)};
@@ -3226,8 +3233,7 @@ Chainstate::BatchConnectResult Chainstate::ConnectTipBatch(
                     return BatchConnectResult::ERROR;
                 }
                 if (prepared != CoinsViewBatch::PrepareResult::READY) {
-                    LogDebug(BCLog::BENCH, "IBD batch fallback: blocks=%u prepare=%.2fms\n", blocks.size(), Ticks<MillisecondsDouble>(SteadyClock::now() - time_start));
-                    return BatchConnectResult::FALLBACK;
+                    return fallback("material-history-or-preparation-budget");
                 }
                 if (body_usage + batch.DynamicMemoryUsage() + BatchValidationMemory(blocks, contexts, &batch) + read_headroom > allowance) {
                     retry_smaller = true;
@@ -3287,7 +3293,7 @@ Chainstate::BatchConnectResult Chainstate::ConnectTipBatch(
                         return BatchConnectResult::ERROR;
                     }
                     if (std::any_of(results.begin(), results.end(), [](const auto& result) { return !result.state.IsValid(); })) {
-                        LogDebug(BCLog::BENCH, "IBD batch fallback: blocks=%u checks=%.2fms total=%.2fms\n", blocks.size(), Ticks<MillisecondsDouble>(SteadyClock::now() - time_prepared), Ticks<MillisecondsDouble>(SteadyClock::now() - time_start));
+                        LogDebug(BCLog::BENCH, "IBD batch fallback: blocks=%u reason=input-rules checks=%.2fms total=%.2fms\n", blocks.size(), Ticks<MillisecondsDouble>(SteadyClock::now() - time_prepared), Ticks<MillisecondsDouble>(SteadyClock::now() - time_start));
                         return BatchConnectResult::FALLBACK;
                     }
                     time_checked = SteadyClock::now();
@@ -3310,7 +3316,7 @@ Chainstate::BatchConnectResult Chainstate::ConnectTipBatch(
                             }
                         }
                         if (control->Complete().has_value()) {
-                            LogDebug(BCLog::BENCH, "IBD batch fallback: blocks=%u scripts=%.2fms total=%.2fms\n", blocks.size(), Ticks<MillisecondsDouble>(SteadyClock::now() - time_checked), Ticks<MillisecondsDouble>(SteadyClock::now() - time_start));
+                            LogDebug(BCLog::BENCH, "IBD batch fallback: blocks=%u reason=scripts scripts=%.2fms total=%.2fms\n", blocks.size(), Ticks<MillisecondsDouble>(SteadyClock::now() - time_checked), Ticks<MillisecondsDouble>(SteadyClock::now() - time_start));
                             return BatchConnectResult::FALLBACK;
                         }
                     }
@@ -3320,7 +3326,7 @@ Chainstate::BatchConnectResult Chainstate::ConnectTipBatch(
                         return BatchConnectResult::ERROR;
                     }
                     if (!CanValidateBatch()) {
-                        return BatchConnectResult::FALLBACK;
+                        return fallback("eligibility-changed");
                     }
                     // No block status, confirmed coins or callbacks change until all checks pass.
                     for (size_t b{0}; b < blocks.size(); ++b) {
@@ -3356,7 +3362,18 @@ Chainstate::BatchConnectResult Chainstate::ConnectTipBatch(
                 return BatchConnectResult::ERROR;
             }
             const auto time_flushed{SteadyClock::now()};
+            const bool log_bench{util::log::ShouldDebugLog(BCLog::BENCH)};
+            size_t transactions{0};
+            size_t inputs{0};
             for (size_t b{0}; b < blocks.size(); ++b) {
+                if (log_bench) {
+                    transactions += blocks[b].block->vtx.size();
+                    for (const auto& tx : blocks[b].block->vtx) {
+                        if (!tx->IsCoinBase()) {
+                            inputs += tx->vin.size();
+                        }
+                    }
+                }
                 if (m_chainman.m_options.signals) {
                     m_chainman.m_options.signals->BlockChecked(blocks[b].block, {});
                 }
@@ -3376,23 +3393,31 @@ Chainstate::BatchConnectResult Chainstate::ConnectTipBatch(
             m_chainman.time_chainstate += time_flushed - time_before_flush;
             m_chainman.time_post_connect += time_before_flush - time_promoted + time_finished - time_flushed;
             m_chainman.time_total += time_finished - time_start;
-            LogDebug(BCLog::BENCH, "IBD batch: blocks=%u first=%d last=%d prepare=%.2fms checks=%.2fms scripts=%.2fms promote=%.2fms flush=%.2fms postprocess=%.2fms total=%.2fms\n",
-                     blocks.size(), indices.front()->nHeight, indices[blocks.size() - 1]->nHeight,
-                     Ticks<MillisecondsDouble>(time_prepared - time_start), Ticks<MillisecondsDouble>(time_checked - time_prepared),
-                     Ticks<MillisecondsDouble>(time_scripts - time_checked), Ticks<MillisecondsDouble>(time_promoted - time_scripts),
-                     Ticks<MillisecondsDouble>(time_flushed - time_before_flush),
-                     Ticks<MillisecondsDouble>(time_before_flush - time_promoted + time_finished - time_flushed),
-                     Ticks<MillisecondsDouble>(time_finished - time_start));
+            if (log_bench) {
+                LogDebug(BCLog::BENCH, "IBD batch: blocks=%u first=%d last=%d workers=%u tx=%u inputs=%u load=%.2fms input_prepare=%.2fms checks=%.2fms scripts=%.2fms promote=%.2fms flush=%.2fms postprocess=%.2fms total=%.2fms\n",
+                         blocks.size(), indices.front()->nHeight, indices[blocks.size() - 1]->nHeight, workers, transactions, inputs,
+                         Ticks<MillisecondsDouble>(time_loaded - time_start), Ticks<MillisecondsDouble>(time_prepared - time_loaded), Ticks<MillisecondsDouble>(time_checked - time_prepared),
+                         Ticks<MillisecondsDouble>(time_scripts - time_checked), Ticks<MillisecondsDouble>(time_promoted - time_scripts),
+                         Ticks<MillisecondsDouble>(time_flushed - time_before_flush),
+                         Ticks<MillisecondsDouble>(time_before_flush - time_promoted + time_finished - time_flushed),
+                         Ticks<MillisecondsDouble>(time_finished - time_start));
+            }
             return BatchConnectResult::CONNECTED;
         }
         attempted_blocks = 0;
-        return BatchConnectResult::FALLBACK;
+        return fallback("input-and-check-storage-budget");
     } catch (const std::exception& e) {
         FatalError(m_chainman.GetNotifications(), state, strprintf(_("System error while validating blocks: %s"), e.what()));
         return BatchConnectResult::ERROR;
     }
 }
 
+/**
+ * Connect a new block to m_chain. block_to_connect is either nullptr or a pointer to a CBlock
+ * corresponding to pindexNew, to bypass loading it again from disk.
+ *
+ * The block is added to connected_blocks if connection succeeds.
+ */
 bool Chainstate::ConnectTip(
     BlockValidationState& state,
     CBlockIndex* pindexNew,
