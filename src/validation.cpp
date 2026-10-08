@@ -1846,18 +1846,18 @@ CAmount GetBlockSubsidy(int nHeight, const Consensus::Params& consensusParams)
 
 CoinsViews::CoinsViews(DBParams db_params, CoinsViewOptions options)
     : m_dbview{std::move(db_params), std::move(options)},
-      m_catcherview(&m_dbview) {}
+      m_catcherview(&m_dbview),
+      m_thread_pool{std::make_shared<ThreadPool>("prevout")} {}
 
 void CoinsViews::InitCache(int32_t prevoutfetch_threads)
 {
     AssertLockHeld(::cs_main);
     m_cacheview = std::make_unique<CCoinsViewCache>(&m_catcherview);
-    util::NotNull thread_pool{std::make_shared<ThreadPool>("prevout")};
     if (prevoutfetch_threads > 0) {
-        thread_pool->Start(prevoutfetch_threads);
+        m_thread_pool->Start(prevoutfetch_threads);
         LogInfo("Block input prevout fetching uses %d additional threads", prevoutfetch_threads);
     }
-    m_connect_block_view = std::make_unique<CoinsViewOverlay>(&*m_cacheview, std::move(thread_pool));
+    m_connect_block_view = std::make_unique<CoinsViewOverlay>(&*m_cacheview, m_thread_pool);
 }
 
 Chainstate::Chainstate(

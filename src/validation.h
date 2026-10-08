@@ -33,6 +33,7 @@
 #include <util/check.h>
 #include <util/fs.h>
 #include <util/hasher.h>
+#include <util/not_null.h>
 #include <util/result.h>
 #include <util/time.h>
 #include <util/translation.h>
@@ -51,6 +52,7 @@
 #include <utility>
 #include <vector>
 
+class ThreadPool;
 class Chainstate;
 class CTxMemPool;
 class ChainstateManager;
@@ -488,6 +490,9 @@ public:
     //! This is the top layer of the cache hierarchy - it keeps as many coins in memory as
     //! can fit per the dbcache setting.
     std::unique_ptr<CCoinsViewCache> m_cacheview GUARDED_BY(cs_main);
+
+    //! Shared executor for prevout resolution and input-dependent block checks.
+    util::NotNullSharedPtr<ThreadPool> m_thread_pool GUARDED_BY(cs_main);
 
     //! Reused CoinsViewOverlay layered on top of m_cacheview and passed to ConnectBlock().
     //! Reset between calls and flushed only on success, so invalid blocks don't pollute the underlying cache.
