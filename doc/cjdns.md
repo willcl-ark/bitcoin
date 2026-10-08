@@ -62,6 +62,10 @@ IPv6 local network. This helps Bitcoin Core perform better address management:
   - If one of your node's local addresses is `fc00::/8`, then it can choose to
     gossip that address to peers.
 
+When `-cjdnsreachable` is set and `-onlynet` permits CJDNS, IPv6 ranges in
+`-rpcallowip` (including `::/0`) do not match CJDNS connections. Individual
+CJDNS addresses may be specified in `-rpcallowip`.
+
 ## Additional configuration options related to CJDNS
 
 ```

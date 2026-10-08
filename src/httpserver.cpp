@@ -100,7 +100,7 @@ bool HTTPServer::InitHTTPAllowList()
         const CSubNet subnet{LookupSubNet(strAllow)};
         if (!subnet.IsValid()) {
             uiInterface.ThreadSafeMessageBox(
-                Untranslated(strprintf("Invalid -rpcallowip subnet specification: %s. Valid values are a single IP (e.g. 1.2.3.4), a network/netmask (e.g. 1.2.3.4/255.255.255.0), a network/CIDR (e.g. 1.2.3.4/24), all ipv4 (0.0.0.0/0), or all ipv6 (::/0). RFC4193 is allowed only if -cjdnsreachable=0.", strAllow)),
+                Untranslated(strprintf("Invalid -rpcallowip subnet specification: %s. Valid values are a single IP (e.g. 1.2.3.4), a network/netmask (e.g. 1.2.3.4/255.255.255.0), a network/CIDR (e.g. 1.2.3.4/24), all ipv4 (0.0.0.0/0), or all ipv6 (::/0). When -cjdnsreachable is set and -onlynet permits CJDNS, IPv6 ranges (including ::/0) do not match CJDNS connections; individual CJDNS addresses may be specified.", strAllow)),
                 CClientUIInterface::MSG_ERROR);
             return false;
         }
