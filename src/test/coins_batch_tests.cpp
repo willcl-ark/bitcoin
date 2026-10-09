@@ -134,7 +134,13 @@ BOOST_FIXTURE_TEST_SUITE(coins_batch_tests, BasicTestingSetup)
 
 BOOST_AUTO_TEST_CASE(serial_equivalence_and_input_lifetimes)
 {
-    for (const int workers : {0, 4}) {
+    enum class PoolState {
+        INACTIVE,
+        ACTIVE,
+        STOPPED,
+        INTERRUPTED,
+    };
+    for (const auto state : {PoolState::INACTIVE, PoolState::ACTIVE, PoolState::STOPPED, PoolState::INTERRUPTED}) {
         for (const bool cache_fresh : {false, true}) {
             BatchTestView base;
             BatchTestCache actual{base};
@@ -156,8 +162,8 @@ BOOST_AUTO_TEST_CASE(serial_equivalence_and_input_lifetimes)
             const auto cb2{Coinbase(3)};
             const std::vector<CoinsViewBatch::BlockDescriptor> blocks{Block(2, {cb1, first}), Block(3, {cb2, second})};
             ThreadPool pool{"batch"};
-            if (workers) {
-                pool.Start(workers);
+            if (state != PoolState::INACTIVE) {
+                pool.Start(4);
             }
             CoinsViewBatch batch{actual, blocks, 8'000'000};
             BOOST_REQUIRE(batch.Prepare(pool) == CoinsViewBatch::PrepareResult::READY);
@@ -175,8 +181,18 @@ BOOST_AUTO_TEST_CASE(serial_equivalence_and_input_lifetimes)
                 expected_undo << oracle[b];
                 BOOST_CHECK_EQUAL(actual_undo.str(), expected_undo.str());
             }
-            batch.Commit(source->GetHash().ToUint256());
+            if (state == PoolState::STOPPED) {
+                pool.Stop();
+            } else if (state == PoolState::INTERRUPTED) {
+                pool.Interrupt();
+            }
+            const auto best{source->GetHash().ToUint256()};
+            batch.Commit(best, pool);
+            BOOST_CHECK(actual.GetBestBlock() == best);
             CheckCache(actual, expected, {external, intermediate, final, {cb1->GetHash(), 0}, {cb2->GetHash(), 0}});
+            // Commit releases pins before returning, even when the pool cannot
+            // accept promotion or cleanup work.
+            actual.Sync();
         }
     }
 }
@@ -229,7 +245,7 @@ BOOST_AUTO_TEST_CASE(recreation_preserves_dirty_spent_state)
         CoinsViewBatch batch{actual, blocks, 8'000'000};
         BOOST_REQUIRE(batch.Prepare(pool) == CoinsViewBatch::PrepareResult::READY);
         ApplySerial(expected, blocks);
-        batch.Commit(funding->GetHash().ToUint256());
+        batch.Commit(funding->GetHash().ToUint256(), pool);
         std::vector<COutPoint> keys{{funding->GetHash(), 0}};
         for (const auto& tx : txs) {
             keys.emplace_back(tx->GetHash(), 0);
@@ -381,7 +397,7 @@ BOOST_AUTO_TEST_CASE(commit_flush_and_reopen_database)
         pool.Start(4);
         CoinsViewBatch batch{cache, blocks, 8'000'000};
         BOOST_REQUIRE(batch.Prepare(pool) == CoinsViewBatch::PrepareResult::READY);
-        batch.Commit(best);
+        batch.Commit(best, pool);
         cache.Flush();
     }
     {

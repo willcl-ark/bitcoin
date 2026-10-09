@@ -13,6 +13,7 @@
 #include <array>
 #include <atomic>
 #include <exception>
+#include <functional>
 #include <future>
 #include <limits>
 #include <tuple>
@@ -95,6 +96,83 @@ struct CoinsViewBatch::Impl {
         : cache{cache_in}, limit{limit_in}, initial_cache_usage{cache.DynamicMemoryUsage()} {}
 
     static size_t Estimate(const CCoinsViewCache& cache, std::span<const BlockDescriptor> blocks, std::array<size_t, COINS_CACHE_PARTITIONS>& event_counts);
+
+    // Range submission accepts all partitions or none. Rejection completes
+    // inline; promotion cannot be cancelled. Allocation failure is fail-stop.
+    template <typename F>
+    void RunPartitions(ThreadPool& pool, F&& job) noexcept
+    {
+        std::array<std::function<void()>, COINS_CACHE_PARTITIONS> tasks;
+        for (size_t i{0}; i < COINS_CACHE_PARTITIONS; ++i) {
+            tasks[i] = [&job, i]() noexcept { job(i); };
+        }
+        if (auto futures{pool.Submit(std::move(tasks))}) {
+            for (auto& future : *futures) {
+                future.get();
+            }
+        } else {
+            for (size_t i{0}; i < COINS_CACHE_PARTITIONS; ++i) {
+                job(i);
+            }
+        }
+    }
+
+    void PromotePartition(size_t partition_index) noexcept
+    {
+        auto& storage{cache.m_storage[partition_index]};
+        for (auto& record : partitions[partition_index].records) {
+            auto& pair{*record.entry};
+            auto& entry{pair.second};
+            if (!record.created && !record.spent) {
+                if (record.inserted) {
+                    storage.coins_usage -= entry.coin.DynamicMemoryUsage();
+                    storage.coins.erase(record.outpoint);
+                }
+                continue;
+            }
+            if (!record.source) {
+                const bool fresh_creation{record.created && !record.coinbase && !entry.IsDirty()};
+                if (entry.IsFresh() || fresh_creation) {
+                    storage.coins_usage -= entry.coin.DynamicMemoryUsage();
+                    storage.dirty_count -= entry.IsDirty();
+                    storage.coins.erase(record.outpoint);
+                    continue;
+                }
+                if (record.created && !record.coinbase && entry.IsDirty() && entry.coin.IsSpent()) {
+                    continue;
+                }
+                storage.coins_usage -= entry.coin.DynamicMemoryUsage();
+                entry.coin.Clear();
+            } else {
+                Assert(record.created);
+                const bool fresh{!record.coinbase && !entry.IsDirty()};
+                storage.coins_usage -= entry.coin.DynamicMemoryUsage();
+                entry.coin = std::move(*record.creation);
+                storage.coins_usage += entry.coin.DynamicMemoryUsage();
+                if (fresh) {
+                    CCoinsCacheEntry::SetFresh(pair, storage.sentinel);
+                }
+            }
+            entry.SetConfirmedUnknown(false);
+            if (!entry.IsDirty()) {
+                CCoinsCacheEntry::SetDirty(pair, storage.sentinel);
+                ++storage.dirty_count;
+            }
+        }
+    }
+
+    void CleanPartition(size_t partition_index) noexcept
+    {
+        auto& partition{partitions[partition_index]};
+        std::vector<Event>{}.swap(partition.events);
+        std::vector<CoinsCacheProvisionalRecord>{}.swap(partition.records);
+        // Promotion readers have joined; each job destroys distinct elements.
+        // The owner keeps the containing vector unchanged until cleanup joins.
+        for (size_t i{partition_index}; i < blocks.size(); i += COINS_CACHE_PARTITIONS) {
+            BlockData empty{};
+            std::swap(empty, blocks[i]);
+        }
+    }
 
     void Release() noexcept
     {
@@ -449,55 +527,20 @@ size_t CoinsViewBatch::DynamicMemoryUsage() const
     return m_impl->GroupUsage() + (cache_usage > m_impl->initial_cache_usage ? cache_usage - m_impl->initial_cache_usage : 0);
 }
 
-void CoinsViewBatch::Commit(const uint256& last_hash)
+CoinsViewBatch::CommitTimings CoinsViewBatch::Commit(const uint256& last_hash, ThreadPool& pool) noexcept
 {
     Assert(m_impl->active && m_impl->prepared);
-    for (size_t partition_index{0}; partition_index < COINS_CACHE_PARTITIONS; ++partition_index) {
-        auto& storage{m_impl->cache.m_storage[partition_index]};
-        for (auto& record : m_impl->partitions[partition_index].records) {
-            auto& pair{*record.entry};
-            auto& entry{pair.second};
-            if (!record.created && !record.spent) {
-                if (record.inserted) {
-                    storage.coins_usage -= entry.coin.DynamicMemoryUsage();
-                    storage.coins.erase(record.outpoint);
-                }
-                continue;
-            }
-            if (!record.source) {
-                const bool fresh_creation{record.created && !record.coinbase && !entry.IsDirty()};
-                if (entry.IsFresh() || fresh_creation) {
-                    storage.coins_usage -= entry.coin.DynamicMemoryUsage();
-                    storage.dirty_count -= entry.IsDirty();
-                    storage.coins.erase(record.outpoint);
-                    continue;
-                }
-                if (record.created && !record.coinbase && entry.IsDirty() && entry.coin.IsSpent()) {
-                    continue;
-                }
-                storage.coins_usage -= entry.coin.DynamicMemoryUsage();
-                entry.coin.Clear();
-            } else {
-                Assert(record.created);
-                const bool fresh{!record.coinbase && !entry.IsDirty()};
-                storage.coins_usage -= entry.coin.DynamicMemoryUsage();
-                entry.coin = std::move(*record.creation);
-                storage.coins_usage += entry.coin.DynamicMemoryUsage();
-                if (fresh) {
-                    CCoinsCacheEntry::SetFresh(pair, storage.sentinel);
-                }
-            }
-            entry.SetConfirmedUnknown(false);
-            if (!entry.IsDirty()) {
-                CCoinsCacheEntry::SetDirty(pair, storage.sentinel);
-                ++storage.dirty_count;
-            }
-        }
-    }
+    const auto start{std::chrono::steady_clock::now()};
+    m_impl->RunPartitions(pool, [this](size_t i) noexcept { m_impl->PromotePartition(i); });
+    const auto promoted{std::chrono::steady_clock::now()};
+    m_impl->RunPartitions(pool, [this](size_t i) noexcept { m_impl->CleanPartition(i); });
+    std::vector<Impl::BlockData>{}.swap(m_impl->blocks);
+    const auto cleaned{std::chrono::steady_clock::now()};
     m_impl->cache.m_block_hash = last_hash;
     m_impl->cache.m_active_batch = nullptr;
     m_impl->active = false;
-    m_impl->Release();
+    return {std::chrono::duration_cast<std::chrono::microseconds>(promoted - start),
+            std::chrono::duration_cast<std::chrono::microseconds>(cleaned - promoted)};
 }
 
 void CoinsViewBatch::Cancel() noexcept

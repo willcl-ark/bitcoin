@@ -8,6 +8,7 @@
 #include <coins.h>
 #include <undo.h>
 
+#include <chrono>
 #include <cstddef>
 #include <memory>
 #include <span>
@@ -59,7 +60,16 @@ public:
     const CBlockUndo& Undo(size_t block) const;
     size_t DynamicMemoryUsage() const;
 
-    void Commit(const uint256& last_hash);
+    struct CommitTimings {
+        std::chrono::microseconds promotion;
+        std::chrono::microseconds cleanup;
+    };
+
+    /** Irrevocable promotion followed by cleanup; all submitted jobs join before
+     * publication. Inactive or interrupted pools finish remaining work inline.
+     * Ordinary reads must not overlap either worker phase.
+     */
+    CommitTimings Commit(const uint256& last_hash, ThreadPool& pool) noexcept;
     void Cancel() noexcept;
 
 private:

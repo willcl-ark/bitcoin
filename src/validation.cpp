@@ -3341,7 +3341,7 @@ Chainstate::BatchConnectResult Chainstate::ConnectTipBatch(
                             m_blockman.m_dirty_blockindex.insert(indices[b]);
                         }
                     }
-                    batch.Commit(indices[blocks.size() - 1]->GetBlockHash());
+                    batch.Commit(indices[blocks.size() - 1]->GetBlockHash(), *m_coins_views->m_thread_pool);
                     m_chain.SetTip(*indices[blocks.size() - 1]);
                     time_promoted = SteadyClock::now();
                 }
