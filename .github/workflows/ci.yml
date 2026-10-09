@@ -230,6 +230,13 @@ jobs:
           echo '---'
           msbuild.exe -version | tee msbuild_version
           echo "${VCToolsVersion-}" | tee toolset_version
+          echo "${WindowsSDKVersion-}" | tee windows_sdk_version
+          pwsh -NoProfile -Command '(Get-FileHash (Get-Command cl.exe).Source -Algorithm SHA256).Hash' | tee compiler_hash
+          pwsh -NoProfile -Command '$PSVersionTable.PSVersion.ToString()' | tee powershell_version
+          pwsh -NoProfile -Command '(Get-FileHash "$env:VCPKG_ROOT\vcpkg.exe" -Algorithm SHA256).Hash' | tee vcpkg_tool_hash
+          pwsh -NoProfile -Command '(Get-FileHash "$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake" -Algorithm SHA256).Hash' | tee vcpkg_toolchain_hash
+          pwsh -NoProfile -Command '(Get-FileHash "$env:VCPKG_ROOT\scripts\toolchains\windows.cmake" -Algorithm SHA256).Hash' | tee vcpkg_windows_toolchain_hash
+          pwsh -NoProfile -Command '(Get-FileHash "$env:VCPKG_ROOT\triplets\x64-windows-release.cmake" -Algorithm SHA256).Hash' | tee vcpkg_triplet_hash
           py -3 --version
           bash --version
 
@@ -241,13 +248,15 @@ jobs:
             ~/AppData/Local/vcpkg/downloads/*
             !~/AppData/Local/vcpkg/downloads/tools
           key: ${{ github.job }}-vcpkg-downloads-${{ hashFiles('vcpkg.json') }}
+          restore-keys: ${{ github.job }}-vcpkg-downloads-
 
       - name: Restore vcpkg binary cache
         uses: actions/cache/restore@v5
         id: vcpkg-binary-cache
         with:
           path: ~/AppData/Local/vcpkg/archives
-          key: ${{ github.job }}-vcpkg-binary-release-${{ hashFiles('cmake_version', 'msbuild_version', 'toolset_version', 'vcpkg.json') }}
+          key: ${{ github.job }}-vcpkg-binary-release-${{ hashFiles('cmake_version', 'msbuild_version', 'toolset_version', 'windows_sdk_version', 'compiler_hash', 'powershell_version', 'vcpkg_tool_hash', 'vcpkg_toolchain_hash', 'vcpkg_windows_toolchain_hash', 'vcpkg_triplet_hash', 'CMakePresets.json', '.github/ci-windows.py', 'vcpkg.json') }}
+          restore-keys: ${{ github.job }}-vcpkg-binary-release-
 
       - name: Generate build system
         run: |
