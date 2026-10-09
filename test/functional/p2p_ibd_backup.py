@@ -8,7 +8,7 @@ import time
 
 from test_framework.blocktools import create_block
 from test_framework.messages import CBlockHeader, CInv, MSG_BLOCK, MSG_TYPE_MASK, msg_block, msg_headers, msg_notfound
-from test_framework.p2p import P2PDataStore
+from test_framework.p2p import P2PDataStore, P2PInterface
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import assert_equal, assert_raises_rpc_error
 
@@ -71,6 +71,10 @@ class IBDBackupTest(BitcoinTestFramework):
             self.test_backup_debt(notfound=notfound)
         self.restart_node(0)
         self.test_backup_stalling()
+        self.restart_node(0, extra_args=self.extra_args[0] + ["-maxconnections=13"])
+        self.test_temporary_peers(count=2)
+        self.restart_node(0, extra_args=self.extra_args[0] + ["-maxconnections=12"])
+        self.test_temporary_peers(count=1)
 
     def test_backup_winner(self):
         self.log.info("A backup wins the missing frontier block; the original response may arrive late")
@@ -190,6 +194,43 @@ class IBDBackupTest(BitcoinTestFramework):
         assert_equal(backup.is_connected, True)
         node.invalidateblock(blocks[0].hash_hex)
 
+
+    def test_temporary_peers(self, *, count):
+        self.log.info("Temporary IBD peers have shallow queues and close when the chain catches up")
+        node = self.nodes[0]
+        initial_height = node.getblockcount()
+        blocks = self.make_blocks(20)
+        hashes = [block.hash_int for block in blocks]
+        regular = self.add_peer(blocks, hashes, 0)
+        regular.wait_until(lambda: len(regular.getdata_requests) == 16)
+        if count == 2:
+            # Manual connections do not consume automatic outbound capacity.
+            node.add_outbound_p2p_connection(P2PInterface(), p2p_idx=3, connection_type="manual")
+        ordinary_ids = {p["id"] for p in node.getpeerinfo()}
+        ibd_peers = [self.add_peer(blocks, hashes, i + 1, "ibd") for i in range(count)]
+        for peer in ibd_peers:
+            peer.wait_until(lambda: len(peer.getdata_requests) == 2)
+        info = node.getpeerinfo()
+        temporary_info = [p for p in info if p["connection_type"] == "ibd"]
+        assert_equal(len(temporary_info), count)
+        for peer in temporary_info:
+            assert_equal(peer["relaytxes"], False)
+            assert_equal(peer["addr_relay_enabled"], False)
+            assert_equal(len(peer["inflight"]), 2)
+        assert_raises_rpc_error(-34, "Already at capacity", node.addconnection,
+                                "127.0.0.1:1", "ibd", node.use_v2transport)
+
+        for block in blocks:
+            regular.send_without_ping(msg_block(block))
+        self.wait_until(lambda: node.getblockcount() == initial_height + len(blocks))
+        for peer in ibd_peers:
+            peer.wait_for_disconnect()
+        regular.sync_with_ping()
+        remaining = node.getpeerinfo()
+        assert_equal({p["id"] for p in remaining}, ordinary_ids)
+        assert_equal([p["connection_type"] for p in remaining],
+                     ["outbound-full-relay", "manual"] if count == 2 else ["outbound-full-relay"])
+        node.invalidateblock(blocks[0].hash_hex)
 
 
 if __name__ == '__main__':

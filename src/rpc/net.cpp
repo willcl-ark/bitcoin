@@ -71,6 +71,7 @@ using util::TrimStringView;
 const std::vector<std::string> CONNECTION_TYPE_DOC{
         "outbound-full-relay (default automatic connections)",
         "block-relay-only (does not relay transactions or addresses)",
+        "ibd (temporary connection for downloading blocks during initial block download)",
         "inbound (initiated by the peer)",
         "manual (added via addnode RPC or -addnode/-connect configuration options)",
         "addr-fetch (short-lived automatic connection for soliciting addresses)",
@@ -423,7 +424,7 @@ static RPCMethod addconnection()
         "Open an outbound connection to a specified node. This RPC is for testing only.\n",
         {
             {"address", RPCArg::Type::STR, RPCArg::Optional::NO, "The IP address and port to attempt connecting to."},
-            {"connection_type", RPCArg::Type::STR, RPCArg::Optional::NO, "Type of connection to open (\"outbound-full-relay\", \"block-relay-only\", \"addr-fetch\", \"feeler\" or \"manual\")."},
+            {"connection_type", RPCArg::Type::STR, RPCArg::Optional::NO, "Type of connection to open (\"outbound-full-relay\", \"block-relay-only\", \"ibd\", \"addr-fetch\", \"feeler\" or \"manual\")."},
             {"v2transport", RPCArg::Type::BOOL, RPCArg::Optional::NO, "Attempt to connect using BIP324 v2 transport protocol"},
         },
         RPCResult{
@@ -449,6 +450,8 @@ static RPCMethod addconnection()
         conn_type = ConnectionType::OUTBOUND_FULL_RELAY;
     } else if (conn_type_in == "block-relay-only") {
         conn_type = ConnectionType::BLOCK_RELAY;
+    } else if (conn_type_in == "ibd") {
+        conn_type = ConnectionType::IBD;
     } else if (conn_type_in == "addr-fetch") {
         conn_type = ConnectionType::ADDR_FETCH;
     } else if (conn_type_in == "feeler") {

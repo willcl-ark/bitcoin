@@ -68,6 +68,9 @@ enum class ConnectionType {
      */
     BLOCK_RELAY,
 
+    /** Temporary block-download connection used only during initial sync. */
+    IBD,
+
     /**
      * AddrFetch connections are short lived connections used to solicit
      * addresses from peers. These are initiated to addresses submitted via the

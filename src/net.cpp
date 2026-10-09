@@ -338,22 +338,28 @@ bool IsLocal(const CService& addr)
     return mapLocalHost.contains(addr);
 }
 
-bool CConnman::AlreadyConnectedToHost(std::string_view host) const
+bool CConnman::AlreadyConnectedToHost(std::string_view host, bool ignore_ibd) const
 {
     LOCK(m_nodes_mutex);
-    return std::ranges::any_of(m_nodes, [&host](CNode* node) { return node->m_addr_name == host; });
+    return std::ranges::any_of(m_nodes, [&host, ignore_ibd](CNode* node) {
+        return (node->m_addr_name == host) && !(ignore_ibd && node->IsIbdConn());
+    });
 }
 
-bool CConnman::AlreadyConnectedToAddressPort(const CService& addr_port) const
+bool CConnman::AlreadyConnectedToAddressPort(const CService& addr_port, bool ignore_ibd) const
 {
     LOCK(m_nodes_mutex);
-    return std::ranges::any_of(m_nodes, [&addr_port](CNode* node) { return node->addr == addr_port; });
+    return std::ranges::any_of(m_nodes, [&addr_port, ignore_ibd](CNode* node) {
+        return (node->addr == addr_port) && !(ignore_ibd && node->IsIbdConn());
+    });
 }
 
-bool CConnman::AlreadyConnectedToAddress(const CNetAddr& addr) const
+bool CConnman::AlreadyConnectedToAddress(const CNetAddr& addr, bool ignore_ibd) const
 {
     LOCK(m_nodes_mutex);
-    return std::ranges::any_of(m_nodes, [&addr](CNode* node) { return node->addr == addr; });
+    return std::ranges::any_of(m_nodes, [&addr, ignore_ibd](CNode* node) {
+        return (node->addr == addr) && !(ignore_ibd && node->IsIbdConn());
+    });
 }
 
 bool CConnman::CheckIncomingNonce(uint64_t nonce)
@@ -391,7 +397,7 @@ CNode* CConnman::ConnectNode(CAddress addrConnect,
             return nullptr;
 
         // Look for an existing connection
-        if (AlreadyConnectedToAddressPort(addrConnect)) {
+        if (AlreadyConnectedToAddressPort(addrConnect, /*ignore_ibd=*/conn_type != ConnectionType::IBD && conn_type != ConnectionType::PRIVATE_BROADCAST)) {
             LogInfo("Failed to open new connection to %s, already connected", addrConnect.ToStringAddrPort());
             return nullptr;
         }
@@ -423,7 +429,7 @@ CNode* CConnman::ConnectNode(CAddress addrConnect,
                 }
                 // It is possible that we already have a connection to the IP/port pszDest resolved to.
                 // In that case, drop the connection that was just created.
-                if (AlreadyConnectedToAddressPort(addrConnect)) {
+                if (AlreadyConnectedToAddressPort(addrConnect, /*ignore_ibd=*/conn_type != ConnectionType::IBD && conn_type != ConnectionType::PRIVATE_BROADCAST)) {
                     LogInfo("Not opening a connection to %s, already connected to %s\n", pszDest, addrConnect.ToStringAddrPort());
                     return nullptr;
                 }
@@ -1844,6 +1850,12 @@ void CConnman::CreateNodeFromAcceptedSocket(std::unique_ptr<Sock>&& sock,
         }
     }
 
+    {
+        LOCK(m_nodes_mutex);
+        YieldIbdCapacity(/*incoming=*/1);
+        ++m_pending_connections;
+    }
+
     NodeId id = GetNewNodeId();
     uint64_t nonce = GetDeterministicRandomizer(RANDOMIZER_ID_LOCALHOSTNONCE).Write(id).Finalize();
 
@@ -1877,6 +1889,7 @@ void CConnman::CreateNodeFromAcceptedSocket(std::unique_ptr<Sock>&& sock,
     m_msgproc->InitializeNode(*pnode, local_services);
     {
         LOCK(m_nodes_mutex);
+        --m_pending_connections;
         m_nodes.push_back(pnode);
     }
     LogDebug(BCLog::NET, "connection from %s accepted\n", addr.ToStringAddrPort());
@@ -1889,6 +1902,54 @@ void CConnman::CreateNodeFromAcceptedSocket(std::unique_ptr<Sock>&& sock,
 
     // We received a new connection, harvest entropy from the time (and our peer count)
     RandAddEvent((uint32_t)id);
+}
+
+void CConnman::SetIbdPeersActive(bool active)
+{
+    LOCK(m_nodes_mutex);
+    m_ibd_peers_active = active;
+    if (!active) {
+        for (CNode* node : m_nodes) {
+            if (node->IsIbdConn()) node->fDisconnect = true;
+        }
+    }
+}
+
+bool CConnman::HaveIbdCapacity() const
+{
+    AssertLockHeld(m_nodes_mutex);
+    int ibd{m_pending_ibd_connections};
+    int automatic{m_pending_automatic_connections};
+    int connected{0};
+    for (const CNode* node : m_nodes) {
+        if (node->IsManualConn() || node->IsPrivateBroadcastConn()) continue;
+        ++connected;
+        if (node->IsIbdConn()) ++ibd;
+        if (node->grantOutbound) ++automatic;
+    }
+    // Preserve the ordinary outbound and feeler budget even while those slots are empty.
+    const int reserved{std::max(0, std::min(m_max_automatic_outbound, m_max_automatic_connections) - automatic)};
+    return ibd < MAX_IBD_CONNECTIONS &&
+           connected + m_pending_connections + reserved < m_max_automatic_connections;
+}
+
+void CConnman::YieldIbdCapacity(int incoming, const CAddress* ordinary_addr)
+{
+    AssertLockHeld(m_nodes_mutex);
+    int occupied{m_pending_connections + incoming};
+    for (const CNode* node : m_nodes) {
+        if (!node->fDisconnect && !node->IsManualConn() && !node->IsPrivateBroadcastConn()) ++occupied;
+    }
+    for (CNode* node : m_nodes) {
+        if (!node->IsIbdConn() || node->fDisconnect) continue;
+        const bool conflict{ordinary_addr && (static_cast<const CNetAddr&>(*ordinary_addr) == static_cast<const CNetAddr&>(node->addr) ||
+                            ((ordinary_addr->IsIPv4() || ordinary_addr->IsIPv6()) &&
+                             m_netgroupman.GetGroup(*ordinary_addr) == m_netgroupman.GetGroup(node->addr)))};
+        if (occupied > m_max_automatic_connections || conflict) {
+            node->fDisconnect = true;
+            --occupied;
+        }
+    }
 }
 
 bool CConnman::AddConnection(const std::string& address, ConnectionType conn_type, bool use_v2transport = false)
@@ -1905,6 +1966,9 @@ bool CConnman::AddConnection(const std::string& address, ConnectionType conn_typ
         break;
     case ConnectionType::OUTBOUND_FULL_RELAY:
         max_connections = m_max_outbound_full_relay;
+        break;
+    case ConnectionType::IBD:
+        max_connections = MAX_IBD_CONNECTIONS;
         break;
     case ConnectionType::BLOCK_RELAY:
         max_connections = m_max_outbound_block_relay;
@@ -1925,17 +1989,20 @@ bool CConnman::AddConnection(const std::string& address, ConnectionType conn_typ
     if (max_connections != std::nullopt && existing_connections >= max_connections) return false;
 
     // Max total automatic outbound or manual connections already exist
-    CountingSemaphoreGrant<> grant(conn_type == ConnectionType::MANUAL ? *semAddnode : *semOutbound, true);
-    if (!grant) return false;
+    CountingSemaphoreGrant<> grant;
+    if (conn_type != ConnectionType::IBD) {
+        grant = CountingSemaphoreGrant<>(conn_type == ConnectionType::MANUAL ? *semAddnode : *semOutbound, true);
+        if (!grant) return false;
+    }
 
-    OpenNetworkConnection(/*addrConnect=*/CAddress{},
+    const bool connected{OpenNetworkConnection(/*addrConnect=*/CAddress{},
                           /*fCountFailure=*/false,
                           /*grant_outbound=*/std::move(grant),
                           /*pszDest=*/address.c_str(),
                           /*conn_type=*/conn_type,
                           /*use_v2transport=*/use_v2transport,
-                          /*proxy_override=*/std::nullopt);
-    return true;
+                          /*proxy_override=*/std::nullopt)};
+    return conn_type == ConnectionType::IBD ? connected : true;
 }
 
 void CConnman::DisconnectNodes()
@@ -2634,6 +2701,7 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
     auto start = GetTime<std::chrono::microseconds>();
 
     // Minimum time before next feeler connection (in microseconds).
+    auto next_ibd = start;
     auto next_feeler = start + rng.rand_exp_duration(FEELER_INTERVAL);
     auto next_extra_block_relay = start + rng.rand_exp_duration(EXTRA_BLOCK_RELAY_ONLY_PEER_INTERVAL);
     auto next_extra_network_peer{start + rng.rand_exp_duration(EXTRA_NETWORK_PEER_INTERVAL)};
@@ -2670,7 +2738,7 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
 
         PerformReconnections();
 
-        CountingSemaphoreGrant<> grant(*semOutbound);
+        CountingSemaphoreGrant<> grant(*semOutbound, /*fTry=*/true);
         if (m_interrupt_net->interrupted()) {
             return;
         }
@@ -2726,10 +2794,14 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
         int nOutboundBlockRelay = 0;
         int outbound_privacy_network_peers = 0;
         std::set<std::vector<unsigned char>> outbound_ipv46_peer_netgroups;
+        std::set<std::vector<unsigned char>> ibd_netgroups;
+        bool ibd_available{false};
 
         {
             LOCK(m_nodes_mutex);
+            ibd_available = m_ibd_peers_active && HaveIbdCapacity();
             for (const CNode* pnode : m_nodes) {
+                if (pnode->IsIbdConn()) ibd_netgroups.insert(m_netgroupman.GetGroup(pnode->addr));
                 if (pnode->IsFullOutboundConn()) nOutboundFullRelay++;
                 if (pnode->IsBlockOnlyConn()) nOutboundBlockRelay++;
 
@@ -2744,6 +2816,7 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
                     case ConnectionType::ADDR_FETCH:
                     case ConnectionType::FEELER:
                     case ConnectionType::PRIVATE_BROADCAST:
+                    case ConnectionType::IBD:
                         break;
                     case ConnectionType::MANUAL:
                     case ConnectionType::OUTBOUND_FULL_RELAY:
@@ -2800,9 +2873,9 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
             // OUTBOUND_FULL_RELAY
         } else if (nOutboundBlockRelay < m_max_outbound_block_relay) {
             conn_type = ConnectionType::BLOCK_RELAY;
-        } else if (GetTryNewOutboundPeer()) {
+        } else if (grant && GetTryNewOutboundPeer()) {
             // OUTBOUND_FULL_RELAY
-        } else if (now > next_extra_block_relay && m_start_extra_block_relay_peers) {
+        } else if (grant && now > next_extra_block_relay && m_start_extra_block_relay_peers) {
             // Periodically connect to a peer (using regular outbound selection
             // methodology from addrman) and stay connected long enough to sync
             // headers, but not much else.
@@ -2826,11 +2899,11 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
             // (similar to how we deal with extra outbound peers).
             next_extra_block_relay = now + rng.rand_exp_duration(EXTRA_BLOCK_RELAY_ONLY_PEER_INTERVAL);
             conn_type = ConnectionType::BLOCK_RELAY;
-        } else if (now > next_feeler) {
+        } else if (grant && now > next_feeler) {
             next_feeler = now + rng.rand_exp_duration(FEELER_INTERVAL);
             conn_type = ConnectionType::FEELER;
             fFeeler = true;
-        } else if (nOutboundFullRelay == m_max_outbound_full_relay &&
+        } else if (grant && nOutboundFullRelay == m_max_outbound_full_relay &&
                    m_max_outbound_full_relay == MAX_OUTBOUND_FULL_RELAY_CONNECTIONS &&
                    now > next_extra_network_peer &&
                    MaybePickPreferredNetwork(preferred_net)) {
@@ -2841,8 +2914,18 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
             // so low that less than MAX_OUTBOUND_FULL_RELAY_CONNECTIONS are made,
             // to prevent interactions with otherwise protected outbound peers.
             next_extra_network_peer = now + rng.rand_exp_duration(EXTRA_NETWORK_PEER_INTERVAL);
+        } else if (ibd_available && now >= next_ibd) {
+            conn_type = ConnectionType::IBD;
+            next_ibd = now + 30s;
+            outbound_ipv46_peer_netgroups.insert(ibd_netgroups.begin(), ibd_netgroups.end());
         } else {
             // skip to next iteration of while loop
+            continue;
+        }
+
+        if (conn_type == ConnectionType::IBD) {
+            grant.Release();
+        } else if (!grant) {
             continue;
         }
 
@@ -3125,22 +3208,56 @@ bool CConnman::OpenNetworkConnection(const CAddress& addrConnect,
     }
     if (!pszDest) {
         bool banned_or_discouraged = m_banman && (m_banman->IsDiscouraged(addrConnect) || m_banman->IsBanned(addrConnect));
-        if (IsLocal(addrConnect) || banned_or_discouraged || AlreadyConnectedToAddress(addrConnect)) {
+        if (IsLocal(addrConnect) || banned_or_discouraged || AlreadyConnectedToAddress(addrConnect, /*ignore_ibd=*/conn_type != ConnectionType::IBD && conn_type != ConnectionType::PRIVATE_BROADCAST)) {
             return false;
         }
-    } else if (AlreadyConnectedToHost(pszDest)) {
+    } else if (AlreadyConnectedToHost(pszDest, /*ignore_ibd=*/conn_type != ConnectionType::IBD && conn_type != ConnectionType::PRIVATE_BROADCAST)) {
         return false;
     }
 
+    const bool ibd{conn_type == ConnectionType::IBD};
+    const bool counted{conn_type != ConnectionType::MANUAL && conn_type != ConnectionType::PRIVATE_BROADCAST};
+    const bool automatic{counted && !ibd && bool(grant_outbound)};
+    {
+        LOCK(m_nodes_mutex);
+        if (ibd) {
+            if ((!pszDest && !m_ibd_peers_active) || !HaveIbdCapacity()) return false;
+            ++m_pending_ibd_connections;
+        }
+        if (counted) ++m_pending_connections;
+        if (automatic) ++m_pending_automatic_connections;
+    }
     CNode* pnode = ConnectNode(addrConnect, pszDest, fCountFailure, conn_type, use_v2transport, proxy_override);
-
-    if (!pnode)
+    if (!pnode) {
+        LOCK(m_nodes_mutex);
+        if (counted) --m_pending_connections;
+        if (ibd) --m_pending_ibd_connections;
+        if (automatic) --m_pending_automatic_connections;
         return false;
+    }
     pnode->grantOutbound = std::move(grant_outbound);
 
     m_msgproc->InitializeNode(*pnode, m_local_services);
     {
         LOCK(m_nodes_mutex);
+        if (counted) --m_pending_connections;
+        if (ibd) --m_pending_ibd_connections;
+        if (automatic) --m_pending_automatic_connections;
+        if (ibd) {
+            if (!m_ibd_peers_active || !HaveIbdCapacity()) pnode->fDisconnect = true;
+            if (!pszDest) {
+                for (const CNode* existing : m_nodes) {
+                    if ((existing->IsManualConn() || existing->IsFullOutboundConn() || existing->IsBlockOnlyConn() || existing->IsIbdConn()) &&
+                        (static_cast<const CNetAddr&>(existing->addr) == static_cast<const CNetAddr&>(pnode->addr) ||
+                         ((pnode->addr.IsIPv4() || pnode->addr.IsIPv6()) &&
+                          m_netgroupman.GetGroup(existing->addr) == m_netgroupman.GetGroup(pnode->addr)))) {
+                        pnode->fDisconnect = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if (!ibd && conn_type != ConnectionType::PRIVATE_BROADCAST) YieldIbdCapacity(/*incoming=*/counted ? 1 : 0, &pnode->addr);
         m_nodes.push_back(pnode);
 
         // update connection count by network

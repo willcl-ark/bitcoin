@@ -781,6 +781,7 @@ public:
             case ConnectionType::OUTBOUND_FULL_RELAY:
             case ConnectionType::BLOCK_RELAY:
                 return true;
+            case ConnectionType::IBD:
             case ConnectionType::INBOUND:
             case ConnectionType::MANUAL:
             case ConnectionType::ADDR_FETCH:
@@ -806,6 +807,7 @@ public:
         case ConnectionType::INBOUND:
         case ConnectionType::FEELER:
         case ConnectionType::BLOCK_RELAY:
+        case ConnectionType::IBD:
         case ConnectionType::ADDR_FETCH:
         case ConnectionType::PRIVATE_BROADCAST:
                 return false;
@@ -819,6 +821,10 @@ public:
 
     bool IsBlockOnlyConn() const {
         return m_conn_type == ConnectionType::BLOCK_RELAY;
+    }
+
+    bool IsIbdConn() const {
+        return m_conn_type == ConnectionType::IBD;
     }
 
     bool IsFeelerConn() const {
@@ -853,6 +859,7 @@ public:
                 return false;
             case ConnectionType::OUTBOUND_FULL_RELAY:
             case ConnectionType::BLOCK_RELAY:
+            case ConnectionType::IBD:
             case ConnectionType::ADDR_FETCH:
             case ConnectionType::PRIVATE_BROADCAST:
                 return true;
@@ -1365,12 +1372,18 @@ public:
     std::vector<AddedNodeInfo> GetAddedNodeInfo(bool include_connected) const
         EXCLUSIVE_LOCKS_REQUIRED(!m_added_nodes_mutex, !m_nodes_mutex);
 
+    /** Enable temporary AddrMan-selected IBD peers, or disconnect them when disabled. */
+    void SetIbdPeersActive(bool active) EXCLUSIVE_LOCKS_REQUIRED(!m_nodes_mutex);
+
+    static constexpr int MAX_IBD_CONNECTIONS{2};
+
     /**
      * Attempts to open a connection. Currently only used from tests.
      *
      * @param[in]   address     Address of node to try connecting to
      * @param[in]   conn_type   ConnectionType::OUTBOUND_FULL_RELAY, ConnectionType::BLOCK_RELAY,
-     *                          ConnectionType::ADDR_FETCH, ConnectionType::FEELER or ConnectionType::MANUAL
+     *                          ConnectionType::ADDR_FETCH, ConnectionType::FEELER,
+     *                          ConnectionType::IBD or ConnectionType::MANUAL
      * @param[in]   use_v2transport  Set to true if node attempts to connect using BIP 324 v2 transport protocol.
      * @return      bool        Returns false if there are no available
      *                          slots for this connection:
@@ -1541,7 +1554,7 @@ private:
      * @param[in] host String of the form "host[:port]", e.g. "localhost" or "localhost:8333" or "1.2.3.4:8333".
      * @return true if connected to `host`.
      */
-    bool AlreadyConnectedToHost(std::string_view host) const EXCLUSIVE_LOCKS_REQUIRED(!m_nodes_mutex);
+    bool AlreadyConnectedToHost(std::string_view host, bool ignore_ibd = false) const EXCLUSIVE_LOCKS_REQUIRED(!m_nodes_mutex);
 
     /**
      * Determine whether we're already connected to a given address:port.
@@ -1550,12 +1563,12 @@ private:
      * @param[in] addr_port Address and port to check.
      * @return true if connected to addr_port.
      */
-    bool AlreadyConnectedToAddressPort(const CService& addr_port) const EXCLUSIVE_LOCKS_REQUIRED(!m_nodes_mutex);
+    bool AlreadyConnectedToAddressPort(const CService& addr_port, bool ignore_ibd = false) const EXCLUSIVE_LOCKS_REQUIRED(!m_nodes_mutex);
 
     /**
      * Determine whether we're already connected to a given address.
      */
-    bool AlreadyConnectedToAddress(const CNetAddr& addr) const EXCLUSIVE_LOCKS_REQUIRED(!m_nodes_mutex);
+    bool AlreadyConnectedToAddress(const CNetAddr& addr, bool ignore_ibd = false) const EXCLUSIVE_LOCKS_REQUIRED(!m_nodes_mutex);
 
     /**
      * Try to find an inbound connection to evict.
@@ -1664,6 +1677,13 @@ private:
     std::vector<CNode*> m_nodes GUARDED_BY(m_nodes_mutex);
     std::list<CNode*> m_nodes_disconnected;
     mutable Mutex m_nodes_mutex;
+    bool m_ibd_peers_active GUARDED_BY(m_nodes_mutex){false};
+    /** Reserve -maxconnections capacity during connect/initialization, excluding manual/private peers. */
+    int m_pending_connections GUARDED_BY(m_nodes_mutex){0};
+    int m_pending_ibd_connections GUARDED_BY(m_nodes_mutex){0};
+    int m_pending_automatic_connections GUARDED_BY(m_nodes_mutex){0};
+    bool HaveIbdCapacity() const EXCLUSIVE_LOCKS_REQUIRED(m_nodes_mutex);
+    void YieldIbdCapacity(int incoming, const CAddress* ordinary_addr = nullptr) EXCLUSIVE_LOCKS_REQUIRED(m_nodes_mutex);
     std::atomic<NodeId> nLastNodeId{0};
     unsigned int nPrevNodeCount{0};
 

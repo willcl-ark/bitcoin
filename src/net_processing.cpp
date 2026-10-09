@@ -137,6 +137,7 @@ static const int MAX_BLOCKS_IN_TRANSIT_PER_PEER = 16;
 static constexpr size_t MAX_IBD_BACKUP_HASHES{4};
 static constexpr auto IBD_BACKUP_DELAY{1s};
 static constexpr auto IBD_BACKUP_INTERVAL{1s};
+static constexpr int MAX_IBD_BLOCKS_IN_TRANSIT{2};
 /** Maximum number of deep-IBD blocks admitted before activating them together. */
 static constexpr size_t MAX_IBD_BLOCKS_TO_ADMIT{8};
 /** Maximum body memory retained for a deep-IBD activation group. */
@@ -260,6 +261,8 @@ struct Peer {
 
     //! Whether this peer is an inbound connection
     const bool m_is_inbound;
+    //! Snapshot of the temporary block-download connection role.
+    const bool m_is_ibd;
 
     /** Protects misbehavior data members */
     Mutex m_misbehavior_mutex;
@@ -426,10 +429,11 @@ struct Peer {
      * timestamp the peer sent in the version message. */
     std::atomic<std::chrono::seconds> m_time_offset{0s};
 
-    explicit Peer(NodeId id, ServiceFlags our_services, bool is_inbound)
+    explicit Peer(NodeId id, ServiceFlags our_services, bool is_inbound, bool is_ibd)
         : m_id{id}
         , m_our_services{our_services}
         , m_is_inbound{is_inbound}
+        , m_is_ibd{is_ibd}
     {}
 
 private:
@@ -1069,6 +1073,10 @@ private:
     std::chrono::microseconds m_last_ibd_backup GUARDED_BY(cs_main){0us};
     bool IbdBackupResponse(const uint256& hash, NodeId peer, size_t bytes, bool notfound = false) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
     int IbdBackupDebt(NodeId peer) const EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    size_t BlockRequestLimit(const Peer& peer) const { return peer.m_is_ibd ? MAX_IBD_BLOCKS_IN_TRANSIT : MAX_BLOCKS_IN_TRANSIT_PER_PEER; }
+    bool IbdPeersActive() EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    void UpdateIbdPeer(CNode& node) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    bool m_ibd_peers_active GUARDED_BY(cs_main){false};
     bool OnlyIbdBackupsInFlight(NodeId peer) const EXCLUSIVE_LOCKS_REQUIRED(cs_main);
     void RequestIbdBackup(CNode& node, const Peer& peer, std::vector<CInv>& requests,
                           std::chrono::microseconds now) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
@@ -1441,6 +1449,30 @@ bool PeerManagerImpl::OnlyIbdBackupsInFlight(NodeId peer) const
     });
 }
 
+bool PeerManagerImpl::IbdPeersActive()
+{
+    const auto* tip = m_chainman.ActiveTip();
+    const auto* best = m_chainman.m_best_header;
+    return m_chainman.IsInitialBlockDownload() && !CanDirectFetch() && !m_chainman.GetHistoricalBlockRange() &&
+           best && best->nHeight > tip->nHeight && best->GetAncestor(tip->nHeight) == tip &&
+           best->nChainWork >= m_chainman.MinimumChainWork() && best->Time() > NodeClock::now() - 24h;
+}
+
+void PeerManagerImpl::UpdateIbdPeer(CNode& node)
+{
+    const bool active = IbdPeersActive();
+    if (active != m_ibd_peers_active) {
+        m_ibd_peers_active = active;
+        m_connman.SetIbdPeersActive(active);
+        LogDebug(BCLog::BENCH, "IBD temporary peers active=%d\n", active);
+    }
+    if (!node.IsIbdConn()) return;
+    if (!active) {
+        LogDebug(BCLog::BENCH, "IBD temporary peer closing gate=false peer=%d\n", node.GetId());
+        node.fDisconnect = true;
+    }
+}
+
 void PeerManagerImpl::RequestIbdBackup(CNode& node, const Peer& peer, std::vector<CInv>& requests,
                                       std::chrono::microseconds now)
 {
@@ -1456,7 +1488,7 @@ void PeerManagerImpl::RequestIbdBackup(CNode& node, const Peer& peer, std::vecto
         m_ibd_frontier_attempted = false;
     }
     if (m_ibd_frontier_attempted || m_ibd_backups.contains(hash) || now - m_last_ibd_backup < IBD_BACKUP_INTERVAL ||
-        m_ibd_backups.size() >= MAX_IBD_BACKUP_HASHES || !(node.IsFullOutboundConn() || node.IsBlockOnlyConn())) return;
+        m_ibd_backups.size() >= MAX_IBD_BACKUP_HASHES || !(node.IsFullOutboundConn() || node.IsBlockOnlyConn() || node.IsIbdConn())) return;
     for (const auto& [hedged_hash, backup] : m_ibd_backups) {
         const auto range = mapBlocksInFlight.equal_range(hedged_hash);
         if (std::any_of(range.first, range.second, [&backup](const auto& entry) { return entry.second.first == backup.backup_peer; })) return;
@@ -1493,6 +1525,8 @@ void PeerManagerImpl::MaybeSetPeerAsAnnouncingHeaderAndIDs(NodeId nodeid)
 
     CNodeState* nodestate = State(nodeid);
     PeerRef peer{GetPeerRef(nodeid)};
+    // Temporary IBD peers use full blocks and shallow request queues.
+    if (peer && peer->m_is_ibd) return;
     if (!nodestate || !nodestate->m_provides_cmpctblocks) {
         // Don't request compact blocks if the peer has not signalled support
         return;
@@ -1827,7 +1861,7 @@ void PeerManagerImpl::InitializeNode(const CNode& node, ServiceFlags our_service
         our_services = static_cast<ServiceFlags>(our_services | NODE_BLOOM);
     }
 
-    PeerRef peer = std::make_shared<Peer>(nodeid, our_services, node.IsInboundConn());
+    PeerRef peer = std::make_shared<Peer>(nodeid, our_services, node.IsInboundConn(), node.IsIbdConn());
     {
         LOCK(m_peer_mutex);
         m_peer_map.emplace_hint(m_peer_map.end(), nodeid, peer);
@@ -1949,7 +1983,7 @@ void PeerManagerImpl::FinalizeNode(const CNode& node)
     }
     } // cs_main
     if (node.fSuccessfullyConnected &&
-        !node.IsBlockOnlyConn() && !node.IsPrivateBroadcastConn() && !node.IsInboundConn()) {
+        !node.IsBlockOnlyConn() && !node.IsIbdConn() && !node.IsPrivateBroadcastConn() && !node.IsInboundConn()) {
         // Only change visible addrman state for full outbound peers.  We don't
         // call Connected() for feeler connections since they don't have
         // fSuccessfullyConnected set. Also don't call Connected() for private broadcast
@@ -2223,8 +2257,8 @@ util::Expected<void, std::string> PeerManagerImpl::FetchBlock(NodeId peer_id, co
         return util::Unexpected{"Block has outstanding IBD backup responses"};
     }
 
-    if (IbdBackupDebt(peer_id) && State(peer_id)->vBlocksInFlight.size() + IbdBackupDebt(peer_id) >= MAX_BLOCKS_IN_TRANSIT_PER_PEER) {
-        return util::Unexpected{"Outstanding IBD backup responses exhaust peer request budget"};
+    if ((peer->m_is_ibd || IbdBackupDebt(peer_id)) && State(peer_id)->vBlocksInFlight.size() + IbdBackupDebt(peer_id) >= BlockRequestLimit(*peer)) {
+        return util::Unexpected{"IBD block request budget exhausted"};
     }
 
     // Forget about all prior requests
@@ -3254,7 +3288,7 @@ void PeerManagerImpl::HeadersDirectFetchBlocks(CNode& pfrom, const Peer& peer, c
             std::vector<CInv> vGetData;
             // Download as much as possible, from earliest to latest.
             for (const CBlockIndex* pindex : vToFetch | std::views::reverse) {
-                if (nodestate->vBlocksInFlight.size() + IbdBackupDebt(pfrom.GetId()) >= MAX_BLOCKS_IN_TRANSIT_PER_PEER) {
+                if (nodestate->vBlocksInFlight.size() + IbdBackupDebt(pfrom.GetId()) >= BlockRequestLimit(peer)) {
                     // Can't download any more from this peer
                     break;
                 }
@@ -3319,7 +3353,7 @@ void PeerManagerImpl::UpdatePeerStateForReceivedHeaders(CNode& pfrom,
             // until we have a headers chain that has at least
             // the minimum chain work, even if a peer has a chain past our tip,
             // as an anti-DoS measure.
-            if (pfrom.IsOutboundOrBlockRelayConn()) {
+            if (pfrom.IsOutboundOrBlockRelayConn() || pfrom.IsIbdConn()) {
                 LogInfo("outbound peer headers chain has insufficient work, %s", pfrom.DisconnectMsg());
                 pfrom.fDisconnect = true;
             }
@@ -3840,6 +3874,15 @@ void PeerManagerImpl::ProcessBlock(CNode& node, const std::shared_ptr<const CBlo
         // from, we can erase the block request now anyway (as we just stored
         // this block to disk).
         LOCK(cs_main);
+        if (node.IsIbdConn()) {
+            const auto* index = m_chainman.m_blockman.LookupBlockIndex(block->GetHash());
+            const auto* best = m_chainman.m_best_header;
+            if (index && best && best->GetAncestor(index->nHeight) == index) {
+                const auto admission_completed = GetTime<std::chrono::microseconds>();
+                LogDebug(BCLog::BENCH, "IBD peer useful body peer=%d height=%d hash=%s admission_completed_us=%d\n",
+                         node.GetId(), index->nHeight, block->GetHash().ToString(), admission_completed.count());
+            }
+        }
         RemoveBlockRequest(block->GetHash(), std::nullopt);
     } else {
         LOCK(cs_main);
@@ -4217,7 +4260,7 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         // - fRelay=true (the peer wishes to receive transaction announcements)
         //   or we're offering NODE_BLOOM to this peer. NODE_BLOOM means that
         //   the peer may turn on transaction relay later.
-        if (!pfrom.IsBlockOnlyConn() &&
+        if (!pfrom.IsBlockOnlyConn() && !pfrom.IsIbdConn() &&
             !pfrom.IsFeelerConn() &&
             (fRelay || (peer.m_our_services & NODE_BLOOM))) {
             auto* const tx_relay = peer.SetTxRelay();
@@ -5190,7 +5233,7 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         // We want to be a bit conservative just to be extra careful about DoS
         // possibilities in compact block processing...
         if (pindex->nHeight <= m_chainman.ActiveChain().Height() + 2) {
-            if ((already_in_flight < MAX_CMPCTBLOCKS_INFLIGHT_PER_BLOCK && nodestate->vBlocksInFlight.size() + IbdBackupDebt(pfrom.GetId()) < MAX_BLOCKS_IN_TRANSIT_PER_PEER) ||
+            if ((already_in_flight < MAX_CMPCTBLOCKS_INFLIGHT_PER_BLOCK && nodestate->vBlocksInFlight.size() + IbdBackupDebt(pfrom.GetId()) < BlockRequestLimit(peer)) ||
                  requested_block_from_this_peer) {
                 std::list<QueuedBlock>::iterator* queuedBlockIt = nullptr;
                 if (!BlockRequested(pfrom.GetId(), *pindex, &queuedBlockIt)) {
@@ -5822,7 +5865,7 @@ void PeerManagerImpl::ConsiderEviction(CNode& pto, Peer& peer, std::chrono::seco
 
     CNodeState &state = *State(pto.GetId());
 
-    if (!state.m_chain_sync.m_protect && pto.IsOutboundOrBlockRelayConn() && state.fSyncStarted) {
+    if (!state.m_chain_sync.m_protect && (pto.IsOutboundOrBlockRelayConn() || pto.IsIbdConn()) && state.fSyncStarted) {
         // This is an outbound peer subject to disconnection if they don't
         // announce a block with as much work as the current tip within
         // CHAIN_SYNC_TIMEOUT + HEADERS_RESPONSE_TIME seconds (note: if
@@ -6155,7 +6198,7 @@ void PeerManagerImpl::MaybeSendFeefilter(CNode& pto, Peer& peer, std::chrono::mi
     if (pto.HasPermission(NetPermissionFlags::ForceRelay)) return;
     // Don't send feefilter messages to outbound block-relay-only peers since they should never announce
     // transactions to us, regardless of feefilter state.
-    if (pto.IsBlockOnlyConn()) return;
+    if (pto.IsBlockOnlyConn() || pto.IsIbdConn()) return;
 
     CAmount currentFilter = m_mempool.GetMinFee().GetFeePerK();
 
@@ -6192,7 +6235,7 @@ void PeerManagerImpl::MaybeSendFeefilter(CNode& pto, Peer& peer, std::chrono::mi
 bool PeerManagerImpl::RejectIncomingTxs(const CNode& peer) const
 {
     // block-relay-only peers may never send txs to us
-    if (peer.IsBlockOnlyConn()) return true;
+    if (peer.IsBlockOnlyConn() || peer.IsIbdConn()) return true;
     if (peer.IsFeelerConn()) return true;
     // In -blocksonly mode, peers need the 'relay' permission to send txs to us
     if (m_opts.ignore_incoming_txs && !peer.HasPermission(NetPermissionFlags::Relay)) return true;
@@ -6264,7 +6307,7 @@ bool PeerManagerImpl::SetupAddressRelay(const CNode& node, Peer& peer)
     // We don't participate in addr relay with outbound block-relay-only
     // connections to prevent providing adversaries with the additional
     // information of addr traffic to infer the link.
-    if (node.IsBlockOnlyConn()) return false;
+    if (node.IsBlockOnlyConn() || node.IsIbdConn()) return false;
 
     // We don't participate in addr relay with feeler connections because
     // they are disconnected shortly after the handshake completes,
@@ -6429,6 +6472,9 @@ bool PeerManagerImpl::SendMessages(CNode& node)
         if (m_chainman.m_best_header == nullptr) {
             m_chainman.m_best_header = m_chainman.ActiveChain().Tip();
         }
+
+        UpdateIbdPeer(node);
+        if (node.fDisconnect) return true;
 
         // Determine whether we might try initial headers sync or parallel
         // block download from this peer -- this mostly affects behavior while
@@ -6840,11 +6886,11 @@ bool PeerManagerImpl::SendMessages(CNode& node)
         //
         std::vector<CInv> vGetData;
         const bool can_request_blocks_from_peer{current_time >= state.m_block_download_paused_until};
-        if (CanServeBlocks(peer) && can_request_blocks_from_peer && ((sync_blocks_and_headers_from_peer && !IsLimitedPeer(peer)) || !m_chainman.IsInitialBlockDownload()) && state.vBlocksInFlight.size() + IbdBackupDebt(node.GetId()) < MAX_BLOCKS_IN_TRANSIT_PER_PEER) {
+        if (CanServeBlocks(peer) && can_request_blocks_from_peer && ((sync_blocks_and_headers_from_peer && !IsLimitedPeer(peer)) || !m_chainman.IsInitialBlockDownload()) && state.vBlocksInFlight.size() + IbdBackupDebt(node.GetId()) < BlockRequestLimit(peer)) {
             std::vector<const CBlockIndex*> vToDownload;
             NodeId staller = -1;
             auto get_inflight_budget = [&]() {
-                return std::max(0, MAX_BLOCKS_IN_TRANSIT_PER_PEER - static_cast<int>(state.vBlocksInFlight.size()) - IbdBackupDebt(node.GetId()));
+                return std::max(0, static_cast<int>(BlockRequestLimit(peer)) - static_cast<int>(state.vBlocksInFlight.size()) - IbdBackupDebt(node.GetId()));
             };
 
             RequestIbdBackup(node, peer, vGetData, current_time);

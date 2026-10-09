@@ -477,6 +477,9 @@ RPCConsole::RPCConsole(interfaces::Node& node, const PlatformStyle *_platformSty
         /*: Explanatory text for an outbound peer connection that relays
             network information about blocks and not transactions or addresses. */
         tr("Outbound Block Relay: does not relay transactions or addresses"),
+        /*: Explanatory text for a temporary outbound peer connection used to
+            download blocks during initial block download. */
+        tr("Outbound IBD: temporary connection for downloading blocks"),
         /*: Explanatory text for an outbound peer connection that was
             established manually through one of several methods. The numbered
             arguments are stand-ins for the methods available to establish
