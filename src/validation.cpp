@@ -3131,9 +3131,11 @@ Chainstate::BatchConnectResult Chainstate::ConnectTipBatch(
     }
     const auto time_start{SteadyClock::now()};
     const size_t workers{m_coins_views->m_thread_pool->WorkersCount()};
+    size_t retained_hits{0};
+    size_t disk_reads{0};
     const auto fallback{[&](const char* reason) {
-        LogDebug(BCLog::BENCH, "IBD batch fallback: candidates=%u attempted=%u workers=%u reason=%s total=%.2fms\n",
-                 std::min<size_t>(indices.size(), 8), attempted_blocks, workers, reason,
+        LogDebug(BCLog::BENCH, "IBD batch fallback: candidates=%u attempted=%u workers=%u reason=%s retained_hits=%u disk_reads=%u total=%.2fms\n",
+                 std::min<size_t>(indices.size(), 8), attempted_blocks, workers, reason, retained_hits, disk_reads,
                  Ticks<MillisecondsDouble>(SteadyClock::now() - time_start));
         return BatchConnectResult::FALLBACK;
     }};
@@ -3171,7 +3173,9 @@ Chainstate::BatchConnectResult Chainstate::ConnectTipBatch(
                 break;
             }
             std::shared_ptr<const CBlock> block{FindRetainedBlock(*index, pblock, retained_blocks)};
-            if (!block) {
+            if (block) {
+                ++retained_hits;
+            } else {
                 if (allowance - body_usage < READ_HEADROOM) {
                     admission_limit = "body-read-budget";
                     break;
@@ -3181,6 +3185,7 @@ Chainstate::BatchConnectResult Chainstate::ConnectTipBatch(
                     FatalError(m_chainman.GetNotifications(), state, _("Failed to read block."));
                     return BatchConnectResult::ERROR;
                 }
+                ++disk_reads;
                 body_usage += sizeof(CBlock) + RecursiveDynamicUsage(*loaded);
                 block = std::move(loaded);
             }
@@ -3225,6 +3230,7 @@ Chainstate::BatchConnectResult Chainstate::ConnectTipBatch(
             attempted_blocks = blocks.size();
             bool retry_smaller{false};
             SteadyClock::time_point time_prepared, time_checked, time_scripts, time_undo_written, time_promoted;
+            CoinsViewBatch::CommitTimings commit_timings{};
             {
                 CoinsViewBatch batch{CoinsTip(), blocks, allowance - body_usage - validation_usage - read_headroom};
                 const auto prepared{batch.Prepare(*m_coins_views->m_thread_pool)};
@@ -3293,7 +3299,7 @@ Chainstate::BatchConnectResult Chainstate::ConnectTipBatch(
                         return BatchConnectResult::ERROR;
                     }
                     if (std::any_of(results.begin(), results.end(), [](const auto& result) { return !result.state.IsValid(); })) {
-                        LogDebug(BCLog::BENCH, "IBD batch fallback: blocks=%u reason=input-rules checks=%.2fms total=%.2fms\n", blocks.size(), Ticks<MillisecondsDouble>(SteadyClock::now() - time_prepared), Ticks<MillisecondsDouble>(SteadyClock::now() - time_start));
+                        LogDebug(BCLog::BENCH, "IBD batch fallback: blocks=%u reason=input-rules retained_hits=%u disk_reads=%u checks=%.2fms total=%.2fms\n", blocks.size(), retained_hits, disk_reads, Ticks<MillisecondsDouble>(SteadyClock::now() - time_prepared), Ticks<MillisecondsDouble>(SteadyClock::now() - time_start));
                         return BatchConnectResult::FALLBACK;
                     }
                     time_checked = SteadyClock::now();
@@ -3316,7 +3322,7 @@ Chainstate::BatchConnectResult Chainstate::ConnectTipBatch(
                             }
                         }
                         if (control->Complete().has_value()) {
-                            LogDebug(BCLog::BENCH, "IBD batch fallback: blocks=%u reason=scripts scripts=%.2fms total=%.2fms\n", blocks.size(), Ticks<MillisecondsDouble>(SteadyClock::now() - time_checked), Ticks<MillisecondsDouble>(SteadyClock::now() - time_start));
+                            LogDebug(BCLog::BENCH, "IBD batch fallback: blocks=%u reason=scripts retained_hits=%u disk_reads=%u scripts=%.2fms total=%.2fms\n", blocks.size(), retained_hits, disk_reads, Ticks<MillisecondsDouble>(SteadyClock::now() - time_checked), Ticks<MillisecondsDouble>(SteadyClock::now() - time_start));
                             return BatchConnectResult::FALLBACK;
                         }
                     }
@@ -3341,7 +3347,7 @@ Chainstate::BatchConnectResult Chainstate::ConnectTipBatch(
                             m_blockman.m_dirty_blockindex.insert(indices[b]);
                         }
                     }
-                    batch.Commit(indices[blocks.size() - 1]->GetBlockHash(), *m_coins_views->m_thread_pool);
+                    commit_timings = batch.Commit(indices[blocks.size() - 1]->GetBlockHash(), *m_coins_views->m_thread_pool);
                     m_chain.SetTip(*indices[blocks.size() - 1]);
                     time_promoted = SteadyClock::now();
                 }
@@ -3394,12 +3400,13 @@ Chainstate::BatchConnectResult Chainstate::ConnectTipBatch(
             m_chainman.time_post_connect += time_before_flush - time_promoted + time_finished - time_flushed;
             m_chainman.time_total += time_finished - time_start;
             if (log_bench) {
-                LogDebug(BCLog::BENCH, "IBD batch: blocks=%u first=%d last=%d workers=%u tx=%u inputs=%u load=%.2fms input_prepare=%.2fms checks=%.2fms scripts=%.2fms promote=%.2fms flush=%.2fms postprocess=%.2fms total=%.2fms\n",
-                         blocks.size(), indices.front()->nHeight, indices[blocks.size() - 1]->nHeight, workers, transactions, inputs,
+                LogDebug(BCLog::BENCH, "IBD batch: blocks=%u first=%d last=%d workers=%u tx=%u inputs=%u retained_hits=%u disk_reads=%u load=%.2fms input_prepare=%.2fms checks=%.2fms scripts=%.2fms undo=%.2fms promote=%.2fms cleanup=%.2fms flush=%.2fms postprocess=%.2fms total=%.2fms\n",
+                         blocks.size(), indices.front()->nHeight, indices[blocks.size() - 1]->nHeight, workers, transactions, inputs, retained_hits, disk_reads,
                          Ticks<MillisecondsDouble>(time_loaded - time_start), Ticks<MillisecondsDouble>(time_prepared - time_loaded), Ticks<MillisecondsDouble>(time_checked - time_prepared),
-                         Ticks<MillisecondsDouble>(time_scripts - time_checked), Ticks<MillisecondsDouble>(time_promoted - time_scripts),
+                         Ticks<MillisecondsDouble>(time_scripts - time_checked), Ticks<MillisecondsDouble>(time_undo_written - time_scripts),
+                         Ticks<MillisecondsDouble>(commit_timings.promotion), Ticks<MillisecondsDouble>(commit_timings.cleanup),
                          Ticks<MillisecondsDouble>(time_flushed - time_before_flush),
-                         Ticks<MillisecondsDouble>(time_before_flush - time_promoted + time_finished - time_flushed),
+                         Ticks<MillisecondsDouble>(time_before_flush - time_undo_written - commit_timings.promotion - commit_timings.cleanup + time_finished - time_flushed),
                          Ticks<MillisecondsDouble>(time_finished - time_start));
             }
             return BatchConnectResult::CONNECTED;
@@ -3431,21 +3438,21 @@ bool Chainstate::ConnectTip(
     assert(pindexNew->pprev == m_chain.Tip());
     // Read block from disk.
     const auto time_1{SteadyClock::now()};
+    const bool retained{block_to_connect != nullptr};
     if (!block_to_connect) {
         std::shared_ptr<CBlock> pblockNew = std::make_shared<CBlock>();
         if (!m_blockman.ReadBlock(*pblockNew, *pindexNew)) {
             return FatalError(m_chainman.GetNotifications(), state, _("Failed to read block."));
         }
         block_to_connect = std::move(pblockNew);
-    } else {
-        LogDebug(BCLog::BENCH, "  - Using cached block\n");
     }
     // Apply the block atomically to the chain state.
     const auto time_2{SteadyClock::now()};
     SteadyClock::time_point time_3;
     // When adding aggregate statistics in the future, keep in mind that
     // num_blocks_total may be zero until the ConnectBlock() call below.
-    LogDebug(BCLog::BENCH, "  - Load block from disk: %.2fms\n",
+    LogDebug(BCLog::BENCH, "Block body load: height=%d retained_hits=%u disk_reads=%u time=%.2fms\n",
+             pindexNew->nHeight, retained, !retained,
              Ticks<MillisecondsDouble>(time_2 - time_1));
     {
         CoinsViewOverlay& view{*m_coins_views->m_connect_block_view};
