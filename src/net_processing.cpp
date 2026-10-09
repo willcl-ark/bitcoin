@@ -14,6 +14,7 @@
 #include <chainparams.h>
 #include <common/bloom.h>
 #include <consensus/amount.h>
+#include <consensus/consensus.h>
 #include <consensus/params.h>
 #include <consensus/validation.h>
 #include <core_memusage.h>
@@ -859,9 +860,12 @@ private:
     ChainstateManager& m_chainman;
     CTxMemPool& m_mempool;
 
-    /** Bodies accepted during the current deep-IBD message batch. */
-    std::vector<std::shared_ptr<const CBlock>> m_admitted_ibd_blocks GUARDED_BY(g_msgproc_mutex);
-    size_t m_admitted_ibd_memory GUARDED_BY(g_msgproc_mutex){0};
+    /** Bodies accepted since the last deep-IBD activation. */
+    std::vector<std::shared_ptr<const CBlock>> m_pending_ibd_blocks GUARDED_BY(g_msgproc_mutex);
+    size_t m_pending_ibd_memory GUARDED_BY(g_msgproc_mutex){0};
+    /** Successfully admitted bodies retained across activation barriers. */
+    std::vector<std::shared_ptr<const CBlock>> m_ibd_block_cache GUARDED_BY(g_msgproc_mutex);
+    size_t m_ibd_block_cache_memory GUARDED_BY(g_msgproc_mutex){0};
 
     /** Synchronizes tx download including TxRequestTracker, rejection filters, and TxOrphanage.
      * Lock invariants:
@@ -1064,6 +1068,9 @@ private:
 
     /** Activate blocks accepted by the bounded deep-IBD admission path. */
     void ActivateAdmittedBlocks() EXCLUSIVE_LOCKS_REQUIRED(g_msgproc_mutex);
+    /** Keep nearest still-useful admitted bodies within the configured IBD cache budget. */
+    void UpdateIbdBlockCache(const std::vector<std::shared_ptr<const CBlock>>& blocks)
+        EXCLUSIVE_LOCKS_REQUIRED(g_msgproc_mutex);
 
     /** Process compact block txns  */
     void ProcessCompactBlockTxns(CNode& pfrom, Peer& peer, const BlockTransactions& block_transactions)
@@ -3702,8 +3709,8 @@ void PeerManagerImpl::ProcessBlock(CNode& node, const std::shared_ptr<const CBlo
         body_memory = sizeof(*block) + RecursiveDynamicUsage(*block);
         memory_limit = WITH_LOCK(cs_main, return std::min(MAX_IBD_BLOCK_ADMISSION_MEMORY,
             m_chainman.ActiveChainstate().m_coinstip_cache_size_bytes / 4));
-        if (!m_admitted_ibd_blocks.empty() &&
-            (body_memory > memory_limit || m_admitted_ibd_memory > memory_limit - body_memory)) {
+        if (!m_pending_ibd_blocks.empty() &&
+            (body_memory > memory_limit || m_pending_ibd_memory > memory_limit - body_memory)) {
             ActivateAdmittedBlocks();
         }
     }
@@ -3718,7 +3725,7 @@ void PeerManagerImpl::ProcessBlock(CNode& node, const std::shared_ptr<const CBlo
     } else {
         accepted = m_chainman.ProcessNewBlock(block, force_processing, min_pow_checked, &new_block);
     }
-    if (!new_block && !m_admitted_ibd_blocks.empty()) ActivateAdmittedBlocks();
+    if (!new_block && !m_pending_ibd_blocks.empty()) ActivateAdmittedBlocks();
 
     if (new_block) {
         node.m_last_block_time = GetTime<std::chrono::seconds>();
@@ -3733,12 +3740,12 @@ void PeerManagerImpl::ProcessBlock(CNode& node, const std::shared_ptr<const CBlo
     }
 
     if (can_batch && accepted && new_block) {
-        m_admitted_ibd_blocks.push_back(block);
-        m_admitted_ibd_memory += body_memory;
-        if (m_admitted_ibd_blocks.size() >= MAX_IBD_BLOCKS_TO_ADMIT || body_memory > memory_limit) {
+        m_pending_ibd_blocks.push_back(block);
+        m_pending_ibd_memory += body_memory;
+        if (m_pending_ibd_blocks.size() >= MAX_IBD_BLOCKS_TO_ADMIT || body_memory > memory_limit) {
             ActivateAdmittedBlocks();
         }
-    } else if (!m_admitted_ibd_blocks.empty()) {
+    } else if (!m_pending_ibd_blocks.empty()) {
         ActivateAdmittedBlocks();
     }
 }
@@ -3746,15 +3753,36 @@ void PeerManagerImpl::ProcessBlock(CNode& node, const std::shared_ptr<const CBlo
 void PeerManagerImpl::ActivateAdmittedBlocks()
 {
     AssertLockHeld(g_msgproc_mutex);
-    if (m_admitted_ibd_blocks.empty()) return;
+    if (m_pending_ibd_blocks.empty() && m_ibd_block_cache.empty()) return;
+    const bool can_batch{WITH_LOCK(cs_main, return m_chainman.ActiveChainstate().CanValidateBatch())};
+    if (!can_batch) {
+        m_ibd_block_cache.clear();
+        m_ibd_block_cache_memory = 0;
+    }
+    if (m_pending_ibd_blocks.empty()) {
+        return;
+    }
 
-    std::vector<std::shared_ptr<const CBlock>> blocks;
-    blocks.swap(m_admitted_ibd_blocks);
-    m_admitted_ibd_memory = 0;
+    std::vector<std::shared_ptr<const CBlock>> pending_blocks;
+    pending_blocks.swap(m_pending_ibd_blocks);
+    m_pending_ibd_memory = 0;
+    std::vector<std::shared_ptr<const CBlock>> blocks{m_ibd_block_cache};
+    for (const auto& block : pending_blocks) {
+        if (std::none_of(blocks.begin(), blocks.end(), [&](const auto& cached) {
+                return cached->GetHash() == block->GetHash();
+            })) {
+            blocks.push_back(block);
+        }
+    }
     const auto start{SteadyClock::now()};
     m_chainman.ActivateNewBlocks(blocks);
-    LogDebug(BCLog::BENCH, "IBD block activation: blocks=%u time=%.2fms\n",
-             static_cast<unsigned int>(blocks.size()), Ticks<MillisecondsDouble>(SteadyClock::now() - start));
+    const auto elapsed{Ticks<MillisecondsDouble>(SteadyClock::now() - start)};
+    LogDebug(BCLog::BENCH, "IBD block activation: blocks=%u cached=%u cached_bytes=%zu pending=%u time=%.2fms\n",
+             static_cast<unsigned int>(blocks.size()), static_cast<unsigned int>(m_ibd_block_cache.size()),
+             m_ibd_block_cache_memory,
+             static_cast<unsigned int>(pending_blocks.size()), elapsed);
+
+    UpdateIbdBlockCache(blocks);
 
     if (util::log::ShouldDebugLog(BCLog::BENCH)) {
         // This is a block-index/request snapshot; a body can also still be
@@ -3780,6 +3808,60 @@ void PeerManagerImpl::ActivateAdmittedBlocks()
                      next_height, next_body_stored ? "stored" : "missing",
                      static_cast<unsigned int>(next_body_requests));
         }
+    }
+}
+
+void PeerManagerImpl::UpdateIbdBlockCache(const std::vector<std::shared_ptr<const CBlock>>& blocks)
+{
+    AssertLockHeld(g_msgproc_mutex);
+
+    struct Candidate {
+        int height;
+        std::shared_ptr<const CBlock> block;
+    };
+    std::vector<Candidate> candidates;
+    size_t memory_limit{0};
+    const size_t count_limit{m_opts.ibd_block_cache};
+    {
+        LOCK(cs_main);
+        const CBlockIndex* tip{m_chainman.ActiveChain().Tip()};
+        const CBlockIndex* best_header{m_chainman.m_best_header};
+        if (!m_chainman.ActiveChainstate().CanValidateBatch() || count_limit == 0 || !tip || !best_header ||
+            best_header->GetAncestor(tip->nHeight) != tip) {
+            m_ibd_block_cache.clear();
+            m_ibd_block_cache_memory = 0;
+            return;
+        }
+        const size_t count_memory_limit{count_limit > std::numeric_limits<size_t>::max() / MAX_BLOCK_SERIALIZED_SIZE ?
+                                            std::numeric_limits<size_t>::max() :
+                                            count_limit * MAX_BLOCK_SERIALIZED_SIZE};
+        memory_limit = std::min(count_memory_limit,
+                                m_chainman.ActiveChainstate().m_coinstip_cache_size_bytes / 4);
+        for (const auto& block : blocks) {
+            const CBlockIndex* index{m_chainman.m_blockman.LookupBlockIndex(block->GetHash())};
+            if (!index || index->nHeight <= tip->nHeight ||
+                (index->nStatus & BLOCK_FAILED_VALID) ||
+                !(index->nStatus & BLOCK_HAVE_DATA) ||
+                best_header->nHeight < index->nHeight ||
+                best_header->GetAncestor(index->nHeight) != index) continue;
+            if (std::any_of(candidates.begin(), candidates.end(), [&](const Candidate& candidate) {
+                    return candidate.block->GetHash() == block->GetHash();
+                })) continue;
+            candidates.push_back({index->nHeight, block});
+        }
+    }
+    std::sort(candidates.begin(), candidates.end(), [](const Candidate& a, const Candidate& b) {
+        return a.height < b.height;
+    });
+
+    m_ibd_block_cache.clear();
+    m_ibd_block_cache_memory = 0;
+    for (const auto& candidate : candidates) {
+        const size_t body_memory{sizeof(*candidate.block) + RecursiveDynamicUsage(*candidate.block)};
+        if (m_ibd_block_cache.size() >= count_limit || body_memory > memory_limit ||
+            m_ibd_block_cache_memory > memory_limit - body_memory) break;
+        m_ibd_block_cache.push_back(candidate.block);
+        m_ibd_block_cache_memory += body_memory;
     }
 }
 
@@ -5586,7 +5668,7 @@ bool PeerManagerImpl::ProcessMessages(CNode& node, std::atomic<bool>& interruptM
         }
 
         if (exception_caught || node.fDisconnect || node.fPauseSend ||
-            m_admitted_ibd_blocks.empty() || !more_messages ||
+            m_pending_ibd_blocks.empty() || !more_messages ||
             processed + 1 >= MAX_IBD_BLOCKS_TO_ADMIT) break;
         poll_result = node.PollMessage();
         if (!poll_result) {

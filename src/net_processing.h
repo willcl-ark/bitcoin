@@ -18,6 +18,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -36,6 +37,8 @@ class uint256;
 namespace node {
 class Warnings;
 } // namespace node
+
+inline constexpr size_t DEFAULT_IBD_BLOCK_CACHE{25};
 
 /** Whether transaction reconciliation protocol should be enabled by default. */
 inline constexpr bool DEFAULT_TXRECONCILIATION_ENABLE{false};
@@ -110,6 +113,8 @@ public:
         bool private_broadcast{DEFAULT_PRIVATE_BROADCAST};
         //! Maximum per-second rate for sending transaction inventory to peers.
         unsigned int tx_send_rate{DEFAULT_TX_SEND_RATE};
+        //! Maximum number of admitted block bodies to retain across deep-IBD activations.
+        size_t ibd_block_cache{DEFAULT_IBD_BLOCK_CACHE};
     };
 
     static std::unique_ptr<PeerManager> make(CConnman& connman, AddrMan& addrman,

@@ -19,6 +19,7 @@
 #include <common/messages.h>
 #include <common/system.h>
 #include <compat/compat.h>
+#include <consensus/consensus.h>
 #include <consensus/params.h>
 #include <crypto/hex_base.h>
 #include <dbwrapper.h>
@@ -533,6 +534,10 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-par=<n>", strprintf("Set the number of script verification threads (0 = auto, up to %d, <0 = leave that many cores free, default: %d)",
         MAX_SCRIPTCHECK_THREADS, DEFAULT_SCRIPTCHECK_THREADS), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-prevoutfetchthreads=<n>", strprintf("Set the number of threads used to prefetch block input prevouts from the chainstate database (0 disables, up to %d, default: %d). Negative values are rejected.", MAX_PREVOUTFETCH_THREADS, DEFAULT_PREVOUTFETCH_THREADS), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
+    argsman.AddArg("-ibdblockcache=<n>",
+                   strprintf("Retain up to <n> admitted block bodies across deep-IBD activations (0 disables, default: %u). Total decoded-body memory is limited to 4 MB times <n> and one quarter of the UTXO cache budget.",
+                             static_cast<unsigned int>(DEFAULT_IBD_BLOCK_CACHE)),
+                   ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-persistmempool", strprintf("Whether to save the mempool on shutdown and load on restart (default: %u)", DEFAULT_PERSIST_MEMPOOL), ArgsManager::ALLOW_ANY, OptionsCategory::OPTIONS);
     argsman.AddArg("-persistmempoolv1",
                    strprintf("Whether a mempool.dat file created by -persistmempool or the savemempool RPC will be written in the legacy format "
@@ -1176,6 +1181,13 @@ bool AppInitParameterInteraction(const ArgsManager& args)
     peer_connect_timeout = args.GetIntArg("-peertimeout", DEFAULT_PEER_CONNECT_TIMEOUT);
     if (peer_connect_timeout <= 0) {
         return InitError(Untranslated("peertimeout must be a positive integer."));
+    }
+
+    if (args.IsArgSet("-ibdblockcache")) {
+        const auto ibd_block_cache{ToIntegral<uint64_t>(args.GetArg("-ibdblockcache", ""))};
+        if (!ibd_block_cache || *ibd_block_cache > std::numeric_limits<size_t>::max() / MAX_BLOCK_SERIALIZED_SIZE) {
+            return InitError(Untranslated("-ibdblockcache must be a non-negative integer small enough to fit its serialized-body budget."));
+        }
     }
 
     auto mining_result{node::ReadMiningArgs(args)};
