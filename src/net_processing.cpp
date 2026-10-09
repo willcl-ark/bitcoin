@@ -138,6 +138,10 @@ static constexpr size_t MAX_IBD_BACKUP_HASHES{4};
 static constexpr auto IBD_BACKUP_DELAY{1s};
 static constexpr auto IBD_BACKUP_INTERVAL{1s};
 static constexpr int MAX_IBD_BLOCKS_IN_TRANSIT{2};
+static constexpr auto IBD_PEER_WARMUP{60s};
+static constexpr auto IBD_PEER_NO_PROGRESS{60s};
+static constexpr auto IBD_PEER_REPLACEMENT_INTERVAL{3min};
+static constexpr auto IBD_PEER_DRAIN_TIMEOUT{5s};
 /** Maximum number of deep-IBD blocks admitted before activating them together. */
 static constexpr size_t MAX_IBD_BLOCKS_TO_ADMIT{8};
 /** Maximum body memory retained for a deep-IBD activation group. */
@@ -471,6 +475,10 @@ struct CNodeState {
     std::chrono::microseconds m_block_download_paused_until{0us};
     //! Whether we consider this a preferred download peer.
     bool fPreferredDownload{false};
+    //! Last newly stored body on the best header chain, measured after local admission.
+    std::chrono::microseconds m_ibd_last_delivery{0us};
+    //! Nonzero while this temporary peer is draining before replacement.
+    std::chrono::microseconds m_ibd_retire_at{0us};
     /** Whether this peer wants invs or cmpctblocks (when possible) for block announcements. */
     bool m_requested_hb_cmpctblocks{false};
     /** Whether this peer will send us cmpctblocks if we request them. */
@@ -1075,8 +1083,12 @@ private:
     int IbdBackupDebt(NodeId peer) const EXCLUSIVE_LOCKS_REQUIRED(cs_main);
     size_t BlockRequestLimit(const Peer& peer) const { return peer.m_is_ibd ? MAX_IBD_BLOCKS_IN_TRANSIT : MAX_BLOCKS_IN_TRANSIT_PER_PEER; }
     bool IbdPeersActive() EXCLUSIVE_LOCKS_REQUIRED(cs_main);
-    void UpdateIbdPeer(CNode& node) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    void UpdateIbdPeer(CNode& node, std::chrono::microseconds now) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
     bool m_ibd_peers_active GUARDED_BY(cs_main){false};
+    uint256 m_ibd_rotation_frontier GUARDED_BY(cs_main);
+    std::chrono::microseconds m_ibd_missing_since GUARDED_BY(cs_main){0us};
+    std::chrono::microseconds m_last_ibd_rotation GUARDED_BY(cs_main){0us};
+    std::optional<NodeId> m_ibd_rotating_peer GUARDED_BY(cs_main);
     bool OnlyIbdBackupsInFlight(NodeId peer) const EXCLUSIVE_LOCKS_REQUIRED(cs_main);
     void RequestIbdBackup(CNode& node, const Peer& peer, std::vector<CInv>& requests,
                           std::chrono::microseconds now) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
@@ -1458,7 +1470,7 @@ bool PeerManagerImpl::IbdPeersActive()
            best->nChainWork >= m_chainman.MinimumChainWork() && best->Time() > NodeClock::now() - 24h;
 }
 
-void PeerManagerImpl::UpdateIbdPeer(CNode& node)
+void PeerManagerImpl::UpdateIbdPeer(CNode& node, std::chrono::microseconds now)
 {
     const bool active = IbdPeersActive();
     if (active != m_ibd_peers_active) {
@@ -1466,11 +1478,38 @@ void PeerManagerImpl::UpdateIbdPeer(CNode& node)
         m_connman.SetIbdPeersActive(active);
         LogDebug(BCLog::BENCH, "IBD temporary peers active=%d\n", active);
     }
+    const auto* frontier = active ? m_chainman.m_best_header->GetAncestor(m_chainman.ActiveTip()->nHeight + 1) : nullptr;
+    if (!frontier || (frontier->nStatus & BLOCK_HAVE_DATA)) {
+        m_ibd_rotation_frontier.SetNull();
+        m_ibd_missing_since = 0us;
+    } else if (m_ibd_rotation_frontier != frontier->GetBlockHash()) {
+        m_ibd_rotation_frontier = frontier->GetBlockHash();
+        m_ibd_missing_since = now;
+    }
     if (!node.IsIbdConn()) return;
     if (!active) {
         LogDebug(BCLog::BENCH, "IBD temporary peer closing gate=false peer=%d\n", node.GetId());
         node.fDisconnect = true;
+        return;
     }
+    auto& state = *Assert(State(node.GetId()));
+    if (state.m_ibd_retire_at != 0us) {
+        if ((state.vBlocksInFlight.empty() && IbdBackupDebt(node.GetId()) == 0) || now >= state.m_ibd_retire_at) {
+            LogDebug(BCLog::BENCH, "IBD temporary peer closing after drain peer=%d requests=%d debt=%d\n",
+                     node.GetId(), state.vBlocksInFlight.size(), IbdBackupDebt(node.GetId()));
+            node.fDisconnect = true;
+        }
+        return;
+    }
+    if (m_ibd_missing_since == 0us || now - m_ibd_missing_since < IBD_PEER_NO_PROGRESS ||
+        NodeClock::now() - node.m_connected < IBD_PEER_WARMUP ||
+        (state.m_ibd_last_delivery != 0us && now - state.m_ibd_last_delivery < IBD_PEER_NO_PROGRESS) ||
+        m_ibd_rotating_peer || now - m_last_ibd_rotation < IBD_PEER_REPLACEMENT_INTERVAL) return;
+    m_ibd_rotating_peer = node.GetId();
+    m_last_ibd_rotation = now;
+    state.m_ibd_retire_at = now + IBD_PEER_DRAIN_TIMEOUT;
+    LogDebug(BCLog::BENCH, "IBD temporary peer draining no useful body peer=%d requests=%d debt=%d frontier=%s\n",
+             node.GetId(), state.vBlocksInFlight.size(), IbdBackupDebt(node.GetId()), m_ibd_rotation_frontier.ToString());
 }
 
 void PeerManagerImpl::RequestIbdBackup(CNode& node, const Peer& peer, std::vector<CInv>& requests,
@@ -1943,6 +1982,7 @@ void PeerManagerImpl::FinalizeNode(const CNode& node)
     if (state->fSyncStarted)
         nSyncStarted--;
 
+    if (m_ibd_rotating_peer == nodeid) m_ibd_rotating_peer.reset();
     for (auto it = m_ibd_backups.begin(); it != m_ibd_backups.end();) {
         it->second.outstanding.erase(nodeid);
         if (it->second.outstanding.empty()) it = m_ibd_backups.erase(it);
@@ -2252,6 +2292,8 @@ util::Expected<void, std::string> PeerManagerImpl::FetchBlock(NodeId peer_id, co
 
     // Ignore pre-segwit peers
     if (!CanServeWitnesses(*peer)) return util::Unexpected{"Pre-SegWit peer"};
+
+    if (peer->m_is_ibd && State(peer_id)->m_ibd_retire_at != 0us) return util::Unexpected{"IBD peer is draining"};
 
     if (m_ibd_backups.contains(block_index.GetBlockHash())) {
         return util::Unexpected{"Block has outstanding IBD backup responses"};
@@ -3261,6 +3303,7 @@ void PeerManagerImpl::HeadersDirectFetchBlocks(CNode& pfrom, const Peer& peer, c
 {
     LOCK(cs_main);
     CNodeState *nodestate = State(pfrom.GetId());
+    if (nodestate->m_ibd_retire_at != 0us) return;
 
     if (CanDirectFetch() && last_header.IsValid(BLOCK_VALID_TREE) && m_chainman.ActiveChain().Tip()->nChainWork <= last_header.nChainWork) {
         std::vector<const CBlockIndex*> vToFetch;
@@ -3878,9 +3921,10 @@ void PeerManagerImpl::ProcessBlock(CNode& node, const std::shared_ptr<const CBlo
             const auto* index = m_chainman.m_blockman.LookupBlockIndex(block->GetHash());
             const auto* best = m_chainman.m_best_header;
             if (index && best && best->GetAncestor(index->nHeight) == index) {
-                const auto admission_completed = GetTime<std::chrono::microseconds>();
+                auto& state = *Assert(State(node.GetId()));
+                state.m_ibd_last_delivery = GetTime<std::chrono::microseconds>();
                 LogDebug(BCLog::BENCH, "IBD peer useful body peer=%d height=%d hash=%s admission_completed_us=%d\n",
-                         node.GetId(), index->nHeight, block->GetHash().ToString(), admission_completed.count());
+                         node.GetId(), index->nHeight, block->GetHash().ToString(), state.m_ibd_last_delivery.count());
             }
         }
         RemoveBlockRequest(block->GetHash(), std::nullopt);
@@ -5233,7 +5277,7 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         // We want to be a bit conservative just to be extra careful about DoS
         // possibilities in compact block processing...
         if (pindex->nHeight <= m_chainman.ActiveChain().Height() + 2) {
-            if ((already_in_flight < MAX_CMPCTBLOCKS_INFLIGHT_PER_BLOCK && nodestate->vBlocksInFlight.size() + IbdBackupDebt(pfrom.GetId()) < BlockRequestLimit(peer)) ||
+            if ((nodestate->m_ibd_retire_at == 0us && already_in_flight < MAX_CMPCTBLOCKS_INFLIGHT_PER_BLOCK && nodestate->vBlocksInFlight.size() + IbdBackupDebt(pfrom.GetId()) < BlockRequestLimit(peer)) ||
                  requested_block_from_this_peer) {
                 std::list<QueuedBlock>::iterator* queuedBlockIt = nullptr;
                 if (!BlockRequested(pfrom.GetId(), *pindex, &queuedBlockIt)) {
@@ -6473,7 +6517,7 @@ bool PeerManagerImpl::SendMessages(CNode& node)
             m_chainman.m_best_header = m_chainman.ActiveChain().Tip();
         }
 
-        UpdateIbdPeer(node);
+        UpdateIbdPeer(node, current_time);
         if (node.fDisconnect) return true;
 
         // Determine whether we might try initial headers sync or parallel
@@ -6885,7 +6929,7 @@ bool PeerManagerImpl::SendMessages(CNode& node)
         // Message: getdata (blocks)
         //
         std::vector<CInv> vGetData;
-        const bool can_request_blocks_from_peer{current_time >= state.m_block_download_paused_until};
+        const bool can_request_blocks_from_peer{current_time >= state.m_block_download_paused_until && state.m_ibd_retire_at == 0us};
         if (CanServeBlocks(peer) && can_request_blocks_from_peer && ((sync_blocks_and_headers_from_peer && !IsLimitedPeer(peer)) || !m_chainman.IsInitialBlockDownload()) && state.vBlocksInFlight.size() + IbdBackupDebt(node.GetId()) < BlockRequestLimit(peer)) {
             std::vector<const CBlockIndex*> vToDownload;
             NodeId staller = -1;

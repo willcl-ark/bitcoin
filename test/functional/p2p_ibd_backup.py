@@ -75,6 +75,8 @@ class IBDBackupTest(BitcoinTestFramework):
         self.test_temporary_peers(count=2)
         self.restart_node(0, extra_args=self.extra_args[0] + ["-maxconnections=12"])
         self.test_temporary_peers(count=1)
+        self.restart_node(0, extra_args=self.extra_args[0] + ["-maxconnections=13"])
+        self.test_temporary_peer_rotation()
 
     def test_backup_winner(self):
         self.log.info("A backup wins the missing frontier block; the original response may arrive late")
@@ -230,6 +232,51 @@ class IBDBackupTest(BitcoinTestFramework):
         assert_equal({p["id"] for p in remaining}, ordinary_ids)
         assert_equal([p["connection_type"] for p in remaining],
                      ["outbound-full-relay", "manual"] if count == 2 else ["outbound-full-relay"])
+        node.invalidateblock(blocks[0].hash_hex)
+
+    def test_temporary_peer_rotation(self):
+        self.log.info("An unproductive temporary peer drains before replacement, with a global cooldown")
+        node = self.nodes[0]
+        blocks = self.make_blocks(20)
+        hashes = [block.hash_int for block in blocks]
+        regular = self.add_peer(blocks, hashes, 0)
+        regular.wait_until(lambda: len(regular.getdata_requests) == 16)
+        temporary = [self.add_peer(blocks, hashes, i + 1, "ibd") for i in range(2)]
+        for peer in temporary:
+            peer.wait_until(lambda: len(peer.getdata_requests) == 2)
+        regular_id = node.getpeerinfo()[0]["id"]
+
+        node.setmocktime(node.mocktime + 59)
+        for peer in [regular] + temporary:
+            peer.sync_with_ping()
+        assert_equal(node.num_test_p2p_connections(), 3)
+        with node.assert_debug_log(expected_msgs=["IBD temporary peer draining no useful body"]):
+            node.setmocktime(node.mocktime + 1)
+            for peer in [regular] + temporary:
+                peer.sync_with_ping()
+        # Outstanding wire requests keep the candidate connected during drain.
+        node.setmocktime(node.mocktime + 4)
+        for peer in [regular] + temporary:
+            peer.sync_with_ping()
+        assert_equal(node.num_test_p2p_connections(), 3)
+        node.setmocktime(node.mocktime + 1)
+        self.wait_until(lambda: sum(peer.is_connected for peer in temporary) == 1)
+        survivor, = [peer for peer in temporary if peer.is_connected]
+        survivor.sync_with_ping()
+        assert_equal([p["id"] for p in node.getpeerinfo() if p["connection_type"] == "outbound-full-relay"], [regular_id])
+
+        # The second peer cannot rotate until three minutes after the first
+        # candidate began draining, even though it has also delivered nothing.
+        node.setmocktime(node.mocktime + 174)
+        survivor.sync_with_ping()
+        assert_equal(survivor.is_connected, True)
+        with node.assert_debug_log(expected_msgs=["IBD temporary peer draining no useful body"]):
+            node.setmocktime(node.mocktime + 1)
+            survivor.sync_with_ping()
+        node.setmocktime(node.mocktime + 5)
+        survivor.wait_for_disconnect()
+        regular.sync_with_ping()
+        assert_equal([p["id"] for p in node.getpeerinfo()], [regular_id])
         node.invalidateblock(blocks[0].hash_hex)
 
 
