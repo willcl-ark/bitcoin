@@ -13,12 +13,17 @@
 #include <util/sock.h>
 #include <util/threadinterrupt.h>
 
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <deque>
 #include <functional>
 #include <memory>
+#include <optional>
+#include <set>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 inline constexpr uint16_t DEFAULT_TOR_SOCKS_PORT{9050};
@@ -80,6 +85,9 @@ public:
      */
     bool Command(const std::string &cmd, const ReplyHandlerCB& reply_handler);
 
+    /** Dispatch asynchronous events independently of command replies. */
+    void SetEventHandler(ReplyHandlerCB handler) { m_event_handler = std::move(handler); }
+
     /**
      * Check if the connection is established.
      */
@@ -106,6 +114,8 @@ private:
     std::unique_ptr<Sock> m_sock;
     /** Message being received */
     TorControlReply m_message;
+    TorControlReply m_event;
+    ReplyHandlerCB m_event_handler;
     /** Response handlers */
     std::deque<ReplyHandlerCB> m_reply_handlers;
     /** Buffer for incoming data */
@@ -122,7 +132,9 @@ private:
 class TorController
 {
 public:
-    TorController(const std::string& tor_control_center, const CService& target);
+    TorController(const std::string& tor_control_center, const CService& target,
+                  bool ordinary_onion = true, std::optional<CService> holepunch_target = std::nullopt,
+                  std::function<void(std::optional<CService>)> holepunch_service_callback = {});
     TorController() : m_conn(m_interrupt) {
         // Used for testing only.
     }
@@ -147,6 +159,25 @@ private:
     std::chrono::duration<double> m_reconnect_timeout;
     CService m_service;
     const CService m_target;
+    const bool m_ordinary_onion{true};
+    const std::optional<CService> m_holepunch_target;
+    const std::function<void(std::optional<CService>)> m_holepunch_service_callback;
+    struct HolePunchService {
+        std::string id;
+        std::chrono::steady_clock::time_point deadline;
+    };
+    std::optional<HolePunchService> m_holepunch_active;
+    std::optional<HolePunchService> m_holepunch_pending;
+    std::optional<HolePunchService> m_holepunch_retiring;
+    bool m_holepunch_subscribed{false};
+    bool m_holepunch_creating{false};
+    std::set<std::string> m_holepunch_early_uploads;
+    std::chrono::steady_clock::time_point m_holepunch_retry{};
+    void MaintainHolePunchService();
+    void CreateHolePunchService();
+    void PublishHolePunchService();
+    void DeleteHolePunchService(const std::string& id);
+    void HolePunchEvent(TorControlConnection& conn, const TorControlReply& reply);
     /** Cookie for SAFECOOKIE auth */
     std::vector<uint8_t> m_cookie;
     /** ClientNonce for SAFECOOKIE auth */

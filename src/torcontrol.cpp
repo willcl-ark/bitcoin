@@ -103,6 +103,7 @@ bool TorControlConnection::Connect(const std::string& tor_control_center)
 
     m_recv_buffer.clear();
     m_message.Clear();
+    m_event.Clear();
     m_reply_handlers.clear();
 
     LogDebug(BCLog::TOR, "Successfully connected to Tor control port");
@@ -114,6 +115,7 @@ void TorControlConnection::Disconnect()
     m_sock.reset();
     m_recv_buffer.clear();
     m_message.Clear();
+    m_event.Clear();
     m_reply_handlers.clear();
 }
 
@@ -181,31 +183,29 @@ bool TorControlConnection::ProcessBuffer()
     util::LineReader reader(m_recv_buffer, MAX_LINE_LENGTH);
 
     while (auto line = reader.ReadLine()) {
-        if (m_message.lines.size() == MAX_LINE_COUNT) {
+        // Events may arrive between the lines of a command reply.
+        if (line->size() < 4) continue;
+        const int code{ToIntegral<int>(line->substr(0, 3)).value_or(0)};
+        TorControlReply& message{code >= 600 ? m_event : m_message};
+        if (message.lines.size() == MAX_LINE_COUNT) {
             throw std::runtime_error(strprintf("Control port reply exceeded %d lines, disconnecting", MAX_LINE_COUNT));
         }
-        // Skip short lines
-        if (line->size() < 4) continue;
-
-        // Parse: <code><separator><data>
-        // <status>(-|+| )<data>
-        m_message.code = ToIntegral<int>(line->substr(0, 3)).value_or(0);
-        m_message.lines.emplace_back(line->substr(4));
-        char separator = (*line)[3]; // '-', '+', or ' '
-
-        if (separator == ' ') {
-            if (m_message.code >= 600) {
-                // Async notifications are currently unused
-                // Synchronous and asynchronous messages are never interleaved
-                LogDebug(BCLog::TOR, "Received async notification %i", m_message.code);
+        message.code = code;
+        message.lines.emplace_back(line->substr(4));
+        if ((*line)[3] == ' ') {
+            // Clear before dispatch because a handler may disconnect the socket.
+            TorControlReply reply{std::move(message)};
+            message.Clear();
+            if (code >= 600) {
+                if (m_event_handler) m_event_handler(*this, reply);
             } else if (!m_reply_handlers.empty()) {
-                // Invoke reply handler with message
-                m_reply_handlers.front()(*this, m_message);
+                auto handler{std::move(m_reply_handlers.front())};
                 m_reply_handlers.pop_front();
+                handler(*this, reply);
             } else {
-                LogDebug(BCLog::TOR, "Received unexpected sync reply %i", m_message.code);
+                LogDebug(BCLog::TOR, "Received unexpected sync reply %i", code);
             }
-            m_message.Clear();
+            if (!m_sock) return false;
         }
     }
 
@@ -348,18 +348,25 @@ std::map<std::string,std::string> ParseTorReplyMapping(const std::string &s)
     return mapping;
 }
 
-TorController::TorController(const std::string& tor_control_center, const CService& target)
+TorController::TorController(const std::string& tor_control_center, const CService& target,
+                             bool ordinary_onion, std::optional<CService> holepunch_target,
+                             std::function<void(std::optional<CService>)> holepunch_service_callback)
     : m_tor_control_center(tor_control_center),
       m_conn(m_interrupt),
       m_reconnect(true),
       m_reconnect_timeout(RECONNECT_TIMEOUT_START),
-      m_target(target)
+      m_target(target),
+      m_ordinary_onion(ordinary_onion),
+      m_holepunch_target(holepunch_target),
+      m_holepunch_service_callback(std::move(holepunch_service_callback))
 {
-    // Read service private key if cached
-    std::pair<bool,std::string> pkf = ReadBinaryFile(GetPrivateKeyFile());
-    if (pkf.first) {
-        LogDebug(BCLog::TOR, "Reading cached private key from %s", fs::PathToString(GetPrivateKeyFile()));
-        m_private_key = pkf.second;
+    // Read the ordinary service private key only when that service is enabled.
+    if (m_ordinary_onion) {
+        auto pkf{ReadBinaryFile(GetPrivateKeyFile())};
+        if (pkf.first) {
+            LogDebug(BCLog::TOR, "Reading cached private key from %s", fs::PathToString(GetPrivateKeyFile()));
+            m_private_key = pkf.second;
+        }
     }
     m_thread = std::thread(&util::TraceThread, "torcontrol", [this] { ThreadControl(); });
 }
@@ -395,6 +402,7 @@ void TorController::ThreadControl()
         if (m_conn.Connect(m_tor_control_center)) {
             connected_cb(m_conn);
             while (!m_interrupt) {
+                MaintainHolePunchService();
                 if (!m_conn.WaitForData(std::chrono::seconds(1))) {
                     if (m_conn.IsConnected()) continue;
                     LogDebug(BCLog::TOR, "Lost connection to Tor control port");
@@ -504,10 +512,7 @@ void TorController::add_onion_cb(TorControlConnection& _conn, const TorControlRe
                 m_private_key = i->second;
         }
         if (m_service_id.empty()) {
-            LogWarning("tor: Error parsing ADD_ONION parameters:");
-            for (const std::string &s : reply.lines) {
-                LogWarning("    %s", SanitizeString(s));
-            }
+            LogWarning("tor: Missing service ID in ADD_ONION reply");
             return;
         }
         m_service = LookupNumeric(std::string(m_service_id+".onion"), Params().GetDefaultPort());
@@ -532,6 +537,123 @@ void TorController::add_onion_cb(TorControlConnection& _conn, const TorControlRe
     }
 }
 
+void TorController::DeleteHolePunchService(const std::string& id)
+{
+    if (!m_conn.Command("DEL_ONION " + id, [id](TorControlConnection& conn, const TorControlReply& reply) {
+            if (reply.code != TOR_REPLY_OK) {
+                LogInfo("tor: Holepunch service retirement failed, code %d", reply.code);
+                // Attached ephemeral services disappear when their control connection closes.
+                conn.Disconnect();
+            } else {
+                LogInfo("tor: Retired holepunch coordination service %s", id);
+            }
+        })) {
+        m_conn.Disconnect();
+    }
+}
+
+void TorController::CreateHolePunchService()
+{
+    if (!m_holepunch_subscribed || m_holepunch_creating || m_holepunch_pending) return;
+    m_holepunch_creating = true;
+    m_holepunch_early_uploads.clear();
+    m_holepunch_retry = std::chrono::steady_clock::now() + 10min;
+    LogInfo("tor: Creating a fresh holepunch coordination onion service");
+    // This identity is never cached, registered as a local address, or shared with ordinary P2P.
+    if (!m_conn.Command(MakeAddOnionCmd("NEW:ED25519-V3", m_holepunch_target->ToStringAddrPort(), false),
+                        [this](TorControlConnection& conn, const TorControlReply& reply) {
+                            m_holepunch_creating = false;
+                            m_holepunch_retry = std::chrono::steady_clock::now() + 60s;
+                            if (reply.code != TOR_REPLY_OK) {
+                                LogInfo("tor: Holepunch coordination service creation failed, code %d", reply.code);
+                                m_holepunch_early_uploads.clear();
+                                return;
+                            }
+                            std::string id;
+                            for (const auto& line : reply.lines) {
+                                auto mapping{ParseTorReplyMapping(line)};
+                                if (auto it{mapping.find("ServiceID")}; it != mapping.end()) id = it->second;
+                            }
+                            const auto service{LookupNumeric(id + ".onion", Params().GetDefaultPort())};
+                            if (!service.IsValid() || !service.IsTor()) {
+                                LogInfo("tor: Invalid holepunch coordination service ID in ADD_ONION reply");
+                                conn.Disconnect();
+                                return;
+                            }
+                            m_holepunch_pending = HolePunchService{id, std::chrono::steady_clock::now() + 10min};
+                            LogInfo("tor: Created holepunch coordination service %s, awaiting descriptor publication", id);
+                            const bool uploaded{m_holepunch_early_uploads.contains(id)};
+                            m_holepunch_early_uploads.clear();
+                            if (uploaded) PublishHolePunchService();
+                        })) {
+        m_holepunch_creating = false;
+        m_conn.Disconnect();
+    }
+}
+
+void TorController::PublishHolePunchService()
+{
+    if (!m_holepunch_pending) return;
+    const auto now{std::chrono::steady_clock::now()};
+    if (m_holepunch_active) {
+        m_holepunch_retiring = std::move(m_holepunch_active);
+        m_holepunch_retiring->deadline = now + 20min;
+    }
+    m_holepunch_active = std::move(m_holepunch_pending);
+    m_holepunch_pending.reset();
+    m_holepunch_active->deadline = now + 24h;
+    const auto service{LookupNumeric(m_holepunch_active->id + ".onion", Params().GetDefaultPort())};
+    LogInfo("tor: Published holepunch coordination service %s", service.ToStringAddrPort());
+    if (m_holepunch_service_callback) m_holepunch_service_callback(service);
+}
+
+void TorController::HolePunchEvent(TorControlConnection&, const TorControlReply& reply)
+{
+    if (reply.code != 650) return;
+    for (const auto& line : reply.lines) {
+        // HS_DESC Action HSAddress AuthType HsDir [optional fields]. HSAddress has no suffix.
+        const auto fields{SplitString(line, ' ')};
+        if (fields.size() < 5 || fields[0] != "HS_DESC" || fields[1] != "UPLOADED") continue;
+        if (m_holepunch_pending && fields[2] == m_holepunch_pending->id) {
+            PublishHolePunchService();
+        } else if (m_holepunch_creating && m_holepunch_early_uploads.size() < 16) {
+            // Tor can deliver the upload event before the ADD_ONION command's final reply.
+            m_holepunch_early_uploads.insert(fields[2]);
+        }
+    }
+}
+
+void TorController::MaintainHolePunchService()
+{
+    if (!m_holepunch_subscribed) return;
+    const auto now{std::chrono::steady_clock::now()};
+    if (m_holepunch_creating && now >= m_holepunch_retry) {
+        LogInfo("tor: Holepunch ADD_ONION reply timed out, reconnecting control connection");
+        m_conn.Disconnect();
+        return;
+    }
+    if (m_holepunch_retiring && now >= m_holepunch_retiring->deadline) {
+        DeleteHolePunchService(m_holepunch_retiring->id);
+        m_holepunch_retiring.reset();
+    }
+    if (m_holepunch_active && now >= m_holepunch_active->deadline) {
+        LogInfo("tor: Rotating holepunch coordination identity after its announcement lifetime");
+        if (m_holepunch_service_callback) m_holepunch_service_callback(std::nullopt);
+        m_holepunch_retiring = std::move(m_holepunch_active);
+        m_holepunch_active.reset();
+        m_holepunch_retiring->deadline = now + 20min;
+    }
+    if (m_holepunch_pending && now >= m_holepunch_pending->deadline) {
+        LogInfo("tor: Holepunch descriptor publication timed out, retrying with a fresh identity");
+        DeleteHolePunchService(m_holepunch_pending->id);
+        m_holepunch_pending.reset();
+        m_holepunch_retry = now + 60s;
+    }
+    if (!m_holepunch_active && !m_holepunch_pending && !m_holepunch_creating && now >= m_holepunch_retry) {
+        CreateHolePunchService();
+    }
+}
+
 void TorController::auth_cb(TorControlConnection& _conn, const TorControlReply& reply)
 {
     if (reply.code == TOR_REPLY_OK) {
@@ -543,15 +665,32 @@ void TorController::auth_cb(TorControlConnection& _conn, const TorControlReply& 
             _conn.Command("GETINFO net/listeners/socks", std::bind_front(&TorController::get_socks_cb, this));
         }
 
-        // Finally - now create the service
-        if (m_private_key.empty()) { // No private key, generate one
-            m_private_key = "NEW:ED25519-V3"; // Explicitly request key type - see issue #9214
+        if (m_holepunch_target) {
+            _conn.SetEventHandler(std::bind_front(&TorController::HolePunchEvent, this));
+            if (!_conn.Command("SETEVENTS HS_DESC", [this](TorControlConnection& conn, const TorControlReply& result) {
+                if (result.code != TOR_REPLY_OK) {
+                    LogInfo("tor: Holepunch descriptor event subscription failed, code %d", result.code);
+                    conn.Disconnect();
+                    return;
+                }
+                m_holepunch_subscribed = true;
+                CreateHolePunchService();
+            })) {
+                _conn.Disconnect();
+                return;
+            }
         }
-        // Request onion service, redirect port.
-        _conn.Command(MakeAddOnionCmd(m_private_key, m_target.ToStringAddrPort(), /*enable_pow=*/true),
-                      [this](TorControlConnection& conn, const TorControlReply& reply) {
-                          add_onion_cb(conn, reply, /*pow_was_enabled=*/true);
-                      });
+        if (m_ordinary_onion) {
+            // Finally - now create the service
+            if (m_private_key.empty()) { // No private key, generate one
+                m_private_key = "NEW:ED25519-V3"; // Explicitly request key type - see issue #9214
+            }
+            // Request onion service, redirect port.
+            _conn.Command(MakeAddOnionCmd(m_private_key, m_target.ToStringAddrPort(), /*enable_pow=*/true),
+                          [this](TorControlConnection& conn, const TorControlReply& reply) {
+                              add_onion_cb(conn, reply, /*pow_was_enabled=*/true);
+                          });
+        }
     } else {
         LogWarning("tor: Authentication failed");
     }
@@ -709,6 +848,18 @@ void TorController::connected_cb(TorControlConnection& _conn)
 
 void TorController::disconnected_cb(TorControlConnection& _conn)
 {
+    if (m_holepunch_target) {
+        if (m_holepunch_service_callback) m_holepunch_service_callback(std::nullopt);
+        if (m_holepunch_subscribed) LogInfo("tor: Holepunch coordination services stopped after control disconnect");
+        m_holepunch_active.reset();
+        m_holepunch_pending.reset();
+        m_holepunch_retiring.reset();
+        m_holepunch_early_uploads.clear();
+        m_holepunch_subscribed = false;
+        m_holepunch_creating = false;
+        m_holepunch_retry = {};
+    }
+    _conn.Disconnect();
     // Stop advertising service when disconnected
     if (m_service.IsValid())
         RemoveLocal(m_service);
@@ -718,7 +869,6 @@ void TorController::disconnected_cb(TorControlConnection& _conn)
 
     LogDebug(BCLog::TOR, "Not connected to Tor control port %s, retrying in %.2f s",
              m_tor_control_center, m_reconnect_timeout.count());
-    _conn.Disconnect();
 
     m_interrupt.sleep_for(std::chrono::duration_cast<std::chrono::milliseconds>(m_reconnect_timeout));
     m_reconnect_timeout = std::min(m_reconnect_timeout * RECONNECT_TIMEOUT_EXP, RECONNECT_TIMEOUT_MAX);
