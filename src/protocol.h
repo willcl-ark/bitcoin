@@ -268,6 +268,10 @@ inline constexpr const char* SENDTXRCNCL{"sendtxrcncl"};
  * BIP 434 Peer feature negotiation
  */
 inline constexpr const char* FEATURE{"feature"};
+/** Request a TCP hole-punch session through a coordinator. */
+inline constexpr const char* RENDEZVOUS{"rendezvous"};
+/** Assign a TCP hole-punch role and remote endpoint. */
+inline constexpr const char* PUNCH{"punch"};
 }; // namespace NetMsgType
 
 /** All known message types (see above). Keep this in the same order as the list of messages above. */
@@ -308,13 +312,15 @@ inline const std::array ALL_NET_MESSAGE_TYPES{std::to_array<std::string>({
     NetMsgType::WTXIDRELAY,
     NetMsgType::SENDTXRCNCL,
     NetMsgType::FEATURE,
+    NetMsgType::RENDEZVOUS,
+    NetMsgType::PUNCH,
 })};
 
 inline constexpr size_t MAX_FEATUREID_LENGTH{80};
 inline constexpr size_t MAX_FEATUREDATA_LENGTH{512};
 
 namespace NetMsgFeature {
-//inline constexpr std::string_view FOO{"BIP-FOO"};
+inline constexpr std::string_view HOLEPUNCH{"https://delvingbitcoin.org/t/2497"};
 }
 
 /** nServices flags */

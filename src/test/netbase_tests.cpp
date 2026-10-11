@@ -3,6 +3,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <compat/compat.h>
+#include <holepunch.h>
 #include <net_permissions.h>
 #include <netaddress.h>
 #include <netbase.h>
@@ -659,6 +660,77 @@ BOOST_AUTO_TEST_CASE(asmap_test_vectors)
     BOOST_CHECK_EQUAL(netgroup.GetMappedAS(*LookupHost("dff5:8021:61d:b17d:406d:7888:fdac:4a20", false)), 969411);
     BOOST_CHECK_EQUAL(netgroup.GetMappedAS(*LookupHost("e888:6791:2960:d723:bcfd:47e1:2d8c:599f", false)), 824019);
     BOOST_CHECK_EQUAL(netgroup.GetMappedAS(*LookupHost("ffff:d499:8c4b:4941:bc81:d5b9:b51e:85a8", false)), 824019);
+}
+
+// Published BIP encodings include documentation addresses and port zero.
+// Policy validation belongs to the message handler, after wire parsing.
+BOOST_AUTO_TEST_CASE(holepunch_wire)
+{
+    const auto roundtrip = []<typename T>(std::string_view hex) {
+        const auto bytes{ParseHex(hex)};
+        DataStream input{bytes};
+        T value;
+        input >> value;
+        BOOST_CHECK(input.empty());
+        DataStream output;
+        output << value;
+        BOOST_CHECK_EQUAL(HexStr(output), hex);
+    };
+    roundtrip.template operator()<holepunch::Rendezvous>("0104cb007101208f0104c6336402c3cb");
+    roundtrip.template operator()<holepunch::Rendezvous>("021020010db8000000000000000000000001208f021020010db8000000000000000000000002479f");
+    roundtrip.template operator()<holepunch::Rendezvous>("0104cb007101208f0104c63364020000");
+    roundtrip.template operator()<holepunch::Punch>("010104cb007101208f");
+    roundtrip.template operator()<holepunch::Punch>("000104c6336402c3cb");
+    roundtrip.template operator()<holepunch::Punch>("01021020010db8000000000000000000000001208f");
+    roundtrip.template operator()<holepunch::Announcement>("a0fee868fd0908080c01c0000203208d01cb007101208f");
+    roundtrip.template operator()<holepunch::Announcement>("a0fee868fd090808180220010db8000000000000000000000003208d01cb007101208f");
+    roundtrip.template operator()<holepunch::Announcement>("a0fee868fd0908081801c0000203208d0220010db8000000000000000000000001208f");
+    roundtrip.template operator()<holepunch::Announcement>("a0fee868fd090808240220010db8000000000000000000000003479d0220010db8000000000000000000000001208f");
+    roundtrip.template operator()<holepunch::Announcement>("a0fee868fd090808280453cd5648af46a92b5b74b7f8f6bd3bb86e5d9ab77c5f0e03a5b43a1b4bbef6ac208d01cb007101208f");
+    roundtrip.template operator()<holepunch::Announcement>("a0fee868fd090808340453cd5648af46a92b5b74b7f8f6bd3bb86e5d9ab77c5f0e03a5b43a1b4bbef6ac208d0220010db8000000000000000000000001208f");
+    roundtrip.template operator()<holepunch::Announcement>("a0fee868fd0908082805a2894dabaec4a6e5f84ccaa9c0b5bc64bd4e4e7f8a9f5f8c3f7aa6a4dd7e5e56000001cb007101208f");
+    roundtrip.template operator()<holepunch::Announcement>("a0fee868fd0908083405a2894dabaec4a6e5f84ccaa9c0b5bc64bd4e4e7f8a9f5f8c3f7aa6a4dd7e5e5600000220010db8000000000000000000000001208f");
+    roundtrip.template operator()<holepunch::Announcement>("a0fee868fd0908080c01c0000203208d01c6336402c3cb");
+
+    const auto rejects = []<typename T>(std::string_view hex) {
+        const auto bytes{ParseHex(hex)};
+        DataStream input{bytes};
+        T value;
+        BOOST_CHECK_THROW(input >> value, std::ios_base::failure);
+    };
+    rejects.template operator()<holepunch::Rendezvous>("0104cb007101208f021020010db8000000000000000000000002479f");
+    rejects.template operator()<holepunch::Rendezvous>("042053cd5648af46a92b5b74b7f8f6bd3bb86e5d9ab77c5f0e03a5b43a1b4bbef6ac208d0104c6336402c3cb");
+    rejects.template operator()<holepunch::Rendezvous>("0105010101010100010104c6336402c3cb");
+    rejects.template operator()<holepunch::Rendezvous>("0104cb007101208f0104c6336402c3");
+    rejects.template operator()<holepunch::Rendezvous>("01fd0400cb007101208f0104c6336402c3cb");
+    rejects.template operator()<holepunch::Punch>("020104cb007101208f");
+    rejects.template operator()<holepunch::Punch>("010610fc000000000000000000000000000001208f");
+    rejects.template operator()<holepunch::Punch>("");
+    rejects.template operator()<holepunch::Punch>("01021000000000000000000000ffffcb007101208f");
+    rejects.template operator()<holepunch::AddrV2>("a0fee8680008fd0102");
+    rejects.template operator()<holepunch::AddrV2>("a0fee868000800208f");
+    roundtrip.template operator()<holepunch::AddrV2>("a0fee868fd0908080c01c0000203208d01cb007101208f");
+    rejects.template operator()<holepunch::Announcement>("a0fee868fd0908080d01c0000203208d01cb00710100208f");
+    rejects.template operator()<holepunch::Announcement>("a0fee868fd0908080b01c0000203208d01cb0071208f");
+    rejects.template operator()<holepunch::Announcement>("a0fee868fd0908081801c0000203208d01cb007101000000000000000000000000208f");
+    rejects.template operator()<holepunch::Announcement>("a0fee868fd0908081806fc000000000000000000000000000001208d01cb007101208f");
+    rejects.template operator()<holepunch::Announcement>("a0fee868fd0908082801c0000203208d0453cd5648af46a92b5b74b7f8f6bd3bb86e5d9ab77c5f0e03a5b43a1b4bbef6ac208f");
+    rejects.template operator()<holepunch::Announcement>("a0fee868fd0908082805a2894dabaec4a6e5f84ccaa9c0b5bc64bd4e4e7f8a9f5f8c3f7aa6a4dd7e5e56000101cb007101208f");
+    rejects.template operator()<holepunch::Announcement>("a0fee868fd09080800208f");
+
+    // Unknown ordinary networks still consume exactly one bounded element.
+    DataStream mixed{ParseHex("a0fee86800090101208f")};
+    holepunch::AddrV2 unknown;
+    mixed >> unknown;
+    BOOST_CHECK(mixed.empty());
+    BOOST_CHECK(std::holds_alternative<CAddress>(unknown.value));
+    BOOST_CHECK(!std::get<CAddress>(unknown.value).IsValid());
+    DataStream ordinary;
+    const CAddress address{CService{ResolveIP("8.8.8.8"), 8333}, NODE_NETWORK};
+    ordinary << CAddress::V2_NETWORK(address);
+    holepunch::AddrV2 decoded;
+    ordinary >> decoded;
+    BOOST_CHECK(std::get<CAddress>(decoded.value) == address);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

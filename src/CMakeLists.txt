@@ -119,6 +119,7 @@ add_library(bitcoin_common STATIC EXCLUDE_FROM_ALL
   core_io.cpp
   deploymentinfo.cpp
   external_signer.cpp
+  holepunch.cpp
   init/common.cpp
   ipc/listen.cpp
   kernel/chainparams.cpp
