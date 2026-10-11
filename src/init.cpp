@@ -576,6 +576,11 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-fixedseeds", strprintf("Allow fixed seeds if DNS seeds don't provide peers (default: %u)", DEFAULT_FIXEDSEEDS), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-forcednsseed", strprintf("Always query for peer addresses via DNS lookup (default: %u)", DEFAULT_FORCEDNSSEED), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-listen", strprintf("Accept connections from outside (default: %u if no -proxy, -connect or -maxconnections=0)", DEFAULT_LISTEN), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
+    argsman.AddArg("-holepunch", "Enable experimental TCP hole punching using v2 transport (default: 0)", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
+    argsman.AddArg("-holepunchcoordinator", "Coordinate TCP hole punching for connected peers (implies -holepunch, default: 0)", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
+    argsman.AddArg("-holepunchonion", "Create a dedicated Tor onion service for TCP hole punch coordination (implies -holepunch, default: 0)", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
+    argsman.AddArg("-punchport=<port>", "Local TCP hole punch port (default: own P2P port plus two)", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::CONNECTION);
+    argsman.AddArg("-punchbind=<addr>", "Bind the punch port to a numeric IPv4 or IPv6 address, without a port (at most once per address family; default: wildcard)", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::CONNECTION);
     argsman.AddArg("-listenonion", strprintf("Automatically create Tor onion service (default: %d)", DEFAULT_LISTEN_ONION), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-maxconnections=<n>", strprintf("Maintain at most <n> automatic connections to peers (default: %u). %u slots of these are reserved for outgoing connections. See -inboundrelaypercent for more information about limits applied to transaction relay inbound peers. "
                                                     "This limit does not apply to connections manually added via -addnode or the addnode RPC, which have a separate limit of %u. "
@@ -795,6 +800,12 @@ static bool AppInitServers(NodeContext& node)
 // Parameter interaction based on rules
 void InitParameterInteraction(ArgsManager& args)
 {
+    if (args.GetBoolArg("-holepunchcoordinator", false) || args.GetBoolArg("-holepunchonion", false)) {
+        if (args.SoftSetBoolArg("-holepunch", true)) {
+            LogInfo("parameter interaction: hole punch coordination enabled -> setting -holepunch=1");
+        }
+    }
+
     // when specifying an explicit binding address, you want to listen on it
     // even when -connect or -proxy is specified
     if (!args.GetArgs("-bind").empty()) {
@@ -1016,6 +1027,34 @@ bool AppInitParameterInteraction(const ArgsManager& args)
         }
     }
 
+    const bool holepunch{args.GetBoolArg("-holepunch", false)};
+    if (!holepunch && (args.GetBoolArg("-holepunchcoordinator", false) || args.GetBoolArg("-holepunchonion", false))) {
+        return InitError(Untranslated("Cannot enable hole punch coordination together with -holepunch=0"));
+    }
+    if (holepunch && !args.GetBoolArg("-v2transport", DEFAULT_V2_TRANSPORT)) {
+        return InitError(Untranslated("TCP hole punching requires -v2transport=1"));
+    }
+    const uint16_t p2p_port{GetListenPort()};
+    std::optional<uint16_t> punch_port;
+    if (args.IsArgSet("-punchport")) {
+        punch_port = ToIntegral<uint16_t>(args.GetArg("-punchport", ""));
+    } else if (p2p_port >= 1 && p2p_port <= 65533) {
+        punch_port = static_cast<uint16_t>(p2p_port + 2);
+    }
+    if ((holepunch || args.IsArgSet("-punchport")) && (!punch_port || *punch_port == 0)) {
+        return InitError(Untranslated("-punchport must be between 1 and 65535; set it explicitly if the P2P port plus two exceeds 65535"));
+    }
+    std::set<Network> punch_bind_families;
+    for (const auto& bind : args.GetArgs("-punchbind")) {
+        const auto address{LookupHost(bind, /*fAllowLookup=*/false)};
+        if (!address || (!address->IsIPv4() && !address->IsIPv6()) || (address->IsIPv6() && address->HasCJDNSPrefix())) {
+            return InitError(Untranslated(strprintf("Invalid -punchbind address '%s': expected a numeric IPv4 or IPv6 address without a port", bind)));
+        }
+        if (!punch_bind_families.insert(address->IsIPv4() ? NET_IPV4 : NET_IPV6).second) {
+            return InitError(Untranslated("Only one -punchbind address per address family is allowed"));
+        }
+    }
+
     // Signal NODE_P2P_V2 if BIP324 v2 transport is enabled.
     if (args.GetBoolArg("-v2transport", DEFAULT_V2_TRANSPORT)) {
         g_local_services = ServiceFlags(g_local_services | NODE_P2P_V2);
@@ -1116,9 +1155,13 @@ bool AppInitParameterInteraction(const ArgsManager& args)
     // Reserve enough FDs to account for the bare minimum, plus any manual connections, plus the bound interfaces.
     // Every element is an int >= 0 so summing in int64_t cannot overflow.
     // RaiseFileDescriptorLimit() accepts an int so we check that limit before casting.
+    // Punch listeners, attempts, outbound, temporary coordinator, private inbound slots,
+    // private listener and handoff connection have independent descriptor budgets.
+    const int holepunch_fds{holepunch ? 16 : 0};
     const int64_t total_fds = int64_t{MIN_CORE_FDS} +
                               MAX_ADDNODE_CONNECTIONS +
                               num_p2p_bind +
+                              holepunch_fds +
                               num_rpc_bind +
                               user_rpc_max_connections +
                               user_p2p_max_connections +
@@ -1134,6 +1177,7 @@ bool AppInitParameterInteraction(const ArgsManager& args)
     int min_required_fds = MIN_CORE_FDS +
                            MAX_ADDNODE_CONNECTIONS +
                            num_p2p_bind +
+                           holepunch_fds +
                            num_rpc_bind +
                            user_rpc_max_connections +
                            static_cast<int>(ipc_fds);
@@ -1872,16 +1916,17 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     }
 
     const bool listenonion{args.GetBoolArg("-listenonion", DEFAULT_LISTEN_ONION)};
+    const bool holepunch_onion{args.GetBoolArg("-holepunchonion", false)};
     if (onion_proxy.IsValid()) {
         SetProxy(NET_ONION, onion_proxy);
     } else {
-        // If -listenonion is set, then we will (try to) connect to the Tor control port
+        // If either onion service is enabled, then we will (try to) connect to the Tor control port
         // later from the torcontrol thread and may retrieve the onion proxy from there.
-        if (onlynet_used_with_onion && !listenonion) {
+        if (onlynet_used_with_onion && !listenonion && !holepunch_onion) {
             return InitError(
                 _("Outbound connections restricted to Tor (-onlynet=onion) but the proxy for "
                   "reaching the Tor network is not provided: none of -proxy, -onion or "
-                  "-listenonion is given"));
+                  "-listenonion or -holepunchonion is given"));
         }
         g_reachable_nets.Remove(NET_ONION);
     }
@@ -2235,6 +2280,15 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     connOptions.m_peer_connect_timeout = peer_connect_timeout;
     connOptions.whitelist_forcerelay = args.GetBoolArg("-whitelistforcerelay", DEFAULT_WHITELISTFORCERELAY);
     connOptions.whitelist_relay = args.GetBoolArg("-whitelistrelay", DEFAULT_WHITELISTRELAY);
+    connOptions.m_holepunch = args.GetBoolArg("-holepunch", false);
+    connOptions.m_holepunch_coordinator = args.GetBoolArg("-holepunchcoordinator", false);
+    connOptions.m_holepunch_onion = holepunch_onion;
+    if (connOptions.m_holepunch) {
+        connOptions.m_punch_port = args.IsArgSet("-punchport") ? *ToIntegral<uint16_t>(args.GetArg("-punchport", "")) : static_cast<uint16_t>(GetListenPort() + 2);
+        for (const auto& bind : args.GetArgs("-punchbind")) {
+            connOptions.m_punch_binds.emplace_back(*LookupHost(bind, /*fAllowLookup=*/false), connOptions.m_punch_port);
+        }
+    }
     connOptions.m_capture_messages = args.GetBoolArg("-capturemessages", false);
 
     // Port to bind to if `-bind=addr` is provided without a `:port` suffix.
@@ -2313,7 +2367,6 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
                                     "for the automatically created Tor onion service."),
                                   onion_service_target.ToStringAddrPort()));
         }
-        node.tor_controller = std::make_unique<TorController>(gArgs.GetArg("-torcontrol", DEFAULT_TOR_CONTROL), onion_service_target);
     }
 
     bool should_discover = connOptions.bind_on_any;
@@ -2400,10 +2453,10 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     }
 
     if (args.GetBoolArg("-privatebroadcast", DEFAULT_PRIVATE_BROADCAST)) {
-        // If -listenonion is set, then NET_ONION may not be reachable now
+        // If either onion service is enabled, then NET_ONION may not be reachable now
         // but may become reachable later, thus only error here if it is not
         // reachable and will not become reachable for sure.
-        const bool onion_may_become_reachable{listenonion && (!args.IsArgSet("-onlynet") || onlynet_used_with_onion)};
+        const bool onion_may_become_reachable{(listenonion || holepunch_onion) && (!args.IsArgSet("-onlynet") || onlynet_used_with_onion)};
         if (!g_reachable_nets.Contains(NET_I2P) &&
             !g_reachable_nets.Contains(NET_ONION) &&
             !onion_may_become_reachable) {
@@ -2427,6 +2480,15 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
 
     if (!node.connman->Start(scheduler, connOptions)) {
         return false;
+    }
+
+    if (listenonion || holepunch_onion) {
+        node.tor_controller = std::make_unique<TorController>(
+            args.GetArg("-torcontrol", DEFAULT_TOR_CONTROL), onion_service_target, listenonion,
+            node.connman->GetHolePunchCoordinationBind(),
+            [connman = node.connman.get()](std::optional<CService> service) {
+                connman->SetHolePunchOnionService(service);
+            });
     }
 
     // ********************************************************* Step 13: finished
