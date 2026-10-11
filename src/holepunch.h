@@ -20,7 +20,7 @@
 #include <vector>
 
 // TCP hole punching draft, pinned for this implementation:
-// https://github.com/willcl-ark/bips/blob/0314af539fee2af61da5ccade300cc890aa47d47/bip-tcp-holepunch.md
+// https://github.com/willcl-ark/bips/blob/a9860ba2ab7cb048209bf69f1e313a31200e1aa2/bip-tcp-holepunch.md
 namespace holepunch {
 enum class Role : uint8_t { Responder = 0,
                             Initiator = 1 };
