@@ -592,11 +592,13 @@ static bool ConnectToSocket(const Sock& sock,
                             socklen_t len,
                             const std::string& dest_str,
                             bool manual_connection,
-                            std::chrono::milliseconds timeout)
+                            std::chrono::milliseconds timeout,
+                            int* connect_error = nullptr)
 {
     // Connect to `sockaddr` using `sock`.
     if (sock.Connect(sockaddr, len) == SOCKET_ERROR) {
         int nErr = WSAGetLastError();
+        if (connect_error) *connect_error = nErr;
         // WSAEINVAL is here because some legacy version of winsock uses it
         if (nErr == WSAEINPROGRESS || nErr == WSAEWOULDBLOCK || nErr == WSAEINVAL)
         {
@@ -626,6 +628,7 @@ static bool ConnectToSocket(const Sock& sock,
                 LogWarnThenDebug(BCLog::NET, "getsockopt() for %s failed: %s", dest_str, NetworkErrorString(WSAGetLastError()));
                 return false;
             }
+            if (connect_error) *connect_error = sockerr;
             if (sockerr != 0) {
                 LogConnectFailure(manual_connection,
                                   "connect() to %s failed after wait: %s",
@@ -654,9 +657,10 @@ std::unique_ptr<Sock> ConnectDirectly(const CService& dest, bool manual_connecti
 
 std::unique_ptr<Sock> ConnectDirectly(const CService& dest,
                                       bool manual_connection,
-                                      std::chrono::milliseconds timeout)
+                                      std::chrono::milliseconds timeout,
+                                      std::unique_ptr<Sock> sock, int* connect_error)
 {
-    auto sock = CreateSock(dest.GetSAFamily(), SOCK_STREAM, IPPROTO_TCP);
+    if (!sock) sock = CreateSock(dest.GetSAFamily(), SOCK_STREAM, IPPROTO_TCP);
     if (!sock) {
         LogDebug(BCLog::NET, "Cannot create a socket for connecting to %s", dest.ToStringAddrPort());
         return {};
@@ -670,7 +674,7 @@ std::unique_ptr<Sock> ConnectDirectly(const CService& dest,
         return {};
     }
 
-    if (!ConnectToSocket(*sock, (struct sockaddr*)&sockaddr, len, dest.ToStringAddrPort(), manual_connection, timeout)) {
+    if (!ConnectToSocket(*sock, (struct sockaddr*)&sockaddr, len, dest.ToStringAddrPort(), manual_connection, timeout, connect_error)) {
         return {};
     }
 

@@ -375,6 +375,18 @@ bool CConnman::CheckIncomingNonce(uint64_t nonce)
     return true;
 }
 
+/** Only use for connect errors from sockets already bound to a punch port. */
+static bool IsPunchTupleConflict(int error)
+{
+    // Linux reports EADDRNOTAVAIL when a reusable fixed source port would
+    // duplicate an existing TCP tuple, even though bind() already succeeded.
+#ifdef WIN32
+    return error == WSAEADDRINUSE || error == WSAEADDRNOTAVAIL;
+#else
+    return error == EADDRINUSE || error == EADDRNOTAVAIL;
+#endif
+}
+
 CNode* CConnman::ConnectNode(CAddress addrConnect,
                              const char* pszDest,
                              bool fCountFailure,
@@ -391,7 +403,7 @@ CNode* CConnman::ConnectNode(CAddress addrConnect,
             return nullptr;
 
         // Look for an existing connection
-        if (AlreadyConnectedToAddressPort(addrConnect)) {
+        if (conn_type != ConnectionType::HOLEPUNCH_COORDINATION && AlreadyConnectedToAddressPort(addrConnect)) {
             LogInfo("Failed to open new connection to %s, already connected", addrConnect.ToStringAddrPort());
             return nullptr;
         }
@@ -492,10 +504,23 @@ CNode* CConnman::ConnectNode(CAddress addrConnect,
                 // No proxy needed (none set for target network). Private broadcast connections
                 // must always use a proxy, otherwise they would leak the originator's IP address.
                 if (Assume(conn_type != ConnectionType::PRIVATE_BROADCAST)) {
-                    sock = ConnectDirectly(target_addr, conn_type == ConnectionType::MANUAL);
+                    if (m_holepunch && (target_addr.IsIPv4() || target_addr.IsIPv6())) {
+                        auto bound{CreatePunchSocket(target_addr)};
+                        if (bound) {
+                            int connect_error{0};
+                            sock = ConnectDirectly(target_addr, conn_type == ConnectionType::MANUAL,
+                                std::chrono::milliseconds{nConnectTimeout}, std::move(bound), &connect_error);
+                            if (!sock && IsPunchTupleConflict(connect_error)) {
+                                LogInfo("TCP holepunch tuple in use for %s, using ephemeral source port", target_addr.ToStringAddrPort());
+                                sock = ConnectDirectly(target_addr, conn_type == ConnectionType::MANUAL);
+                            }
+                        }
+                    } else {
+                        sock = ConnectDirectly(target_addr, conn_type == ConnectionType::MANUAL);
+                    }
                 }
             }
-            if (!proxyConnectionFailed) {
+            if (!proxyConnectionFailed && conn_type != ConnectionType::HOLEPUNCH_COORDINATION) {
                 // If a connection to the node was attempted, and failure (if any) is not caused by a problem connecting to
                 // the proxy, mark this as an attempt.
                 addrman.get().Attempt(target_addr, fCountFailure);
@@ -547,7 +572,11 @@ CNode* CConnman::ConnectNode(CAddress addrConnect,
                                     .i2p_sam_session = std::move(i2p_transient_session),
                                     .recv_flood_size = nReceiveFloodSize,
                                     .use_v2transport = use_v2transport,
+                                    .v2_only = conn_type == ConnectionType::HOLEPUNCH_COORDINATION,
                                 });
+        pnode->m_from_punch_port = m_holepunch && !(proxy_override.has_value() ? proxy_override : GetProxy(target_addr.GetNetwork())) && (target_addr.IsIPv4() || target_addr.IsIPv6()) && addr_bind.GetPort() == m_punch_port;
+        pnode->m_temporary_coordination = conn_type == ConnectionType::HOLEPUNCH_COORDINATION;
+        pnode->m_coordination_only = pnode->m_temporary_coordination && target_addr.IsTor();
         pnode->AddRef();
 
         // We're making a new connection, harvest entropy from the time (and our peer count)
@@ -1003,8 +1032,9 @@ void V2Transport::StartSendingHandshake() noexcept
     // We cannot wipe m_send_garbage as it will still be used as AAD later in the handshake.
 }
 
-V2Transport::V2Transport(NodeId nodeid, bool initiating, const CKey& key, std::span<const std::byte> ent32, std::vector<uint8_t> garbage) noexcept
-    : m_cipher{key, ent32},
+V2Transport::V2Transport(NodeId nodeid, bool initiating, const CKey& key, std::span<const std::byte> ent32, std::vector<uint8_t> garbage, bool v2_only) noexcept
+    : m_v2_only{v2_only},
+      m_cipher{key, ent32},
       m_initiating{initiating},
       m_nodeid{nodeid},
       m_v1_fallback{nodeid},
@@ -1020,9 +1050,9 @@ V2Transport::V2Transport(NodeId nodeid, bool initiating, const CKey& key, std::s
     }
 }
 
-V2Transport::V2Transport(NodeId nodeid, bool initiating) noexcept
+V2Transport::V2Transport(NodeId nodeid, bool initiating, bool v2_only) noexcept
     : V2Transport{nodeid, initiating, GenerateRandomKey(),
-                  MakeByteSpan(GetRandHash()), GenerateRandomGarbage()} {}
+                  MakeByteSpan(GetRandHash()), GenerateRandomGarbage(), v2_only} {}
 
 void V2Transport::SetReceiveState(RecvState recv_state) noexcept
 {
@@ -1104,6 +1134,10 @@ void V2Transport::ProcessReceivedMaybeV1Bytes() noexcept
         SetSendState(SendState::AWAITING_KEY);
         StartSendingHandshake();
     } else if (m_recv_buffer.size() == v1_prefix.size()) {
+        if (m_v2_only) {
+            m_v1_rejected = true;
+            return;
+        }
         // Full match with the v1 prefix, so fall back to v1 behavior.
         LOCK(m_send_mutex);
         std::span<const uint8_t> feedback{m_recv_buffer};
@@ -1386,6 +1420,7 @@ bool V2Transport::ReceivedBytes(std::span<const uint8_t>& msg_bytes) noexcept
         switch (m_recv_state) {
         case RecvState::KEY_MAYBE_V1:
             ProcessReceivedMaybeV1Bytes();
+            if (m_v1_rejected) return false;
             if (m_recv_state == RecvState::V1) return true;
             break;
 
@@ -1563,7 +1598,7 @@ bool V2Transport::ShouldReconnectV1() const noexcept
     AssertLockNotHeld(m_send_mutex);
     AssertLockNotHeld(m_recv_mutex);
     // Only outgoing connections need reconnection.
-    if (!m_initiating) return false;
+    if (!m_initiating || m_v2_only) return false;
 
     LOCK(m_recv_mutex);
     // We only reconnect in the very first state and when the receive buffer is empty. Together
@@ -1701,7 +1736,7 @@ bool CConnman::AttemptToEvictConnection(bool evict_tx_relay_peer_only, std::opti
 
         LOCK(m_nodes_mutex);
         for (const CNode* node : m_nodes) {
-            if (node->fDisconnect)
+            if (node->fDisconnect || node->m_coordination_only || (m_holepunch_coordinator && node->m_holepunch_protect_until.load() > NodeClock::now()))
                 continue;
             if (protect_peer.has_value() && node->GetId() == protect_peer) {
                 continue;
@@ -1719,7 +1754,7 @@ bool CConnman::AttemptToEvictConnection(bool evict_tx_relay_peer_only, std::opti
                 .m_relay_txs = node->m_relays_txs.load(),
                 .fBloomFilter = node->m_bloom_filter_loaded.load(),
                 .nKeyedNetGroup = node->nKeyedNetGroup,
-                .prefer_evict = node->m_prefer_evict,
+                .prefer_evict = node->m_prefer_evict || (m_holepunch_coordinator && !node->m_holepunch_advertised),
                 .m_is_local = node->addr.IsLocal(),
                 .m_network = node->ConnectedThroughNetwork(),
                 .m_noban = node->HasPermission(NetPermissionFlags::NoBan),
@@ -1732,9 +1767,19 @@ bool CConnman::AttemptToEvictConnection(bool evict_tx_relay_peer_only, std::opti
     if (!node_id_to_evict) {
         return false;
     }
+    LOCK(m_holepunch_mutex);
     LOCK(m_nodes_mutex);
     for (CNode* pnode : m_nodes) {
         if (pnode->GetId() == *node_id_to_evict) {
+            if (m_holepunch_coordinator && !evict_tx_relay_peer_only && !m_holepunch_eviction &&
+                pnode->m_holepunch_can_handoff && pnode->fSuccessfullyConnected && pnode->m_permission_flags == NetPermissionFlags::None) {
+                pnode->m_holepunch_protect_until = NodeClock::now() + holepunch::WINDOW + holepunch::GRACE;
+                m_holepunch_eviction = pnode->GetId();
+                m_holepunch_eviction_taken = false;
+                m_holepunch_handoff_deadline = NodeClock::now() + holepunch::COORD_TIMEOUT;
+                LogInfo("TCP holepunch deferred eviction for peer=%d", pnode->GetId());
+                return true;
+            }
             LogDebug(BCLog::NET, "selected %s connection for eviction, %s", pnode->ConnectionTypeAsString(), pnode->DisconnectMsg());
             TRACEPOINT(net, evicted_inbound_connection,
                 pnode->GetId(),
@@ -1772,6 +1817,27 @@ void CConnman::AcceptConnection(const ListenSocket& hListenSocket) {
     }
 
     const CService addr_bind{MaybeFlipIPv6toCJDNS(GetBindAddress(*sock))};
+    if (m_holepunch && std::any_of(m_punch_binds.begin(), m_punch_binds.end(), [&addr_bind](const CService& local) {
+            return local.GetPort() == addr_bind.GetPort() && local.IsIPv4() == addr_bind.IsIPv4();
+        })) {
+        CNode* node{nullptr};
+        {
+            LOCK(m_holepunch_mutex);
+            for (auto& session : m_holepunch_sessions) {
+                if (session.peer == addr && !session.node && NodeClock::now() < session.start + holepunch::WINDOW + holepunch::GRACE && fNetworkActive) {
+                    session.sock.reset();
+                    node = AddHolePunchNode(session, std::move(sock));
+                    break;
+                }
+            }
+        }
+        if (node) {
+            PublishHolePunchNode(node);
+            return;
+        }
+        LogInfo("TCP holepunch rejected unmatched accept from %s", addr.ToStringAddrPort());
+        return;
+    }
 
     NetPermissionFlags permission_flags = NetPermissionFlags::None;
     hListenSocket.AddSocketPermissionFlags(permission_flags);
@@ -1787,6 +1853,17 @@ void CConnman::CreateNodeFromAcceptedSocket(std::unique_ptr<Sock>&& sock,
     AssertLockNotHeld(m_nodes_mutex);
 
     int nInbound = 0;
+    const auto coordination_bind{GetHolePunchCoordinationBind()};
+    const bool coordination_only{coordination_bind && *coordination_bind == addr_bind};
+    if (coordination_only) {
+        LOCK(m_nodes_mutex);
+        const auto count{std::count_if(m_nodes.begin(), m_nodes.end(), [](const CNode* node) { return node->m_coordination_only && node->IsInboundConn(); })};
+        if (count >= holepunch::COORD_INBOUND_MAX) return;
+    }
+    {
+        LOCK(m_holepunch_mutex);
+        for (const auto& session : m_holepunch_sessions) if (session.role == holepunch::Role::Responder && !session.published) ++nInbound;
+    }
 
     const bool inbound_onion = std::find(m_onion_binds.begin(), m_onion_binds.end(), addr_bind) != m_onion_binds.end();
 
@@ -1797,7 +1874,7 @@ void CConnman::CreateNodeFromAcceptedSocket(std::unique_ptr<Sock>&& sock,
     {
         LOCK(m_nodes_mutex);
         for (const CNode* pnode : m_nodes) {
-            if (pnode->IsInboundConn()) nInbound++;
+            if (pnode->IsInboundConn() && !pnode->m_coordination_only) nInbound++;
         }
     }
 
@@ -1835,7 +1912,7 @@ void CConnman::CreateNodeFromAcceptedSocket(std::unique_ptr<Sock>&& sock,
         return;
     }
 
-    if (nInbound >= m_max_inbound)
+    if (!coordination_only && nInbound >= m_max_inbound)
     {
         if (!AttemptToEvictConnection(/*evict_tx_relay_peer_only=*/false)) {
             // No connection to evict, disconnect the new connection
@@ -1871,13 +1948,31 @@ void CConnman::CreateNodeFromAcceptedSocket(std::unique_ptr<Sock>&& sock,
                                  .permission_flags = permission_flags,
                                  .prefer_evict = discouraged,
                                  .recv_flood_size = nReceiveFloodSize,
-                                 .use_v2transport = use_v2transport,
+                                 .use_v2transport = coordination_only || use_v2transport,
+                                 .v2_only = coordination_only,
                              });
+    pnode->m_coordination_only = coordination_only;
     pnode->AddRef();
     m_msgproc->InitializeNode(*pnode, local_services);
+    bool admitted{true};
     {
-        LOCK(m_nodes_mutex);
-        m_nodes.push_back(pnode);
+        LOCK(m_holepunch_mutex);
+        if (!coordination_only && m_holepunch) {
+            LOCK(m_nodes_mutex);
+            int reserved{0};
+            for (const auto* node : m_nodes) if (node->IsInboundConn() && !node->m_coordination_only && !node->fDisconnect) ++reserved;
+            for (const auto& session : m_holepunch_sessions) if (session.role == holepunch::Role::Responder && !session.published) ++reserved;
+            const int allowance{m_holepunch_eviction.has_value() ? 1 : 0};
+            if (reserved >= m_max_inbound + allowance) admitted = false;
+        }
+        if (admitted) {
+            LOCK(m_nodes_mutex);
+            m_nodes.push_back(pnode);
+        }
+    }
+    if (!admitted) {
+        DeleteNode(pnode);
+        return;
     }
     LogDebug(BCLog::NET, "connection from %s accepted\n", addr.ToStringAddrPort());
     TRACEPOINT(net, inbound_connection,
@@ -1899,6 +1994,8 @@ bool CConnman::AddConnection(const std::string& address, ConnectionType conn_typ
     switch (conn_type) {
     case ConnectionType::INBOUND:
     case ConnectionType::PRIVATE_BROADCAST:
+    case ConnectionType::OUTBOUND_HOLEPUNCH:
+    case ConnectionType::HOLEPUNCH_COORDINATION:
         return false;
     // no separate per-type limit for MANUAL because semAddnode limits them
     case ConnectionType::MANUAL:
@@ -2101,6 +2198,14 @@ Sock::EventsPerSock CConnman::GenerateWaitSockets(std::span<CNode* const> nodes)
         events_per_sock.emplace(hListenSocket.sock, Sock::Events{Sock::RecvEvent});
     }
 
+    {
+        LOCK(m_holepunch_mutex);
+        for (const auto& listener : m_punch_listeners) events_per_sock.emplace(listener.sock, Sock::Events{Sock::RecvEvent});
+        for (const auto& session : m_holepunch_sessions) {
+            if (session.sock) events_per_sock.emplace(session.sock, Sock::Events{Sock::SendEvent | Sock::ErrorEvent});
+        }
+    }
+
     for (CNode* pnode : nodes) {
         bool select_recv = !pnode->fPauseRecv;
         bool select_send;
@@ -2148,6 +2253,8 @@ void CConnman::SocketHandler()
         // Service (send/receive) each of the already connected nodes.
         SocketHandlerConnected(snap.Nodes(), events_per_sock);
     }
+
+    ServiceHolePunch(events_per_sock);
 
     // Accept new connections from listening sockets.
     SocketHandlerListening(events_per_sock);
@@ -2251,6 +2358,15 @@ void CConnman::SocketHandlerConnected(const std::vector<CNode*>& nodes,
             }
         }
 
+        if (pnode->m_disconnect_after_send) {
+            LOCK(pnode->cs_vSend);
+            const auto& [bytes, more, type] = pnode->m_transport->GetBytesToSend(!pnode->vSendMsg.empty());
+            if (pnode->vSendMsg.empty() && bytes.empty() && !more) {
+                pnode->m_send_drained = true;
+                pnode->fDisconnect = true;
+            }
+        }
+        if (pnode->m_coordination_only && pnode->IsInboundConn() && now >= pnode->m_connected + holepunch::COORD_TIMEOUT) pnode->fDisconnect = true;
         if (InactivityCheck(*pnode, now)) pnode->fDisconnect = true;
     }
 }
@@ -2259,6 +2375,15 @@ void CConnman::SocketHandlerListening(const Sock::EventsPerSock& events_per_sock
 {
     AssertLockNotHeld(m_nodes_mutex);
 
+    std::vector<ListenSocket> punch_listeners;
+    {
+        LOCK(m_holepunch_mutex);
+        punch_listeners = m_punch_listeners;
+    }
+    for (const auto& listener : punch_listeners) {
+        const auto it{events_per_sock.find(listener.sock)};
+        if (it != events_per_sock.end() && (it->second.occurred & Sock::RecvEvent)) AcceptConnection(listener);
+    }
     for (const ListenSocket& listen_socket : vhListenSocket) {
         if (m_interrupt_net->interrupted()) {
             return;
@@ -2599,6 +2724,14 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
     AssertLockNotHeld(m_unused_i2p_sessions_mutex);
     AssertLockNotHeld(m_anchors_mutex);
     FastRandomContext rng;
+    if (m_holepunch && !m_use_addrman_outgoing && connect.empty()) {
+        while (!m_interrupt_net->interrupted()) {
+            ProcessHolePunchQueue();
+            PerformReconnections();
+            if (!m_interrupt_net->sleep_for(500ms)) return;
+        }
+        return;
+    }
     // Connect to specific addresses
     if (!connect.empty())
     {
@@ -2627,6 +2760,7 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
                 return;
             }
             PerformReconnections();
+            ProcessHolePunchQueue();
         }
     }
 
@@ -2662,6 +2796,7 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
             }
         }
 
+        ProcessHolePunchQueue();
         ProcessAddrFetch();
 
         if (!m_interrupt_net->sleep_for(500ms)) {
@@ -2670,7 +2805,8 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
 
         PerformReconnections();
 
-        CountingSemaphoreGrant<> grant(*semOutbound);
+        CountingSemaphoreGrant<> grant(*semOutbound, m_holepunch);
+        if (m_holepunch && !grant) continue;
         if (m_interrupt_net->interrupted()) {
             return;
         }
@@ -2744,6 +2880,8 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
                     case ConnectionType::ADDR_FETCH:
                     case ConnectionType::FEELER:
                     case ConnectionType::PRIVATE_BROADCAST:
+                    case ConnectionType::OUTBOUND_HOLEPUNCH:
+                    case ConnectionType::HOLEPUNCH_COORDINATION:
                         break;
                     case ConnectionType::MANUAL:
                     case ConnectionType::OUTBOUND_FULL_RELAY:
@@ -3125,7 +3263,10 @@ bool CConnman::OpenNetworkConnection(const CAddress& addrConnect,
     }
     if (!pszDest) {
         bool banned_or_discouraged = m_banman && (m_banman->IsDiscouraged(addrConnect) || m_banman->IsBanned(addrConnect));
-        if (IsLocal(addrConnect) || banned_or_discouraged || AlreadyConnectedToAddress(addrConnect)) {
+        // Coordination may need a punch-port connection alongside an inbound
+        // or ephemeral-port connection to the same coordinator.
+        if (IsLocal(addrConnect) || banned_or_discouraged ||
+            (conn_type != ConnectionType::HOLEPUNCH_COORDINATION && AlreadyConnectedToAddress(addrConnect))) {
             return false;
         }
     } else if (AlreadyConnectedToHost(pszDest)) {
@@ -3488,6 +3629,19 @@ void CConnman::SetNetworkActive(bool active)
     }
 
     fNetworkActive = active;
+    if (m_holepunch) {
+        if (!active) {
+            LOCK(m_holepunch_mutex);
+            m_holepunch_sessions.clear();
+            m_punch_listeners.clear();
+            m_holepunch_queue.reset();
+            m_holepunch_eviction.reset();
+            m_holepunch_handoff_deadline.reset();
+        } else if (!InitHolePunch()) {
+            fNetworkActive = false;
+            LogError("TCP holepunch could not reopen its listeners");
+        }
+    }
 
     if (m_client_interface) {
         m_client_interface->NotifyNetworkActiveChanged(fNetworkActive);
@@ -3584,6 +3738,323 @@ bool CConnman::InitBinds(const Options& options)
     return true;
 }
 
+bool CConnman::HasPunchPort(Network network) const
+{
+    return m_holepunch && std::any_of(m_punch_binds.begin(), m_punch_binds.end(), [network](const CService& bind) {
+        return (network == NET_IPV4 && bind.IsIPv4()) || (network == NET_IPV6 && bind.IsIPv6());
+    });
+}
+
+bool CConnman::HasFreeHolePunchInboundSlot() const
+{
+    LOCK(m_holepunch_mutex);
+    LOCK(m_nodes_mutex);
+    int count{0};
+    for (const auto* node : m_nodes) if (node->IsInboundConn() && !node->m_coordination_only) ++count;
+    for (const auto& session : m_holepunch_sessions) if (session.role == holepunch::Role::Responder && !session.published) ++count;
+    return count < m_max_inbound;
+}
+
+bool CConnman::HasHolePunchOutbound() const
+{
+    LOCK(m_holepunch_mutex);
+    for (const auto& session : m_holepunch_sessions) if (session.role == holepunch::Role::Initiator) return true;
+    LOCK(m_nodes_mutex);
+    return std::any_of(m_nodes.begin(), m_nodes.end(), [](const CNode* node) { return node->m_conn_type == ConnectionType::OUTBOUND_HOLEPUNCH; });
+}
+
+std::unique_ptr<Sock> CConnman::CreatePunchSocket(const CService& peer, std::optional<CService> local)
+{
+    const auto bind{std::find_if(m_punch_binds.begin(), m_punch_binds.end(), [&peer](const CService& local) {
+        return local.IsIPv4() == peer.IsIPv4();
+    })};
+    if (bind == m_punch_binds.end()) return {};
+    auto sock{CreateSock(peer.GetSAFamily(), SOCK_STREAM, IPPROTO_TCP)};
+    if (!sock) return {};
+    const int one{1};
+#ifdef SO_REUSEPORT
+    if (sock->SetSockOpt(SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) == SOCKET_ERROR ||
+        sock->SetSockOpt(SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one)) == SOCKET_ERROR) return {};
+#else
+    return {};
+#endif
+#ifdef IPV6_V6ONLY
+    if (peer.IsIPv6() && sock->SetSockOpt(IPPROTO_IPV6, IPV6_V6ONLY, &one, sizeof(one)) == SOCKET_ERROR) return {};
+#endif
+    sockaddr_storage address{};
+    socklen_t len{sizeof(address)};
+    if (!local.value_or(*bind).GetSockAddr(reinterpret_cast<sockaddr*>(&address), &len) ||
+        sock->Bind(reinterpret_cast<sockaddr*>(&address), len) == SOCKET_ERROR) return {};
+    return sock;
+}
+
+bool CConnman::InitHolePunch()
+{
+    if (!m_holepunch) return true;
+    LOCK(m_holepunch_mutex);
+    if (!m_punch_listeners.empty()) return true;
+#ifndef SO_REUSEPORT
+    LogError("TCP holepunch requires SO_REUSEPORT on this platform");
+    return false;
+#endif
+    std::vector<ListenSocket> listeners;
+    for (const auto& local : m_punch_binds) {
+        auto sock{CreatePunchSocket(local, local)};
+        if (!sock || sock->Listen(SOMAXCONN) == SOCKET_ERROR) {
+            LogError("TCP holepunch could not bind %s", local.ToStringAddrPort());
+            return false;
+        }
+        LogInfo("TCP holepunch listening on %s", local.ToStringAddrPort());
+        listeners.emplace_back(std::move(sock), NetPermissionFlags::None);
+    }
+    if (m_punch_binds.empty()) return false;
+    if (m_holepunch_onion) {
+        const auto loopback{m_holepunch_coordination_bind.value_or(LookupNumeric("127.0.0.1", 0))};
+        auto sock{CreateSock(AF_INET, SOCK_STREAM, IPPROTO_TCP)};
+        if (!sock) return false;
+        const int one{1};
+        if (sock->SetSockOpt(SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) == SOCKET_ERROR) return false;
+#ifdef SO_REUSEPORT
+        if (sock->SetSockOpt(SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one)) == SOCKET_ERROR) return false;
+#endif
+        sockaddr_storage address{};
+        socklen_t len{sizeof(address)};
+        if (!loopback.IsValid() || !sock || !loopback.GetSockAddr(reinterpret_cast<sockaddr*>(&address), &len) ||
+            sock->Bind(reinterpret_cast<sockaddr*>(&address), len) == SOCKET_ERROR || sock->Listen(SOMAXCONN) == SOCKET_ERROR) return false;
+        m_holepunch_coordination_bind = GetBindAddress(*sock);
+        listeners.emplace_back(std::move(sock), NetPermissionFlags::None);
+        LogInfo("TCP holepunch private coordination listening on %s", m_holepunch_coordination_bind->ToStringAddrPort());
+    }
+    m_punch_listeners = std::move(listeners);
+    return true;
+}
+
+bool CConnman::StartHolePunch(const CService& peer, holepunch::Role role, const CService& coordinator)
+{
+    if (!fNetworkActive || !m_holepunch || !HasPunchPort(peer.IsIPv4() ? NET_IPV4 : NET_IPV6) ||
+        (!peer.IsIPv4() && !peer.IsIPv6()) || !peer.IsValid() || peer.GetPort() == 0 ||
+        (!peer.IsRoutable() && m_params.GetChainType() != ChainType::REGTEST)) return false;
+    for (const auto& local : m_punch_binds) if (static_cast<const CNetAddr&>(local) == peer) return false;
+    const auto now{NodeClock::now()};
+    LOCK(m_holepunch_mutex);
+    if (!fNetworkActive) return false;
+    if (role != holepunch::Role::Responder && role != holepunch::Role::Initiator) return false;
+    {
+        LOCK(m_nodes_mutex);
+        int inbound{0};
+        for (const auto* node : m_nodes) {
+            if (node->addr == peer || static_cast<const CNetAddr&>(node->addrBind) == peer) return false;
+            if (node->IsInboundConn() && !node->m_coordination_only) ++inbound;
+        }
+        for (const auto& session : m_holepunch_sessions) if (session.role == holepunch::Role::Responder && !session.published) ++inbound;
+        if (role == holepunch::Role::Responder && inbound >= m_max_inbound) {
+            LogInfo("TCP holepunch inbound reservation rejected: full");
+            return false;
+        }
+    }
+    for (auto it{m_holepunch_last_ip.begin()}; it != m_holepunch_last_ip.end();) {
+        if (now - it->second >= holepunch::PER_IP_INTERVAL) it = m_holepunch_last_ip.erase(it); else ++it;
+    }
+    while (!m_holepunch_starts.empty() && now - m_holepunch_starts.front() >= 1min) m_holepunch_starts.pop_front();
+    if (m_holepunch_sessions.size() >= holepunch::MAX_ACTIVE_SESSIONS || m_holepunch_starts.size() >= holepunch::SESSIONS_PER_MIN) return false;
+    for (const auto& session : m_holepunch_sessions) if (session.peer == peer) return false;
+    const auto previous{m_holepunch_last_ip.find(peer)};
+    if (previous != m_holepunch_last_ip.end() && now - previous->second < holepunch::PER_IP_INTERVAL) return false;
+    CountingSemaphoreGrant<> grant;
+    if (role == holepunch::Role::Initiator) {
+        grant = CountingSemaphoreGrant<>{m_holepunch_outbound, true};
+        if (!grant) return false;
+    }
+    m_holepunch_starts.push_back(now);
+    m_holepunch_last_ip[peer] = now;
+    m_holepunch_sessions.push_back({peer, coordinator, role, now, now, {}, {}, false, std::move(grant), false});
+    LogInfo("TCP holepunch session reserved for %s, role=%d", peer.ToStringAddrPort(), static_cast<int>(role));
+    return true;
+}
+
+void CConnman::AbortHolePunch(const CService& peer)
+{
+    LOCK(m_holepunch_mutex);
+    for (auto it{m_holepunch_sessions.begin()}; it != m_holepunch_sessions.end(); ++it) {
+        if (it->peer != peer) continue;
+        if (it->node) {
+            LOCK(m_nodes_mutex);
+            for (auto* node : m_nodes) if (node->GetId() == *it->node && !node->fSuccessfullyConnected) node->fDisconnect = true;
+        }
+        m_holepunch_sessions.erase(it);
+        return;
+    }
+}
+
+CNode* CConnman::AddHolePunchNode(HolePunchSession& session, std::shared_ptr<Sock> sock)
+{
+    const auto id{GetNewNodeId()};
+    const auto bind{GetBindAddress(*sock)};
+    auto* node = new CNode(id, std::move(sock), CAddress{session.peer, NODE_NONE}, CalculateKeyedNetGroup(session.peer),
+        GetDeterministicRandomizer(RANDOMIZER_ID_LOCALHOSTNONCE).Write(id).Finalize(), bind, "",
+        session.role == holepunch::Role::Responder ? ConnectionType::INBOUND : ConnectionType::OUTBOUND_HOLEPUNCH,
+        false, GetDeterministicRandomizer(RANDOMIZER_ID_NETWORKKEY).Write(session.peer.GetAddrBytes()).Finalize(),
+        CNodeOptions{.recv_flood_size = nReceiveFloodSize, .use_v2transport = true, .v2_only = true});
+    node->m_from_punch_port = true;
+    node->m_holepunch = true;
+    node->m_holepunch_coordinator = session.coordinator;
+    node->grantOutbound = std::move(session.grant);
+    node->AddRef();
+    session.node = id;
+    session.sock.reset();
+    LogInfo("TCP holepunch TCP established with %s, peer=%d", session.peer.ToStringAddrPort(), id);
+    return node;
+}
+
+void CConnman::PublishHolePunchNode(CNode* node)
+{
+    // Initialize protocol state without holding the session mutex. The message
+    // processor must not see a node before its protocol state exists.
+    m_msgproc->InitializeNode(*node, m_local_services);
+    bool published{false};
+    {
+        LOCK(m_holepunch_mutex);
+        for (auto& session : m_holepunch_sessions) {
+            if (session.node != node->GetId() || !fNetworkActive) continue;
+            LOCK(m_nodes_mutex);
+            m_nodes.push_back(node);
+            session.published = true;
+            published = true;
+            break;
+        }
+    }
+    if (!published) DeleteNode(node);
+}
+
+void CConnman::ServiceHolePunch(const Sock::EventsPerSock& events)
+{
+    const auto now{NodeClock::now()};
+    std::vector<CNode*> created;
+    {
+        LOCK(m_holepunch_mutex);
+        for (auto it{m_holepunch_sessions.begin()}; it != m_holepunch_sessions.end();) {
+            bool erase{!fNetworkActive};
+            if (it->node) {
+                LOCK(m_nodes_mutex);
+                auto node{std::find_if(m_nodes.begin(), m_nodes.end(), [&](const CNode* n) { return n->GetId() == *it->node; })};
+                if (node == m_nodes.end() || (*node)->fDisconnect) erase = true;
+                else if ((*node)->fSuccessfullyConnected) {
+                    LogInfo("TCP holepunch verack completed with %s", it->peer.ToStringAddrPort());
+                    erase = true;
+                } else if (now >= it->start + holepunch::WINDOW + holepunch::GRACE || !fNetworkActive) {
+                    (*node)->fDisconnect = true;
+                    erase = true;
+                }
+            } else if (now >= it->start + holepunch::WINDOW + holepunch::GRACE) {
+                LogInfo("TCP holepunch timed out for %s", it->peer.ToStringAddrPort());
+                erase = true;
+            } else if (now >= it->start + holepunch::WINDOW) {
+                it->sock.reset();
+            } else if (it->sock) {
+                auto event{events.find(it->sock)};
+                if (event != events.end() && event->second.occurred) {
+                    int error{0};
+                    socklen_t len{sizeof(error)};
+                    if (it->sock->GetSockOpt(SOL_SOCKET, SO_ERROR, &error, &len) == SOCKET_ERROR) error = WSAGetLastError();
+                    if (error == 0) {
+                        created.push_back(AddHolePunchNode(*it, it->sock));
+                    } else {
+                        it->sock.reset();
+                        it->tuple_conflict = IsPunchTupleConflict(error);
+                        it->retry = now + holepunch::RETRY;
+                        LogInfo("TCP holepunch connect failed for %s: %s", it->peer.ToStringAddrPort(), NetworkErrorString(error));
+                    }
+                }
+            } else if (!it->tuple_conflict && now >= it->retry) {
+                auto sock{CreatePunchSocket(it->peer)};
+                sockaddr_storage address{};
+                socklen_t len{sizeof(address)};
+                if (sock && it->peer.GetSockAddr(reinterpret_cast<sockaddr*>(&address), &len)) {
+                    LogInfo("TCP holepunch attempting %s", it->peer.ToStringAddrPort());
+                    const auto result{sock->Connect(reinterpret_cast<sockaddr*>(&address), len)};
+                    const auto error{result == SOCKET_ERROR ? WSAGetLastError() : 0};
+                    if (!error) created.push_back(AddHolePunchNode(*it, std::move(sock)));
+                    else if (error == WSAEINPROGRESS || error == WSAEWOULDBLOCK) it->sock = std::move(sock);
+                    else {
+                        it->tuple_conflict = IsPunchTupleConflict(error);
+                        LogInfo("TCP holepunch connect failed for %s: %s", it->peer.ToStringAddrPort(), NetworkErrorString(error));
+                    }
+                }
+                it->retry = now + holepunch::RETRY;
+            }
+            if (erase) it = m_holepunch_sessions.erase(it); else ++it;
+        }
+        if (m_holepunch_handoff_deadline && now >= *m_holepunch_handoff_deadline) {
+            LOCK(m_nodes_mutex);
+            for (auto* node : m_nodes) if (node->GetId() == m_holepunch_eviction) node->fDisconnect = true;
+            m_holepunch_eviction.reset();
+            m_holepunch_handoff_deadline.reset();
+        }
+    }
+    for (auto* node : created) PublishHolePunchNode(node);
+}
+
+void CConnman::QueueHolePunchConnection(const CService& coordinator)
+{
+    if (!m_holepunch || !fNetworkActive) return;
+    LOCK(m_holepunch_mutex);
+    LOCK(m_nodes_mutex);
+    if (!fNetworkActive || std::any_of(m_nodes.begin(), m_nodes.end(), [](const CNode* node) { return node->m_temporary_coordination; })) return;
+    if (!m_holepunch_queue && !m_holepunch_coordination_inflight) m_holepunch_queue = coordinator;
+}
+
+void CConnman::ProcessHolePunchQueue()
+{
+    std::optional<CService> coordinator;
+    {
+        LOCK(m_holepunch_mutex);
+        if (!fNetworkActive || !m_holepunch_queue || m_holepunch_coordination_inflight) return;
+        coordinator = std::exchange(m_holepunch_queue, {});
+        m_holepunch_coordination_inflight = true;
+    }
+    std::optional<Proxy> proxy;
+    if (coordinator->IsTor()) {
+        proxy = GetProxy(NET_ONION);
+        if (proxy) proxy->m_tor_stream_isolation = true;
+    }
+    OpenNetworkConnection(CAddress{*coordinator, NODE_NONE}, false, {}, nullptr,
+        ConnectionType::HOLEPUNCH_COORDINATION, true, proxy);
+    LOCK(m_holepunch_mutex);
+    m_holepunch_coordination_inflight = false;
+}
+
+std::optional<CService> CConnman::GetHolePunchCoordinationBind() const
+{
+    LOCK(m_holepunch_mutex);
+    return m_holepunch_coordination_bind;
+}
+void CConnman::SetHolePunchOnionService(std::optional<CService> service)
+{
+    LOCK(m_holepunch_mutex);
+    m_holepunch_onion_service = std::move(service);
+    m_holepunch_onion_published = std::chrono::steady_clock::now();
+}
+std::optional<CService> CConnman::GetHolePunchOnionService() const
+{
+    LOCK(m_holepunch_mutex);
+    if (!fNetworkActive || std::chrono::steady_clock::now() - m_holepunch_onion_published >= 24h) return {};
+    return m_holepunch_onion_service;
+}
+std::optional<NodeId> CConnman::TakeHolePunchEvictionCandidate()
+{
+    LOCK(m_holepunch_mutex);
+    if (m_holepunch_eviction_taken) return {};
+    m_holepunch_eviction_taken = m_holepunch_eviction.has_value();
+    return m_holepunch_eviction;
+}
+void CConnman::CompleteHolePunchHandoff(NodeId candidate, std::optional<NodeClock::time_point> deadline)
+{
+    LOCK(m_holepunch_mutex);
+    if (m_holepunch_eviction != candidate) return;
+    m_holepunch_handoff_deadline = deadline.value_or(NodeClock::now());
+    LogInfo("TCP holepunch handoff scheduled for peer=%d", candidate);
+}
+
 bool CConnman::Start(CScheduler& scheduler, const Options& connOptions)
 {
     AssertLockNotHeld(m_total_bytes_sent_mutex);
@@ -3597,6 +4068,8 @@ bool CConnman::Start(CScheduler& scheduler, const Options& connOptions)
         }
         return false;
     }
+
+    if (!InitHolePunch()) return false;
 
     if (connOptions.m_i2p_accept_incoming) {
         if (const auto i2p_sam = GetProxy(NET_I2P)) {
@@ -3669,7 +4142,7 @@ bool CConnman::Start(CScheduler& scheduler, const Options& connOptions)
         }
         return false;
     }
-    if (connOptions.m_use_addrman_outgoing || !connOptions.m_specified_outgoing.empty()) {
+    if (connOptions.m_use_addrman_outgoing || !connOptions.m_specified_outgoing.empty() || m_holepunch) {
         threadOpenConnections = std::thread(
             &util::TraceThread, "opencon",
             [this, connect = connOptions.m_specified_outgoing, seed_nodes = std::move(seed_nodes)] { ThreadOpenConnections(connect, seed_nodes); });
@@ -3802,6 +4275,14 @@ void CConnman::StopNodes()
     }
     m_nodes_disconnected.clear();
     WITH_LOCK(m_reconnections_mutex, m_reconnections.clear());
+    {
+        LOCK(m_holepunch_mutex);
+        m_holepunch_sessions.clear();
+        m_punch_listeners.clear();
+        m_holepunch_coordination_bind.reset();
+        m_holepunch_onion_service.reset();
+        m_holepunch_queue.reset();
+    }
     vhListenSocket.clear();
     semOutbound.reset();
     semAddnode.reset();
@@ -4100,10 +4581,10 @@ ServiceFlags CConnman::GetLocalServices() const
     return m_local_services;
 }
 
-static util::NotNullUniquePtr<Transport> MakeTransport(NodeId id, bool use_v2transport, bool inbound) noexcept
+static util::NotNullUniquePtr<Transport> MakeTransport(NodeId id, bool use_v2transport, bool inbound, bool v2_only) noexcept
 {
     if (use_v2transport) {
-        return util::NotNull{std::make_unique<V2Transport>(id, /*initiating=*/!inbound)};
+        return util::NotNull{std::make_unique<V2Transport>(id, /*initiating=*/!inbound, v2_only)};
     } else {
         return util::NotNull{std::make_unique<V1Transport>(id)};
     }
@@ -4120,7 +4601,7 @@ CNode::CNode(NodeId idIn,
              bool inbound_onion,
              uint64_t network_key,
              CNodeOptions&& node_opts)
-    : m_transport{MakeTransport(idIn, node_opts.use_v2transport, conn_type_in == ConnectionType::INBOUND)},
+    : m_transport{MakeTransport(idIn, node_opts.use_v2transport, conn_type_in == ConnectionType::INBOUND, node_opts.v2_only)},
       m_permission_flags{node_opts.permission_flags},
       m_sock{sock},
       m_connected{NodeClock::now()},
@@ -4244,6 +4725,7 @@ void CConnman::PushMessage(CNode* pnode, CSerializedNetMsg&& msg)
         pnode->m_send_memusage += msg.GetMemoryUsage();
         if (pnode->m_send_memusage + pnode->m_transport->GetSendMemoryUsage() > nSendBufferMaxSize) pnode->fPauseSend = true;
         // Move message to vSendMsg queue.
+        pnode->m_send_drained = false;
         pnode->vSendMsg.push_back(std::move(msg));
 
         // If there was nothing to send before, and there is now (predicted by the "more" value

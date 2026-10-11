@@ -13,6 +13,7 @@
 #include <consensus/amount.h>
 #include <crypto/siphash.h>
 #include <hash.h>
+#include <holepunch.h>
 #include <i2p.h>
 #include <kernel/messagestartchars.h>
 #include <net_permissions.h>
@@ -467,6 +468,8 @@ private:
     /** The length of the V1 prefix to match bytes initially received by responders with to
      *  determine if their peer is speaking V1 or V2. */
     static constexpr size_t V1_PREFIX_LEN = 16;
+    const bool m_v2_only;
+    bool m_v1_rejected GUARDED_BY(m_recv_mutex){false};
 
     // The sender side and receiver side of V2Transport are state machines that are transitioned
     // through, based on what has been received. The receive state corresponds to the contents of,
@@ -648,10 +651,10 @@ public:
      * @param[in] nodeid      the node's NodeId (only for debug log output).
      * @param[in] initiating  whether we are the initiator side.
      */
-    V2Transport(NodeId nodeid, bool initiating) noexcept;
+    V2Transport(NodeId nodeid, bool initiating, bool v2_only = false) noexcept;
 
     /** Construct a V2 transport with specified keys and garbage (test use only). */
-    V2Transport(NodeId nodeid, bool initiating, const CKey& key, std::span<const std::byte> ent32, std::vector<uint8_t> garbage) noexcept;
+    V2Transport(NodeId nodeid, bool initiating, const CKey& key, std::span<const std::byte> ent32, std::vector<uint8_t> garbage, bool v2_only = false) noexcept;
 
     // Receive side functions.
     bool ReceivedMessageComplete() const noexcept override EXCLUSIVE_LOCKS_REQUIRED(!m_recv_mutex);
@@ -677,6 +680,7 @@ struct CNodeOptions
     bool prefer_evict = false;
     size_t recv_flood_size{DEFAULT_MAXRECEIVEBUFFER * 1000};
     bool use_v2transport = false;
+    bool v2_only{false};
 };
 
 /** Information about a peer */
@@ -687,6 +691,16 @@ public:
      * the sending side functions are only called under cs_vSend. */
     const util::NotNullUniquePtr<Transport> m_transport;
 
+    bool m_from_punch_port{false};
+    bool m_holepunch{false};
+    CService m_holepunch_coordinator;
+    bool m_coordination_only{false};
+    bool m_temporary_coordination{false};
+    std::atomic<bool> m_holepunch_advertised{false};
+    std::atomic<bool> m_holepunch_can_handoff{false};
+    std::atomic<NodeClock::time_point> m_holepunch_protect_until{};
+    std::atomic<bool> m_disconnect_after_send{false};
+    std::atomic<bool> m_send_drained{false};
     const NetPermissionFlags m_permission_flags;
 
     /**
@@ -781,6 +795,8 @@ public:
             case ConnectionType::OUTBOUND_FULL_RELAY:
             case ConnectionType::BLOCK_RELAY:
                 return true;
+            case ConnectionType::OUTBOUND_HOLEPUNCH:
+            case ConnectionType::HOLEPUNCH_COORDINATION:
             case ConnectionType::INBOUND:
             case ConnectionType::MANUAL:
             case ConnectionType::ADDR_FETCH:
@@ -808,6 +824,8 @@ public:
         case ConnectionType::BLOCK_RELAY:
         case ConnectionType::ADDR_FETCH:
         case ConnectionType::PRIVATE_BROADCAST:
+        case ConnectionType::OUTBOUND_HOLEPUNCH:
+        case ConnectionType::HOLEPUNCH_COORDINATION:
                 return false;
         case ConnectionType::OUTBOUND_FULL_RELAY:
         case ConnectionType::MANUAL:
@@ -847,6 +865,8 @@ public:
 
     bool ExpectServicesFromConn() const {
         switch (m_conn_type) {
+            case ConnectionType::OUTBOUND_HOLEPUNCH:
+            case ConnectionType::HOLEPUNCH_COORDINATION:
             case ConnectionType::INBOUND:
             case ConnectionType::MANUAL:
             case ConnectionType::FEELER:
@@ -1114,12 +1134,26 @@ public:
         bool whitelist_forcerelay = DEFAULT_WHITELISTFORCERELAY;
         bool whitelist_relay = DEFAULT_WHITELISTRELAY;
         bool m_capture_messages = false;
+        bool m_holepunch{false};
+        bool m_holepunch_coordinator{false};
+        bool m_holepunch_onion{false};
+        uint16_t m_punch_port{0};
+        std::vector<CService> m_punch_binds;
     };
 
     void Init(const Options& connOptions) EXCLUSIVE_LOCKS_REQUIRED(!m_added_nodes_mutex, !m_total_bytes_sent_mutex)
     {
         AssertLockNotHeld(m_total_bytes_sent_mutex);
 
+        m_holepunch = connOptions.m_holepunch;
+        m_holepunch_coordinator = connOptions.m_holepunch_coordinator;
+        m_holepunch_onion = connOptions.m_holepunch_onion;
+        m_punch_port = connOptions.m_punch_port;
+        m_punch_binds = connOptions.m_punch_binds;
+        if (m_holepunch && m_punch_binds.empty()) {
+            if (g_reachable_nets.Contains(NET_IPV4)) m_punch_binds.emplace_back(LookupNumeric("0.0.0.0", m_punch_port));
+            if (g_reachable_nets.Contains(NET_IPV6)) m_punch_binds.emplace_back(LookupNumeric("::", m_punch_port));
+        }
         m_local_services = connOptions.m_local_services;
         m_max_automatic_connections = connOptions.m_max_automatic_connections;
         m_max_outbound_full_relay = std::min(MAX_OUTBOUND_FULL_RELAY_CONNECTIONS, m_max_automatic_connections);
@@ -1154,6 +1188,20 @@ public:
         whitelist_relay = connOptions.whitelist_relay;
         m_capture_messages = connOptions.m_capture_messages;
     }
+
+    std::vector<unsigned char> GetNetworkGroup(const CNetAddr& address) const { return m_netgroupman.GetGroup(address); }
+    bool HolePunchEnabled() const { return m_holepunch; }
+    bool HasPunchPort(Network network) const;
+    bool HasFreeHolePunchInboundSlot() const;
+    bool HasHolePunchOutbound() const;
+    bool StartHolePunch(const CService& peer, holepunch::Role role, const CService& coordinator);
+    void AbortHolePunch(const CService& peer);
+    void QueueHolePunchConnection(const CService& coordinator);
+    std::optional<CService> GetHolePunchCoordinationBind() const;
+    void SetHolePunchOnionService(std::optional<CService> service);
+    std::optional<CService> GetHolePunchOnionService() const;
+    std::optional<NodeId> TakeHolePunchEvictionCandidate();
+    void CompleteHolePunchHandoff(NodeId candidate, std::optional<NodeClock::time_point> deadline);
 
     // test only
     void SetCaptureMessages(bool cap) { m_capture_messages = cap; }
@@ -1649,6 +1697,43 @@ private:
     unsigned int nSendBufferMaxSize{0};
     unsigned int nReceiveFloodSize{0};
 
+    bool m_holepunch{false};
+    bool m_holepunch_coordinator{false};
+    bool m_holepunch_onion{false};
+    uint16_t m_punch_port{0};
+    std::vector<CService> m_punch_binds;
+    mutable Mutex m_holepunch_mutex;
+    struct HolePunchSession {
+        CService peer;
+        CService coordinator;
+        holepunch::Role role;
+        NodeClock::time_point start;
+        NodeClock::time_point retry;
+        std::shared_ptr<Sock> sock;
+        std::optional<NodeId> node;
+        bool published{false};
+        CountingSemaphoreGrant<> grant;
+        bool tuple_conflict{false};
+    };
+    std::vector<HolePunchSession> m_holepunch_sessions GUARDED_BY(m_holepunch_mutex);
+    std::deque<NodeClock::time_point> m_holepunch_starts GUARDED_BY(m_holepunch_mutex);
+    std::map<CNetAddr, NodeClock::time_point> m_holepunch_last_ip GUARDED_BY(m_holepunch_mutex);
+    std::optional<CService> m_holepunch_coordination_bind GUARDED_BY(m_holepunch_mutex);
+    std::optional<CService> m_holepunch_onion_service GUARDED_BY(m_holepunch_mutex);
+    std::chrono::steady_clock::time_point m_holepunch_onion_published GUARDED_BY(m_holepunch_mutex){};
+    std::optional<CService> m_holepunch_queue GUARDED_BY(m_holepunch_mutex);
+    bool m_holepunch_coordination_inflight GUARDED_BY(m_holepunch_mutex){false};
+    std::optional<NodeId> m_holepunch_eviction GUARDED_BY(m_holepunch_mutex);
+    std::optional<NodeClock::time_point> m_holepunch_handoff_deadline GUARDED_BY(m_holepunch_mutex);
+    bool m_holepunch_eviction_taken GUARDED_BY(m_holepunch_mutex){false};
+    std::counting_semaphore<> m_holepunch_outbound{1};
+    bool InitHolePunch();
+    std::unique_ptr<Sock> CreatePunchSocket(const CService& peer, std::optional<CService> local = {});
+    void ServiceHolePunch(const Sock::EventsPerSock& events);
+    CNode* AddHolePunchNode(HolePunchSession& session, std::shared_ptr<Sock> sock) EXCLUSIVE_LOCKS_REQUIRED(m_holepunch_mutex);
+    void PublishHolePunchNode(CNode* node);
+    void ProcessHolePunchQueue();
+    std::vector<ListenSocket> m_punch_listeners GUARDED_BY(m_holepunch_mutex);
     std::vector<ListenSocket> vhListenSocket;
     std::atomic<bool> fNetworkActive{true};
     bool fAddressesInitialized{false};

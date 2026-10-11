@@ -1376,6 +1376,27 @@ public:
 
 } // namespace
 
+BOOST_AUTO_TEST_CASE(v2transport_strict)
+{
+    std::array<uint8_t, 16> prefix{0, 0, 0, 0, 'v', 'e', 'r', 's', 'i', 'o', 'n', 0, 0, 0, 0, 0};
+    std::copy(Params().MessageStart().begin(), Params().MessageStart().end(), prefix.begin());
+    V2Transport ordinary{0, false};
+    V2Transport strict{1, false, true};
+    std::span<const uint8_t> ordinary_bytes{prefix};
+    std::span<const uint8_t> strict_bytes{prefix};
+    BOOST_CHECK(ordinary.ReceivedBytes(ordinary_bytes));
+    BOOST_CHECK(ordinary.GetInfo().transport_type == TransportProtocolType::V1);
+    BOOST_CHECK(!strict.ReceivedBytes(strict_bytes));
+    BOOST_CHECK(strict.GetInfo().transport_type != TransportProtocolType::V1);
+
+    V2Transport ordinary_outbound{2, true};
+    V2Transport strict_outbound{3, true, true};
+    ordinary_outbound.MarkBytesSent(CMessageHeader::HEADER_SIZE);
+    strict_outbound.MarkBytesSent(CMessageHeader::HEADER_SIZE);
+    BOOST_CHECK(ordinary_outbound.ShouldReconnectV1());
+    BOOST_CHECK(!strict_outbound.ShouldReconnectV1());
+}
+
 BOOST_AUTO_TEST_CASE(v2transport_test)
 {
     // A mostly normal scenario, testing a transport in initiator mode.

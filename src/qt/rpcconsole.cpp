@@ -493,7 +493,9 @@ RPCConsole::RPCConsole(interfaces::Node& node, const PlatformStyle *_platformSty
         tr("Outbound Address Fetch: short-lived, for soliciting addresses"),
         /*: Explanatory text for a short-lived outbound peer connection that is used
             to broadcast privacy-sensitive data (like our transactions). */
-        tr("Private broadcast: short-lived, for broadcasting privacy-sensitive transactions")};
+        tr("Private broadcast: short-lived, for broadcasting privacy-sensitive transactions"),
+        tr("Outbound Hole Punch: full relay, established by TCP hole punching"),
+        tr("Hole Punch Coordination: dedicated connection for coordinating TCP hole punching")};
     const QString connection_types_list{"<ul><li>" + Join(CONNECTION_TYPE_DOC, QString("</li><li>")) + "</li></ul>"};
     ui->peerConnectionTypeLabel->setToolTip(ui->peerConnectionTypeLabel->toolTip().arg(connection_types_list));
     const std::vector<QString> TRANSPORT_TYPE_DOC{

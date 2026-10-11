@@ -8,6 +8,10 @@
 std::string ConnectionTypeAsString(ConnectionType conn_type)
 {
     switch (conn_type) {
+    case ConnectionType::OUTBOUND_HOLEPUNCH:
+        return "outbound-holepunch";
+    case ConnectionType::HOLEPUNCH_COORDINATION:
+        return "holepunch-coordination";
     case ConnectionType::INBOUND:
         return "inbound";
     case ConnectionType::MANUAL:

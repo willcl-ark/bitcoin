@@ -309,7 +309,8 @@ std::unique_ptr<Sock> ConnectDirectly(const CService& dest, bool manual_connecti
 /** Create a socket and try to connect to the specified service, using the provided timeout. */
 std::unique_ptr<Sock> ConnectDirectly(const CService& dest,
                                       bool manual_connection,
-                                      std::chrono::milliseconds timeout);
+                                      std::chrono::milliseconds timeout,
+                                      std::unique_ptr<Sock> sock = {}, int* connect_error = nullptr);
 
 /**
  * Connect to a specified destination service through a SOCKS5 proxy by first
