@@ -66,8 +66,17 @@ std::vector<uint8_t> AnnouncementBytes(const CService& coordinator, const CServi
     const uint8_t target_net{NetworkId(target, false)};
     if (coord_net == 5 && coordinator.GetPort() != 0) throw std::ios_base::failure("Nonzero I2P coordinator port");
     DataStream encoded;
-    const auto coord_bytes{coordinator.GetAddrBytes()};
-    const auto target_bytes{target.GetAddrBytes()};
+    const auto address_bytes = [](const CService& endpoint) {
+        DataStream address;
+        address << CNetAddr::V2(static_cast<const CNetAddr&>(endpoint));
+        uint8_t network;
+        address >> network;
+        std::vector<uint8_t> bytes(ReadCompactSize(address));
+        address >> std::span{bytes};
+        return bytes;
+    };
+    const auto coord_bytes{address_bytes(coordinator)};
+    const auto target_bytes{address_bytes(target)};
     encoded << coord_net << std::span{coord_bytes} << Using<BigEndianFormatter<2>>(coordinator.GetPort());
     encoded << target_net << std::span{target_bytes};
     const auto* begin{reinterpret_cast<const uint8_t*>(encoded.data())};
