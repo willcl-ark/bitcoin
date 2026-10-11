@@ -32,3 +32,16 @@ continues to leave I2P-specific coordination mechanics outside its scope.
 Validation: all 38 existing wire vectors pass. Rule references and state-table
 columns were checked, and the amended rules received separate coordination and
 Tor lifecycle reviews. No GitHub comments or pull requests were posted.
+
+## Open issue found during runtime validation
+
+In a live Profile B run, the advertiser established TCP before the connector
+received `punch` over Tor. R-5.7 required the connector to close that unmatched
+socket. R-5.8 then stopped the advertiser's attempts, and the connector's later
+socket found no active session. Neither side completed the v2 handshake.
+
+Proposed clarification: treat a socket that closes before receiving any BIP324
+bytes as a failed attempt, retaining the session and reserved slot. Retry after
+RETRY_MS within the original attempt window; during grace, accept matching
+sockets only. Keep the absolute deadlines and tuple-conflict rule unchanged.
+This proposal awaits a decision and is not part of the pinned BIP or code.
