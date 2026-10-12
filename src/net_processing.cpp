@@ -6500,14 +6500,14 @@ void PeerManagerImpl::MaybeHolePunch(CNode& node, Peer& peer, NodeClock::time_po
                 (coordinator_peer->m_holepunch_our_caps & (holepunch::ADVERTISED | holepunch::PUNCHPORT)) != (holepunch::ADVERTISED | holepunch::PUNCHPORT) ||
                 !ValidHolePunchEndpoint(coordinator->addr)) return;
             for (const auto& external : {ipv4, ipv6}) {
-                if (external && HolePunchNetwork(*external) == HolePunchNetwork(coordinator->addr)) clearnet_announcements.push_back({time, peer.m_our_services, coordinator->addr, *external});
+                if (external && !IsBadPort(external->GetPort()) && HolePunchNetwork(*external) == HolePunchNetwork(coordinator->addr)) clearnet_announcements.push_back({time, peer.m_our_services, coordinator->addr, *external});
             }
         });
         if (m_opts.holepunch_onion && IsDirectIPConnection(node)) {
             const auto onion{m_connman.GetHolePunchOnionService()};
             if (onion) {
                 for (const auto& external : {ipv4, ipv6}) {
-                    if (external) onion_announcements.push_back({time, peer.m_our_services, *onion, *external});
+                    if (external && !IsBadPort(external->GetPort())) onion_announcements.push_back({time, peer.m_our_services, *onion, *external});
                 }
             }
         }
