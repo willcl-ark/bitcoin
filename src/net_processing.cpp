@@ -4346,16 +4346,14 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
             try {
                 uint8_t version;
                 feature_data >> version;
-                if (version != 0) {
-                    LogInfo("Ignored unsupported holepunch feature version: peer=%d version=%u", pfrom.GetId(), version);
-                    return;
-                }
+                // Negotiate the minimum of both maximum versions. Our maximum
+                // is zero, so every remote maximum negotiates version zero.
                 uint32_t caps;
                 feature_data >> caps;
                 if (!feature_data.empty()) throw std::ios_base::failure("Trailing holepunch feature bytes");
                 peer.m_holepunch_remote = true;
                 peer.m_holepunch_their_caps = caps & 31;
-                LogInfo("Accepted holepunch feature: peer=%d version=0 caps=%u", pfrom.GetId(), peer.m_holepunch_their_caps);
+                LogInfo("Accepted holepunch feature: peer=%d remote_version=%u negotiated_version=0 caps=%u", pfrom.GetId(), version, peer.m_holepunch_their_caps);
                 pfrom.m_holepunch_advertised = pfrom.IsInboundConn() && (caps & holepunch::ADVERTISED) && (caps & holepunch::PUNCHPORT);
                 pfrom.m_holepunch_can_handoff = pfrom.IsInboundConn() && (caps & holepunch::HANDOFF_OK) && (caps & holepunch::PUNCHPORT);
             } catch (const std::exception& error) {
