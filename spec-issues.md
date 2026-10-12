@@ -1,6 +1,90 @@
 # TCP holepunch specification issues
 
-The implementation uses the amended draft at
+## Canonical draft compliance review, 2026-10-13
+
+The canonical source is now b10c's draft 0.3.4 at
+[`17bbcc637049b9ce63a0faac91e0a9330481193f`](https://github.com/0xB10C/bips/blob/17bbcc637049b9ce63a0faac91e0a9330481193f/bip-tcp-holepunch.md).
+The remote branch tip was verified before this review. Core was reviewed at
+`cb8d503095807784095ea5b4009f488e5c19b9a5`. The canonical draft includes all 15
+earlier amendments below, plus the changes in drafts 0.3.2 through 0.3.4.
+The implementation is not yet compliant with those new requirements.
+
+### Required changes
+
+1. **BLOCKING: replace the onion identity when the external address changes.**
+   R-12.1 and I-12 prohibit announcing a new address under an identity already
+   associated with the old one. `HolePunchExternal()` updates the endpoint at
+   `src/net_processing.cpp:6156`, while announcements at line 6509 reuse the
+   existing global service. `src/torcontrol.cpp:639` rotates only after 24 hours.
+   Observers can therefore link successive ISP-assigned addresses. Retain the
+   address binding for each announced identity across quorum loss, suppress
+   changed-address announcements immediately, and obtain and publish a fresh
+   service before resuming. Preserve every retiring service's cache overlap,
+   including when multiple address changes occur within twenty minutes.
+   Relevant implementation commits: `707845e2b59`, `6bbc0cb9b44`.
+
+2. **BLOCKING: negotiate the lower feature version.** R-3.2 defines the field as
+   the highest supported version and negotiates the minimum. At
+   `src/net_processing.cpp:4349`, any nonzero remote version is ignored. A peer
+   advertising maximum version 1 should negotiate version 0 with this node, but
+   subsequent coordination messages instead cause disconnection. Parse the full
+   payload and apply the rules for the negotiated version.
+   Relevant implementation commit: `6bbc0cb9b44`.
+
+3. **BLOCKING: choose a random default punch port.** The terminology and limits
+   sections require a default chosen at startup from 49152 through 65535,
+   excluding bad ports and fixed throughout the run. `src/init.cpp:2287` still
+   uses the P2P port plus two; lines 1037 through 1045 also retain the obsolete
+   overflow restriction. Choose the default once, keep explicit overrides, and
+   update help and operator documentation.
+   Relevant implementation commit: `85600f64714`.
+
+4. **BLOCKING: do not self-announce a bad-port external endpoint.** R-6.5 now
+   explicitly forbids this. Both announcement lists at
+   `src/net_processing.cpp:6505` and line 6512 accept such endpoints, even though
+   connectors reject them. A disposable regtest advertiser reproduced this by
+   announcing port 27017 after two agreeing reports. Filter both profiles with
+   `IsBadPort()` before selecting an announcement.
+   Relevant implementation commit: `6bbc0cb9b44`.
+
+### Recommendations and allowed choices
+
+- **SHOULD-FIX:** R-3.5 recommends omitting the feature from feeler and
+  address-fetch connections. The send condition at `src/net_processing.cpp:4066`
+  does not exclude either type. Avoid disclosing participation on these
+  short-lived connections. Relevant commit: `6bbc0cb9b44`.
+- R-1.4's existing stable-source-address recommendation is supported through
+  explicit `-punchbind`; the wildcard default does not automatically choose a
+  stable address, particularly with IPv6 privacy addressing.
+- The onion virtual port is now an implementation choice. Continuing to use the
+  network's default P2P port is permitted and does not require a change.
+- Existing rotation timing is relative to publication, rather than a common
+  wall-clock boundary. The twenty-minute retirement and publication gate remain
+  applicable when address-triggered replacement is added.
+- Source and operator documentation still identify the old implementation pin.
+  Update those references when the implementation adopts this canonical draft.
+
+### Questions for the author
+
+- R-12.1 does not clearly define whether one onion identity may advertise stable
+  IPv4 and IPv6 endpoints together, or whether each family needs its own identity.
+  This affects the design of address-triggered rotation. A loss of reporting
+  quorum must not erase the remembered association and permit a later different
+  address to reuse the old identity.
+- R-11.2 counts requests that named a target, while the implementation counts
+  requests that pass validation and lead to pairing. Clarify whether rejected
+  requests count. The separate 17-second pairing cooldown already bounds
+  successful sessions.
+
+Wire encodings and the published vectors are unchanged. All 38 vector checks
+pass. Disposable regtest probes also confirmed the version-negotiation failure,
+the bad-port announcement, and the old default port. The probes and logs are
+outside the repository; all their processes have stopped. This review changes
+no protocol behavior and adds no functional tests.
+
+## Earlier amendments incorporated into the canonical draft
+
+The current implementation was written against the amended draft at
 [`a9860ba2ab7cb048209bf69f1e313a31200e1aa2`](https://github.com/willcl-ark/bips/blob/a9860ba2ab7cb048209bf69f1e313a31200e1aa2/bip-tcp-holepunch.md).
 The amendments are on `origin/holepunch-amendments` in
 `/home/will/src/core/bitcoin/bips`, based on upstream draft commit
@@ -44,4 +128,5 @@ Proposed clarification: treat a socket that closes before receiving any BIP324
 bytes as a failed attempt, retaining the session and reserved slot. Retry after
 RETRY_MS within the original attempt window; during grace, accept matching
 sockets only. Keep the absolute deadlines and tuple-conflict rule unchanged.
-This proposal awaits a decision and is not part of the pinned BIP or code.
+Draft 0.3.4 retains the original termination behavior. This recovery proposal is
+not part of the canonical BIP or code and must not be treated as a compliance fix.
