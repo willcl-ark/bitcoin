@@ -25,10 +25,11 @@ uses direct IP.
 There is no I2P coordination service implementation. The draft leaves its
 specifics outside the scope of the protocol.
 
-The punch port defaults to the node's own P2P port plus two. Set
-`-punchport=<port>` to choose a port between 1 and 65535, including when the
-P2P port plus two would overflow. Punch listeners operate independently of
-`-listen`. The dedicated onion service operates independently of `-listenonion`
+By default, the punch port is chosen uniformly at random from 49152 to 65535,
+excluding bad ports. It remains fixed for the process lifetime, including across
+network activity toggles. Set `-punchport=<port>` to choose a port between 1 and
+65535 explicitly. Punch listeners operate independently of `-listen`. The
+dedicated onion service operates independently of `-listenonion`
 and uses a separate loopback listener with an automatically assigned port.
 
 Use `-punchbind=<addr>` for a stable local source address. It accepts a numeric

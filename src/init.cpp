@@ -579,7 +579,7 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-holepunch", "Enable experimental TCP hole punching using v2 transport (default: 0)", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-holepunchcoordinator", "Coordinate TCP hole punching for connected peers (implies -holepunch, default: 0)", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-holepunchonion", "Create a dedicated Tor onion service for TCP hole punch coordination (implies -holepunch, default: 0)", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
-    argsman.AddArg("-punchport=<port>", "Local TCP hole punch port (default: own P2P port plus two)", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::CONNECTION);
+    argsman.AddArg("-punchport=<port>", "Local TCP hole punch port (default: random port in 49152-65535, excluding bad ports)", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::CONNECTION);
     argsman.AddArg("-punchbind=<addr>", "Bind the punch port to a numeric IPv4 or IPv6 address, without a port (at most once per address family; default: wildcard)", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::CONNECTION);
     argsman.AddArg("-listenonion", strprintf("Automatically create Tor onion service (default: %d)", DEFAULT_LISTEN_ONION), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-maxconnections=<n>", strprintf("Maintain at most <n> automatic connections to peers (default: %u). %u slots of these are reserved for outgoing connections. See -inboundrelaypercent for more information about limits applied to transaction relay inbound peers. "
@@ -1034,15 +1034,11 @@ bool AppInitParameterInteraction(const ArgsManager& args)
     if (holepunch && !args.GetBoolArg("-v2transport", DEFAULT_V2_TRANSPORT)) {
         return InitError(Untranslated("TCP hole punching requires -v2transport=1"));
     }
-    const uint16_t p2p_port{GetListenPort()};
-    std::optional<uint16_t> punch_port;
     if (args.IsArgSet("-punchport")) {
-        punch_port = ToIntegral<uint16_t>(args.GetArg("-punchport", ""));
-    } else if (p2p_port >= 1 && p2p_port <= 65533) {
-        punch_port = static_cast<uint16_t>(p2p_port + 2);
-    }
-    if ((holepunch || args.IsArgSet("-punchport")) && (!punch_port || *punch_port == 0)) {
-        return InitError(Untranslated("-punchport must be between 1 and 65535; set it explicitly if the P2P port plus two exceeds 65535"));
+        const auto punch_port{ToIntegral<uint16_t>(args.GetArg("-punchport", ""))};
+        if (!punch_port || *punch_port == 0) {
+            return InitError(Untranslated("-punchport must be between 1 and 65535"));
+        }
     }
     std::set<Network> punch_bind_families;
     for (const auto& bind : args.GetArgs("-punchbind")) {
@@ -2284,7 +2280,14 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     connOptions.m_holepunch_coordinator = args.GetBoolArg("-holepunchcoordinator", false);
     connOptions.m_holepunch_onion = holepunch_onion;
     if (connOptions.m_holepunch) {
-        connOptions.m_punch_port = args.IsArgSet("-punchport") ? *ToIntegral<uint16_t>(args.GetArg("-punchport", "")) : static_cast<uint16_t>(GetListenPort() + 2);
+        if (args.IsArgSet("-punchport")) {
+            connOptions.m_punch_port = *ToIntegral<uint16_t>(args.GetArg("-punchport", ""));
+        } else {
+            FastRandomContext rng;
+            do {
+                connOptions.m_punch_port = 49152 + rng.randrange(16384);
+            } while (IsBadPort(connOptions.m_punch_port));
+        }
         for (const auto& bind : args.GetArgs("-punchbind")) {
             connOptions.m_punch_binds.emplace_back(*LookupHost(bind, /*fAllowLookup=*/false), connOptions.m_punch_port);
         }
