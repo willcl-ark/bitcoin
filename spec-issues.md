@@ -7,11 +7,38 @@ The canonical source is now b10c's draft 0.3.4 at
 The remote branch tip was verified before this review. Core was reviewed at
 `cb8d503095807784095ea5b4009f488e5c19b9a5`. The canonical draft includes all 15
 earlier amendments below, plus the changes in drafts 0.3.2 through 0.3.4.
-The implementation is not yet compliant with those new requirements.
+At that review, the four requirements below were not yet implemented.
 
-### Required changes
 
-1. **BLOCKING: replace the onion identity when the external address changes.**
+### Implementation follow-up
+
+All four required changes are implemented. IPv4 and IPv6 use separate onion
+identities. Endpoint changes invalidate the old identity immediately, while a
+generation number prevents delayed Tor callbacks from restoring it. Quorum
+loss preserves the association. Every retired service keeps its cache overlap.
+
+| Change | Commit |
+| --- | --- |
+| Random default punch port, fixed for the process lifetime | `f5c526d12ce` |
+| Negotiate the minimum supported feature version | `32f3f00ef1e` |
+| Suppress bad-port self-announcements in both profiles | `e2f03f72067` |
+| Independent onion identities with endpoint-triggered replacement | `9d94979c065` |
+
+Validation: `just make` passed using `./build`. The six focused networking and
+Tor unit suites passed 44 cases and 153679 assertions, including one new case
+for independent identities, quorum loss and stale callbacks. All 38 canonical
+wire vectors pass. Disposable runtime probes confirmed version maxima 0, 1
+and 255 negotiate zero, malformed feature payloads disconnect, default ports
+remain stable across network toggles, and bad-port Profile A announcements are
+suppressed with an allowed-port positive control. No functional tests were
+added. The recommendations, author questions and early TCP close race below
+remain open.
+
+### Required changes identified by the review
+
+These descriptions refer to the pre-update implementation.
+
+1. **RESOLVED: replace the onion identity when the external address changes.**
    R-12.1 and I-12 prohibit announcing a new address under an identity already
    associated with the old one. `HolePunchExternal()` updates the endpoint at
    `src/net_processing.cpp:6156`, while announcements at line 6509 reuse the
@@ -23,7 +50,7 @@ The implementation is not yet compliant with those new requirements.
    including when multiple address changes occur within twenty minutes.
    Relevant implementation commits: `707845e2b59`, `6bbc0cb9b44`.
 
-2. **BLOCKING: negotiate the lower feature version.** R-3.2 defines the field as
+2. **RESOLVED: negotiate the lower feature version.** R-3.2 defines the field as
    the highest supported version and negotiates the minimum. At
    `src/net_processing.cpp:4349`, any nonzero remote version is ignored. A peer
    advertising maximum version 1 should negotiate version 0 with this node, but
@@ -31,7 +58,7 @@ The implementation is not yet compliant with those new requirements.
    payload and apply the rules for the negotiated version.
    Relevant implementation commit: `6bbc0cb9b44`.
 
-3. **BLOCKING: choose a random default punch port.** The terminology and limits
+3. **RESOLVED: choose a random default punch port.** The terminology and limits
    sections require a default chosen at startup from 49152 through 65535,
    excluding bad ports and fixed throughout the run. `src/init.cpp:2287` still
    uses the P2P port plus two; lines 1037 through 1045 also retain the obsolete
@@ -39,7 +66,7 @@ The implementation is not yet compliant with those new requirements.
    update help and operator documentation.
    Relevant implementation commit: `85600f64714`.
 
-4. **BLOCKING: do not self-announce a bad-port external endpoint.** R-6.5 now
+4. **RESOLVED: do not self-announce a bad-port external endpoint.** R-6.5 now
    explicitly forbids this. Both announcement lists at
    `src/net_processing.cpp:6505` and line 6512 accept such endpoints, even though
    connectors reject them. A disposable regtest advertiser reproduced this by
@@ -60,9 +87,8 @@ The implementation is not yet compliant with those new requirements.
   network's default P2P port is permitted and does not require a change.
 - Existing rotation timing is relative to publication, rather than a common
   wall-clock boundary. The twenty-minute retirement and publication gate remain
-  applicable when address-triggered replacement is added.
-- Source and operator documentation still identify the old implementation pin.
-  Update those references when the implementation adopts this canonical draft.
+  applicable to address-triggered replacement.
+- Source and operator documentation now pin the canonical draft above.
 
 ### Questions for the author
 
@@ -70,7 +96,9 @@ The implementation is not yet compliant with those new requirements.
   IPv4 and IPv6 endpoints together, or whether each family needs its own identity.
   This affects the design of address-triggered rotation. A loss of reporting
   quorum must not erase the remembered association and permit a later different
-  address to reuse the old identity.
+  address to reuse the old identity. The implementation now uses separate
+  identities per IP family, as chosen by the operator, and preserves each
+  binding through quorum loss.
 - R-11.2 counts requests that named a target, while the implementation counts
   requests that pass validation and lead to pairing. Clarify whether rejected
   requests count. The separate 17-second pairing cooldown already bounds
@@ -79,12 +107,12 @@ The implementation is not yet compliant with those new requirements.
 Wire encodings and the published vectors are unchanged. All 38 vector checks
 pass. Disposable regtest probes also confirmed the version-negotiation failure,
 the bad-port announcement, and the old default port. The probes and logs are
-outside the repository; all their processes have stopped. This review changes
-no protocol behavior and adds no functional tests.
+outside the repository; all their processes have stopped. The initial review changed
+no protocol behavior and added no functional tests.
 
 ## Earlier amendments incorporated into the canonical draft
 
-The current implementation was written against the amended draft at
+The original implementation was written against the amended draft at
 [`a9860ba2ab7cb048209bf69f1e313a31200e1aa2`](https://github.com/willcl-ark/bips/blob/a9860ba2ab7cb048209bf69f1e313a31200e1aa2/bip-tcp-holepunch.md).
 The amendments are on `origin/holepunch-amendments` in
 `/home/will/src/core/bitcoin/bips`, based on upstream draft commit
