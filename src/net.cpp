@@ -4028,18 +4028,55 @@ std::optional<CService> CConnman::GetHolePunchCoordinationBind() const
     LOCK(m_holepunch_mutex);
     return m_holepunch_coordination_bind;
 }
-void CConnman::SetHolePunchOnionService(std::optional<CService> service)
+void CConnman::SetHolePunchExternal(Network network, std::optional<CService> endpoint)
+{
+    if (network != NET_IPV4 && network != NET_IPV6) return;
+    if (endpoint && ((network == NET_IPV4 && !endpoint->IsIPv4()) || (network == NET_IPV6 && !endpoint->IsIPv6()))) return;
+    LOCK(m_holepunch_mutex);
+    if (!endpoint) {
+        const auto it{m_holepunch_onion_states.find(network)};
+        if (it != m_holepunch_onion_states.end() && it->second.confirmed) {
+            it->second.confirmed = false;
+            LogInfo("TCP holepunch withdrew %s onion announcement: endpoint quorum lost", GetNetworkName(network));
+        }
+        return;
+    }
+    auto& state{m_holepunch_onion_states[network]};
+    if (state.request.endpoint != *endpoint) {
+        state.request.endpoint = *endpoint;
+        ++state.request.generation;
+        state.service.reset();
+        LogInfo("TCP holepunch %s onion identity requested for %s, generation=%d", GetNetworkName(network), endpoint->ToStringAddrPort(), state.request.generation);
+    }
+    state.confirmed = true;
+}
+
+std::optional<holepunch::OnionRequest> CConnman::GetHolePunchOnionRequest(Network network) const
 {
     LOCK(m_holepunch_mutex);
-    m_holepunch_onion_service = std::move(service);
-    m_holepunch_onion_published = std::chrono::steady_clock::now();
+    const auto it{m_holepunch_onion_states.find(network)};
+    if (!fNetworkActive || it == m_holepunch_onion_states.end() || !it->second.confirmed) return {};
+    return it->second.request;
 }
-std::optional<CService> CConnman::GetHolePunchOnionService() const
+
+void CConnman::SetHolePunchOnionService(Network network, const holepunch::OnionRequest& request, std::optional<CService> service)
 {
     LOCK(m_holepunch_mutex);
-    if (!fNetworkActive || std::chrono::steady_clock::now() - m_holepunch_onion_published >= 24h) return {};
-    return m_holepunch_onion_service;
+    const auto it{m_holepunch_onion_states.find(network)};
+    if (it == m_holepunch_onion_states.end() || it->second.request != request) return;
+    it->second.service = std::move(service);
+    if (it->second.service) it->second.published = std::chrono::steady_clock::now();
 }
+
+std::optional<CService> CConnman::GetHolePunchOnionService(Network network, const CService& endpoint) const
+{
+    LOCK(m_holepunch_mutex);
+    const auto it{m_holepunch_onion_states.find(network)};
+    if (!fNetworkActive || it == m_holepunch_onion_states.end() || !it->second.confirmed ||
+        it->second.request.endpoint != endpoint || std::chrono::steady_clock::now() - it->second.published >= 24h) return {};
+    return it->second.service;
+}
+
 std::optional<NodeId> CConnman::TakeHolePunchEvictionCandidate()
 {
     LOCK(m_holepunch_mutex);
@@ -4280,7 +4317,7 @@ void CConnman::StopNodes()
         m_holepunch_sessions.clear();
         m_punch_listeners.clear();
         m_holepunch_coordination_bind.reset();
-        m_holepunch_onion_service.reset();
+        m_holepunch_onion_states.clear();
         m_holepunch_queue.reset();
     }
     vhListenSocket.clear();

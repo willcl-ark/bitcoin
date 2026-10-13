@@ -1,12 +1,12 @@
 # Experimental TCP hole punching
 
 TCP hole punching lets two nodes behind compatible NATs establish a direct
-IPv4 or IPv6 connection. It follows the [draft TCP hole punching BIP](https://github.com/willcl-ark/bips/blob/a9860ba2ab7cb048209bf69f1e313a31200e1aa2/bip-tcp-holepunch.md).
+IPv4 or IPv6 connection. It follows the [draft TCP hole punching BIP](https://github.com/0xB10C/bips/blob/17bbcc637049b9ce63a0faac91e0a9330481193f/bip-tcp-holepunch.md).
 The feature is experimental and disabled by default. It requires v2 transport.
 
 Enable `-holepunch=1` to participate as a connector and advertise eligible
 endpoints. Enable `-holepunchcoordinator=1` to coordinate requests between peers.
-Enable `-holepunchonion=1` to create a dedicated Tor onion coordination service,
+Enable `-holepunchonion=1` to create dedicated Tor onion coordination services,
 using the existing `-torcontrol` and Tor authentication settings. Both
 coordination options imply `-holepunch=1`; explicitly disabling `-holepunch` or
 v2 transport while enabling a role is an initialization error.
@@ -29,8 +29,16 @@ By default, the punch port is chosen uniformly at random from 49152 to 65535,
 excluding bad ports. It remains fixed for the process lifetime, including across
 network activity toggles. Set `-punchport=<port>` to choose a port between 1 and
 65535 explicitly. Punch listeners operate independently of `-listen`. The
-dedicated onion service operates independently of `-listenonion`
-and uses a separate loopback listener with an automatically assigned port.
+dedicated onion services operate independently of `-listenonion`
+and share a separate loopback listener with an automatically assigned port.
+
+IPv4 and IPv6 use separate coordination onion identities. Each is created after
+two reporting peers agree on that family's external endpoint, and announced only
+after Tor reports descriptor publication. An endpoint change stops announcements
+under the old identity and requires a fresh one. Losing reporting quorum pauses
+announcements while retaining the identity's endpoint association. Identities
+also rotate after 24 hours; every retired service stays reachable for another
+20 minutes to serve cached announcements.
 
 Use `-punchbind=<addr>` for a stable local source address. It accepts a numeric
 IPv4 or IPv6 address without a port, at most once per family. Without explicit

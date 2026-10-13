@@ -20,10 +20,18 @@
 #include <vector>
 
 // TCP hole punching draft, pinned for this implementation:
-// https://github.com/willcl-ark/bips/blob/a9860ba2ab7cb048209bf69f1e313a31200e1aa2/bip-tcp-holepunch.md
+// https://github.com/0xB10C/bips/blob/17bbcc637049b9ce63a0faac91e0a9330481193f/bip-tcp-holepunch.md
 namespace holepunch {
 enum class Role : uint8_t { Responder = 0,
                             Initiator = 1 };
+/** Associates an onion identity with one confirmed external punch endpoint. */
+struct OnionRequest {
+    CService endpoint;
+    // Distinguish changes that return to a previously used endpoint.
+    uint64_t generation;
+    bool operator==(const OnionRequest&) const = default;
+};
+
 inline constexpr uint32_t COORDINATOR{1}, ADVERTISED{2}, POOL_OK{4}, HANDOFF_OK{8}, PUNCHPORT{16};
 inline constexpr auto WINDOW{std::chrono::seconds{15}};
 inline constexpr auto RETRY{std::chrono::seconds{1}};

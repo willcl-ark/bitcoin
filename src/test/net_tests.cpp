@@ -41,6 +41,62 @@ using util::ToString;
 
 BOOST_FIXTURE_TEST_SUITE(net_tests, RegTestingSetup)
 
+BOOST_AUTO_TEST_CASE(holepunch_onion_endpoint_binding)
+{
+    auto& connman{*m_node.connman};
+    const CService ipv4{LookupNumeric("8.8.8.8", 8333)};
+    const CService other_ipv4{LookupNumeric("8.8.4.4", 8333)};
+    const CService ipv6{LookupNumeric("2001:4860:4860::8888", 8333)};
+    CNetAddr onion4;
+    CNetAddr onion6;
+    BOOST_REQUIRE(onion4.SetSpecial("pg6mmjiyjmcrsslvykfwnntlaru7p5svn6y2ymmju6nubxndf4pscryd.onion"));
+    BOOST_REQUIRE(onion6.SetSpecial("kpgvmscirrdqpekbqjsvw5teanhatztpp2gl6eee4zkowvwfxwenqaid.onion"));
+    const CService service4{onion4, 8333};
+    const CService service6{onion6, 8333};
+
+    connman.SetHolePunchExternal(NET_IPV4, ipv4);
+    connman.SetHolePunchExternal(NET_IPV6, ipv6);
+    const auto request4{connman.GetHolePunchOnionRequest(NET_IPV4)};
+    const auto request6{connman.GetHolePunchOnionRequest(NET_IPV6)};
+    BOOST_REQUIRE(request4);
+    BOOST_REQUIRE(request6);
+    connman.SetHolePunchOnionService(NET_IPV4, *request4, service4);
+    connman.SetHolePunchOnionService(NET_IPV6, *request6, service6);
+    BOOST_CHECK(connman.GetHolePunchOnionService(NET_IPV4, ipv4) == service4);
+    BOOST_CHECK(connman.GetHolePunchOnionService(NET_IPV6, ipv6) == service6);
+    BOOST_CHECK(!connman.GetHolePunchOnionService(NET_IPV4, other_ipv4));
+
+    // Quorum loss hides the identity but retains its endpoint association.
+    connman.SetHolePunchExternal(NET_IPV4, std::nullopt);
+    BOOST_CHECK(!connman.GetHolePunchOnionRequest(NET_IPV4));
+    BOOST_CHECK(!connman.GetHolePunchOnionService(NET_IPV4, ipv4));
+    BOOST_CHECK(connman.GetHolePunchOnionService(NET_IPV6, ipv6) == service6);
+    connman.SetHolePunchExternal(NET_IPV4, ipv4);
+    BOOST_CHECK(connman.GetHolePunchOnionRequest(NET_IPV4) == request4);
+    BOOST_CHECK(connman.GetHolePunchOnionService(NET_IPV4, ipv4) == service4);
+
+    // Returning to the original endpoint must not revive its old callback.
+    connman.SetHolePunchExternal(NET_IPV4, other_ipv4);
+    BOOST_CHECK(!connman.GetHolePunchOnionService(NET_IPV4, ipv4));
+    BOOST_CHECK(!connman.GetHolePunchOnionService(NET_IPV4, other_ipv4));
+    connman.SetHolePunchExternal(NET_IPV4, ipv4);
+    const auto new_request4{connman.GetHolePunchOnionRequest(NET_IPV4)};
+    BOOST_REQUIRE(new_request4);
+    BOOST_CHECK(new_request4->generation > request4->generation);
+    connman.SetHolePunchOnionService(NET_IPV4, *request4, service4);
+    BOOST_CHECK(!connman.GetHolePunchOnionService(NET_IPV4, ipv4));
+    connman.SetHolePunchOnionService(NET_IPV4, *new_request4, service4);
+    // A stale removal callback must not erase the replacement identity either.
+    connman.SetHolePunchOnionService(NET_IPV4, *request4, std::nullopt);
+    BOOST_CHECK(connman.GetHolePunchOnionService(NET_IPV4, ipv4) == service4);
+    BOOST_CHECK(connman.GetHolePunchOnionRequest(NET_IPV6) == request6);
+    BOOST_CHECK(connman.GetHolePunchOnionService(NET_IPV6, ipv6) == service6);
+
+    connman.SetNetworkActive(false);
+    BOOST_CHECK(!connman.GetHolePunchOnionRequest(NET_IPV6));
+    BOOST_CHECK(!connman.GetHolePunchOnionService(NET_IPV6, ipv6));
+}
+
 BOOST_AUTO_TEST_CASE(cnode_listen_port)
 {
     // test default

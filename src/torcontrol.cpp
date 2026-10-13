@@ -350,7 +350,8 @@ std::map<std::string,std::string> ParseTorReplyMapping(const std::string &s)
 
 TorController::TorController(const std::string& tor_control_center, const CService& target,
                              bool ordinary_onion, std::optional<CService> holepunch_target,
-                             std::function<void(std::optional<CService>)> holepunch_service_callback)
+                             std::function<std::optional<holepunch::OnionRequest>(Network)> holepunch_request_callback,
+                             std::function<void(Network, const holepunch::OnionRequest&, std::optional<CService>)> holepunch_service_callback)
     : m_tor_control_center(tor_control_center),
       m_conn(m_interrupt),
       m_reconnect(true),
@@ -358,6 +359,7 @@ TorController::TorController(const std::string& tor_control_center, const CServi
       m_target(target),
       m_ordinary_onion(ordinary_onion),
       m_holepunch_target(holepunch_target),
+      m_holepunch_request_callback(std::move(holepunch_request_callback)),
       m_holepunch_service_callback(std::move(holepunch_service_callback))
 {
     // Read the ordinary service private key only when that service is enabled.
@@ -537,36 +539,40 @@ void TorController::add_onion_cb(TorControlConnection& _conn, const TorControlRe
     }
 }
 
-void TorController::DeleteHolePunchService(const std::string& id)
+void TorController::DeleteHolePunchService(Network network, const std::string& id)
 {
-    if (!m_conn.Command("DEL_ONION " + id, [id](TorControlConnection& conn, const TorControlReply& reply) {
+    if (!m_conn.Command("DEL_ONION " + id, [network, id](TorControlConnection& conn, const TorControlReply& reply) {
             if (reply.code != TOR_REPLY_OK) {
-                LogInfo("tor: Holepunch service retirement failed, code %d", reply.code);
+                LogInfo("tor: %s holepunch service deletion failed, code %d", GetNetworkName(network), reply.code);
                 // Attached ephemeral services disappear when their control connection closes.
                 conn.Disconnect();
             } else {
-                LogInfo("tor: Retired holepunch coordination service %s", id);
+                LogInfo("tor: Deleted %s holepunch coordination service %s", GetNetworkName(network), id);
             }
         })) {
         m_conn.Disconnect();
     }
 }
 
-void TorController::CreateHolePunchService()
+void TorController::CreateHolePunchService(Network network, const holepunch::OnionRequest& request)
 {
-    if (!m_holepunch_subscribed || m_holepunch_creating || m_holepunch_pending) return;
-    m_holepunch_creating = true;
-    m_holepunch_early_uploads.clear();
-    m_holepunch_retry = std::chrono::steady_clock::now() + 10min;
-    LogInfo("tor: Creating a fresh holepunch coordination onion service");
+    auto& family{m_holepunch_families.at(network)};
+    const auto now{std::chrono::steady_clock::now()};
+    if (!m_holepunch_subscribed || family.active || family.creating || family.pending || now < family.retry) return;
+    family.creating = request;
+    family.early_uploads.clear();
+    family.creation_deadline = now + 10min;
+    family.retry = now + 60s;
+    LogInfo("tor: Creating a fresh %s holepunch coordination service for %s", GetNetworkName(network), request.endpoint.ToStringAddrPort());
     // This identity is never cached, registered as a local address, or shared with ordinary P2P.
     if (!m_conn.Command(MakeAddOnionCmd("NEW:ED25519-V3", m_holepunch_target->ToStringAddrPort(), false),
-                        [this](TorControlConnection& conn, const TorControlReply& reply) {
-                            m_holepunch_creating = false;
-                            m_holepunch_retry = std::chrono::steady_clock::now() + 60s;
+                        [this, network, request](TorControlConnection& conn, const TorControlReply& reply) {
+                            auto& family{m_holepunch_families.at(network)};
+                            family.creating.reset();
+                            family.retry = std::chrono::steady_clock::now() + 60s;
                             if (reply.code != TOR_REPLY_OK) {
-                                LogInfo("tor: Holepunch coordination service creation failed, code %d", reply.code);
-                                m_holepunch_early_uploads.clear();
+                                LogInfo("tor: %s holepunch service creation failed, code %d", GetNetworkName(network), reply.code);
+                                family.early_uploads.clear();
                                 return;
                             }
                             std::string id;
@@ -576,35 +582,65 @@ void TorController::CreateHolePunchService()
                             }
                             const auto service{LookupNumeric(id + ".onion", Params().GetDefaultPort())};
                             if (!service.IsValid() || !service.IsTor()) {
-                                LogInfo("tor: Invalid holepunch coordination service ID in ADD_ONION reply");
+                                LogInfo("tor: Invalid %s holepunch service ID in ADD_ONION reply", GetNetworkName(network));
                                 conn.Disconnect();
                                 return;
                             }
-                            m_holepunch_pending = HolePunchService{id, std::chrono::steady_clock::now() + 10min};
-                            LogInfo("tor: Created holepunch coordination service %s, awaiting descriptor publication", id);
-                            const bool uploaded{m_holepunch_early_uploads.contains(id)};
-                            m_holepunch_early_uploads.clear();
-                            if (uploaded) PublishHolePunchService();
+                            const auto current{m_holepunch_request_callback(network)};
+                            if (family.request != request || (current && *current != request)) {
+                                LogInfo("tor: Discarding stale %s holepunch service %s", GetNetworkName(network), id);
+                                family.early_uploads.clear();
+                                DeleteHolePunchService(network, id);
+                                return;
+                            }
+                            family.pending = HolePunchService{request, id, std::chrono::steady_clock::now() + 10min,
+                                                              family.early_uploads.contains(id)};
+                            family.early_uploads.clear();
+                            LogInfo("tor: Created %s holepunch service %s, awaiting descriptor publication", GetNetworkName(network), id);
+                            if (family.pending->uploaded) PublishHolePunchService(network);
                         })) {
-        m_holepunch_creating = false;
+        family.creating.reset();
         m_conn.Disconnect();
     }
 }
 
-void TorController::PublishHolePunchService()
+void TorController::RetireHolePunchService(Network network)
 {
-    if (!m_holepunch_pending) return;
+    auto& family{m_holepunch_families.at(network)};
+    if (!family.active) return;
+    if (m_holepunch_service_callback) m_holepunch_service_callback(network, family.active->request, std::nullopt);
+    LogInfo("tor: Retiring %s holepunch service %s for 20 minutes", GetNetworkName(network), family.active->id);
+    family.active->deadline = std::chrono::steady_clock::now() + 20min;
+    m_holepunch_retiring.emplace_back(network, std::move(*family.active));
+    family.active.reset();
+}
+
+void TorController::PublishHolePunchService(Network network)
+{
+    auto& family{m_holepunch_families.at(network)};
+    if (!family.pending || !family.pending->uploaded) return;
     const auto now{std::chrono::steady_clock::now()};
-    if (m_holepunch_active) {
-        m_holepunch_retiring = std::move(m_holepunch_active);
-        m_holepunch_retiring->deadline = now + 20min;
+    if (now >= family.pending->deadline) {
+        LogInfo("tor: %s holepunch descriptor publication timed out", GetNetworkName(network));
+        DeleteHolePunchService(network, family.pending->id);
+        family.pending.reset();
+        family.retry = now + 60s;
+        return;
     }
-    m_holepunch_active = std::move(m_holepunch_pending);
-    m_holepunch_pending.reset();
-    m_holepunch_active->deadline = now + 24h;
-    const auto service{LookupNumeric(m_holepunch_active->id + ".onion", Params().GetDefaultPort())};
-    LogInfo("tor: Published holepunch coordination service %s", service.ToStringAddrPort());
-    if (m_holepunch_service_callback) m_holepunch_service_callback(service);
+    const auto current{m_holepunch_request_callback(network)};
+    if (family.request != family.pending->request || (current && *current != family.pending->request)) {
+        DeleteHolePunchService(network, family.pending->id);
+        family.pending.reset();
+        return;
+    }
+    // Quorum loss does not change the association, but cannot authorize publication.
+    if (!current) return;
+    family.active = std::move(family.pending);
+    family.pending.reset();
+    family.active->deadline = now + 24h;
+    const auto service{LookupNumeric(family.active->id + ".onion", Params().GetDefaultPort())};
+    LogInfo("tor: Published %s holepunch service %s for %s", GetNetworkName(network), service.ToStringAddrPort(), current->endpoint.ToStringAddrPort());
+    if (m_holepunch_service_callback) m_holepunch_service_callback(network, family.active->request, service);
 }
 
 void TorController::HolePunchEvent(TorControlConnection&, const TorControlReply& reply)
@@ -614,43 +650,58 @@ void TorController::HolePunchEvent(TorControlConnection&, const TorControlReply&
         // HS_DESC Action HSAddress AuthType HsDir [optional fields]. HSAddress has no suffix.
         const auto fields{SplitString(line, ' ')};
         if (fields.size() < 5 || fields[0] != "HS_DESC" || fields[1] != "UPLOADED") continue;
-        if (m_holepunch_pending && fields[2] == m_holepunch_pending->id) {
-            PublishHolePunchService();
-        } else if (m_holepunch_creating && m_holepunch_early_uploads.size() < 16) {
-            // Tor can deliver the upload event before the ADD_ONION command's final reply.
-            m_holepunch_early_uploads.insert(fields[2]);
+        for (auto& [network, family] : m_holepunch_families) {
+            if (family.pending && fields[2] == family.pending->id) {
+                family.pending->uploaded = true;
+                PublishHolePunchService(network);
+            } else if (family.creating && family.early_uploads.size() < 16) {
+                // Tor can deliver the upload event before ADD_ONION's final reply.
+                family.early_uploads.insert(fields[2]);
+            }
         }
     }
 }
 
 void TorController::MaintainHolePunchService()
 {
-    if (!m_holepunch_subscribed) return;
+    if (!m_holepunch_subscribed || !m_holepunch_request_callback) return;
     const auto now{std::chrono::steady_clock::now()};
-    if (m_holepunch_creating && now >= m_holepunch_retry) {
-        LogInfo("tor: Holepunch ADD_ONION reply timed out, reconnecting control connection");
-        m_conn.Disconnect();
-        return;
+    for (auto it{m_holepunch_retiring.begin()}; it != m_holepunch_retiring.end();) {
+        if (now >= it->second.deadline) {
+            DeleteHolePunchService(it->first, it->second.id);
+            it = m_holepunch_retiring.erase(it);
+        } else {
+            ++it;
+        }
     }
-    if (m_holepunch_retiring && now >= m_holepunch_retiring->deadline) {
-        DeleteHolePunchService(m_holepunch_retiring->id);
-        m_holepunch_retiring.reset();
-    }
-    if (m_holepunch_active && now >= m_holepunch_active->deadline) {
-        LogInfo("tor: Rotating holepunch coordination identity after its announcement lifetime");
-        if (m_holepunch_service_callback) m_holepunch_service_callback(std::nullopt);
-        m_holepunch_retiring = std::move(m_holepunch_active);
-        m_holepunch_active.reset();
-        m_holepunch_retiring->deadline = now + 20min;
-    }
-    if (m_holepunch_pending && now >= m_holepunch_pending->deadline) {
-        LogInfo("tor: Holepunch descriptor publication timed out, retrying with a fresh identity");
-        DeleteHolePunchService(m_holepunch_pending->id);
-        m_holepunch_pending.reset();
-        m_holepunch_retry = now + 60s;
-    }
-    if (!m_holepunch_active && !m_holepunch_pending && !m_holepunch_creating && now >= m_holepunch_retry) {
-        CreateHolePunchService();
+    for (auto& [network, family] : m_holepunch_families) {
+        if (family.creating && now >= family.creation_deadline) {
+            LogInfo("tor: %s holepunch ADD_ONION reply timed out, reconnecting", GetNetworkName(network));
+            m_conn.Disconnect();
+            return;
+        }
+        const auto request{m_holepunch_request_callback(network)};
+        if (request && family.request != request) {
+            LogInfo("tor: %s holepunch endpoint changed to %s", GetNetworkName(network), request->endpoint.ToStringAddrPort());
+            RetireHolePunchService(network);
+            if (family.pending) {
+                DeleteHolePunchService(network, family.pending->id);
+                family.pending.reset();
+            }
+            family.request = request;
+        }
+        if (family.active && now >= family.active->deadline) {
+            LogInfo("tor: Rotating %s holepunch identity after its announcement lifetime", GetNetworkName(network));
+            RetireHolePunchService(network);
+        }
+        if (family.pending && now >= family.pending->deadline) {
+            LogInfo("tor: %s holepunch descriptor publication timed out", GetNetworkName(network));
+            DeleteHolePunchService(network, family.pending->id);
+            family.pending.reset();
+            family.retry = now + 60s;
+        }
+        if (family.pending && family.pending->uploaded) PublishHolePunchService(network);
+        if (request) CreateHolePunchService(network, *request);
     }
 }
 
@@ -674,7 +725,7 @@ void TorController::auth_cb(TorControlConnection& _conn, const TorControlReply& 
                     return;
                 }
                 m_holepunch_subscribed = true;
-                CreateHolePunchService();
+                MaintainHolePunchService();
             })) {
                 _conn.Disconnect();
                 return;
@@ -849,15 +900,15 @@ void TorController::connected_cb(TorControlConnection& _conn)
 void TorController::disconnected_cb(TorControlConnection& _conn)
 {
     if (m_holepunch_target) {
-        if (m_holepunch_service_callback) m_holepunch_service_callback(std::nullopt);
-        if (m_holepunch_subscribed) LogInfo("tor: Holepunch coordination services stopped after control disconnect");
-        m_holepunch_active.reset();
-        m_holepunch_pending.reset();
-        m_holepunch_retiring.reset();
-        m_holepunch_early_uploads.clear();
+        for (auto& [network, family] : m_holepunch_families) {
+            if (family.active && m_holepunch_service_callback) {
+                m_holepunch_service_callback(network, family.active->request, std::nullopt);
+            }
+            if (m_holepunch_subscribed) LogInfo("tor: %s holepunch services stopped after control disconnect", GetNetworkName(network));
+            family = {};
+        }
+        m_holepunch_retiring.clear();
         m_holepunch_subscribed = false;
-        m_holepunch_creating = false;
-        m_holepunch_retry = {};
     }
     _conn.Disconnect();
     // Stop advertising service when disconnected

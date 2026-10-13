@@ -578,7 +578,7 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-listen", strprintf("Accept connections from outside (default: %u if no -proxy, -connect or -maxconnections=0)", DEFAULT_LISTEN), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-holepunch", "Enable experimental TCP hole punching using v2 transport (default: 0)", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-holepunchcoordinator", "Coordinate TCP hole punching for connected peers (implies -holepunch, default: 0)", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
-    argsman.AddArg("-holepunchonion", "Create a dedicated Tor onion service for TCP hole punch coordination (implies -holepunch, default: 0)", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
+    argsman.AddArg("-holepunchonion", "Create dedicated Tor onion services for TCP hole punch coordination (implies -holepunch, default: 0)", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-punchport=<port>", "Local TCP hole punch port (default: random port in 49152-65535, excluding bad ports)", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::CONNECTION);
     argsman.AddArg("-punchbind=<addr>", "Bind the punch port to a numeric IPv4 or IPv6 address, without a port (at most once per address family; default: wildcard)", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY, OptionsCategory::CONNECTION);
     argsman.AddArg("-listenonion", strprintf("Automatically create Tor onion service (default: %d)", DEFAULT_LISTEN_ONION), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
@@ -2489,8 +2489,11 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         node.tor_controller = std::make_unique<TorController>(
             args.GetArg("-torcontrol", DEFAULT_TOR_CONTROL), onion_service_target, listenonion,
             node.connman->GetHolePunchCoordinationBind(),
-            [connman = node.connman.get()](std::optional<CService> service) {
-                connman->SetHolePunchOnionService(service);
+            [connman = node.connman.get()](Network network) {
+                return connman->GetHolePunchOnionRequest(network);
+            },
+            [connman = node.connman.get()](Network network, const holepunch::OnionRequest& request, std::optional<CService> service) {
+                connman->SetHolePunchOnionService(network, request, service);
             });
     }
 

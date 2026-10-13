@@ -8,6 +8,7 @@
 #ifndef BITCOIN_TORCONTROL_H
 #define BITCOIN_TORCONTROL_H
 
+#include <holepunch.h>
 #include <netaddress.h>
 #include <util/fs.h>
 #include <util/sock.h>
@@ -18,6 +19,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <set>
@@ -134,7 +136,8 @@ class TorController
 public:
     TorController(const std::string& tor_control_center, const CService& target,
                   bool ordinary_onion = true, std::optional<CService> holepunch_target = std::nullopt,
-                  std::function<void(std::optional<CService>)> holepunch_service_callback = {});
+                  std::function<std::optional<holepunch::OnionRequest>(Network)> holepunch_request_callback = {},
+                  std::function<void(Network, const holepunch::OnionRequest&, std::optional<CService>)> holepunch_service_callback = {});
     TorController() : m_conn(m_interrupt) {
         // Used for testing only.
     }
@@ -161,22 +164,32 @@ private:
     const CService m_target;
     const bool m_ordinary_onion{true};
     const std::optional<CService> m_holepunch_target;
-    const std::function<void(std::optional<CService>)> m_holepunch_service_callback;
+    const std::function<std::optional<holepunch::OnionRequest>(Network)> m_holepunch_request_callback;
+    const std::function<void(Network, const holepunch::OnionRequest&, std::optional<CService>)> m_holepunch_service_callback;
     struct HolePunchService {
+        holepunch::OnionRequest request;
         std::string id;
         std::chrono::steady_clock::time_point deadline;
+        bool uploaded{false};
     };
-    std::optional<HolePunchService> m_holepunch_active;
-    std::optional<HolePunchService> m_holepunch_pending;
-    std::optional<HolePunchService> m_holepunch_retiring;
+    struct HolePunchFamily {
+        // Preserve the association when reports temporarily lose quorum.
+        std::optional<holepunch::OnionRequest> request;
+        std::optional<HolePunchService> active;
+        std::optional<HolePunchService> pending;
+        std::optional<holepunch::OnionRequest> creating;
+        std::chrono::steady_clock::time_point creation_deadline{};
+        std::chrono::steady_clock::time_point retry{};
+        std::set<std::string> early_uploads;
+    };
+    std::map<Network, HolePunchFamily> m_holepunch_families{{NET_IPV4, {}}, {NET_IPV6, {}}};
+    std::vector<std::pair<Network, HolePunchService>> m_holepunch_retiring;
     bool m_holepunch_subscribed{false};
-    bool m_holepunch_creating{false};
-    std::set<std::string> m_holepunch_early_uploads;
-    std::chrono::steady_clock::time_point m_holepunch_retry{};
     void MaintainHolePunchService();
-    void CreateHolePunchService();
-    void PublishHolePunchService();
-    void DeleteHolePunchService(const std::string& id);
+    void CreateHolePunchService(Network network, const holepunch::OnionRequest& request);
+    void PublishHolePunchService(Network network);
+    void RetireHolePunchService(Network network);
+    void DeleteHolePunchService(Network network, const std::string& id);
     void HolePunchEvent(TorControlConnection& conn, const TorControlReply& reply);
     /** Cookie for SAFECOOKIE auth */
     std::vector<uint8_t> m_cookie;

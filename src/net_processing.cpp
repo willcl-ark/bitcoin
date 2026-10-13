@@ -6159,6 +6159,7 @@ std::optional<CService> PeerManagerImpl::HolePunchExternal(Network network)
         LogInfo("Holepunch external mapping no longer confirmed: %s", previous->second.ToStringAddrPort());
         m_holepunch_external.erase(previous);
     }
+    if (m_opts.holepunch_onion) m_connman.SetHolePunchExternal(network, external);
     return external;
 }
 
@@ -6504,11 +6505,10 @@ void PeerManagerImpl::MaybeHolePunch(CNode& node, Peer& peer, NodeClock::time_po
             }
         });
         if (m_opts.holepunch_onion && IsDirectIPConnection(node)) {
-            const auto onion{m_connman.GetHolePunchOnionService()};
-            if (onion) {
-                for (const auto& external : {ipv4, ipv6}) {
-                    if (external && !IsBadPort(external->GetPort())) onion_announcements.push_back({time, peer.m_our_services, *onion, *external});
-                }
+            for (const auto& external : {ipv4, ipv6}) {
+                if (!external || IsBadPort(external->GetPort())) continue;
+                const auto onion{m_connman.GetHolePunchOnionService(HolePunchNetwork(*external), *external)};
+                if (onion) onion_announcements.push_back({time, peer.m_our_services, *onion, *external});
             }
         }
         // Alternate profiles when both are available; choose endpoints within

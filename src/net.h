@@ -1198,8 +1198,10 @@ public:
     void AbortHolePunch(const CService& peer);
     void QueueHolePunchConnection(const CService& coordinator);
     std::optional<CService> GetHolePunchCoordinationBind() const;
-    void SetHolePunchOnionService(std::optional<CService> service);
-    std::optional<CService> GetHolePunchOnionService() const;
+    void SetHolePunchExternal(Network network, std::optional<CService> endpoint) EXCLUSIVE_LOCKS_REQUIRED(!m_holepunch_mutex);
+    std::optional<holepunch::OnionRequest> GetHolePunchOnionRequest(Network network) const EXCLUSIVE_LOCKS_REQUIRED(!m_holepunch_mutex);
+    void SetHolePunchOnionService(Network network, const holepunch::OnionRequest& request, std::optional<CService> service) EXCLUSIVE_LOCKS_REQUIRED(!m_holepunch_mutex);
+    std::optional<CService> GetHolePunchOnionService(Network network, const CService& endpoint) const EXCLUSIVE_LOCKS_REQUIRED(!m_holepunch_mutex);
     std::optional<NodeId> TakeHolePunchEvictionCandidate();
     void CompleteHolePunchHandoff(NodeId candidate, std::optional<NodeClock::time_point> deadline);
 
@@ -1719,8 +1721,13 @@ private:
     std::deque<NodeClock::time_point> m_holepunch_starts GUARDED_BY(m_holepunch_mutex);
     std::map<CNetAddr, NodeClock::time_point> m_holepunch_last_ip GUARDED_BY(m_holepunch_mutex);
     std::optional<CService> m_holepunch_coordination_bind GUARDED_BY(m_holepunch_mutex);
-    std::optional<CService> m_holepunch_onion_service GUARDED_BY(m_holepunch_mutex);
-    std::chrono::steady_clock::time_point m_holepunch_onion_published GUARDED_BY(m_holepunch_mutex){};
+    struct HolePunchOnionState {
+        holepunch::OnionRequest request{{}, 0};
+        bool confirmed{false};
+        std::optional<CService> service;
+        std::chrono::steady_clock::time_point published{};
+    };
+    std::map<Network, HolePunchOnionState> m_holepunch_onion_states GUARDED_BY(m_holepunch_mutex);
     std::optional<CService> m_holepunch_queue GUARDED_BY(m_holepunch_mutex);
     bool m_holepunch_coordination_inflight GUARDED_BY(m_holepunch_mutex){false};
     std::optional<NodeId> m_holepunch_eviction GUARDED_BY(m_holepunch_mutex);
