@@ -95,9 +95,9 @@ bool TorControlConnection::Connect(const std::string& tor_control_center)
         return false;
     }
 
-    m_sock = ConnectDirectly(control_service.value(), /*manual_connection=*/true);
+    m_sock = ConnectDirectly(control_service.value(), /*manual_connection=*/false);
     if (!m_sock) {
-        LogWarning("tor: Error connecting to address %s", tor_control_center);
+        LogDebug(BCLog::TOR, "Error connecting to address %s", tor_control_center);
         return false;
     }
 
@@ -390,20 +390,30 @@ void TorController::ThreadControl()
 {
     LogDebug(BCLog::TOR, "Entering Tor control thread");
 
+    enum class ConnectionState { UNKNOWN, CONNECTED, DISCONNECTED };
+    ConnectionState connection_state{ConnectionState::UNKNOWN};
+
     while (!m_interrupt) {
         LogDebug(BCLog::TOR, "Attempting to connect to Tor control port %s", m_tor_control_center);
         if (m_conn.Connect(m_tor_control_center)) {
+            LogInfo("tor: Connected to control port %s", m_tor_control_center);
+            connection_state = ConnectionState::CONNECTED;
             connected_cb(m_conn);
             while (!m_interrupt) {
                 if (!m_conn.WaitForData(std::chrono::seconds(1))) {
                     if (m_conn.IsConnected()) continue;
-                    LogDebug(BCLog::TOR, "Lost connection to Tor control port");
                     break;
                 }
                 if (!m_conn.ReceiveAndProcess()) break;
             }
-        } else {
-            LogWarning("tor: Initiating connection to Tor control port %s failed", m_tor_control_center);
+        }
+        if (!m_interrupt) {
+            if (connection_state == ConnectionState::UNKNOWN) {
+                LogInfo("tor: Unable to connect to control port %s; will retry", m_tor_control_center);
+            } else if (connection_state == ConnectionState::CONNECTED) {
+                LogWarning("tor: Lost connection to control port %s; will retry", m_tor_control_center);
+            }
+            connection_state = ConnectionState::DISCONNECTED;
         }
         disconnected_cb(m_conn);
     }
