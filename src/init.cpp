@@ -572,10 +572,10 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-externalip=<ip>", "Specify your own public address", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-fixedseeds", strprintf("Allow fixed seeds if DNS seeds don't provide peers (default: %u)", DEFAULT_FIXEDSEEDS), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-forcednsseed", strprintf("Always query for peer addresses via DNS lookup (default: %u)", DEFAULT_FORCEDNSSEED), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
-    argsman.AddArg("-holepunch", "Participate in experimental IPv4 TCP hole punching on regtest or a custom signet (requires -holepunchbind and -v2transport, default: 0)", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY | ArgsManager::DEBUG_ONLY, OptionsCategory::CONNECTION);
+    argsman.AddArg("-holepunch", "Participate in experimental IPv4 TCP hole punching on regtest or a custom signet (requires -v2transport and, unless -holepunchfast, -holepunchbind; default: enabled by -holepunchfast)", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY | ArgsManager::DEBUG_ONLY, OptionsCategory::CONNECTION);
     argsman.AddArg("-holepunchbind=<addr>:<port>", "Local IPv4 address and nonzero TCP port shared by holepunch observations and attempts; must be separate from listening bindings", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY | ArgsManager::DEBUG_ONLY, OptionsCategory::CONNECTION);
     argsman.AddArg("-holepunchexternal=<addr>:<port>", "Use this advertised IPv4 endpoint for the holepunch experiment instead of opening observer connections; local addresses require -holepunchfast (requires -holepunch)", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY | ArgsManager::DEBUG_ONLY, OptionsCategory::CONNECTION);
-    argsman.AddArg("-holepunchfast", "Use the incompatible fast holepunch test profile on regtest or a custom signet: 30-second rounds, one-minute epochs, every pair eligible, and local IPv4 endpoints allowed. All participants and relays must enable this option (default: 0)", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY | ArgsManager::DEBUG_ONLY, OptionsCategory::CONNECTION);
+    argsman.AddArg("-holepunchfast", "Enable the incompatible fast holepunch test profile on regtest or a custom signet: automatic local binding, one outbound peer as observer, 30-second rounds, one-minute epochs, every pair eligible, and local IPv4 endpoints allowed. Use -holepunch=0 for relay only. All participants and relays must enable this option (default: 0)", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY | ArgsManager::DEBUG_ONLY, OptionsCategory::CONNECTION);
     argsman.AddArg("-listen", strprintf("Accept connections from outside (default: %u if no -proxy, -connect or -maxconnections=0)", DEFAULT_LISTEN), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-listenonion", strprintf("Automatically create Tor onion service (default: %d)", DEFAULT_LISTEN_ONION), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-maxconnections=<n>", strprintf("Maintain at most <n> automatic connections to peers (default: %u). %u slots of these are reserved for outgoing connections. See -inboundrelaypercent for more information about limits applied to transaction relay inbound peers. "
@@ -949,6 +949,11 @@ bool AppInitBasicSetup(const ArgsManager& args, std::atomic<int>& exit_status)
     return true;
 }
 
+static bool IsHolePunchEnabled(const ArgsManager& args)
+{
+    return args.GetBoolArg("-holepunch", args.GetBoolArg("-holepunchfast", false));
+}
+
 static bool IsHolePunchNetwork(const CChainParams& params)
 {
     return params.GetChainType() == ChainType::REGTEST ||
@@ -966,12 +971,13 @@ bool AppInitParameterInteraction(const ArgsManager& args)
     if (args.GetBoolArg("-holepunchfast", false) && !IsHolePunchNetwork(chainparams)) {
         return InitError(Untranslated("-holepunchfast is only supported on regtest or a custom signet"));
     }
-    if (args.GetBoolArg("-holepunch", false)) {
+    if (IsHolePunchEnabled(args)) {
         if (!IsHolePunchNetwork(chainparams)) {
             return InitError(Untranslated("-holepunch is only supported on regtest or a custom signet"));
         }
         const CService binding{LookupNumeric(args.GetArg("-holepunchbind", ""))};
-        if (!binding.IsIPv4() || !binding.IsValid() || binding.GetPort() == 0) {
+        if ((!args.GetBoolArg("-holepunchfast", false) || args.IsArgSet("-holepunchbind")) &&
+            (!binding.IsIPv4() || !binding.IsValid() || binding.GetPort() == 0)) {
             return InitError(Untranslated("-holepunch requires -holepunchbind=<local IPv4>:<nonzero port>"));
         }
         if (!args.GetBoolArg("-v2transport", DEFAULT_V2_TRANSPORT)) {
@@ -1135,7 +1141,7 @@ bool AppInitParameterInteraction(const ArgsManager& args)
                              ? MAX_PRIVATE_BROADCAST_CONNECTIONS
                              : 0};
     // Fixed binding, four observers, four pending attempts and four established peers.
-    const int holepunch_fds{args.GetBoolArg("-holepunch", false) ? 13 : 0};
+    const int holepunch_fds{IsHolePunchEnabled(args) ? 13 : 0};
     // HTTP server listen sockets: by default two (IPv4 and IPv6 loopback), or one per -rpcbind entry
     int num_rpc_bind = std::max(args.GetArgs("-rpcbind").size(), size_t(2));
     // HTTP server connected client sockets
@@ -2252,12 +2258,14 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     CConnman::Options connOptions;
     connOptions.m_holepunch_relay = IsHolePunchNetwork(chainparams);
     connOptions.m_holepunch_fast = args.GetBoolArg("-holepunchfast", false);
-    connOptions.m_holepunch = args.GetBoolArg("-holepunch", false);
+    connOptions.m_holepunch = IsHolePunchEnabled(args);
     if (connOptions.m_holepunch) {
         if (!g_reachable_nets.Contains(NET_IPV4) || GetProxy(NET_IPV4)) {
             return InitError(Untranslated("-holepunch requires direct IPv4 connectivity"));
         }
-        connOptions.m_holepunch_bind = LookupNumeric(args.GetArg("-holepunchbind", ""));
+        if (args.IsArgSet("-holepunchbind")) {
+            connOptions.m_holepunch_bind = LookupNumeric(args.GetArg("-holepunchbind", ""));
+        }
         if (args.IsArgSet("-holepunchexternal")) {
             connOptions.m_holepunch_external = LookupNumeric(args.GetArg("-holepunchexternal", ""));
         }

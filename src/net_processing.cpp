@@ -1682,6 +1682,12 @@ void PeerManagerImpl::PushNodeVersion(CNode& pnode, const Peer& peer)
         my_time = TicksSinceEpoch<std::chrono::seconds>(NodeClock::now());
         your_services = addr.nServices;
         your_addr = addr.IsRoutable() && !IsProxy(addr) && addr.IsAddrV1Compatible() ? CService{addr} : CService{};
+        // The local fast experiment also needs version reports for private IPv4 peers.
+        if (const auto* manager = m_connman.GetHolePunchManager();
+            manager && manager->GetFormat() == holepunch::FAST_FORMAT &&
+            holepunch::IsValidEndpoint(addr, holepunch::FAST_FORMAT) && !IsProxy(addr)) {
+            your_addr = addr;
+        }
         my_user_agent = strSubVersion;
         my_height = m_best_height;
         my_tx_relay = !pnode.IsHolePunchObserverConn() && !RejectIncomingTxs(pnode);

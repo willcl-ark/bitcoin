@@ -3167,7 +3167,7 @@ bool CConnman::OpenNetworkConnection(const CAddress& addrConnect,
     return true;
 }
 
-/** Every socket must reuse the exact configured binding; never substitute a port. */
+/** Every socket must reuse the reserved binding; port zero requests the initial reservation. */
 std::unique_ptr<Sock> CConnman::MakePunchSocket(const CService& binding)
 {
     auto sock{CreateSock(AF_INET, SOCK_STREAM, IPPROTO_TCP)};
@@ -3239,14 +3239,42 @@ bool CConnman::AddHolePunchNode(std::shared_ptr<Sock> sock, const CAddress& addr
     return true;
 }
 
-void CConnman::ThreadHolePunch(CService binding)
+void CConnman::ThreadHolePunch(std::optional<CService> configured_binding)
 {
+    CService binding;
+    if (configured_binding) {
+        binding = *configured_binding;
+    } else {
+        // The fast profile can use the interface selected for an ordinary outbound
+        // connection, while reserving its own port for observers and punching.
+        while (!m_interrupt_net->interrupted()) {
+            if (fNetworkActive) {
+                LOCK(m_nodes_mutex);
+                for (const auto* node : m_nodes) {
+                    if (!node->fDisconnect && node->fSuccessfullyConnected && node->IsManualOrFullOutboundConn() &&
+                        node->addr.IsIPv4() && node->addrBind.IsIPv4() && !node->addrBind.IsBindAny()) {
+                        binding = CService{node->addrBind, 0};
+                        break;
+                    }
+                }
+            }
+            if (binding.IsIPv4()) break;
+            if (!m_interrupt_net->sleep_for(100ms)) return;
+        }
+        if (m_interrupt_net->interrupted()) return;
+    }
     // Keep a socket bound even while disconnected so the local port remains reserved.
     auto reservation{MakePunchSocket(binding)};
     if (!reservation) {
         LogError("Unable to reserve reusable holepunch binding %s", binding.ToStringAddrPort());
         return;
     }
+    if (!configured_binding) binding = GetBindAddress(*reservation);
+    if (!binding.IsIPv4() || binding.IsBindAny() || binding.GetPort() == 0) {
+        LogError("Unable to determine reusable holepunch binding");
+        return;
+    }
+    LogInfo("Holepunch binding %s", binding.ToStringAddrPort());
     // Some operating systems can also accept on the shared binding. Only sockets
     // belonging to a currently pending attempt may be selected below.
     const bool listening{reservation->Listen(holepunch::Manager::MAX_PENDING) != SOCKET_ERROR};
@@ -3350,15 +3378,36 @@ void CConnman::ThreadHolePunch(CService binding)
         if (fNetworkActive && now >= next_observer && !observer_pending && m_holepunch->NeedsObserver()) {
             next_observer = now + 5s;
             const auto groups{m_holepunch->ObserverGroups()};
-            // Bounded addrman work, independent of ordinary outbound accounting and selection.
-            for (int tries{0}; tries < 100; ++tries) {
-                const auto [address, last_try]{addrman.get().Select(false, {NET_IPV4})};
-                if (!allowed(address) || groups.contains(m_netgroupman.GetGroup(address)) ||
-                    !m_msgproc->HasAllDesirableServiceFlags(address.nServices)) continue;
-                if (auto sock = StartPunchConnect(binding, address)) {
-                    connecting.push_back({std::move(sock), address, now + 10s, {}, {}});
+            if (m_holepunch->GetFormat() == holepunch::FAST_FORMAT) {
+                std::vector<CAddress> candidates;
+                {
+                    LOCK(m_nodes_mutex);
+                    for (const auto* node : m_nodes) {
+                        if (!node->fDisconnect && node->fSuccessfullyConnected && node->IsManualOrFullOutboundConn() && node->addr.IsIPv4()) {
+                            candidates.push_back(node->addr);
+                        }
+                    }
                 }
-                break;
+                // Reconnect from the punch port: the ordinary connection's source
+                // port is unrelated to the endpoint that peers need to advertise.
+                for (const auto& address : candidates) {
+                    if (!allowed(address) || groups.contains(m_netgroupman.GetGroup(address))) continue;
+                    if (auto sock = StartPunchConnect(binding, address)) {
+                        connecting.push_back({std::move(sock), address, now + 10s, {}, {}});
+                    }
+                    break;
+                }
+            } else {
+                // Bounded addrman work, independent of ordinary outbound accounting and selection.
+                for (int tries{0}; tries < 100; ++tries) {
+                    const auto [address, last_try]{addrman.get().Select(false, {NET_IPV4})};
+                    if (!allowed(address) || groups.contains(m_netgroupman.GetGroup(address)) ||
+                        !m_msgproc->HasAllDesirableServiceFlags(address.nServices)) continue;
+                    if (auto sock = StartPunchConnect(binding, address)) {
+                        connecting.push_back({std::move(sock), address, now + 10s, {}, {}});
+                    }
+                    break;
+                }
             }
         }
         if (!m_interrupt_net->sleep_for(100ms)) break;
@@ -3887,8 +3936,8 @@ bool CConnman::Start(CScheduler& scheduler, const Options& connOptions)
             [this, connect = connOptions.m_specified_outgoing, seed_nodes = std::move(seed_nodes)] { ThreadOpenConnections(connect, seed_nodes); });
     }
 
-    if (connOptions.m_holepunch && connOptions.m_holepunch_bind && m_holepunch) {
-        m_thread_holepunch = std::thread(&util::TraceThread, "holepunch", [this, binding = *connOptions.m_holepunch_bind] { ThreadHolePunch(binding); });
+    if (connOptions.m_holepunch && m_holepunch) {
+        m_thread_holepunch = std::thread(&util::TraceThread, "holepunch", [this, binding = connOptions.m_holepunch_bind] { ThreadHolePunch(binding); });
     }
 
     // Process messages

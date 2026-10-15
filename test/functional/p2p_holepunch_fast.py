@@ -15,17 +15,16 @@ class HolePunchFastTest(BitcoinTestFramework):
     def set_test_params(self):
         self.setup_clean_chain = True
         self.num_nodes = 3
-        self.punch_endpoints = [f"127.0.0.1:{p2p_port(index + self.num_nodes)}" for index in range(2)]
         self.extra_args = [
-            ["-holepunchfast", "-holepunch", "-v2transport=1",
-             f"-holepunchbind={endpoint}", f"-holepunchexternal={endpoint}"]
-            for endpoint in self.punch_endpoints
-        ] + [["-holepunchfast", "-v2transport=1"]]
+            ["-holepunchfast", "-v2transport=1", f"-connect=127.0.0.1:{p2p_port(2)}"],
+            ["-holepunchfast", "-v2transport=1", f"-connect=127.0.0.1:{p2p_port(2)}"],
+            ["-holepunchfast", "-holepunch=0"],
+        ]
 
     def setup_network(self):
         self.setup_nodes()
-        self.connect_nodes(0, 2)
-        self.connect_nodes(1, 2)
+        self.wait_until(lambda: all(any(peer["connection_type"] == "manual" and peer["version"] != 0
+                                       for peer in node.getpeerinfo()) for node in self.nodes[:2]))
         self.generate(self.nodes[2], 1)
 
     @staticmethod
@@ -36,9 +35,24 @@ class HolePunchFastTest(BitcoinTestFramework):
 
     def run_test(self):
         a, b, relay = self.nodes
-        manual_ids = [node.getpeerinfo()[0]["id"] for node in (a, b)]
+        manual_ids = [next(peer["id"] for peer in node.getpeerinfo()
+                           if peer["connection_type"] == "manual") for node in (a, b)]
+        self.log.info("Fast mode discovers the fixed punch binding through one observer at C")
+        self.wait_until(lambda: all(sum(peer["connection_type"] == "holepunch-observer"
+                                       and peer["version"] != 0 for peer in node.getpeerinfo()) == 1
+                                   for node in (a, b)), timeout=15)
+        self.punch_endpoints = []
         for node in (a, b):
-            assert_equal([peer["connection_type"] for peer in node.getpeerinfo()], ["manual"])
+            peers = node.getpeerinfo()
+            assert_equal(sorted(peer["connection_type"] for peer in peers),
+                         ["holepunch-observer", "manual"])
+            observer = next(peer for peer in peers if peer["connection_type"] == "holepunch-observer")
+            self.punch_endpoints.append(observer["addrbind"])
+            assert observer["addrbind"].startswith("127.0.0.1:")
+            assert int(observer["addrbind"].rsplit(":", 1)[1]) != 0
+        assert self.punch_endpoints[0] != self.punch_endpoints[1]
+        self.wait_until(lambda: all(endpoint in [peer["addr"] for peer in relay.getpeerinfo()]
+                                   for endpoint in self.punch_endpoints))
 
         self.log.info("The optional punch listener closes sockets outside an active attempt")
         for endpoint in self.punch_endpoints:
@@ -52,7 +66,7 @@ class HolePunchFastTest(BitcoinTestFramework):
             with sock:
                 assert_equal(sock.recv(1), b"")
         for node in (a, b):
-            assert_equal(len(node.getpeerinfo()), 1)
+            assert_equal(len(node.getpeerinfo()), 2)
 
         self.log.info("Wait for A and B to discover each other through C and establish a v2 holepunch connection")
         # Use actual wall time for the shared schedule and monotonic deadlines.
@@ -70,19 +84,19 @@ class HolePunchFastTest(BitcoinTestFramework):
             assert peer["bytesrecv_per_msg"].get("feature", 0) > 0
             assert peer["bytessent_per_msg"].get("feature", 0) > 0
             peers = node.getpeerinfo()
-            assert_equal(len(peers), 2)
+            assert_equal(len(peers), 3)
             assert_equal([p["id"] for p in peers if p["connection_type"] == "manual"], [manual_ids[index]])
-            assert all(p["connection_type"] != "holepunch-observer" for p in peers)
+            assert_equal(sum(p["connection_type"] == "holepunch-observer" for p in peers), 1)
             assert all(f"{addr['address']}:{addr['port']}" not in self.punch_endpoints
                        for addr in node.getnodeaddresses(count=0))
-        assert_equal(len(relay.getpeerinfo()), 2)
+        assert_equal(len(relay.getpeerinfo()), 4)
         assert all(peer["connection_type"] == "inbound" for peer in relay.getpeerinfo())
 
         self.log.info("The authenticated connection survives descriptor expiry and relays without C")
-        self.disconnect_nodes(0, 2)
-        self.disconnect_nodes(1, 2)
-        assert_equal(relay.getpeerinfo(), [])
+        # Stop C so participants cannot recreate their discovery connections.
         relay_tip = relay.getbestblockhash()
+        self.stop_node(2)
+        self.wait_until(lambda: all(len(node.getpeerinfo()) == 1 for node in (a, b)))
         # Changing wall time after authentication expires both descriptors and
         # cancels unfinished attempts, but must preserve admitted connections.
         expired_time = int(time.time()) + 120
@@ -93,9 +107,10 @@ class HolePunchFastTest(BitcoinTestFramework):
         self.wait_until(lambda: self.punched_peers(a)[0]["bytesrecv_per_msg"]["pong"] > pong_before)
         self.generate(a, 1, sync_fun=lambda: self.sync_blocks([a, b]))
         assert_equal(a.getbestblockhash(), b.getbestblockhash())
-        assert_equal(relay.getbestblockhash(), relay_tip)
         for index, node in enumerate((a, b)):
             assert_equal([peer["id"] for peer in node.getpeerinfo()], [punched[index]["id"]])
+        self.start_node(2)
+        assert_equal(relay.getbestblockhash(), relay_tip)
 
 
 if __name__ == "__main__":

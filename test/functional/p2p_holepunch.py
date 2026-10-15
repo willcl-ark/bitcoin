@@ -255,7 +255,7 @@ class HolePunchTest(BitcoinTestFramework):
     def test_fast_profile(self):
         self.log.info("The fast relay accepts only its new format, excluding both retired profiles")
         self.nodes[0].disconnect_p2ps()
-        self.restart_node(0, extra_args=["-holepunchfast", "-whitelist=addr@127.0.0.1"])
+        self.restart_node(0, extra_args=["-holepunchfast", "-holepunch=0", "-whitelist=addr@127.0.0.1"])
         self.mocktime = self.mocktime // 60 * 60 + 10
         self.nodes[0].setmocktime(self.mocktime)
         self.source = self.nodes[0].add_p2p_connection(P2PInterface(support_addrv2=True))
@@ -305,23 +305,24 @@ class HolePunchTest(BitcoinTestFramework):
                 extra_args=["-holepunch", binding, "-v2transport=1", f"-holepunchexternal={external}"],
                 expected_msg="Error: -holepunchexternal requires an allowed IPv4 address and nonzero port (local addresses require -holepunchfast)",
             )
-        self.nodes[0].assert_start_raises_init_error(
-            extra_args=["-holepunch", binding, "-v2transport=0"],
-            expected_msg="Error: -holepunch requires -v2transport",
-        )
-        for restriction in ("-onlynet=ipv6", "-proxy=127.0.0.1:1"):
+        for participation in (["-holepunch", binding], ["-holepunchfast"]):
             self.nodes[0].assert_start_raises_init_error(
-                extra_args=["-holepunch", binding, "-v2transport=1", restriction],
-                expected_msg="Error: -holepunch requires direct IPv4 connectivity",
+                extra_args=participation + ["-v2transport=0"],
+                expected_msg="Error: -holepunch requires -v2transport",
             )
+        for participation in (["-holepunch", binding], ["-holepunchfast"]):
+            for restriction in ("-onlynet=ipv6", "-proxy=127.0.0.1:1"):
+                self.nodes[0].assert_start_raises_init_error(
+                    extra_args=participation + ["-v2transport=1", restriction],
+                    expected_msg="Error: -holepunch requires direct IPv4 connectivity",
+                )
         self.start_node(0, extra_args=["-holepunch", binding, "-v2transport=1"])
 
-        self.log.info("A custom signet accepts the fast profile with a manual endpoint")
+        self.log.info("A custom signet accepts fast participation without an explicit binding")
         self.stop_node(0)
         node = self.nodes[0]
         node.chain = "signet"
-        node.extra_args = ["-signetchallenge=51", "-holepunchfast", "-holepunch", binding,
-                           f"-holepunchexternal=127.0.0.1:{p2p_port(1)}", "-v2transport=1"]
+        node.extra_args = ["-signetchallenge=51", "-holepunchfast", "-v2transport=1"]
         write_config(node.bitcoinconf, n=0, chain="signet", extra_config="bind=127.0.0.1\n")
         self.start_node(0)
         assert_equal(node.getblockchaininfo()["chain"], "signet")

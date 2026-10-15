@@ -1506,7 +1506,7 @@ private:
     static std::unique_ptr<Sock> MakePunchSocket(const CService& binding);
     static std::unique_ptr<Sock> StartPunchConnect(const CService& binding, const CService& remote);
     static std::optional<bool> PunchConnectReady(const Sock& sock);
-    void ThreadHolePunch(CService binding) EXCLUSIVE_LOCKS_REQUIRED(!m_nodes_mutex);
+    void ThreadHolePunch(std::optional<CService> configured_binding) EXCLUSIVE_LOCKS_REQUIRED(!m_nodes_mutex);
     bool AddHolePunchNode(std::shared_ptr<Sock> sock, const CAddress& address, const CService& binding,
                           std::shared_ptr<const holepunch::Attempt> attempt) EXCLUSIVE_LOCKS_REQUIRED(!m_nodes_mutex);
     void ThreadPrivateBroadcast() EXCLUSIVE_LOCKS_REQUIRED(!m_nodes_mutex, !m_unused_i2p_sessions_mutex);
