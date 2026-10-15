@@ -84,7 +84,17 @@ draft's epoch and eligibility rules remain in effect.
 
 `-holepunchfast` selects a separate test profile. All participating nodes and
 address relays must enable it. This mode is restricted to regtest and custom
-signet, and is incompatible with the draft profile:
+signet, and is incompatible with the draft profile.
+
+Fast mode enables participation by default. After an ordinary outbound IPv4
+connection completes, it uses that connection's local interface and reserves
+an automatically assigned source port. It opens one observer connection to
+that outbound peer from the reserved port and accepts its single `version`
+report as the external endpoint. With `-connect=<C>`, C supplies both address
+relay and this observation. The ordinary connection's source port is not
+used as the punch port. No public IP or local binding needs to be configured.
+Use `-holepunch=0` for a relay that should not participate. Explicit bindings
+and the manual external endpoint override remain available.
 
 | Parameter | Draft profile | Fast test profile |
 | --- | --- | --- |
@@ -96,6 +106,7 @@ signet, and is incompatible with the draft profile:
 | Start offset | 5,000–34,999 ms | 5,000–9,999 ms |
 | Mean address send interval | 30 seconds | 1 second |
 | Destination cooldown | 10 minutes | 30 seconds |
+| Observer discovery | Three observers, two agreeing network groups | One connected outbound peer |
 | Destinations | Global IPv4, different public IP | Unicast IPv4, including local addresses and same-IP different ports |
 
 The fast profile uses feature identifier
@@ -108,25 +119,23 @@ attempts wait for a later opportunity. Both profiles reject their retired
 formats and feature identifiers without fallback.
 
 Here is a three-process custom signet experiment on one machine. C relays
-addresses; A and B advertise separate fixed loopback ports. Run from the
-repository root after building `bitcoind` and `bitcoin-cli`:
+addresses and reports A and B's endpoints. Run from the repository root after
+building `bitcoind` and `bitcoin-cli`:
 
 ```sh
 mkdir -p /tmp/holepunch-C /tmp/holepunch-A /tmp/holepunch-B
 
 build/bin/bitcoind -daemon -datadir=/tmp/holepunch-C \
-  -signet -signetchallenge=51 -holepunchfast \
-  -connect=0 -listen=1 -bind=127.0.0.1:38333 -port=38333 \
+  -signet -signetchallenge=51 -holepunchfast -holepunch=0 \
+  -connect=0 -listen=1 -bind=0.0.0.0:38333 -port=38333 \
   -rpcport=38332 -listenonion=0 -natpmp=0
 
 build/bin/bitcoind -daemon -datadir=/tmp/holepunch-A \
-  -signet -signetchallenge=51 -holepunchfast -holepunch \
-  -holepunchbind=127.0.0.1:38401 -holepunchexternal=127.0.0.1:38401 \
+  -signet -signetchallenge=51 -holepunchfast \
   -connect=127.0.0.1:38333 -listen=0 -rpcport=38342
 
 build/bin/bitcoind -daemon -datadir=/tmp/holepunch-B \
-  -signet -signetchallenge=51 -holepunchfast -holepunch \
-  -holepunchbind=127.0.0.1:38402 -holepunchexternal=127.0.0.1:38402 \
+  -signet -signetchallenge=51 -holepunchfast \
   -connect=127.0.0.1:38333 -listen=0 -rpcport=38352
 
 build/bin/bitcoin-cli -signet -datadir=/tmp/holepunch-A -rpcport=38342 getpeerinfo
@@ -134,9 +143,12 @@ build/bin/bitcoin-cli -signet -datadir=/tmp/holepunch-B -rpcport=38352 getpeerin
 ```
 
 Both A and B should show a `holepunch` peer using transport `v2`, in addition
-to their manual connection to C. They should have no `holepunch-observer`
-connections. Stop each process using the corresponding `bitcoin-cli` command
-with `stop` instead of `getpeerinfo` (C uses RPC port 38332).
+to their manual connection and one `holepunch-observer` connection to C.
+For three separate machines, replace `127.0.0.1:38333` in A and B's `-connect`
+arguments with C's reachable IPv4 address and port. Only C needs an ordinary
+inbound listening port reachable by A and B. Stop each process using the
+corresponding `bitcoin-cli` command with `stop` instead of `getpeerinfo` (C uses
+RPC port 38332).
 
 A sparse cache does not increase the draft profile's eligibility probability.
 With one mutually known candidate, opportunities occur every 32 minutes on
@@ -146,9 +158,9 @@ that lack of diversity explicit by making every pair eligible.
 
 Observer-based participation requires peers in distinct globally routable IPv4
 network groups and compatible NAT/socket behavior. Localhost nodes alone cannot
-provide draft-compliant observations; manual fast mode supplies a local test
-path. Unit tests exercise cryptography and lifecycle without contacting vector
-addresses. Functional tests exercise address relay, configuration, and actual
+provide draft-compliant observations; the single-observer fast mode supplies
+a local test path. Unit tests exercise cryptography and lifecycle without
+contacting vector addresses. Functional tests exercise address relay, configuration, and actual
 three-node connection establishment, expiry survival, and block relay after
 the intermediary disconnects. These checks do
 not establish real NAT traversal success or the draft's ten-minute connection
