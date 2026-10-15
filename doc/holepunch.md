@@ -1,7 +1,7 @@
 # Experimental IPv4 TCP hole punching
 
-This implements the version-0 profile of the coordinatorless holepunch draft
-(`bip-holepunch-v6.md`, version 0.2.0). The experimental BIP155 network ID `0x08`
+This implements the version-1 profile of the coordinatorless holepunch draft
+(`bip-holepunch-v6.md`, version 0.3.0). The experimental BIP155 network ID `0x08`
 has not been assigned for public use. Descriptor relay is therefore restricted
 to regtest and custom signets; mainnet, testnets and public signet ignore these
 records. Ordinary outbound selection and source ports are unchanged.
@@ -40,8 +40,12 @@ are kept separately from AddrMan, expire every hour, and are never dialed as
 ordinary outbound peers.
 
 Two participants retaining each other's descriptors derive the same schedule
-and BIP324 initiator/responder roles. The implementation selects at most four
-eligible pairs per minute, opens nonblocking sockets from the fixed binding,
+and BIP324 initiator/responder roles. Eligibility and group priority depend on
+the public IPv4 pair; changing keys or ports cannot improve them. The node
+selects at most four eligible remote IPs per minute, preferring one endpoint
+per IP using the shared endpoint ranking. It reserves connection capacity in
+group-priority order before starting any selected pair, without backfilling
+skipped selections. It opens nonblocking sockets from the fixed binding,
 and allows ten seconds for TCP and twenty seconds for the complete encrypted
 handshake and session-bound proof. This implementation uses one connect call
 per selected pair, without application retries. On systems supporting a
@@ -51,10 +55,25 @@ has not elapsed. Other accepted sockets are closed. Kernel TCP retransmissions
 still apply. Failure never falls back to another source port or v1 transport.
 
 Authenticated connections appear as `holepunch` in `getpeerinfo`. Up to four
-are allowed, separately from ordinary outbound peers. They may perform normal
-Bitcoin relay and survive advertisement expiry and observer loss. A clock
+are allowed, separately from ordinary outbound peers, with at most one pending
+or established holepunch connection per remote IPv4 address. They may perform
+normal Bitcoin relay and survive advertisement expiry and observer loss. A clock
 discontinuity cancels unfinished attempts. Full capacity cancels the remaining
-attempts until a slot becomes available.
+attempts until a slot becomes available. Each started attempt sets a ten-minute
+cooldown for its remote IPv4 address. Changing keys, ports, or epochs does not
+reset it, and failure or disconnection does not extend it. The node retains at
+most 64 unexpired cooldowns and skips attempts if no history slot is available.
+
+The remote descriptor cache holds at most 1,024 records, with private keyed
+placement into buckets of at most 16 records and limits of 32 records per
+connected source network group and advertised destination network group.
+Retained records cannot be displaced by new records before expiry. Separate
+curve-validation budgets allow one record per second per peer (burst 32) and
+16 per second across all peers (burst 256), including privileged peers and
+invalid or conflicting keys. At most four new ECDH derivations are allowed per
+round, both per source group and in total; derived keys are reused while their
+descriptors remain valid. These limits can reject advertisements or skip
+attempts before the overall connection or cache limit is reached.
 
 For a controlled experiment, `-holepunchexternal=<IPv4>:<port>` supplies the
 advertised endpoint directly and disables observer connections. This is an
@@ -69,22 +88,24 @@ signet, and is incompatible with the draft profile:
 
 | Parameter | Draft profile | Fast test profile |
 | --- | --- | --- |
-| Descriptor and proof format | `0x00` | `0xfe` |
-| Cryptographic domain | `BitcoinHolePunch/v0` | `BitcoinHolePunch/test-fast/v0` |
+| Descriptor and proof format | `0x01` | `0xfd` |
+| Cryptographic domain | `BitcoinHolePunch/v1` | `BitcoinHolePunch/test-fast/v1` |
 | Round | 60 seconds | 30 seconds |
 | Epoch | 3,600 seconds | 60 seconds |
-| Pair eligibility per round | 1/32 | Always eligible |
+| IPv4-pair eligibility per round | 1/32 | Always eligible |
 | Start offset | 5,000–34,999 ms | 5,000–9,999 ms |
 | Mean address send interval | 30 seconds | 1 second |
+| Destination cooldown | 10 minutes | 30 seconds |
 | Destinations | Global IPv4, different public IP | Unicast IPv4, including local addresses and same-IP different ports |
 
 The fast profile uses feature identifier
-`5282aeae4c7dbd76b35765093623f374efd0318378da760927c4d47cb0c019c5`.
+`3e4f5bc6bad88ba8ec2be4c54dcdbef6f17b08884ad5ae1884ac2f4eabc547b0`.
 Authentication, descriptor conflict rules, resource limits, and TCP/handshake
 deadlines remain enforced. Startup waits for the next minute, and origination
 waits five seconds into that minute. Candidates received during the first
 round can be selected at second 30 and start at seconds 35–39.999. Failed
-attempts wait for a later opportunity.
+attempts wait for a later opportunity. Both profiles reject their retired
+formats and feature identifiers without fallback.
 
 Here is a three-process custom signet experiment on one machine. C relays
 addresses; A and B advertise separate fixed loopback ports. Run from the
