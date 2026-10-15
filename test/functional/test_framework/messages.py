@@ -293,7 +293,7 @@ def from_binary(cls, stream):
 
 
 class CAddress:
-    __slots__ = ("net", "ip", "nServices", "port", "time")
+    __slots__ = ("net", "ip", "nServices", "port", "time", "holepunch_format", "holepunch_epoch", "holepunch_key")
 
     # see https://github.com/bitcoin/bips/blob/master/bip-0155.mediawiki
     NET_IPV4 = 1
@@ -301,13 +301,15 @@ class CAddress:
     NET_TORV3 = 4
     NET_I2P = 5
     NET_CJDNS = 6
+    NET_HOLEPUNCH = 8
 
     ADDRV2_NET_NAME = {
         NET_IPV4: "IPv4",
         NET_IPV6: "IPv6",
         NET_TORV3: "TorV3",
         NET_I2P: "I2P",
-        NET_CJDNS: "CJDNS"
+        NET_CJDNS: "CJDNS",
+        NET_HOLEPUNCH: "HOLEPUNCH",
     }
 
     ADDRV2_ADDRESS_LENGTH = {
@@ -315,7 +317,8 @@ class CAddress:
         NET_IPV6: 16,
         NET_TORV3: 32,
         NET_I2P: 32,
-        NET_CJDNS: 16
+        NET_CJDNS: 16,
+        NET_HOLEPUNCH: 42,
     }
 
     I2P_PAD = "===="
@@ -326,8 +329,16 @@ class CAddress:
         self.net = self.NET_IPV4
         self.ip = "0.0.0.0"
         self.port = 0
+        self.holepunch_format = 0
+        self.holepunch_epoch = 0
+        self.holepunch_key = bytes(33)
 
     def __eq__(self, other):
+        if self.net == self.NET_HOLEPUNCH:
+            if (self.holepunch_format != other.holepunch_format or
+                    self.holepunch_epoch != other.holepunch_epoch or
+                    self.holepunch_key != other.holepunch_key):
+                return False
         return self.net == other.net and self.ip == other.ip and self.nServices == other.nServices and self.port == other.port and self.time == other.time
 
     def deserialize(self, f, *, with_time=True):
@@ -381,6 +392,11 @@ class CAddress:
             self.ip = b32encode(addr_bytes)[0:-len(self.I2P_PAD)].decode("ascii").lower() + ".b32.i2p"
         elif self.net == self.NET_CJDNS:
             self.ip = socket.inet_ntop(socket.AF_INET6, addr_bytes)
+        elif self.net == self.NET_HOLEPUNCH:
+            self.holepunch_format = addr_bytes[0]
+            self.ip = socket.inet_ntoa(addr_bytes[1:5])
+            self.holepunch_epoch = int.from_bytes(addr_bytes[5:9], "little")
+            self.holepunch_key = addr_bytes[9:]
         else:
             raise Exception("Address type not supported")
 
@@ -408,6 +424,12 @@ class CAddress:
             r += b32decode(self.ip[0:-len(sfx)] + self.I2P_PAD, True)
         elif self.net == self.NET_CJDNS:
             r += socket.inet_pton(socket.AF_INET6, self.ip)
+        elif self.net == self.NET_HOLEPUNCH:
+            assert_equal(len(self.holepunch_key), 33)
+            r += bytes([self.holepunch_format])
+            r += socket.inet_aton(self.ip)
+            r += self.holepunch_epoch.to_bytes(4, "little")
+            r += self.holepunch_key
         else:
             raise Exception("Address type not supported")
         r += self.port.to_bytes(2, "big")
@@ -1975,6 +1997,20 @@ class TestFrameworkScript(unittest.TestCase):
         check_addrv2("2bqghnldu6mcug4pikzprwhtjjnsyederctvci6klcwzepnjd46ikjyd.onion", CAddress.NET_TORV3)
         check_addrv2("255fhcp6ajvftnyo7bwz3an3t4a4brhopm3bamyh2iu5r3gnr2rq.b32.i2p", CAddress.NET_I2P)
         check_addrv2("fc32:17ea:e415:c3bf:9808:149d:b5a2:c9aa", CAddress.NET_CJDNS)
+
+    def test_holepunch_addrv2_encode_decode(self):
+        addr = CAddress()
+        addr.net = CAddress.NET_HOLEPUNCH
+        addr.time = 0x01020304
+        addr.ip = "1.2.3.4"
+        addr.port = 8333
+        addr.holepunch_epoch = 0x11223344
+        addr.holepunch_key = bytes.fromhex("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
+        expected = bytes.fromhex("0403020101082a0001020304443322110279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798208d")
+        self.assertEqual(addr.serialize_v2(), expected)
+        actual = CAddress()
+        actual.deserialize_v2(BytesIO(expected))
+        self.assertEqual(actual, addr)
 
     def test_varint_encode_decode(self):
         def check_varint(num, expected_encoding_hex):
