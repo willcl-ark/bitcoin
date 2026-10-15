@@ -18,7 +18,7 @@ from test_framework.messages import (
 from test_framework.p2p import P2PInterface, P2P_SERVICES, p2p_lock
 from test_framework.signet import SIGNET_DEFAULT_CHALLENGE
 from test_framework.test_framework import BitcoinTestFramework
-from test_framework.util import assert_equal, p2p_port
+from test_framework.util import assert_equal, p2p_port, write_config
 
 EPOCH_SECONDS = 3600
 
@@ -137,6 +137,7 @@ class HolePunchTest(BitcoinTestFramework):
             self.descriptor(9, ip="192.168.1.1"),
             self.descriptor(10, holepunch_epoch=base.holepunch_epoch - 1),
             self.descriptor(11, holepunch_epoch=base.holepunch_epoch + 1),
+            self.descriptor(12, holepunch_format=0xfe),
         ])
         good = []
         ordinary = CAddress()
@@ -225,6 +226,10 @@ class HolePunchTest(BitcoinTestFramework):
                 extra_args=["-noconf", f"-chain={chain}", "-holepunch", binding],
                 expected_msg="Error: -holepunch is only supported on regtest or a custom signet",
             )
+            self.nodes[0].assert_start_raises_init_error(
+                extra_args=["-noconf", f"-chain={chain}", "-holepunchfast"],
+                expected_msg="Error: -holepunchfast is only supported on regtest or a custom signet",
+            )
         self.nodes[0].assert_start_raises_init_error(
             extra_args=["-noconf", "-chain=signet", f"-signetchallenge={SIGNET_DEFAULT_CHALLENGE}", "-holepunch", binding],
             expected_msg="Error: -holepunch is only supported on regtest or a custom signet",
@@ -238,6 +243,15 @@ class HolePunchTest(BitcoinTestFramework):
             extra_args=[binding], expected_msg="Error: -holepunchbind requires -holepunch",
         )
         self.nodes[0].assert_start_raises_init_error(
+            extra_args=["-holepunchexternal=1.2.3.4:8333"],
+            expected_msg="Error: -holepunchexternal requires -holepunch",
+        )
+        for external in ("127.0.0.1:8333", "1.2.3.4:0", "[::1]:8333"):
+            self.nodes[0].assert_start_raises_init_error(
+                extra_args=["-holepunch", binding, "-v2transport=1", f"-holepunchexternal={external}"],
+                expected_msg="Error: -holepunchexternal requires an allowed IPv4 address and nonzero port (local addresses require -holepunchfast)",
+            )
+        self.nodes[0].assert_start_raises_init_error(
             extra_args=["-holepunch", binding, "-v2transport=0"],
             expected_msg="Error: -holepunch requires -v2transport",
         )
@@ -247,6 +261,18 @@ class HolePunchTest(BitcoinTestFramework):
                 expected_msg="Error: -holepunch requires direct IPv4 connectivity",
             )
         self.start_node(0, extra_args=["-holepunch", binding, "-v2transport=1"])
+
+        self.log.info("A custom signet accepts the fast profile with a manual endpoint")
+        self.stop_node(0)
+        node = self.nodes[0]
+        node.chain = "signet"
+        node.extra_args = ["-signetchallenge=51", "-holepunchfast", "-holepunch", binding,
+                           f"-holepunchexternal=127.0.0.1:{p2p_port(1)}", "-v2transport=1"]
+        write_config(node.bitcoinconf, n=0, chain="signet", extra_config="bind=127.0.0.1\n")
+        self.start_node(0)
+        assert_equal(node.getblockchaininfo()["chain"], "signet")
+        assert_equal(node.getblockchaininfo()["signet_challenge"], "51")
+        assert_equal(node.getpeerinfo(), [])
 
 
 if __name__ == "__main__":
