@@ -98,6 +98,9 @@ inline constexpr size_t ADDR_I2P_SIZE = 32;
 /// Size of CJDNS address (in bytes).
 inline constexpr size_t ADDR_CJDNS_SIZE = 16;
 
+/// Size of an experimental holepunch descriptor, excluding its outer port.
+inline constexpr size_t ADDR_HOLEPUNCH_SIZE = 42;
+
 /// Size of "internal" (NET_INTERNAL) address (in bytes).
 inline constexpr size_t ADDR_INTERNAL_SIZE = 10;
 
@@ -153,6 +156,15 @@ public:
      * @see CNetAddr::IsTor(), CNetAddr::IsI2P()
      */
     bool SetSpecial(std::string_view addr);
+
+    /** Holepunch records are advertisements, never ordinary dialable addresses. */
+    bool IsHolePunch() const { return m_net == NET_UNROUTABLE; }
+    void SetHolePunch(std::span<const uint8_t, ADDR_HOLEPUNCH_SIZE> payload);
+    std::span<const uint8_t> GetHolePunchPayload() const
+    {
+        assert(IsHolePunch());
+        return m_addr;
+    }
 
     bool IsBindAny() const; // INADDR_ANY equivalent
     [[nodiscard]] bool IsIPv4() const { return m_net == NET_IPV4; } // IPv4 mapped address (::FFFF:0:0/96, 0.0.0.0/0)
@@ -268,6 +280,7 @@ public:
         TORV3 = 4,
         I2P = 5,
         CJDNS = 6,
+        HOLEPUNCH = 8,
     };
 
     friend class CSubNet;
@@ -346,8 +359,8 @@ private:
         case NET_ONION:
         case NET_I2P:
         case NET_CJDNS:
-            break;
         case NET_UNROUTABLE:
+            break;
         case NET_MAX:
             assert(false);
         } // no default case, so the compiler can warn about missing cases

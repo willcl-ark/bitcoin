@@ -37,8 +37,9 @@ CNetAddr::BIP155Network CNetAddr::GetBIP155Network() const
         return BIP155Network::I2P;
     case NET_CJDNS:
         return BIP155Network::CJDNS;
+    case NET_UNROUTABLE:
+        return BIP155Network::HOLEPUNCH;
     case NET_INTERNAL:   // should have been handled before calling this function
-    case NET_UNROUTABLE: // m_net is never and should not be set to NET_UNROUTABLE
     case NET_MAX:        // m_net is never and should not be set to NET_MAX
         assert(false);
     } // no default case, so the compiler can warn about missing cases
@@ -48,6 +49,12 @@ CNetAddr::BIP155Network CNetAddr::GetBIP155Network() const
 
 bool CNetAddr::SetNetFromBIP155Network(uint8_t possible_bip155_net, size_t address_size)
 {
+    // A malformed experimental record must not invalidate its siblings.
+    if (possible_bip155_net == BIP155Network::HOLEPUNCH) {
+        if (address_size != ADDR_HOLEPUNCH_SIZE) return false;
+        m_net = NET_UNROUTABLE;
+        return true;
+    }
     switch (possible_bip155_net) {
     case BIP155Network::IPV4:
         if (address_size == ADDR_IPV4_SIZE) {
@@ -104,6 +111,13 @@ bool CNetAddr::SetNetFromBIP155Network(uint8_t possible_bip155_net, size_t addre
  */
 CNetAddr::CNetAddr() = default;
 
+void CNetAddr::SetHolePunch(std::span<const uint8_t, ADDR_HOLEPUNCH_SIZE> payload)
+{
+    m_net = NET_UNROUTABLE;
+    m_addr.assign(payload.begin(), payload.end());
+    m_scope_id = 0;
+}
+
 void CNetAddr::SetIP(const CNetAddr& ipIn)
 {
     // Size check.
@@ -127,6 +141,8 @@ void CNetAddr::SetIP(const CNetAddr& ipIn)
         assert(ipIn.m_addr.size() == ADDR_INTERNAL_SIZE);
         break;
     case NET_UNROUTABLE:
+        assert(ipIn.m_addr.size() == ADDR_HOLEPUNCH_SIZE);
+        break;
     case NET_MAX:
         assert(false);
     } // no default case, so the compiler can warn about missing cases
@@ -429,6 +445,9 @@ bool CNetAddr::IsLocal() const
  */
 bool CNetAddr::IsValid() const
 {
+    // These records must never enter addrman or ordinary outbound selection.
+    if (IsHolePunch()) return false;
+
     // unspecified IPv6 address (::/128)
     unsigned char ipNone6[16] = {};
     if (IsIPv6() && memcmp(m_addr.data(), ipNone6, sizeof(ipNone6)) == 0) {
@@ -490,8 +509,8 @@ bool CNetAddr::IsAddrV1Compatible() const
     case NET_ONION:
     case NET_I2P:
     case NET_CJDNS:
+    case NET_UNROUTABLE:
         return false;
-    case NET_UNROUTABLE: // m_net is never and should not be set to NET_UNROUTABLE
     case NET_MAX:        // m_net is never and should not be set to NET_MAX
         assert(false);
     } // no default case, so the compiler can warn about missing cases
@@ -598,7 +617,8 @@ std::string CNetAddr::ToStringAddr() const
         return IPv6ToString(m_addr, 0);
     case NET_INTERNAL:
         return EncodeBase32(m_addr) + ".internal";
-    case NET_UNROUTABLE: // m_net is never and should not be set to NET_UNROUTABLE
+    case NET_UNROUTABLE:
+        return "holepunch:" + HexStr(m_addr);
     case NET_MAX:        // m_net is never and should not be set to NET_MAX
         assert(false);
     } // no default case, so the compiler can warn about missing cases

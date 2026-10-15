@@ -602,6 +602,60 @@ BOOST_AUTO_TEST_CASE(caddress_unserialize_v2)
     BOOST_CHECK(fixture_addresses == addresses_unserialized);
 }
 
+BOOST_AUTO_TEST_CASE(holepunch_address_encoding)
+{
+    // Wire decoding preserves the record; cryptographic and epoch checks are
+    // applied by the address processor after its per-peer rate limit.
+    std::array<uint8_t, ADDR_HOLEPUNCH_SIZE> payload{};
+    std::iota(payload.begin(), payload.end(), uint8_t{0});
+    CNetAddr record;
+    record.SetHolePunch(payload);
+    const CAddress address{CService{record, 8333}, NODE_NETWORK, NodeSeconds{123s}};
+    DataStream encoded;
+    encoded << CAddress::V2_NETWORK(address);
+    BOOST_CHECK_EQUAL(HexStr(encoded).substr(10, 4), "082a");
+    CAddress decoded;
+    encoded >> CAddress::V2_NETWORK(decoded);
+    BOOST_CHECK(encoded.empty());
+    BOOST_CHECK(address == decoded);
+    BOOST_CHECK(decoded.IsHolePunch());
+    BOOST_CHECK(!decoded.IsValid());
+    BOOST_CHECK(!decoded.IsRoutable());
+    BOOST_CHECK(!decoded.IsIPv4());
+    BOOST_CHECK(!decoded.IsAddrV1Compatible());
+    BOOST_CHECK_EQUAL(decoded.GetPort(), 8333);
+    BOOST_CHECK_EQUAL(HexStr(decoded.GetHolePunchPayload()), HexStr(payload));
+
+    ++payload[5]; // The next epoch must not be hidden by endpoint-only deduplication.
+    record.SetHolePunch(payload);
+    BOOST_CHECK(address.GetKey() != CService(record, 8333).GetKey());
+    ++payload[10]; // Neither may a different key for the same endpoint.
+    record.SetHolePunch(payload);
+    BOOST_CHECK(address.GetKey() != CService(record, 8333).GetKey());
+}
+
+BOOST_AUTO_TEST_CASE(holepunch_wrong_length_preserves_siblings)
+{
+    const CAddress ordinary{CService{ResolveIP("8.8.8.8"), 8333}, NODE_NETWORK, NodeSeconds{123s}};
+    for (const size_t length : {0, 41, 43, 512}) {
+        DataStream encoded;
+        WriteCompactSize(encoded, 2);
+        encoded << uint32_t{123} << uint8_t{NODE_NETWORK} << uint8_t{CNetAddr::HOLEPUNCH};
+        WriteCompactSize(encoded, length);
+        const std::vector<uint8_t> payload(length, 0);
+        encoded << std::span{payload} << uint16_t{0};
+        encoded << CAddress::V2_NETWORK(ordinary);
+
+        std::vector<CAddress> decoded;
+        encoded >> CAddress::V2_NETWORK(decoded);
+        BOOST_REQUIRE_EQUAL(decoded.size(), 2);
+        BOOST_CHECK(!decoded[0].IsValid());
+        BOOST_CHECK(!decoded[0].IsHolePunch());
+        BOOST_CHECK(decoded[1] == ordinary);
+        BOOST_CHECK(encoded.empty());
+    }
+}
+
 BOOST_AUTO_TEST_CASE(isbadport)
 {
     BOOST_CHECK(IsBadPort(1));
