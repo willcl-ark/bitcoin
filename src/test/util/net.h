@@ -41,6 +41,11 @@ struct ConnmanTestMsg : public CConnman {
         m_msgproc = msgproc;
     }
 
+    void SetHolePunchManager(std::unique_ptr<holepunch::Manager> manager)
+    {
+        m_holepunch = std::move(manager);
+    }
+
     void SetAddrman(AddrMan& in) { addrman = in; }
 
     void SetPeerConnectTimeout(std::chrono::seconds timeout)
@@ -89,6 +94,10 @@ struct ConnmanTestMsg : public CConnman {
         return InitBinds(options);
     }
 
+    using CConnman::MakePunchSocket;
+    using CConnman::StartPunchConnect;
+    using CConnman::PunchConnectReady;
+
     void SocketHandlerPublic()
     {
         SocketHandler();
@@ -113,6 +122,8 @@ struct ConnmanTestMsg : public CConnman {
     void FlushSendBuffer(CNode& node) const;
 
     bool AlreadyConnectedToAddressPublic(const CNetAddr& addr) { return AlreadyConnectedToAddress(addr); };
+    using CConnman::AlreadyConnectedToAddressPort;
+    using CConnman::AlreadyConnectedToHost;
 
     CNode* ConnectNodePublic(PeerManager& peerman, const char* pszDest, ConnectionType conn_type)
         EXCLUSIVE_LOCKS_REQUIRED(!m_unused_i2p_sessions_mutex);
