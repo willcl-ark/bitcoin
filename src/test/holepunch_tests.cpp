@@ -384,6 +384,7 @@ BOOST_AUTO_TEST_CASE(observer_agreement)
     const auto second = Descriptor(vectors["pairs"][0]["descriptors"][1]).endpoint;
     std::vector<holepunch::Observation> observations{{first, {1}}, {first, {1}}};
     BOOST_CHECK(!holepunch::FindObservedEndpoint(observations));
+    BOOST_CHECK(holepunch::FindObservedEndpoint(std::span{observations}.first(1), holepunch::FAST_FORMAT) == first);
     observations.push_back({first, {2}});
     BOOST_CHECK(holepunch::FindObservedEndpoint(observations) == first);
     observations.push_back({second, {3}});

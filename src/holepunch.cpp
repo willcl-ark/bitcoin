@@ -340,7 +340,7 @@ std::optional<CService> FindObservedEndpoint(std::span<const Observation> observ
     }
     std::optional<CService> endpoint;
     for (const auto& [reported, sources] : groups) {
-        if (sources.size() < 2) continue;
+        if (sources.size() < (format == FAST_FORMAT ? 1U : 2U)) continue;
         if (endpoint) return std::nullopt;
         endpoint = reported;
     }

@@ -290,6 +290,43 @@ BOOST_AUTO_TEST_CASE(manual_endpoint)
     BOOST_CHECK(!manual.IsRetained(*descriptor));
 }
 
+BOOST_AUTO_TEST_CASE(fast_single_observer)
+{
+    holepunch::Manager fast{m_genesis, true, std::nullopt, holepunch::FAST_FORMAT};
+    const auto endpoint{LookupNumeric("127.0.0.1", 18444)};
+    BOOST_CHECK(fast.NeedsObserver());
+    fast.AddObserver(9, {1});
+    fast.ReportObserver(9, LookupNumeric("127.0.0.1", 0));
+    fast.ObserverHandshakeComplete(9);
+    BOOST_CHECK(!fast.LocalDescriptor());
+    Advance(20s);
+    const auto invalid{fast.Poll(m_wall_ms, holepunch::Clock::now(), true)};
+    BOOST_REQUIRE_EQUAL(invalid.disconnect.size(), 1);
+    BOOST_CHECK_EQUAL(invalid.disconnect.front(), 9);
+    BOOST_CHECK(fast.NeedsObserver());
+    fast.AddObserver(10, {1});
+    fast.ReportObserver(10, endpoint);
+    BOOST_CHECK(!fast.NeedsObserver());
+    BOOST_CHECK(!fast.LocalDescriptor()); // The reporting connection must finish its handshake.
+    fast.ObserverHandshakeComplete(10);
+    const auto local{fast.LocalDescriptor()};
+    BOOST_REQUIRE(local);
+    BOOST_CHECK(local->endpoint == endpoint);
+    fast.RemoveNode(10);
+    BOOST_CHECK(!fast.LocalDescriptor());
+    BOOST_CHECK(fast.NeedsObserver());
+    fast.AddObserver(11, {1});
+    fast.ReportObserver(11, endpoint);
+    fast.ObserverHandshakeComplete(11);
+    BOOST_CHECK(fast.LocalDescriptor() == local);
+    Advance(30min);
+    const auto expired{fast.Poll(m_wall_ms, holepunch::Clock::now(), true)};
+    BOOST_REQUIRE_EQUAL(expired.disconnect.size(), 1);
+    BOOST_CHECK_EQUAL(expired.disconnect.front(), 11);
+    BOOST_CHECK(!fast.LocalDescriptor());
+    BOOST_CHECK(fast.NeedsObserver());
+}
+
 BOOST_AUTO_TEST_CASE(fast_profile)
 {
     holepunch::Manager fast{m_genesis, true, LookupNumeric("127.0.0.1", 18333), holepunch::FAST_FORMAT};

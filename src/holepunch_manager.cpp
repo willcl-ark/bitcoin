@@ -136,6 +136,7 @@ void Manager::ObserverHandshakeComplete(int64_t node)
 bool Manager::NeedsObserver()
 {
     LOCK(m_mutex);
+    if (m_format == FAST_FORMAT) return m_participate && !m_manual_endpoint && m_observers.empty();
     return m_participate && !m_manual_endpoint && (m_observers.size() < STEADY_OBSERVERS ||
         (m_observers.size() < MAX_OBSERVERS && Clock::now() - m_last_refresh >= std::chrono::minutes{10}));
 }
@@ -228,7 +229,8 @@ Manager::Actions Manager::Poll(int64_t wall_ms, Clock::time_point now, bool netw
     std::erase_if(m_observers, [&](const auto& entry) EXCLUSIVE_LOCKS_REQUIRED(m_mutex) {
         const auto& observer = entry.second;
         const bool stale = observer.endpoint && now - observer.reported >= std::chrono::minutes{30};
-        const bool failed = !observer.complete && now - observer.connected >= std::chrono::seconds{20};
+        const bool failed = (!observer.complete || (m_format == FAST_FORMAT && !observer.endpoint)) &&
+            now - observer.connected >= std::chrono::seconds{20};
         if (!stale && !failed) return false;
         m_disconnect.push_back(entry.first);
         return true;
