@@ -21,6 +21,8 @@
 #include <deploymentstatus.h>
 #include <flatfile.h>
 #include <headerssync.h>
+#include <holepunch.h>
+#include <holepunch_manager.h>
 #include <index/blockfilterindex.h>
 #include <kernel/types.h>
 #include <logging.h>
@@ -251,6 +253,8 @@ struct Peer {
 
     //! Whether this peer is an inbound connection
     const bool m_is_inbound;
+    //! Whether this peer qualifies for the ordinary outbound block relay protections.
+    const bool m_is_ordinary_outbound;
 
     /** Protects misbehavior data members */
     Mutex m_misbehavior_mutex;
@@ -273,8 +277,11 @@ struct Peer {
      * Most peers use headers-first syncing, which doesn't use this mechanism */
     uint256 m_continuation_block GUARDED_BY(m_block_inv_mutex) {};
 
-    /** Set to true once initial VERSION message was sent (only relevant for outbound peers). */
+    /** Set once the transport initiator sends its initial VERSION message. */
     bool m_outbound_version_message_sent GUARDED_BY(NetEventsInterface::g_msgproc_mutex){false};
+    /** The holepunch proof is bound to this transport and its pinned attempt. */
+    bool m_holepunch_proof_received GUARDED_BY(NetEventsInterface::g_msgproc_mutex){false};
+    bool m_holepunch_verack_sent GUARDED_BY(NetEventsInterface::g_msgproc_mutex){false};
 
     /** The pong reply we're expecting, or 0 if no pong expected. */
     std::atomic<uint64_t> m_ping_nonce_sent{0};
@@ -341,6 +348,9 @@ struct Peer {
 
     /** A vector of addresses to send to the peer, limited to MAX_ADDR_TO_SEND. */
     std::vector<CAddress> m_addrs_to_send GUARDED_BY(NetEventsInterface::g_msgproc_mutex);
+    /** Bulk getaddr replies retain the ordinary address message limit. */
+    bool m_addr_response_pending GUARDED_BY(NetEventsInterface::g_msgproc_mutex){false};
+    std::optional<CService> m_local_holepunch_queued GUARDED_BY(NetEventsInterface::g_msgproc_mutex);
     /** Probabilistic filter to track recent addr messages relayed with this
      *  peer. Used to avoid relaying redundant addresses to this peer.
      *
@@ -417,10 +427,11 @@ struct Peer {
      * timestamp the peer sent in the version message. */
     std::atomic<std::chrono::seconds> m_time_offset{0s};
 
-    explicit Peer(NodeId id, ServiceFlags our_services, bool is_inbound)
+    explicit Peer(NodeId id, ServiceFlags our_services, bool is_inbound, bool is_ordinary_outbound)
         : m_id{id}
         , m_our_services{our_services}
         , m_is_inbound{is_inbound}
+        , m_is_ordinary_outbound{is_ordinary_outbound}
     {}
 
 private:
@@ -1231,7 +1242,7 @@ void PeerManagerImpl::PushAddress(Peer& peer, const CAddress& addr)
     // Before sending, we'll filter it again for known addresses that were
     // added after addresses were pushed.
     assert(peer.m_addr_known);
-    if (addr.IsValid() && !peer.m_addr_known->contains(addr.GetKey()) && IsAddrCompatible(peer, addr)) {
+    if ((addr.IsValid() || addr.IsHolePunch()) && !peer.m_addr_known->contains(addr.GetKey()) && IsAddrCompatible(peer, addr)) {
         if (peer.m_addrs_to_send.size() >= MAX_ADDR_TO_SEND) {
             peer.m_addrs_to_send[m_rng.randrange(peer.m_addrs_to_send.size())] = addr;
         } else {
@@ -1291,7 +1302,7 @@ bool PeerManagerImpl::IsBlockRequestedFromOutbound(const uint256& hash)
     for (auto range = mapBlocksInFlight.equal_range(hash); range.first != range.second; range.first++) {
         auto [nodeid, block_it] = range.first->second;
         PeerRef peer{GetPeerRef(nodeid)};
-        if (peer && !peer->m_is_inbound) return true;
+        if (peer && peer->m_is_ordinary_outbound) return true;
     }
 
     return false;
@@ -1394,14 +1405,14 @@ void PeerManagerImpl::MaybeSetPeerAsAnnouncingHeaderAndIDs(NodeId nodeid)
             return;
         }
         PeerRef peer_ref{GetPeerRef(*it)};
-        if (peer_ref && !peer_ref->m_is_inbound) ++num_outbound_hb_peers;
+        if (peer_ref && peer_ref->m_is_ordinary_outbound) ++num_outbound_hb_peers;
     }
-    if (peer && peer->m_is_inbound) {
-        // If we're adding an inbound HB peer, make sure we're not removing
-        // our last outbound HB peer in the process.
+    if (peer && !peer->m_is_ordinary_outbound) {
+        // Adding an inbound or holepunch peer must not remove our last
+        // ordinary outbound high-bandwidth peer.
         if (lNodesAnnouncingHeaderAndIDs.size() >= 3 && num_outbound_hb_peers == 1) {
             PeerRef remove_peer{GetPeerRef(lNodesAnnouncingHeaderAndIDs.front())};
-            if (remove_peer && !remove_peer->m_is_inbound) {
+            if (remove_peer && remove_peer->m_is_ordinary_outbound) {
                 // Put the HB outbound peer in the second slot, so that it
                 // doesn't get removed.
                 std::swap(lNodesAnnouncingHeaderAndIDs.front(), *std::next(lNodesAnnouncingHeaderAndIDs.begin()));
@@ -1670,7 +1681,7 @@ void PeerManagerImpl::PushNodeVersion(CNode& pnode, const Peer& peer)
         your_addr = addr.IsRoutable() && !IsProxy(addr) && addr.IsAddrV1Compatible() ? CService{addr} : CService{};
         my_user_agent = strSubVersion;
         my_height = m_best_height;
-        my_tx_relay = !RejectIncomingTxs(pnode);
+        my_tx_relay = !pnode.IsHolePunchObserverConn() && !RejectIncomingTxs(pnode);
     }
 
     MakeAndPushMessage(
@@ -1715,7 +1726,8 @@ void PeerManagerImpl::InitializeNode(const CNode& node, ServiceFlags our_service
         our_services = static_cast<ServiceFlags>(our_services | NODE_BLOOM);
     }
 
-    PeerRef peer = std::make_shared<Peer>(nodeid, our_services, node.IsInboundConn());
+    PeerRef peer = std::make_shared<Peer>(nodeid, our_services, node.IsInboundConn(),
+                                        !node.IsInboundConn() && !node.IsHolePunchConn() && !node.IsHolePunchObserverConn());
     {
         LOCK(m_peer_mutex);
         m_peer_map.emplace_hint(m_peer_map.end(), nodeid, peer);
@@ -1832,7 +1844,8 @@ void PeerManagerImpl::FinalizeNode(const CNode& node)
     }
     } // cs_main
     if (node.fSuccessfullyConnected &&
-        !node.IsBlockOnlyConn() && !node.IsPrivateBroadcastConn() && !node.IsInboundConn()) {
+        !node.IsBlockOnlyConn() && !node.IsPrivateBroadcastConn() && !node.IsInboundConn() &&
+        !node.IsHolePunchConn() && !node.IsHolePunchObserverConn()) {
         // Only change visible addrman state for full outbound peers.  We don't
         // call Connected() for feeler connections since they don't have
         // fSuccessfullyConnected set. Also don't call Connected() for private broadcast
@@ -2524,7 +2537,7 @@ void PeerManagerImpl::RelayAddress(NodeId originator,
     // prevent a peer from unjustly giving their address better propagation by sending
     // it to us repeatedly.
 
-    if (!fReachable && !addr.IsRelayable()) return;
+    if (!fReachable && !addr.IsRelayable() && !addr.IsHolePunch()) return;
 
     // Relay to a limited number of other nodes
     // Use deterministic randomness to send to the same nodes for 24 hours
@@ -3857,7 +3870,8 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         }
         vRecv.ignore(8); // Ignore the addrMe service bits sent by the peer
         vRecv >> CNetAddr::V1(addrMe);
-        if (!pfrom.IsInboundConn() && !pfrom.IsPrivateBroadcastConn())
+        if (!pfrom.IsInboundConn() && !pfrom.IsPrivateBroadcastConn() &&
+            !pfrom.IsHolePunchConn() && !pfrom.IsHolePunchObserverConn())
         {
             // Overwrites potentially existing services. In contrast to this,
             // unvalidated services received via gossip relay in ADDR/ADDRV2
@@ -3877,6 +3891,11 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         if (nVersion < MIN_PEER_PROTO_VERSION) {
             // disconnect from peers older than this proto version
             LogDebug(BCLog::NET, "peer using obsolete version %i, %s", nVersion, pfrom.DisconnectMsg());
+            pfrom.fDisconnect = true;
+            return;
+        }
+        if (pfrom.IsHolePunchConn() && std::min(nVersion, pfrom.AdvertisedVersion()) < FEATURE_VERSION) {
+            LogDebug(BCLog::NET, "holepunch requires feature negotiation, %s", pfrom.DisconnectMsg());
             pfrom.fDisconnect = true;
             return;
         }
@@ -3912,9 +3931,8 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
             SeenLocal(addrMe);
         }
 
-        // Inbound peers send us their version message when they connect.
-        // We send our version message in response.
-        if (pfrom.IsInboundConn()) {
+        // The transport responder sends its version after the initiator's.
+        if (!pfrom.IsTransportInitiator()) {
             PushNodeVersion(pfrom, peer);
         }
 
@@ -3926,6 +3944,9 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         pfrom.m_has_all_wanted_services = HasAllDesirableServiceFlags(nServices);
         peer.m_their_services = nServices;
         pfrom.SetAddrLocal(addrMe);
+        if (pfrom.IsHolePunchObserverConn()) {
+            if (auto* manager = m_connman.GetHolePunchManager()) manager->ReportObserver(pfrom.GetId(), addrMe);
+        }
         {
             LOCK(pfrom.m_subver_mutex);
             pfrom.cleanSubVer = cleanSubVer;
@@ -3939,6 +3960,7 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         //   the peer may turn on transaction relay later.
         if (!pfrom.IsBlockOnlyConn() &&
             !pfrom.IsFeelerConn() &&
+            !pfrom.IsHolePunchObserverConn() &&
             (fRelay || (peer.m_our_services & NODE_BLOOM))) {
             auto* const tx_relay = peer.SetTxRelay();
             {
@@ -3994,21 +4016,28 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
             }
         }
 
-        if (greatest_common_version >= FEATURE_VERSION) {
-            // announce supported features
-            // MakeAndPushFeature(pfrom, NetMsgFeature::FOO, uint32_t{1});
+        if (pfrom.IsHolePunchConn()) {
+            const auto session_id = pfrom.m_transport->GetInfo().session_id;
+            const auto& attempt = pfrom.m_holepunch_attempt;
+            if (!attempt || !session_id) {
+                pfrom.fDisconnect = true;
+                return;
+            }
+            MakeAndPushFeature(pfrom, holepunch::GetProfile(attempt->pair.local.format).feature_id,
+                               holepunch::MakeProof(attempt->pair, attempt->round, *session_id));
         }
 
         // If we have too many tx-relaying inbound peers, attempt to evict an existing one.
         // Only if this fails, disconnect this peer.
         if (MaybeDisconnectForTxRelayCapacity(pfrom, msg_type, /*protect_peer=*/pfrom.GetId())) return;
         MakeAndPushMessage(pfrom, NetMsgType::VERACK);
+        if (pfrom.IsHolePunchConn()) peer.m_holepunch_verack_sent = true;
 
         // Potentially mark this peer as a preferred download peer.
         {
             LOCK(cs_main);
             CNodeState* state = State(pfrom.GetId());
-            state->fPreferredDownload = (!pfrom.IsInboundConn() || pfrom.HasPermission(NetPermissionFlags::NoBan)) && !pfrom.IsAddrFetchConn() && CanServeBlocks(peer);
+            state->fPreferredDownload = (peer.m_is_ordinary_outbound || pfrom.HasPermission(NetPermissionFlags::NoBan)) && !pfrom.IsAddrFetchConn() && !pfrom.IsHolePunchObserverConn() && CanServeBlocks(peer);
             m_num_preferred_download_peers += state->fPreferredDownload;
         }
 
@@ -4032,7 +4061,7 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
             peer.m_addr_token_bucket += MAX_ADDR_TO_SEND;
         }
 
-        if (!pfrom.IsInboundConn()) {
+        if (!pfrom.IsInboundConn() && !pfrom.IsHolePunchConn() && !pfrom.IsHolePunchObserverConn()) {
             // For non-inbound connections, we update the addrman to record
             // connection success so that addrman will have an up-to-date
             // notion of which peers are online and available.
@@ -4081,6 +4110,21 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
     if (msg_type == NetMsgType::VERACK) {
         if (pfrom.fSuccessfullyConnected) {
             LogDebug(BCLog::NET, "ignoring redundant verack message from peer=%d\n", pfrom.GetId());
+            return;
+        }
+        if (pfrom.IsHolePunchConn()) {
+            auto* manager = m_connman.GetHolePunchManager();
+            if (!peer.m_holepunch_proof_received || !peer.m_holepunch_verack_sent ||
+                !manager || !manager->CompleteHandshake(pfrom.GetId())) {
+                LogDebug(BCLog::NET, "incomplete holepunch authentication, %s", pfrom.DisconnectMsg());
+                pfrom.fDisconnect = true;
+                return;
+            }
+            pfrom.m_holepunch_attempt.reset();
+        }
+        if (pfrom.IsHolePunchObserverConn()) {
+            if (auto* manager = m_connman.GetHolePunchManager()) manager->ObserverHandshakeComplete(pfrom.GetId());
+            pfrom.fSuccessfullyConnected = true;
             return;
         }
 
@@ -4252,10 +4296,18 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
             return;
         }
 
-        // if (feature_id == NetMsgFeature::FOO) {
-        //     ...
-        //     return;
-        // }
+        if (const auto& attempt = pfrom.m_holepunch_attempt;
+            pfrom.IsHolePunchConn() && attempt && feature_id == holepunch::GetProfile(attempt->pair.local.format).feature_id) {
+            const auto session_id = pfrom.m_transport->GetInfo().session_id;
+            if (peer.m_holepunch_proof_received || !session_id ||
+                !holepunch::CheckProof(MakeUCharSpan(feature_data), attempt->pair, attempt->round, *session_id)) {
+                LogDebug(BCLog::NET, "invalid holepunch proof, %s", pfrom.DisconnectMsg());
+                pfrom.fDisconnect = true;
+                return;
+            }
+            peer.m_holepunch_proof_received = true;
+            return;
+        }
 
         // ignore unknown feature_id
         LogDebug(BCLog::NET, "unknown feature advertised: %s", SanitizeString(feature_id));
@@ -4298,7 +4350,7 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         uint64_t remote_salt;
         vRecv >> peer_txreconcl_version >> remote_salt;
 
-        const ReconciliationRegisterResult result = m_txreconciliation->RegisterPeer(pfrom.GetId(), pfrom.IsInboundConn(),
+        const ReconciliationRegisterResult result = m_txreconciliation->RegisterPeer(pfrom.GetId(), !pfrom.IsTransportInitiator(),
                                                                                      peer_txreconcl_version, remote_salt);
         switch (result) {
         case ReconciliationRegisterResult::NOT_FOUND:
@@ -4322,6 +4374,8 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         LogDebug(BCLog::NET, "Unsupported message \"%s\" prior to verack from peer=%d\n", SanitizeString(msg_type), pfrom.GetId());
         return;
     }
+
+    if (pfrom.IsHolePunchObserverConn() && msg_type != NetMsgType::PING && msg_type != NetMsgType::PONG) return;
 
     if (pfrom.IsPrivateBroadcastConn()) {
         if (msg_type != NetMsgType::PONG && msg_type != NetMsgType::GETDATA) {
@@ -4955,7 +5009,7 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
                     req.blockhash = pindex->GetBlockHash();
                     MakeAndPushMessage(pfrom, NetMsgType::GETBLOCKTXN, req);
                 } else if (pfrom.m_bip152_highbandwidth_to &&
-                    (!pfrom.IsInboundConn() ||
+                    (peer.m_is_ordinary_outbound ||
                     IsBlockRequestedFromOutbound(blockhash) ||
                     already_in_flight < MAX_CMPCTBLOCKS_INFLIGHT_PER_BLOCK - 1)) {
                     // ... or it's a hb relay peer and:
@@ -5171,6 +5225,7 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
             return;
         }
         peer.m_getaddr_recvd = true;
+        peer.m_addr_response_pending = true;
 
         peer.m_addrs_to_send.clear();
         std::vector<CAddress> vAddr;
@@ -5426,9 +5481,9 @@ bool PeerManagerImpl::ProcessMessages(CNode& node, std::atomic<bool>& interruptM
     if (maybe_peer == nullptr) return false;
     Peer& peer{*maybe_peer};
 
-    // For outbound connections, ensure that the initial VERSION message
+    // For transport initiators, ensure that the initial VERSION message
     // has been sent first before processing any incoming messages
-    if (!node.IsInboundConn() && !peer.m_outbound_version_message_sent) return false;
+    if (node.IsTransportInitiator() && !peer.m_outbound_version_message_sent) return false;
 
     {
         LOCK(peer.m_getdata_requests_mutex);
@@ -5737,6 +5792,24 @@ void PeerManagerImpl::MaybeSendAddr(CNode& node, Peer& peer, std::chrono::micros
     // Nothing to do for non-address-relay peers
     if (!peer.m_addr_relay_enabled) return;
 
+    // Holepunch origination follows observer agreement and epoch changes, even
+    // when this node cannot advertise an ordinary listening address.
+    if (peer.m_wants_addrv2) {
+        auto* manager = m_connman.GetHolePunchManager();
+        const auto descriptor = manager ? manager->LocalDescriptor() : std::nullopt;
+        if (descriptor) {
+            CNetAddr record;
+            record.SetHolePunch(descriptor->Payload());
+            const CService service{record, descriptor->endpoint.GetPort()};
+            if (peer.m_local_holepunch_queued != service) {
+                PushAddress(peer, CAddress{service, peer.m_our_services, Now<NodeSeconds>()});
+                peer.m_local_holepunch_queued = service;
+            }
+        } else {
+            peer.m_local_holepunch_queued.reset();
+        }
+    }
+
     LOCK(peer.m_addr_send_times_mutex);
     // Periodically advertise our local address to the peer.
     if (fListen && !m_chainman.IsInitialBlockDownload() &&
@@ -5775,7 +5848,10 @@ void PeerManagerImpl::MaybeSendAddr(CNode& node, Peer& peer, std::chrono::micros
     // We sent an `addr` message to this peer recently. Nothing more to do.
     if (current_time <= peer.m_next_addr_send) return;
 
-    peer.m_next_addr_send = current_time + m_rng.rand_exp_duration(AVG_ADDRESS_BROADCAST_INTERVAL);
+    // The isolated fast profile needs gossip to arrive within its short epochs.
+    const auto* manager = m_connman.GetHolePunchManager();
+    const auto interval = manager && manager->GetFormat() == holepunch::FAST_FORMAT ? 1s : AVG_ADDRESS_BROADCAST_INTERVAL;
+    peer.m_next_addr_send = current_time + m_rng.rand_exp_duration(interval);
 
     if (!Assume(peer.m_addrs_to_send.size() <= MAX_ADDR_TO_SEND)) {
         // Should be impossible since we always check size before adding to
@@ -5783,28 +5859,45 @@ void PeerManagerImpl::MaybeSendAddr(CNode& node, Peer& peer, std::chrono::micros
         peer.m_addrs_to_send.resize(MAX_ADDR_TO_SEND);
     }
 
-    // Remove addr records that the peer already knows about, and add new
-    // addrs to the m_addr_known filter on the same pass.
-    auto addr_already_known = [&peer](const CAddress& addr) EXCLUSIVE_LOCKS_REQUIRED(g_msgproc_mutex) {
-        bool ret = peer.m_addr_known->contains(addr.GetKey());
-        if (!ret) peer.m_addr_known->insert(addr.GetKey());
-        return ret;
+    // Queueing never extends a descriptor's retention or observation validity.
+    auto addr_not_sendable = [this, &peer](const CAddress& addr) EXCLUSIVE_LOCKS_REQUIRED(g_msgproc_mutex) {
+        if (addr.IsHolePunch()) {
+            const auto descriptor = holepunch::Descriptor::Parse(addr.GetHolePunchPayload(), addr.GetPort());
+            auto* manager = m_connman.GetHolePunchManager();
+            if (!descriptor || !manager || !manager->IsRetained(*descriptor)) return true;
+        }
+        return peer.m_addr_known->contains(addr.GetKey());
     };
-    peer.m_addrs_to_send.erase(std::remove_if(peer.m_addrs_to_send.begin(), peer.m_addrs_to_send.end(), addr_already_known),
+    peer.m_addrs_to_send.erase(std::remove_if(peer.m_addrs_to_send.begin(), peer.m_addrs_to_send.end(), addr_not_sendable),
                            peer.m_addrs_to_send.end());
 
     // No addr messages to send
-    if (peer.m_addrs_to_send.empty()) return;
+    if (peer.m_addrs_to_send.empty()) {
+        peer.m_addr_response_pending = false;
+        return;
+    }
+
+    const bool has_holepunch = std::ranges::any_of(peer.m_addrs_to_send, [](const auto& addr) { return addr.IsHolePunch(); });
+    const size_t limit = has_holepunch && !peer.m_addr_response_pending ? 10 : MAX_ADDR_TO_SEND;
+    std::vector<CAddress> addresses;
+    auto take_address = [this, &peer, &addresses, limit](const CAddress& addr) EXCLUSIVE_LOCKS_REQUIRED(g_msgproc_mutex) {
+        if (peer.m_addr_known->contains(addr.GetKey())) return true;
+        if (addresses.size() == limit) return false;
+        addresses.push_back(addr);
+        AddAddressKnown(peer, addr);
+        return true;
+    };
+    std::erase_if(peer.m_addrs_to_send, take_address);
+    peer.m_addr_response_pending = false;
 
     if (peer.m_wants_addrv2) {
-        MakeAndPushMessage(node, NetMsgType::ADDRV2, CAddress::V2_NETWORK(peer.m_addrs_to_send));
+        MakeAndPushMessage(node, NetMsgType::ADDRV2, CAddress::V2_NETWORK(addresses));
     } else {
-        MakeAndPushMessage(node, NetMsgType::ADDR, CAddress::V1_NETWORK(peer.m_addrs_to_send));
+        MakeAndPushMessage(node, NetMsgType::ADDR, CAddress::V1_NETWORK(addresses));
     }
-    peer.m_addrs_to_send.clear();
 
     // we only send the big addr message once
-    if (peer.m_addrs_to_send.capacity() > 40) {
+    if (peer.m_addrs_to_send.empty() && peer.m_addrs_to_send.capacity() > 40) {
         peer.m_addrs_to_send.shrink_to_fit();
     }
 }
@@ -5953,6 +6046,7 @@ bool PeerManagerImpl::SetupAddressRelay(const CNode& node, Peer& peer)
     // they are disconnected shortly after the handshake completes,
     // before the node will receive the addr response.
     if (node.IsFeelerConn()) return false;
+    if (node.IsHolePunchObserverConn()) return false;
 
     if (!peer.m_addr_relay_enabled.exchange(true)) {
         // During version message processing (non-block-relay-only outbound peers)
@@ -6011,6 +6105,20 @@ void PeerManagerImpl::ProcessAddrs(std::string_view msg_type, CNode& pfrom, Peer
         } else {
             peer.m_addr_token_bucket -= 1.0;
         }
+        if (addr.IsHolePunch()) {
+            auto* manager = m_connman.GetHolePunchManager();
+            if (!manager) continue;
+            const auto descriptor = holepunch::Descriptor::Parse(addr.GetHolePunchPayload(), addr.GetPort());
+            if (!descriptor) continue;
+            AddAddressKnown(peer, addr);
+            if (m_banman && (m_banman->IsDiscouraged(descriptor->endpoint) || m_banman->IsBanned(descriptor->endpoint))) continue;
+            if (!manager->AddDescriptor(*descriptor)) continue;
+            ++num_proc;
+            if (addr.nTime > current_time - 10min && addr.nTime <= current_time + 10min && vAddr.size() <= 10) {
+                RelayAddress(pfrom.GetId(), addr, g_reachable_nets.Contains(descriptor->endpoint));
+            }
+            continue;
+        }
         // We only bother storing full nodes, though this may include
         // things which we would not make an outbound connection to, in
         // part because we may make feeler connections to them.
@@ -6064,8 +6172,8 @@ bool PeerManagerImpl::SendMessages(CNode& node)
     // disconnect misbehaving peers even before the version handshake is complete.
     if (MaybeDiscourageAndDisconnect(node, peer)) return true;
 
-    // Initiate version handshake for outbound connections
-    if (!node.IsInboundConn() && !peer.m_outbound_version_message_sent) {
+    // Holepunch uses its pinned transport role, independently of socket direction.
+    if (node.IsTransportInitiator() && !peer.m_outbound_version_message_sent) {
         PushNodeVersion(node, peer);
         peer.m_outbound_version_message_sent = true;
     }
@@ -6096,6 +6204,7 @@ bool PeerManagerImpl::SendMessages(CNode& node)
     }
 
     MaybeSendPing(node, peer, now);
+    if (node.IsHolePunchObserverConn()) return true;
 
     MaybeSendAddr(node, peer, current_time);
 
