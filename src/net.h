@@ -13,6 +13,7 @@
 #include <consensus/amount.h>
 #include <crypto/siphash.h>
 #include <hash.h>
+#include <holepunch_manager.h>
 #include <i2p.h>
 #include <kernel/messagestartchars.h>
 #include <net_permissions.h>
@@ -586,6 +587,7 @@ private:
     BIP324Cipher m_cipher;
     /** Whether we are the initiator side. */
     const bool m_initiating;
+    const bool m_allow_v1_fallback;
     /** NodeId (for debug logging). */
     const NodeId m_nodeid;
     /** Encapsulate a V1Transport to fall back to. */
@@ -632,7 +634,7 @@ private:
     /** Put our public key + garbage in the send buffer. */
     void StartSendingHandshake() noexcept EXCLUSIVE_LOCKS_REQUIRED(m_send_mutex);
     /** Process bytes in m_recv_buffer, while in KEY_MAYBE_V1 state. */
-    void ProcessReceivedMaybeV1Bytes() noexcept EXCLUSIVE_LOCKS_REQUIRED(m_recv_mutex, !m_send_mutex);
+    bool ProcessReceivedMaybeV1Bytes() noexcept EXCLUSIVE_LOCKS_REQUIRED(m_recv_mutex, !m_send_mutex);
     /** Process bytes in m_recv_buffer, while in KEY state. */
     bool ProcessReceivedKeyBytes() noexcept EXCLUSIVE_LOCKS_REQUIRED(m_recv_mutex, !m_send_mutex);
     /** Process bytes in m_recv_buffer, while in GARB_GARBTERM state. */
@@ -647,11 +649,12 @@ public:
      *
      * @param[in] nodeid      the node's NodeId (only for debug log output).
      * @param[in] initiating  whether we are the initiator side.
+     * @param[in] allow_v1_fallback  permit v1 detection and outgoing reconnection.
      */
-    V2Transport(NodeId nodeid, bool initiating) noexcept;
+    V2Transport(NodeId nodeid, bool initiating, bool allow_v1_fallback = true) noexcept;
 
     /** Construct a V2 transport with specified keys and garbage (test use only). */
-    V2Transport(NodeId nodeid, bool initiating, const CKey& key, std::span<const std::byte> ent32, std::vector<uint8_t> garbage) noexcept;
+    V2Transport(NodeId nodeid, bool initiating, const CKey& key, std::span<const std::byte> ent32, std::vector<uint8_t> garbage, bool allow_v1_fallback = true) noexcept;
 
     // Receive side functions.
     bool ReceivedMessageComplete() const noexcept override EXCLUSIVE_LOCKS_REQUIRED(!m_recv_mutex);
@@ -677,6 +680,7 @@ struct CNodeOptions
     bool prefer_evict = false;
     size_t recv_flood_size{DEFAULT_MAXRECEIVEBUFFER * 1000};
     bool use_v2transport = false;
+    std::shared_ptr<const holepunch::Attempt> holepunch_attempt;
 };
 
 /** Information about a peer */
@@ -756,6 +760,10 @@ public:
     const uint64_t m_network_key;
 
     const ConnectionType m_conn_type;
+    /** Holepunch transport roles are independent of which side opens the TCP socket. */
+    const bool m_transport_initiating;
+    /** Accessed only by message processing after construction; cleared after authentication. */
+    std::shared_ptr<const holepunch::Attempt> m_holepunch_attempt;
 
     /** Move all messages from the received queue to the processing queue. */
     void MarkReceivedMsgsForProcessing()
@@ -786,6 +794,8 @@ public:
             case ConnectionType::ADDR_FETCH:
             case ConnectionType::FEELER:
             case ConnectionType::PRIVATE_BROADCAST:
+            case ConnectionType::HOLEPUNCH:
+            case ConnectionType::HOLEPUNCH_OBSERVER:
                 return false;
         } // no default case, so the compiler can warn about missing cases
 
@@ -808,6 +818,8 @@ public:
         case ConnectionType::BLOCK_RELAY:
         case ConnectionType::ADDR_FETCH:
         case ConnectionType::PRIVATE_BROADCAST:
+        case ConnectionType::HOLEPUNCH:
+        case ConnectionType::HOLEPUNCH_OBSERVER:
                 return false;
         case ConnectionType::OUTBOUND_FULL_RELAY:
         case ConnectionType::MANUAL:
@@ -841,6 +853,10 @@ public:
         return IsPrivateBroadcastConn() ? WTXID_RELAY_VERSION : PROTOCOL_VERSION;
     }
 
+    bool IsHolePunchConn() const { return m_conn_type == ConnectionType::HOLEPUNCH; }
+    bool IsHolePunchObserverConn() const { return m_conn_type == ConnectionType::HOLEPUNCH_OBSERVER; }
+    bool IsTransportInitiator() const { return m_transport_initiating; }
+
     bool IsInboundConn() const {
         return m_conn_type == ConnectionType::INBOUND;
     }
@@ -850,6 +866,8 @@ public:
             case ConnectionType::INBOUND:
             case ConnectionType::MANUAL:
             case ConnectionType::FEELER:
+            case ConnectionType::HOLEPUNCH:
+            case ConnectionType::HOLEPUNCH_OBSERVER:
                 return false;
             case ConnectionType::OUTBOUND_FULL_RELAY:
             case ConnectionType::BLOCK_RELAY:
@@ -1114,7 +1132,14 @@ public:
         bool whitelist_forcerelay = DEFAULT_WHITELISTFORCERELAY;
         bool whitelist_relay = DEFAULT_WHITELISTRELAY;
         bool m_capture_messages = false;
+        bool m_holepunch_relay{false};
+        bool m_holepunch{false};
+        bool m_holepunch_fast{false};
+        std::optional<CService> m_holepunch_bind;
+        std::optional<CService> m_holepunch_external;
     };
+
+    holepunch::Manager* GetHolePunchManager() const { return m_holepunch.get(); }
 
     void Init(const Options& connOptions) EXCLUSIVE_LOCKS_REQUIRED(!m_added_nodes_mutex, !m_total_bytes_sent_mutex)
     {
@@ -1477,6 +1502,12 @@ private:
     void ThreadMessageHandler() EXCLUSIVE_LOCKS_REQUIRED(!m_nodes_mutex, !mutexMsgProc);
     /// \anchor i2paccept
     void ThreadI2PAcceptIncoming() EXCLUSIVE_LOCKS_REQUIRED(!m_nodes_mutex);
+    static std::unique_ptr<Sock> MakePunchSocket(const CService& binding);
+    static std::unique_ptr<Sock> StartPunchConnect(const CService& binding, const CService& remote);
+    static std::optional<bool> PunchConnectReady(const Sock& sock);
+    void ThreadHolePunch(CService binding) EXCLUSIVE_LOCKS_REQUIRED(!m_nodes_mutex);
+    bool AddHolePunchNode(std::shared_ptr<Sock> sock, const CAddress& address, const CService& binding,
+                          std::shared_ptr<const holepunch::Attempt> attempt) EXCLUSIVE_LOCKS_REQUIRED(!m_nodes_mutex);
     void ThreadPrivateBroadcast() EXCLUSIVE_LOCKS_REQUIRED(!m_nodes_mutex, !m_unused_i2p_sessions_mutex);
     void AcceptConnection(const ListenSocket& hListenSocket) EXCLUSIVE_LOCKS_REQUIRED(!m_nodes_mutex);
 
@@ -1779,6 +1810,8 @@ private:
     std::thread threadSocketHandler;
     std::thread threadOpenAddedConnections;
     std::thread threadOpenConnections;
+    std::thread m_thread_holepunch;
+    std::unique_ptr<holepunch::Manager> m_holepunch;
     std::thread threadMessageHandler;
     std::thread threadI2PAcceptIncoming;
     std::thread threadPrivateBroadcast;

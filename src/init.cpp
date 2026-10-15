@@ -23,6 +23,7 @@
 #include <crypto/hex_base.h>
 #include <dbwrapper.h>
 #include <httprpc.h>
+#include <holepunch.h>
 #include <httpserver.h>
 #include <index/base.h>
 #include <index/blockfilterindex.h>
@@ -42,6 +43,7 @@
 #include <kernel/checks.h>
 #include <kernel/context.h>
 #include <kernel/notifications_interface.h>
+#include <kernel/signet.h>
 #include <key.h>
 #include <logging.h>
 #include <mapport.h>
@@ -570,11 +572,15 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
     argsman.AddArg("-externalip=<ip>", "Specify your own public address", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-fixedseeds", strprintf("Allow fixed seeds if DNS seeds don't provide peers (default: %u)", DEFAULT_FIXEDSEEDS), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-forcednsseed", strprintf("Always query for peer addresses via DNS lookup (default: %u)", DEFAULT_FORCEDNSSEED), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
+    argsman.AddArg("-holepunch", "Participate in experimental IPv4 TCP hole punching on regtest or a custom signet (requires -holepunchbind and -v2transport, default: 0)", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY | ArgsManager::DEBUG_ONLY, OptionsCategory::CONNECTION);
+    argsman.AddArg("-holepunchbind=<addr>:<port>", "Local IPv4 address and nonzero TCP port shared by holepunch observations and attempts; must be separate from listening bindings", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY | ArgsManager::DEBUG_ONLY, OptionsCategory::CONNECTION);
+    argsman.AddArg("-holepunchexternal=<addr>:<port>", "Use this advertised IPv4 endpoint for the holepunch experiment instead of opening observer connections; local addresses require -holepunchfast (requires -holepunch)", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY | ArgsManager::DEBUG_ONLY, OptionsCategory::CONNECTION);
+    argsman.AddArg("-holepunchfast", "Use the incompatible fast holepunch test profile on regtest or a custom signet: 30-second rounds, one-minute epochs, every pair eligible, and local IPv4 endpoints allowed. All participants and relays must enable this option (default: 0)", ArgsManager::ALLOW_ANY | ArgsManager::NETWORK_ONLY | ArgsManager::DEBUG_ONLY, OptionsCategory::CONNECTION);
     argsman.AddArg("-listen", strprintf("Accept connections from outside (default: %u if no -proxy, -connect or -maxconnections=0)", DEFAULT_LISTEN), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-listenonion", strprintf("Automatically create Tor onion service (default: %d)", DEFAULT_LISTEN_ONION), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-maxconnections=<n>", strprintf("Maintain at most <n> automatic connections to peers (default: %u). %u slots of these are reserved for outgoing connections. See -inboundrelaypercent for more information about limits applied to transaction relay inbound peers. "
                                                     "This limit does not apply to connections manually added via -addnode or the addnode RPC, which have a separate limit of %u. "
-                                                    "It does not apply to short-lived private broadcast connections either, which have a separate limit of %u.",
+                                                    "It does not apply to short-lived private broadcast connections either, which have a separate limit of %u, or to experimental holepunch connections and observers, which have separate limits.",
                                                     DEFAULT_MAX_PEER_CONNECTIONS, MAX_OUTBOUND_FULL_RELAY_CONNECTIONS + MAX_BLOCK_RELAY_ONLY_CONNECTIONS + MAX_FEELER_CONNECTIONS, MAX_ADDNODE_CONNECTIONS, MAX_PRIVATE_BROADCAST_CONNECTIONS),
                    ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-inboundrelaypercent=<n>", strprintf("Permit a maximum percent of inbound connections to relay transactions, to limit memory utilization (0 to 100, default: %u).", DEFAULT_FULL_RELAY_INBOUND_PCT), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
@@ -943,12 +949,44 @@ bool AppInitBasicSetup(const ArgsManager& args, std::atomic<int>& exit_status)
     return true;
 }
 
+static bool IsHolePunchNetwork(const CChainParams& params)
+{
+    return params.GetChainType() == ChainType::REGTEST ||
+           (params.GetChainType() == ChainType::SIGNET &&
+            params.GetConsensus().signet_challenge != kernel::SIGNET_DEFAULT_CHALLENGE);
+}
+
 bool AppInitParameterInteraction(const ArgsManager& args)
 {
     const CChainParams& chainparams = Params();
     // ********************************************************* Step 2: parameter interactions
 
     // also see: InitParameterInteraction()
+
+    if (args.GetBoolArg("-holepunchfast", false) && !IsHolePunchNetwork(chainparams)) {
+        return InitError(Untranslated("-holepunchfast is only supported on regtest or a custom signet"));
+    }
+    if (args.GetBoolArg("-holepunch", false)) {
+        if (!IsHolePunchNetwork(chainparams)) {
+            return InitError(Untranslated("-holepunch is only supported on regtest or a custom signet"));
+        }
+        const CService binding{LookupNumeric(args.GetArg("-holepunchbind", ""))};
+        if (!binding.IsIPv4() || !binding.IsValid() || binding.GetPort() == 0) {
+            return InitError(Untranslated("-holepunch requires -holepunchbind=<local IPv4>:<nonzero port>"));
+        }
+        if (!args.GetBoolArg("-v2transport", DEFAULT_V2_TRANSPORT)) {
+            return InitError(Untranslated("-holepunch requires -v2transport"));
+        }
+        if (args.IsArgSet("-holepunchexternal") &&
+            !holepunch::IsValidEndpoint(LookupNumeric(args.GetArg("-holepunchexternal", "")),
+                                      args.GetBoolArg("-holepunchfast", false) ? holepunch::FAST_FORMAT : 0)) {
+            return InitError(Untranslated("-holepunchexternal requires an allowed IPv4 address and nonzero port (local addresses require -holepunchfast)"));
+        }
+    } else if (args.IsArgSet("-holepunchbind")) {
+        return InitError(Untranslated("-holepunchbind requires -holepunch"));
+    } else if (args.IsArgSet("-holepunchexternal")) {
+        return InitError(Untranslated("-holepunchexternal requires -holepunch"));
+    }
 
     // We removed checkpoints but keep the option to warn users who still have it in their config.
     if (args.IsArgSet("-checkpoints")) {
@@ -1096,6 +1134,8 @@ bool AppInitParameterInteraction(const ArgsManager& args)
     const size_t max_private{args.GetBoolArg("-privatebroadcast", DEFAULT_PRIVATE_BROADCAST)
                              ? MAX_PRIVATE_BROADCAST_CONNECTIONS
                              : 0};
+    // Fixed binding, four observers, four pending attempts and four established peers.
+    const int holepunch_fds{args.GetBoolArg("-holepunch", false) ? 13 : 0};
     // HTTP server listen sockets: by default two (IPv4 and IPv6 loopback), or one per -rpcbind entry
     int num_rpc_bind = std::max(args.GetArgs("-rpcbind").size(), size_t(2));
     // HTTP server connected client sockets
@@ -1118,7 +1158,7 @@ bool AppInitParameterInteraction(const ArgsManager& args)
                               user_rpc_max_connections +
                               user_p2p_max_connections +
                               static_cast<int64_t>(ipc_fds) +
-                              static_cast<int64_t>(max_private);
+                              static_cast<int64_t>(max_private) + holepunch_fds;
     if (total_fds > std::numeric_limits<int>::max()) {
         return InitError(Untranslated("Too many file descriptors requested. Try lower values for -rpcmaxconnections "
                                       "or -maxconnections, or fewer settings of "
@@ -1131,7 +1171,7 @@ bool AppInitParameterInteraction(const ArgsManager& args)
                            num_p2p_bind +
                            num_rpc_bind +
                            user_rpc_max_connections +
-                           static_cast<int>(ipc_fds);
+                           static_cast<int>(ipc_fds) + holepunch_fds;
 
     // Try raising the FD limit to what the user wants (available_fds may be smaller than the requested amount if this fails)
     available_fds = RaiseFileDescriptorLimit(static_cast<int>(total_fds));
@@ -1364,6 +1404,7 @@ bool CheckHostPortOptions(const ArgsManager& args) {
 static std::optional<CService> CheckBindingConflicts(const CConnman::Options& conn_options)
 {
     std::set<CService> seen;
+    if (conn_options.m_holepunch_bind) seen.insert(*conn_options.m_holepunch_bind);
 
     // Check all whitelisted bindings
     for (const auto& wb : conn_options.vWhiteBinds) {
@@ -2209,6 +2250,18 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     StartMapPort(args.GetBoolArg("-natpmp", DEFAULT_NATPMP));
 
     CConnman::Options connOptions;
+    connOptions.m_holepunch_relay = IsHolePunchNetwork(chainparams);
+    connOptions.m_holepunch_fast = args.GetBoolArg("-holepunchfast", false);
+    connOptions.m_holepunch = args.GetBoolArg("-holepunch", false);
+    if (connOptions.m_holepunch) {
+        if (!g_reachable_nets.Contains(NET_IPV4) || GetProxy(NET_IPV4)) {
+            return InitError(Untranslated("-holepunch requires direct IPv4 connectivity"));
+        }
+        connOptions.m_holepunch_bind = LookupNumeric(args.GetArg("-holepunchbind", ""));
+        if (args.IsArgSet("-holepunchexternal")) {
+            connOptions.m_holepunch_external = LookupNumeric(args.GetArg("-holepunchexternal", ""));
+        }
+    }
     connOptions.m_local_services = g_local_services;
     connOptions.m_max_automatic_connections = num_p2p_max_connections;
     connOptions.m_full_relay_inbound_percent = std::clamp<int>(args.GetIntArg("-inboundrelaypercent", DEFAULT_FULL_RELAY_INBOUND_PCT), 0, 100);

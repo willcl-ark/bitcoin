@@ -82,6 +82,12 @@ enum class ConnectionType {
      * our own transactions) and closed afterwards.
      */
     PRIVATE_BROADCAST,
+
+    /** Separately budgeted, authenticated simultaneous-open connection. */
+    HOLEPUNCH,
+
+    /** Auxiliary connection from the punch binding to observe its external mapping. */
+    HOLEPUNCH_OBSERVER,
 };
 
 /** Convert ConnectionType enum to a string value */

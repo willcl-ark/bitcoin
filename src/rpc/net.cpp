@@ -75,6 +75,8 @@ const std::vector<std::string> CONNECTION_TYPE_DOC{
         "manual (added via addnode RPC or -addnode/-connect configuration options)",
         "addr-fetch (short-lived automatic connection for soliciting addresses)",
         "feeler (short-lived automatic connection for testing addresses)",
+        "holepunch (authenticated experimental TCP simultaneous-open connection)",
+        "holepunch-observer (auxiliary connection observing the holepunch endpoint)",
         "private-broadcast (short-lived automatic connection for broadcasting privacy-sensitive transactions)"
 };
 
