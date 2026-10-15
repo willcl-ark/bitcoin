@@ -27,7 +27,8 @@ uint32_t Manager::Epoch(int64_t wall_ms) const
     return wall_ms / (1000 * GetProfile(m_format).epoch_seconds);
 }
 
-bool Manager::AddDescriptor(const Descriptor& descriptor)
+bool Manager::AddDescriptor(const Descriptor& descriptor, const std::vector<unsigned char>& source_group,
+                            const std::vector<unsigned char>& destination_group)
 {
     LOCK(m_mutex);
     if (descriptor.format != m_format) return false;
@@ -37,7 +38,7 @@ bool Manager::AddDescriptor(const Descriptor& descriptor)
     if (auto own = m_owned.find(descriptor.endpoint); own != m_owned.end() && own->second.first.epoch == epoch) {
         return own->second.first == descriptor;
     }
-    return m_cache.Insert(descriptor, epoch);
+    return m_cache.Insert(descriptor, epoch, source_group, destination_group);
 }
 
 bool Manager::IsRetained(const Descriptor& descriptor)

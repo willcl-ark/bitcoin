@@ -72,7 +72,8 @@ public:
 
     explicit Manager(const uint256& genesis, bool participate, std::optional<CService> manual_endpoint = std::nullopt, uint8_t format = 0);
     uint8_t GetFormat() const { return m_format; }
-    bool AddDescriptor(const Descriptor& descriptor) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
+    bool AddDescriptor(const Descriptor& descriptor, const std::vector<unsigned char>& source_group = {},
+                       const std::vector<unsigned char>& destination_group = {}) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
     bool IsRetained(const Descriptor& descriptor) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
     std::vector<Descriptor> GetDescriptors() EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
     std::optional<Descriptor> LocalDescriptor() EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);

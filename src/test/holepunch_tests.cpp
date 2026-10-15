@@ -275,8 +275,10 @@ BOOST_AUTO_TEST_CASE(retention_conflicts_and_expiry)
     BOOST_CHECK_EQUAL(cache.Size(), 2);
     auto third = first;
     third.endpoint = CService{third.endpoint, 18444};
-    BOOST_CHECK(cache.Insert(third, first.epoch));
-    BOOST_CHECK(cache.Contains(third));
+    BOOST_CHECK(!cache.Insert(third, first.epoch));
+    BOOST_CHECK(!cache.Contains(third));
+    BOOST_CHECK(cache.Contains(first));
+    BOOST_CHECK(cache.Contains(second));
     BOOST_CHECK_EQUAL(cache.Size(), 2);
     cache.Expire(first.epoch + 1);
     BOOST_CHECK_EQUAL(cache.Size(), 0);

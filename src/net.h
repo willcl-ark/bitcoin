@@ -1140,6 +1140,7 @@ public:
     };
 
     holepunch::Manager* GetHolePunchManager() const { return m_holepunch.get(); }
+    std::vector<unsigned char> GetNetGroup(const CNetAddr& address) const { return m_netgroupman.GetGroup(address); }
 
     void Init(const Options& connOptions) EXCLUSIVE_LOCKS_REQUIRED(!m_added_nodes_mutex, !m_total_bytes_sent_mutex)
     {

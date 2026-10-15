@@ -395,14 +395,19 @@ BOOST_AUTO_TEST_CASE(pinned_attempt_and_handshake_deadline)
     m_manager.RemoveNode(2);
     BOOST_CHECK(!m_manager.LocalDescriptor());
 
-    // Force ordinary cache eviction while the attempt retains its original cryptographic inputs.
+    // Replacement floods cannot displace admitted records or change pinned inputs.
     auto filler{candidate.descriptor};
-    for (uint32_t port{1}; port < 65536 && m_manager.IsRetained(candidate.descriptor); ++port) {
+    bool rejected{false};
+    for (uint32_t port{1}; port < 65536; ++port) {
         filler.endpoint = LookupNumeric("9.9.9.9", port);
-        BOOST_REQUIRE(m_manager.AddDescriptor(filler));
+        if (!m_manager.AddDescriptor(filler)) {
+            rejected = true;
+            break;
+        }
     }
-    BOOST_CHECK(!m_manager.IsRetained(candidate.descriptor));
-    BOOST_CHECK_EQUAL(m_manager.GetDescriptors().size(), 1024);
+    BOOST_CHECK(rejected);
+    BOOST_CHECK(m_manager.IsRetained(candidate.descriptor));
+    BOOST_CHECK(m_manager.GetDescriptors().size() <= 1024);
     BOOST_CHECK(m_manager.IsActive(attempt));
     BOOST_CHECK(attempt->pair.remote == candidate.descriptor);
     for (size_t retry{0}; retry < 4; ++retry) {

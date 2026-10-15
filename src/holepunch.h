@@ -8,6 +8,7 @@
 #include <key.h>
 #include <netaddress.h>
 #include <pubkey.h>
+#include <random.h>
 #include <uint256.h>
 
 #include <array>
@@ -55,9 +56,13 @@ struct Descriptor {
     CPubKey pubkey;
     uint8_t format{0};
 
+    /** Cheap format, destination, and compressed-key encoding checks only. */
+    bool IsValidStructure() const;
     bool IsValid() const;
     std::array<unsigned char, PAYLOAD_SIZE> Payload() const;
     static std::optional<Descriptor> Parse(std::span<const unsigned char> payload, uint16_t port);
+    /** The caller must budget and validate the curve point before admitting this record. */
+    static std::optional<Descriptor> ParseUnchecked(std::span<const unsigned char> payload, uint16_t port);
     /** genesis_hash is the chain's ordinary uint256 block hash, whose bytes are the raw digest. */
     std::array<unsigned char, 76> Bytes(const uint256& genesis_hash) const;
     uint256 Id(const uint256& genesis_hash) const;
@@ -97,17 +102,30 @@ bool CheckProof(std::span<const unsigned char> proof, const Pair& pair, uint64_t
 
 /** Nonpersistent, first-admitted-per-endpoint cache. Callers supply synchronization. */
 class DescriptorCache {
+    struct Entry {
+        Descriptor descriptor;
+        std::vector<unsigned char> source_group;
+        std::vector<unsigned char> destination_group;
+        size_t bucket;
+    };
+    static constexpr size_t BUCKET_SIZE{16};
+    static constexpr size_t GROUP_LIMIT{32};
     const size_t m_capacity;
-    std::map<CService, Descriptor> m_remote;
+    const uint64_t m_salt0{FastRandomContext{}.rand64()};
+    const uint64_t m_salt1{FastRandomContext{}.rand64()};
+    std::map<CService, Entry> m_remote;
     std::optional<Descriptor> m_local;
-    FastRandomContext m_rng;
 
 public:
     explicit DescriptorCache(size_t capacity = 1024) : m_capacity{capacity} {}
-    /** Accept a new or identical descriptor; reject conflicts, invalid and out-of-epoch records. */
-    bool Insert(const Descriptor& descriptor, uint32_t epoch);
+    /** Admit a previously curve-validated descriptor, subject to private placement and group limits.
+     * Occupied buckets never replace retained entries; expiry permits fresh admission. */
+    bool Insert(const Descriptor& descriptor, uint32_t epoch,
+                const std::vector<unsigned char>& source_group = {},
+                const std::vector<unsigned char>& destination_group = {});
     bool Contains(const Descriptor& descriptor) const;
     std::optional<Descriptor> Get(const CService& endpoint) const;
+    std::vector<unsigned char> SourceGroup(const CService& endpoint) const;
     /** Only remote records are candidates for attempts. */
     std::vector<Descriptor> GetAll(uint32_t epoch) const;
     void Expire(uint32_t epoch);

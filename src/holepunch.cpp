@@ -7,13 +7,13 @@
 #include <crypto/common.h>
 #include <crypto/hmac_sha256.h>
 #include <crypto/sha256.h>
+#include <crypto/siphash.h>
 #include <support/cleanse.h>
 #include <util/strencodings.h>
 
 #include <algorithm>
 #include <cassert>
 #include <cstring>
-#include <iterator>
 #include <set>
 
 namespace holepunch {
@@ -77,9 +77,14 @@ std::array<unsigned char, PROOF_SIZE> Proof(const Pair& pair, uint64_t round, co
 
 } // namespace
 
+bool Descriptor::IsValidStructure() const
+{
+    return IsValidEndpoint(endpoint, format) && pubkey.IsCompressed();
+}
+
 bool Descriptor::IsValid() const
 {
-    return IsValidEndpoint(endpoint, format) && pubkey.IsCompressed() && pubkey.IsFullyValid();
+    return IsValidStructure() && pubkey.IsFullyValid();
 }
 
 std::array<unsigned char, PAYLOAD_SIZE> Descriptor::Payload() const
@@ -99,11 +104,18 @@ std::array<unsigned char, PAYLOAD_SIZE> Descriptor::Payload() const
 
 std::optional<Descriptor> Descriptor::Parse(std::span<const unsigned char> payload, uint16_t port)
 {
+    auto descriptor{ParseUnchecked(payload, port)};
+    if (!descriptor || !descriptor->pubkey.IsFullyValid()) return std::nullopt;
+    return descriptor;
+}
+
+std::optional<Descriptor> Descriptor::ParseUnchecked(std::span<const unsigned char> payload, uint16_t port)
+{
     if (payload.size() != PAYLOAD_SIZE || !IsSupportedFormat(payload[0])) return std::nullopt;
     in_addr ip;
     std::memcpy(&ip, payload.data() + 1, 4);
     Descriptor descriptor{CService{CNetAddr{ip}, port}, ReadLE32(payload.data() + 5), CPubKey{payload.subspan(9)}, payload[0]};
-    if (!descriptor.IsValid()) return std::nullopt;
+    if (!descriptor.IsValidStructure()) return std::nullopt;
     return descriptor;
 }
 
@@ -210,16 +222,25 @@ bool CheckProof(std::span<const unsigned char> proof, const Pair& pair, uint64_t
     return TimingResistantEqual(proof, std::span<const unsigned char>{expected});
 }
 
-bool DescriptorCache::Insert(const Descriptor& descriptor, uint32_t epoch)
+bool DescriptorCache::Insert(const Descriptor& descriptor, uint32_t epoch,
+                            const std::vector<unsigned char>& source_group,
+                            const std::vector<unsigned char>& destination_group)
 {
     Expire(epoch);
-    if (descriptor.epoch != epoch || !descriptor.IsValid()) return false;
+    if (descriptor.epoch != epoch || !descriptor.IsValidStructure()) return false;
     if (const auto retained = Get(descriptor.endpoint)) return *retained == descriptor;
-    if (m_capacity == 0) return false;
-    if (m_remote.size() == m_capacity) {
-        m_remote.erase(std::next(m_remote.begin(), m_rng.randrange(m_remote.size())));
+    if (m_remote.size() >= m_capacity) return false;
+    // Neither epoch nor advertised key gives a sender another placement choice.
+    const auto bucket{CSipHasher{m_salt0, m_salt1}.Write(source_group.size()).Write(source_group)
+                          .Write(descriptor.endpoint.GetKey()).Finalize() % ((m_capacity + BUCKET_SIZE - 1) / BUCKET_SIZE)};
+    size_t sources{0}, destinations{0}, occupants{0};
+    for (const auto& [endpoint, entry] : m_remote) {
+        sources += entry.source_group == source_group;
+        destinations += entry.destination_group == destination_group;
+        occupants += entry.bucket == bucket;
     }
-    m_remote.emplace(descriptor.endpoint, descriptor);
+    if (sources >= GROUP_LIMIT || destinations >= GROUP_LIMIT || occupants >= BUCKET_SIZE) return false;
+    m_remote.emplace(descriptor.endpoint, Entry{descriptor, source_group, destination_group, bucket});
     return true;
 }
 
@@ -234,29 +255,35 @@ std::optional<Descriptor> DescriptorCache::Get(const CService& endpoint) const
     if (m_local && m_local->endpoint == endpoint) return m_local;
     const auto it = m_remote.find(endpoint);
     if (it == m_remote.end()) return std::nullopt;
-    return it->second;
+    return it->second.descriptor;
+}
+
+std::vector<unsigned char> DescriptorCache::SourceGroup(const CService& endpoint) const
+{
+    const auto it{m_remote.find(endpoint)};
+    return it == m_remote.end() ? std::vector<unsigned char>{} : it->second.source_group;
 }
 
 std::vector<Descriptor> DescriptorCache::GetAll(uint32_t epoch) const
 {
     std::vector<Descriptor> result;
     result.reserve(m_remote.size());
-    for (const auto& [endpoint, descriptor] : m_remote) {
-        if (descriptor.epoch == epoch) result.push_back(descriptor);
+    for (const auto& [endpoint, entry] : m_remote) {
+        if (entry.descriptor.epoch == epoch) result.push_back(entry.descriptor);
     }
     return result;
 }
 
 void DescriptorCache::Expire(uint32_t epoch)
 {
-    std::erase_if(m_remote, [epoch](const auto& entry) { return entry.second.epoch != epoch; });
+    std::erase_if(m_remote, [epoch](const auto& entry) { return entry.second.descriptor.epoch != epoch; });
     if (m_local && m_local->epoch != epoch) m_local.reset();
 }
 
 void DescriptorCache::SetLocal(std::optional<Descriptor> descriptor)
 {
     if (descriptor) {
-        assert(descriptor->IsValid());
+        assert(descriptor->IsValidStructure());
         m_remote.erase(descriptor->endpoint);
     }
     m_local = std::move(descriptor);

@@ -54,6 +54,7 @@ add_executable(test_bitcoin
   getarg_tests.cpp
   hash_tests.cpp
   headers_sync_chainwork_tests.cpp
+  holepunch_cache_tests.cpp
   holepunch_manager_tests.cpp
   holepunch_peer_tests.cpp
   holepunch_socket_tests.cpp

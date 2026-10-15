@@ -392,6 +392,8 @@ struct Peer {
     double m_addr_token_bucket GUARDED_BY(NetEventsInterface::g_msgproc_mutex){1.0};
     /** When m_addr_token_bucket was last updated */
     NodeClock::time_point m_addr_token_timestamp GUARDED_BY(NetEventsInterface::g_msgproc_mutex){NodeClock::now()};
+    /** Curve-validation work is bounded even for peers with Addr permission. */
+    util::TokenBucket<MockableSteadyClock> m_holepunch_work GUARDED_BY(NetEventsInterface::g_msgproc_mutex){1, 32, 32};
     /** Total number of addresses that were dropped due to rate limiting. */
     std::atomic<uint64_t> m_addr_rate_limited{0};
     /** Total number of addresses that were processed (excludes rate-limited ones). */
@@ -853,6 +855,7 @@ private:
     void MaybeSendFeefilter(CNode& node, Peer& peer, std::chrono::microseconds current_time) EXCLUSIVE_LOCKS_REQUIRED(g_msgproc_mutex);
 
     FastRandomContext m_rng GUARDED_BY(NetEventsInterface::g_msgproc_mutex);
+    util::TokenBucket<MockableSteadyClock> m_holepunch_work GUARDED_BY(NetEventsInterface::g_msgproc_mutex){16, 256, 256};
 
     /** Copied into short-lived tx INV deduplication sets to avoid generating salts per message. */
     const SaltedUint256Hasher m_txhash_hasher;
@@ -5862,7 +5865,7 @@ void PeerManagerImpl::MaybeSendAddr(CNode& node, Peer& peer, std::chrono::micros
     // Queueing never extends a descriptor's retention or observation validity.
     auto addr_not_sendable = [this, &peer](const CAddress& addr) EXCLUSIVE_LOCKS_REQUIRED(g_msgproc_mutex) {
         if (addr.IsHolePunch()) {
-            const auto descriptor = holepunch::Descriptor::Parse(addr.GetHolePunchPayload(), addr.GetPort());
+            const auto descriptor = holepunch::Descriptor::ParseUnchecked(addr.GetHolePunchPayload(), addr.GetPort());
             auto* manager = m_connman.GetHolePunchManager();
             if (!descriptor || !manager || !manager->IsRetained(*descriptor)) return true;
         }
@@ -6108,11 +6111,24 @@ void PeerManagerImpl::ProcessAddrs(std::string_view msg_type, CNode& pfrom, Peer
         if (addr.IsHolePunch()) {
             auto* manager = m_connman.GetHolePunchManager();
             if (!manager) continue;
-            const auto descriptor = holepunch::Descriptor::Parse(addr.GetHolePunchPayload(), addr.GetPort());
-            if (!descriptor) continue;
+            const auto descriptor = holepunch::Descriptor::ParseUnchecked(addr.GetHolePunchPayload(), addr.GetPort());
+            const auto epoch{Ticks<std::chrono::seconds>(current_time.time_since_epoch()) / holepunch::GetProfile(manager->GetFormat()).epoch_seconds};
+            if (!descriptor || descriptor->format != manager->GetFormat() ||
+                descriptor->epoch != epoch) continue;
             AddAddressKnown(peer, addr);
             if (m_banman && (m_banman->IsDiscouraged(descriptor->endpoint) || m_banman->IsBanned(descriptor->endpoint))) continue;
-            if (!manager->AddDescriptor(*descriptor)) continue;
+            const auto work_time{MockableSteadyClock::now()};
+            peer.m_holepunch_work.increment(work_time);
+            m_holepunch_work.increment(work_time);
+            if (peer.m_holepunch_work.value() < 1 || m_holepunch_work.value() < 1) {
+                ++num_rate_limit;
+                continue;
+            }
+            // Charge before decoding, including invalid points and endpoint conflicts.
+            peer.m_holepunch_work.decrement();
+            m_holepunch_work.decrement();
+            if (!manager->IsRetained(*descriptor) && !descriptor->pubkey.IsFullyValid()) continue;
+            if (!manager->AddDescriptor(*descriptor, m_connman.GetNetGroup(pfrom.addr), m_connman.GetNetGroup(descriptor->endpoint))) continue;
             ++num_proc;
             if (addr.nTime > current_time - 10min && addr.nTime <= current_time + 10min && vAddr.size() <= 10) {
                 RelayAddress(pfrom.GetId(), addr, g_reachable_nets.Contains(descriptor->endpoint));
