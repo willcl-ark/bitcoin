@@ -680,7 +680,7 @@ struct CNodeOptions
     bool prefer_evict = false;
     size_t recv_flood_size{DEFAULT_MAXRECEIVEBUFFER * 1000};
     bool use_v2transport = false;
-    std::shared_ptr<const holepunch::Attempt> holepunch_attempt;
+    std::shared_ptr<const holepunch::Attempt> holepunch_attempt = nullptr;
 };
 
 /** Information about a peer */

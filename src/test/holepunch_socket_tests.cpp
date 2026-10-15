@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <chrono>
 #include <memory>
 #include <span>
@@ -46,6 +47,12 @@ struct SocketState {
 class PunchSock : public ZeroSock
 {
     SocketState& m_state;
+
+    PunchSock& operator=(Sock&&) override
+    {
+        assert(false && "Move of Sock into PunchSock not allowed.");
+        return *this;
+    }
 
 public:
     explicit PunchSock(SocketState& state) : m_state{state} {}
@@ -197,8 +204,8 @@ BOOST_AUTO_TEST_CASE(strict_v2_transport)
         BOOST_CHECK(!transport.ShouldReconnectV1());
         // A responder rejects a v1 version immediately. An initiator treats it as
         // an invalid v2 handshake and rejects it without ever accepting v1 data.
-        std::vector<uint8_t> input(v1_prefix.begin(), v1_prefix.end());
-        if (initiating) input.resize(EllSwiftPubKey::size() + V2Transport::MAX_GARBAGE_LEN + BIP324Cipher::GARBAGE_TERMINATOR_LEN);
+        std::vector<uint8_t> input(initiating ? EllSwiftPubKey::size() + V2Transport::MAX_GARBAGE_LEN + BIP324Cipher::GARBAGE_TERMINATOR_LEN : v1_prefix.size());
+        std::ranges::copy(v1_prefix, input.begin());
         std::span<const uint8_t> incoming{input};
         BOOST_CHECK(!transport.ReceivedBytes(incoming));
         BOOST_CHECK(!transport.ReceivedMessageComplete());
