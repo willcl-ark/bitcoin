@@ -607,7 +607,7 @@ BOOST_AUTO_TEST_CASE(holepunch_address_encoding)
     // Wire decoding preserves the record; cryptographic and epoch checks are
     // applied by the address processor after its per-peer rate limit.
     std::array<uint8_t, ADDR_HOLEPUNCH_SIZE> payload{};
-    std::iota(payload.begin(), payload.end(), uint8_t{0});
+    std::iota(payload.begin(), payload.end(), uint8_t{1});
     CNetAddr record;
     record.SetHolePunch(payload);
     const CAddress address{CService{record, 8333}, NODE_NETWORK, NodeSeconds{123s}};

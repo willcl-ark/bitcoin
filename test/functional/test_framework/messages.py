@@ -329,7 +329,7 @@ class CAddress:
         self.net = self.NET_IPV4
         self.ip = "0.0.0.0"
         self.port = 0
-        self.holepunch_format = 0
+        self.holepunch_format = 1
         self.holepunch_epoch = 0
         self.holepunch_key = bytes(33)
 
@@ -2006,7 +2006,7 @@ class TestFrameworkScript(unittest.TestCase):
         addr.port = 8333
         addr.holepunch_epoch = 0x11223344
         addr.holepunch_key = bytes.fromhex("0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")
-        expected = bytes.fromhex("0403020101082a0001020304443322110279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798208d")
+        expected = bytes.fromhex("0403020101082a0101020304443322110279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798208d")
         self.assertEqual(addr.serialize_v2(), expected)
         actual = CAddress()
         actual.deserialize_v2(BytesIO(expected))

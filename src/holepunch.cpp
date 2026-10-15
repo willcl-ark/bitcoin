@@ -20,9 +20,9 @@ namespace holepunch {
 
 const Profile& GetProfile(uint8_t format)
 {
-    static constexpr Profile draft{0, ROUND_SECONDS, EPOCH_SECONDS, 30000, false, "BitcoinHolePunch/v0", FEATURE_ID};
-    static constexpr Profile fast{FAST_FORMAT, 30, 60, 5000, true, "BitcoinHolePunch/test-fast/v0",
-                                  "5282aeae4c7dbd76b35765093623f374efd0318378da760927c4d47cb0c019c5"};
+    static constexpr Profile draft{FORMAT, ROUND_SECONDS, EPOCH_SECONDS, 30000, false, "BitcoinHolePunch/v1", FEATURE_ID};
+    static constexpr Profile fast{FAST_FORMAT, 30, 60, 5000, true, "BitcoinHolePunch/test-fast/v1",
+                                  "3e4f5bc6bad88ba8ec2be4c54dcdbef6f17b08884ad5ae1884ac2f4eabc547b0"};
     assert(IsSupportedFormat(format));
     return format == FAST_FORMAT ? fast : draft;
 }
@@ -36,12 +36,19 @@ bool IsGlobalEndpoint(const CService& endpoint)
 
 bool IsValidEndpoint(const CService& endpoint, uint8_t format)
 {
-    if (format == 0) return IsGlobalEndpoint(endpoint);
+    if (format == FORMAT) return IsGlobalEndpoint(endpoint);
     return format == FAST_FORMAT && endpoint.IsIPv4() && endpoint.GetPort() != 0 &&
            endpoint.GetLinkedIPv4() >= 0x01000000 && endpoint.GetLinkedIPv4() < 0xe0000000;
 }
 
 namespace {
+
+bool IsValidPair(const Descriptor& local, const Descriptor& remote)
+{
+    return local.IsValidStructure() && remote.IsValidStructure() && local.epoch == remote.epoch &&
+           local.format == remote.format && local.endpoint != remote.endpoint && local.pubkey != remote.pubkey &&
+           (local.format == FAST_FORMAT || local.endpoint.GetLinkedIPv4() != remote.endpoint.GetLinkedIPv4());
+}
 
 Bytes32 RoundHash(const Bytes32& key, std::string_view label, uint64_t round)
 {
@@ -145,24 +152,20 @@ Pair::~Pair()
 
 std::optional<Pair> DerivePair(const CKey& key, const Descriptor& local, const Descriptor& remote, const uint256& genesis_hash)
 {
-    if (!local.IsValid() || !remote.IsValid() || local.epoch != remote.epoch || local.format != remote.format ||
-        local.endpoint == remote.endpoint || local.pubkey == remote.pubkey ||
-        !key.IsValid() || key.GetPubKey() != local.pubkey) return std::nullopt;
+    if (!IsValidPair(local, remote) || !key.IsValid() || key.GetPubKey() != local.pubkey) return std::nullopt;
     Pair pair;
     pair.local = local;
     pair.remote = remote;
     pair.local_id = local.Id(genesis_hash);
     pair.remote_id = remote.Id(genesis_hash);
+    pair.genesis_hash = genesis_hash;
     pair.initiating = local.pubkey < remote.pubkey;
     const auto lo = (pair.initiating ? local : remote).Bytes(genesis_hash);
     const auto hi = (pair.initiating ? remote : local).Bytes(genesis_hash);
-    std::copy(lo.begin(), lo.end(), pair.tie_break.begin());
-    std::copy(hi.begin(), hi.end(), pair.tie_break.begin() + lo.size());
-
     const auto domain = GetProfile(local.format).domain;
     Bytes32 salt;
     CSHA256{}.Write(reinterpret_cast<const unsigned char*>(domain.data()), domain.size())
-        .Write(pair.tie_break.data(), pair.tie_break.size()).Finalize(salt.data());
+        .Write(lo.data(), lo.size()).Write(hi.data(), hi.size()).Finalize(salt.data());
     ECDHSecret secret;
     if (!key.ComputeECDHX(remote.pubkey, secret)) return std::nullopt;
     Bytes32 prk;
@@ -197,16 +200,54 @@ uint32_t OffsetMillis(const Bytes32& draw, uint8_t format)
     return 5000 + carry;
 }
 
+std::optional<PublicSchedule> RankPair(const Descriptor& local, const Descriptor& remote, const uint256& genesis_hash, uint64_t round)
+{
+    if (!IsValidPair(local, remote)) return std::nullopt;
+    const auto& profile = GetProfile(local.format);
+    if (round / (profile.epoch_seconds / profile.round_seconds) != local.epoch) return std::nullopt;
+
+    std::array<unsigned char, 6> local_endpoint, remote_endpoint;
+    WriteBE32(local_endpoint.data(), local.endpoint.GetLinkedIPv4());
+    WriteBE16(local_endpoint.data() + 4, local.endpoint.GetPort());
+    WriteBE32(remote_endpoint.data(), remote.endpoint.GetLinkedIPv4());
+    WriteBE16(remote_endpoint.data() + 4, remote.endpoint.GetPort());
+    const auto& lo = std::min(local_endpoint, remote_endpoint);
+    const auto& hi = std::max(local_endpoint, remote_endpoint);
+    PublicSchedule result;
+    std::copy_n(lo.begin(), 4, result.tie_break.begin());
+    std::copy_n(hi.begin(), 4, result.tie_break.begin() + 4);
+    std::copy(lo.begin(), lo.end(), result.endpoint_tie_break.begin());
+    std::copy(hi.begin(), hi.end(), result.endpoint_tie_break.begin() + lo.size());
+
+    std::array<unsigned char, 8> encoded_round;
+    WriteLE64(encoded_round.data(), round);
+    const auto hash = [&](std::string_view label, std::span<const unsigned char> endpoints, Bytes32& output) {
+        CSHA256{}.Write(reinterpret_cast<const unsigned char*>(profile.domain.data()), profile.domain.size())
+            .Write(reinterpret_cast<const unsigned char*>(label.data()), label.size())
+            .Write(genesis_hash.data(), genesis_hash.size())
+            .Write(encoded_round.data(), encoded_round.size())
+            .Write(endpoints.data(), endpoints.size()).Finalize(output.data());
+    };
+    hash("/eligibility", result.tie_break, result.draw);
+    result.eligible = IsEligible(result.draw, profile.format);
+    hash("/priority", result.tie_break, result.priority);
+    hash("/endpoint", result.endpoint_tie_break, result.endpoint_priority);
+    return result;
+}
+
 std::optional<RoundSchedule> Schedule(const Pair& pair, uint64_t round)
 {
     const auto& profile = GetProfile(pair.local.format);
-    if (round / (profile.epoch_seconds / profile.round_seconds) != pair.local.epoch) return std::nullopt;
+    const auto ranking = RankPair(pair.local, pair.remote, pair.genesis_hash, round);
+    if (!ranking) return std::nullopt;
     return RoundSchedule{
-        IsEligible(RoundHash(pair.schedule_key, "eligibility", round), profile.format),
+        ranking->eligible,
         round,
         round * profile.round_seconds * 1000 + OffsetMillis(RoundHash(pair.schedule_key, "time", round), profile.format),
-        RoundHash(pair.schedule_key, "priority", round),
-        pair.tie_break,
+        ranking->priority,
+        ranking->tie_break,
+        ranking->endpoint_priority,
+        ranking->endpoint_tie_break,
     };
 }
 

@@ -12,10 +12,52 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <functional>
+#include <string>
 #include <tuple>
 #include <vector>
 
 #include <boost/test/unit_test.hpp>
+
+namespace holepunch {
+struct ManagerTestAccess {
+    static std::optional<Clock::time_point> Expiry(Manager& manager, const CNetAddr& ip)
+    {
+        LOCK(manager.m_mutex);
+        const auto it{manager.m_recent.find(ip)};
+        if (it == manager.m_recent.end()) return std::nullopt;
+        return it->second;
+    }
+    static size_t RecentSize(Manager& manager)
+    {
+        LOCK(manager.m_mutex);
+        return manager.m_recent.size();
+    }
+    static void FillHistory(Manager& manager, size_t count, Clock::time_point expiry)
+    {
+        LOCK(manager.m_mutex);
+        for (size_t i{0}; i < count; ++i) {
+            manager.m_recent.emplace(LookupNumeric("12.0.0." + std::to_string(i + 1), 8333), expiry);
+        }
+    }
+    static void SetExpiry(Manager& manager, const CNetAddr& ip, Clock::time_point expiry)
+    {
+        LOCK(manager.m_mutex);
+        manager.m_recent[ip] = expiry;
+    }
+    static size_t PairCacheSize(Manager& manager)
+    {
+        LOCK(manager.m_mutex);
+        return manager.m_pairs.size();
+    }
+    static const Pair* CachedPair(Manager& manager, const CService& endpoint)
+    {
+        LOCK(manager.m_mutex);
+        const auto it{manager.m_pairs.find(endpoint)};
+        return it == manager.m_pairs.end() || !it->second.pair ? nullptr : &*it->second.pair;
+    }
+};
+} // namespace holepunch
 
 namespace {
 using namespace std::chrono_literals;
@@ -44,18 +86,19 @@ struct ManagerTestingSetup : BasicTestingSetup {
         return m_manager.Poll(m_wall_ms, holepunch::Clock::now(), active);
     }
 
-    holepunch::Manager::Actions Advance(std::chrono::milliseconds elapsed, bool active = true)
+    holepunch::Manager::Actions Advance(std::chrono::milliseconds elapsed, bool active = true,
+                                      const std::function<bool(const CService&)>& allowed = {})
     {
         m_steady += elapsed;
         m_wall_ms += elapsed.count();
         m_wall.set(std::chrono::seconds{m_wall_ms / 1000});
-        return Poll(active);
+        return m_manager.Poll(m_wall_ms, holepunch::Clock::now(), active, allowed);
     }
 
-    holepunch::Manager::Actions AdvanceTo(uint64_t wall_ms)
+    holepunch::Manager::Actions AdvanceTo(uint64_t wall_ms, const std::function<bool(const CService&)>& allowed = {})
     {
         BOOST_REQUIRE(wall_ms >= static_cast<uint64_t>(m_wall_ms));
-        return Advance(std::chrono::milliseconds{wall_ms - m_wall_ms});
+        return Advance(std::chrono::milliseconds{wall_ms - m_wall_ms}, true, allowed);
     }
 
     void Observe(int64_t node, unsigned char group, const CService& endpoint)
@@ -79,7 +122,7 @@ struct ManagerTestingSetup : BasicTestingSetup {
     };
 
     /** Derive expected schedules as the remote participant, without accessing local secrets. */
-    std::vector<Candidate> Candidates(uint64_t round, size_t count, const char* ip = "8.8.4.4", uint16_t fixed_port = 0)
+    std::vector<Candidate> Candidates(uint64_t round, size_t count, const char* ip = nullptr, uint16_t fixed_port = 0)
     {
         const auto local{m_manager.LocalDescriptor()};
         BOOST_REQUIRE(local);
@@ -88,7 +131,10 @@ struct ManagerTestingSetup : BasicTestingSetup {
             const auto index{m_next_key++};
             const auto key{TestKey(index)};
             const uint16_t port{fixed_port ? fixed_port : static_cast<uint16_t>(10000 + index)};
-            holepunch::Descriptor remote{LookupNumeric(ip, port), local->epoch, key.GetPubKey()};
+            const auto address{ip ? std::string{ip} : "11." + std::to_string(index / 256) + "." + std::to_string(index % 256) + ".1"};
+            holepunch::Descriptor remote{LookupNumeric(address, port), local->epoch, key.GetPubKey()};
+            const auto rank{holepunch::RankPair(*local, remote, m_genesis, round)};
+            if (!rank || !rank->eligible) continue;
             const auto pair{holepunch::DerivePair(key, remote, *local, m_genesis)};
             BOOST_REQUIRE(pair);
             const auto schedule{holepunch::Schedule(*pair, round)};
@@ -302,6 +348,66 @@ BOOST_AUTO_TEST_CASE(fast_profile)
     BOOST_CHECK_EQUAL(expired.disconnect.front(), 100);
 }
 
+BOOST_AUTO_TEST_CASE(fast_established_ip_limit_survives_descriptor_changes)
+{
+    holepunch::Manager fast{m_genesis, true, LookupNumeric("127.0.0.1", 18333), holepunch::FAST_FORMAT};
+    const auto poll_fast = [&] { return fast.Poll(m_wall_ms, holepunch::Clock::now(), true); };
+    Advance(15s);
+    const auto local{fast.LocalDescriptor()};
+    BOOST_REQUIRE(local);
+    poll_fast();
+    const uint64_t round{static_cast<uint64_t>(m_wall_ms / 30000 + 1)};
+    std::vector<Candidate> candidates;
+    for (uint16_t port{18444}; port < 18446; ++port) {
+        const auto key{TestKey(port)};
+        const holepunch::Descriptor remote{LookupNumeric("127.0.0.1", port), local->epoch, key.GetPubKey(), holepunch::FAST_FORMAT};
+        BOOST_REQUIRE(fast.AddDescriptor(remote));
+        const auto pair{holepunch::DerivePair(key, remote, *local, m_genesis)};
+        BOOST_REQUIRE(pair);
+        const auto schedule{holepunch::Schedule(*pair, round)};
+        BOOST_REQUIRE(schedule);
+        candidates.push_back({remote, *schedule});
+    }
+    const auto preferred{std::min_element(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) {
+        return std::tie(a.schedule.endpoint_priority, a.schedule.endpoint_tie_break) <
+               std::tie(b.schedule.endpoint_priority, b.schedule.endpoint_tie_break);
+    })->descriptor};
+    AdvanceTo(round * 30000);
+    poll_fast();
+    std::sort(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) {
+        return a.schedule.start_ms < b.schedule.start_ms;
+    });
+    size_t started{0};
+    for (const auto& candidate : candidates) {
+        AdvanceTo(candidate.schedule.start_ms);
+        const auto actions{poll_fast()};
+        for (const auto& attempt : actions.start) {
+            ++started;
+            BOOST_CHECK(attempt->pair.remote == preferred);
+            BOOST_REQUIRE(fast.AttachNode(attempt, 100));
+            BOOST_REQUIRE(fast.CompleteHandshake(100));
+        }
+    }
+    BOOST_CHECK_EQUAL(started, 1);
+    AdvanceTo((round + 1) * 30000 + 5000);
+    poll_fast();
+    const auto next_local{fast.LocalDescriptor()};
+    BOOST_REQUIRE(next_local);
+    BOOST_CHECK_EQUAL(next_local->epoch, local->epoch + 1);
+    const auto key{TestKey(12345)};
+    const holepunch::Descriptor changed{LookupNumeric("127.0.0.1", 18555), next_local->epoch, key.GetPubKey(), holepunch::FAST_FORMAT};
+    BOOST_REQUIRE(fast.AddDescriptor(changed));
+    const auto pair{holepunch::DerivePair(key, changed, *next_local, m_genesis)};
+    BOOST_REQUIRE(pair);
+    const auto schedule{holepunch::Schedule(*pair, round + 2)};
+    BOOST_REQUIRE(schedule);
+    AdvanceTo((round + 2) * 30000);
+    BOOST_CHECK(poll_fast().start.empty());
+    AdvanceTo(schedule->start_ms);
+    BOOST_CHECK(poll_fast().start.empty());
+    BOOST_CHECK_EQUAL(holepunch::ManagerTestAccess::RecentSize(fast), 0);
+}
+
 BOOST_AUTO_TEST_CASE(observer_agreement_and_rotation)
 {
     Advance(15s);
@@ -348,7 +454,8 @@ BOOST_AUTO_TEST_CASE(priority_capacity_and_endpoint_tuples)
     Ready();
     const uint64_t round{NextRound()};
     auto candidates{Candidates(round, 6)};
-    Candidates(round, 1, "8.8.8.8"); // Exclude the local public IP even on a different port.
+    // Exclude the local public IP even on a different port.
+    BOOST_REQUIRE(m_manager.AddDescriptor({LookupNumeric("8.8.8.8", 12345), 101, TestKey(12345).GetPubKey()}));
     candidates.resize(holepunch::Manager::MAX_PENDING);
     std::sort(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) {
         return a.schedule.start_ms < b.schedule.start_ms;
@@ -369,17 +476,157 @@ BOOST_AUTO_TEST_CASE(priority_capacity_and_endpoint_tuples)
     Candidates(full_round, 2);
     BOOST_CHECK(AdvanceTo(full_round * 60000).start.empty());
     BOOST_CHECK(AdvanceTo(full_round * 60000 + 34999).start.empty());
+}
 
-    // Established tuples survive epoch changes and forbid a second connection with a new key.
-    AdvanceTo(102 * 3600000 + 5000);
-    Observe(1, 1, m_endpoint);
-    Observe(2, 2, m_endpoint);
-    m_manager.RemoveNode(103);
-    const uint64_t duplicate_round{NextRound()};
-    const auto duplicate{Candidates(duplicate_round, 1, "8.8.4.4", candidates[0].descriptor.endpoint.GetPort()).front()};
-    AdvanceTo(duplicate_round * 60000);
-    BOOST_CHECK(AdvanceTo(duplicate.schedule.start_ms).start.empty());
-    BOOST_CHECK(Poll().disconnect.empty());
+BOOST_AUTO_TEST_CASE(one_endpoint_per_ip_and_no_backfill)
+{
+    Ready();
+    const uint64_t round{NextRound()};
+    auto candidates{Candidates(round, 1)};
+    const auto ip{candidates.front().descriptor.endpoint.ToStringAddr()};
+    auto additional{Candidates(round, 7, ip.c_str())};
+    candidates.insert(candidates.end(), additional.begin(), additional.end());
+    const auto preferred{std::min_element(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) {
+        return std::tie(a.schedule.endpoint_priority, a.schedule.endpoint_tie_break) <
+               std::tie(b.schedule.endpoint_priority, b.schedule.endpoint_tie_break);
+    })};
+    const auto selected{preferred->descriptor};
+    AdvanceTo(round * 60000);
+    BOOST_CHECK_EQUAL(holepunch::ManagerTestAccess::PairCacheSize(m_manager), 1);
+    BOOST_CHECK_EQUAL(holepunch::ManagerTestAccess::RecentSize(m_manager), 0);
+    std::sort(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) {
+        return a.schedule.start_ms < b.schedule.start_ms;
+    });
+    size_t started{0};
+    for (const auto& candidate : candidates) {
+        const auto actions{AdvanceTo(candidate.schedule.start_ms)};
+        for (const auto& attempt : actions.start) {
+            ++started;
+            BOOST_CHECK(attempt->pair.remote == selected);
+            m_manager.FailAttempt(attempt);
+        }
+    }
+    BOOST_CHECK_EQUAL(started, 1);
+    BOOST_CHECK_EQUAL(holepunch::ManagerTestAccess::RecentSize(m_manager), 1);
+}
+
+BOOST_AUTO_TEST_CASE(history_reservations_and_fixed_expiry)
+{
+    Ready();
+    const auto expiry{holepunch::Clock::now() + 10min};
+    holepunch::ManagerTestAccess::FillHistory(m_manager, holepunch::Manager::MAX_RECENT - 1, expiry);
+    const uint64_t round{NextRound()};
+    auto candidates{Candidates(round, 4)};
+    const auto selected{candidates.front().descriptor};
+    AdvanceTo(round * 60000);
+    // Selection reserves the last entry without allocating a cooldown early.
+    BOOST_CHECK_EQUAL(holepunch::ManagerTestAccess::RecentSize(m_manager), holepunch::Manager::MAX_RECENT - 1);
+    BOOST_CHECK(!holepunch::ManagerTestAccess::Expiry(m_manager, selected.endpoint));
+    std::sort(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) {
+        return a.schedule.start_ms < b.schedule.start_ms;
+    });
+    size_t started{0};
+    for (const auto& candidate : candidates) {
+        const auto actions{AdvanceTo(candidate.schedule.start_ms)};
+        for (const auto& attempt : actions.start) {
+            ++started;
+            BOOST_CHECK(attempt->pair.remote == selected);
+            m_manager.FailAttempt(attempt);
+        }
+    }
+    BOOST_CHECK_EQUAL(started, 1);
+    BOOST_CHECK_EQUAL(holepunch::ManagerTestAccess::RecentSize(m_manager), holepunch::Manager::MAX_RECENT);
+    const auto started_expiry{holepunch::ManagerTestAccess::Expiry(m_manager, selected.endpoint)};
+    BOOST_REQUIRE(started_expiry);
+
+    auto changed{selected};
+    changed.endpoint = CService{changed.endpoint, static_cast<uint16_t>(changed.endpoint.GetPort() + 1)};
+    changed.pubkey = TestKey(m_next_key++).GetPubKey();
+    BOOST_REQUIRE(m_manager.AddDescriptor(changed));
+    BOOST_REQUIRE(m_manager.AddDescriptor(selected));
+    BOOST_CHECK(holepunch::ManagerTestAccess::Expiry(m_manager, selected.endpoint) == started_expiry);
+
+    const uint64_t full_round{NextRound()};
+    Candidates(full_round, 4);
+    AdvanceTo(full_round * 60000);
+    BOOST_CHECK(AdvanceTo(full_round * 60000 + 34999).start.empty());
+    BOOST_CHECK_EQUAL(holepunch::ManagerTestAccess::RecentSize(m_manager), holepunch::Manager::MAX_RECENT);
+    BOOST_CHECK(holepunch::ManagerTestAccess::Expiry(m_manager, selected.endpoint) == started_expiry);
+
+    Advance(std::chrono::duration_cast<std::chrono::milliseconds>(expiry - holepunch::Clock::now()), false);
+    BOOST_CHECK_EQUAL(holepunch::ManagerTestAccess::RecentSize(m_manager), 1);
+    Advance(std::chrono::duration_cast<std::chrono::milliseconds>(*started_expiry - holepunch::Clock::now()), false);
+    BOOST_CHECK_EQUAL(holepunch::ManagerTestAccess::RecentSize(m_manager), 0);
+}
+
+BOOST_AUTO_TEST_CASE(cooldown_excludes_changed_endpoint_without_extension)
+{
+    Ready();
+    const uint64_t round{NextRound()};
+    const auto candidate{Candidates(round, 1).front()};
+    const auto expiry{holepunch::Clock::now() + 10min};
+    holepunch::ManagerTestAccess::SetExpiry(m_manager, candidate.descriptor.endpoint, expiry);
+    auto changed{candidate.descriptor};
+    changed.endpoint = CService{changed.endpoint, static_cast<uint16_t>(changed.endpoint.GetPort() + 1)};
+    changed.pubkey = TestKey(m_next_key++).GetPubKey();
+    BOOST_REQUIRE(m_manager.AddDescriptor(changed));
+    AdvanceTo(round * 60000);
+    BOOST_CHECK_EQUAL(holepunch::ManagerTestAccess::PairCacheSize(m_manager), 0);
+    BOOST_CHECK(AdvanceTo(round * 60000 + 34999).start.empty());
+    BOOST_REQUIRE(m_manager.AddDescriptor(candidate.descriptor));
+    BOOST_CHECK(holepunch::ManagerTestAccess::Expiry(m_manager, changed.endpoint) == expiry);
+}
+
+BOOST_AUTO_TEST_CASE(skipped_destination_has_no_cooldown)
+{
+    Ready();
+    const uint64_t round{NextRound()};
+    const auto candidate{Candidates(round, 1).front()};
+    AdvanceTo(round * 60000);
+    const auto denied = [](const CService&) { return false; };
+    BOOST_CHECK(AdvanceTo(candidate.schedule.start_ms, denied).start.empty());
+    BOOST_CHECK_EQUAL(holepunch::ManagerTestAccess::RecentSize(m_manager), 0);
+    BOOST_CHECK(Advance(1ms).start.empty());
+
+    const auto next{NextRound()};
+    Candidates(next, 1);
+    AdvanceTo(next * 60000, denied);
+    BOOST_CHECK(AdvanceTo(next * 60000 + 34999).start.empty());
+    BOOST_CHECK_EQUAL(holepunch::ManagerTestAccess::RecentSize(m_manager), 0);
+}
+
+BOOST_AUTO_TEST_CASE(pair_cache_and_clock_changes)
+{
+    Ready();
+    const uint64_t round{NextRound()};
+    const auto candidate{Candidates(round, 1).front()};
+    AdvanceTo(round * 60000);
+    const auto cached{holepunch::ManagerTestAccess::CachedPair(m_manager, candidate.descriptor.endpoint)};
+    BOOST_REQUIRE(cached);
+    const auto actions{AdvanceTo(candidate.schedule.start_ms)};
+    BOOST_REQUIRE_EQUAL(actions.start.size(), 1);
+    const auto expiry{holepunch::ManagerTestAccess::Expiry(m_manager, candidate.descriptor.endpoint)};
+    BOOST_REQUIRE(expiry);
+    m_manager.FailAttempt(actions.start.front());
+    AdvanceTo((round + 1) * 60000);
+    BOOST_CHECK(holepunch::ManagerTestAccess::CachedPair(m_manager, candidate.descriptor.endpoint) == cached);
+    BOOST_CHECK(holepunch::ManagerTestAccess::Expiry(m_manager, candidate.descriptor.endpoint) == expiry);
+
+    // Neither a forward epoch change nor a rollback can erase an unexpired cooldown.
+    m_wall_ms += 3600000;
+    m_wall.set(std::chrono::seconds{m_wall_ms / 1000});
+    BOOST_CHECK(Poll().start.empty());
+    BOOST_CHECK_EQUAL(holepunch::ManagerTestAccess::PairCacheSize(m_manager), 0);
+    BOOST_CHECK(holepunch::ManagerTestAccess::Expiry(m_manager, candidate.descriptor.endpoint) == expiry);
+    auto changed{candidate.descriptor};
+    changed.epoch = m_wall_ms / 3600000;
+    changed.pubkey = TestKey(m_next_key++).GetPubKey();
+    BOOST_REQUIRE(m_manager.AddDescriptor(changed));
+    BOOST_CHECK(holepunch::ManagerTestAccess::Expiry(m_manager, candidate.descriptor.endpoint) == expiry);
+    m_wall_ms -= 3600000;
+    m_wall.set(std::chrono::seconds{m_wall_ms / 1000});
+    BOOST_CHECK(Poll().start.empty());
+    BOOST_CHECK(holepunch::ManagerTestAccess::Expiry(m_manager, candidate.descriptor.endpoint) == expiry);
 }
 
 BOOST_AUTO_TEST_CASE(pinned_attempt_and_handshake_deadline)
@@ -429,7 +676,7 @@ BOOST_AUTO_TEST_CASE(pinned_attempt_and_handshake_deadline)
     BOOST_CHECK(!m_manager.AttachNode(attempt, 101));
 }
 
-BOOST_AUTO_TEST_CASE(filling_capacity_cancels_pending)
+BOOST_AUTO_TEST_CASE(remaining_capacity_is_reserved_by_priority)
 {
     Ready();
     uint64_t round{NextRound()};
@@ -445,50 +692,37 @@ BOOST_AUTO_TEST_CASE(filling_capacity_cancels_pending)
         BOOST_REQUIRE(m_manager.CompleteHandshake(100 + i));
     }
 
-    // Start with fresh advertisements while preserving the three established connections.
+    // Only one additional connection fits, regardless of the selected pair's start time.
     AdvanceTo(102 * 3600000 + 5000);
     Observe(1, 1, m_endpoint);
     Observe(2, 2, m_endpoint);
     round = NextRound();
     candidates = Candidates(round, 4);
+    const auto selected{candidates.front().descriptor};
     std::sort(candidates.begin(), candidates.end(), [](const auto& a, const auto& b) {
         return a.schedule.start_ms < b.schedule.start_ms;
     });
-    // Among four starts in a 30-second window, two are less than the handshake deadline apart.
-    size_t closest{0};
-    for (size_t i{1}; i + 1 < candidates.size(); ++i) {
-        if (candidates[i + 1].schedule.start_ms - candidates[i].schedule.start_ms <
-            candidates[closest + 1].schedule.start_ms - candidates[closest].schedule.start_ms) closest = i;
-    }
     AdvanceTo(round * 60000);
-    for (size_t i{0}; i < closest; ++i) {
-        const auto actions{AdvanceTo(candidates[i].schedule.start_ms)};
-        BOOST_REQUIRE_EQUAL(actions.start.size(), 1);
-        m_manager.FailAttempt(actions.start.front());
-        BOOST_CHECK(!m_manager.IsActive(actions.start.front()));
+    size_t started{0};
+    for (const auto& candidate : candidates) {
+        const auto actions{AdvanceTo(candidate.schedule.start_ms)};
+        for (const auto& attempt : actions.start) {
+            ++started;
+            BOOST_CHECK(attempt->pair.remote == selected);
+            // Even a failure must not backfill the round's unused reservation.
+            m_manager.FailAttempt(attempt);
+        }
     }
-    const auto first{AdvanceTo(candidates[closest].schedule.start_ms)};
-    const auto second{AdvanceTo(candidates[closest + 1].schedule.start_ms)};
-    BOOST_REQUIRE_EQUAL(first.start.size(), 1);
-    BOOST_REQUIRE_EQUAL(second.start.size(), 1);
-    BOOST_REQUIRE(m_manager.AttachNode(first.start.front(), 200));
-    BOOST_REQUIRE(m_manager.AttachNode(second.start.front(), 201));
-    BOOST_REQUIRE(m_manager.CompleteHandshake(200));
-    const auto full{Poll()};
-    BOOST_REQUIRE_EQUAL(full.disconnect.size(), 1);
-    BOOST_CHECK_EQUAL(full.disconnect.front(), 201);
-    BOOST_CHECK(!m_manager.IsActive(second.start.front()));
-    BOOST_CHECK(AdvanceTo(round * 60000 + 34999).start.empty());
+    BOOST_CHECK_EQUAL(started, 1);
 }
 
 BOOST_AUTO_TEST_CASE(start_rechecks)
 {
     Ready();
     uint64_t round{NextRound()};
-    const auto hairpin{Candidates(round, 1, "8.8.8.8").front()};
+    BOOST_REQUIRE(m_manager.AddDescriptor({LookupNumeric("8.8.8.8", 12345), 101, TestKey(12345).GetPubKey()}));
     AdvanceTo(round * 60000);
-    BOOST_CHECK(AdvanceTo(hairpin.schedule.start_ms).start.empty());
-
+    BOOST_CHECK(AdvanceTo(round * 60000 + 34999).start.empty());
     round = NextRound();
     const auto unobserved{Candidates(round, 1).front()};
     AdvanceTo(round * 60000);

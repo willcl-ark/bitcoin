@@ -120,6 +120,8 @@ class HolePunchTest(BitcoinTestFramework):
         self.test_expired_queue()
         self.test_relay_batches()
         self.test_legacy_peer()
+        self.test_curve_budget()
+        self.test_fast_profile()
         self.test_configuration()
 
     def test_invalid_records(self):
@@ -127,7 +129,7 @@ class HolePunchTest(BitcoinTestFramework):
         base = self.descriptor(1)
         invalid = [RawAddress(base, bytes(length)) for length in (0, 41, 43, 512)]
         invalid.extend([
-            self.descriptor(2, holepunch_format=1),
+            self.descriptor(2, holepunch_format=0),
             self.descriptor(3, holepunch_key=bytes(33)),
             self.descriptor(4, holepunch_key=b"\x02" + b"\xff" * 32),
             self.descriptor(5, holepunch_key=b"\x04" + base.holepunch_key[1:]),
@@ -138,6 +140,7 @@ class HolePunchTest(BitcoinTestFramework):
             self.descriptor(10, holepunch_epoch=base.holepunch_epoch - 1),
             self.descriptor(11, holepunch_epoch=base.holepunch_epoch + 1),
             self.descriptor(12, holepunch_format=0xfe),
+            self.descriptor(13, holepunch_format=0xfd),
         ])
         good = []
         ordinary = CAddress()
@@ -197,6 +200,12 @@ class HolePunchTest(BitcoinTestFramework):
     def test_relay_batches(self):
         self.log.info("Queued announcements are split into batches of at most ten")
         self.next_epoch()
+        # Use a fresh source so earlier cases do not consume this test's
+        # monotonic curve-validation budget.
+        self.nodes[0].disconnect_p2ps()
+        self.source = self.nodes[0].add_p2p_connection(P2PInterface(support_addrv2=True))
+        self.receiver = self.nodes[0].add_p2p_connection(AddrReceiver())
+        self.receiver.clear()
         descriptors = [self.descriptor(400 + index) for index in range(25)]
         for offset in range(0, len(descriptors), 10):
             self.send(descriptors[offset:offset + 10])
@@ -212,6 +221,51 @@ class HolePunchTest(BitcoinTestFramework):
         self.send([self.descriptor(500)])
         self.flush()
         assert_equal(legacy.received(), [])
+
+    def test_curve_budget(self):
+        self.log.info("Cheap format checks precede the source's curve-validation budget")
+        self.next_epoch()
+        self.nodes[0].disconnect_p2ps()
+        self.source = self.nodes[0].add_p2p_connection(P2PInterface(support_addrv2=True))
+        self.receiver = self.nodes[0].add_p2p_connection(AddrReceiver())
+        self.receiver.clear()
+        self.send([self.descriptor(600, holepunch_format=0)] * 64)
+        valid = self.descriptor(601)
+        self.send([valid])
+        self.flush()
+        self.assert_received([valid])
+        self.receiver.clear()
+
+        self.log.info("Invalid curve points consume the source's validation budget, including whitelisted sources")
+        invalid = self.descriptor(602, holepunch_key=b"\x02" + b"\xff" * 32)
+        self.send([invalid] * 64)
+        valid = self.descriptor(603)
+        self.send([valid])
+        self.flush()
+        self.assert_received([])
+
+        # Work budgets use monotonic time; advancing mocktime did not replenish
+        # the exhausted bucket. A real second permits one fresh validation.
+        time.sleep(1.1)
+        valid.time = self.mocktime
+        self.send([valid])
+        self.flush()
+        self.assert_received([valid])
+
+    def test_fast_profile(self):
+        self.log.info("The fast relay accepts only its new format, excluding both retired profiles")
+        self.nodes[0].disconnect_p2ps()
+        self.restart_node(0, extra_args=["-holepunchfast", "-whitelist=addr@127.0.0.1"])
+        self.mocktime = self.mocktime // 60 * 60 + 10
+        self.nodes[0].setmocktime(self.mocktime)
+        self.source = self.nodes[0].add_p2p_connection(P2PInterface(support_addrv2=True))
+        self.receiver = self.nodes[0].add_p2p_connection(AddrReceiver())
+        self.receiver.clear()
+        descriptors = [self.descriptor(700 + index, holepunch_format=profile, holepunch_epoch=self.mocktime // 60)
+                       for index, profile in enumerate((0, 1, 0xfe, 0xfd))]
+        self.send(descriptors)
+        self.advance(10)
+        self.assert_received([descriptors[-1]])
 
     def test_configuration(self):
         self.log.info("Participation requires an isolated network and a fixed direct IPv4 binding")

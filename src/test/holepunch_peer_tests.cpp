@@ -103,7 +103,7 @@ struct HolePunchPeerSetup : TestingSetup {
         m_connman.ProcessMessagesOnce(*m_peer);
     }
 
-    void Start(bool initiating, uint8_t format = 0) EXCLUSIVE_LOCKS_REQUIRED(NetEventsInterface::g_msgproc_mutex)
+    void Start(bool initiating, uint8_t format = holepunch::FORMAT) EXCLUSIVE_LOCKS_REQUIRED(NetEventsInterface::g_msgproc_mutex)
     {
         m_connman.SetHolePunchManager(std::make_unique<holepunch::Manager>(Params().GenesisBlock().GetHash(), true, std::nullopt, format));
         auto& manager{*m_connman.GetHolePunchManager()};
@@ -126,22 +126,30 @@ struct HolePunchPeerSetup : TestingSetup {
         BOOST_REQUIRE_EQUAL(local->pubkey[0], initiating ? 2 : 3);
         Poll();
         const uint64_t round{GetTime() / profile.round_seconds + 1};
-        std::optional<holepunch::RoundSchedule> schedule;
-        // Select an eligible remote descriptor with the requested local transport role.
-        for (uint32_t i = 1; i <= 10000; ++i) {
+        CKey key;
+        // Select the opposite transport role, independently of the public-IP lottery.
+        for (uint32_t i = 1; i <= 100; ++i) {
             std::array<unsigned char, 32> secret{};
             secret[30] = i >> 8;
             secret[31] = i;
-            CKey key;
             key.Set(secret.begin(), secret.end(), true);
-            if (key.GetPubKey()[0] == local->pubkey[0]) continue;
-            holepunch::Descriptor remote{LookupNumeric("9.9.9.9", 8333), local->epoch, key.GetPubKey(), format};
+            if (key.GetPubKey()[0] != local->pubkey[0]) break;
+        }
+        BOOST_REQUIRE(key.GetPubKey()[0] != local->pubkey[0]);
+        std::optional<holepunch::RoundSchedule> schedule;
+        // Eligibility depends only on the public IPs and round, never on the key or port.
+        for (uint32_t i = 1; i <= 10000; ++i) {
+            holepunch::Descriptor remote{LookupNumeric("9.9." + std::to_string(i / 256) + "." + std::to_string(i % 256), 8333),
+                                        local->epoch, key.GetPubKey(), format};
+            const auto ranking{holepunch::RankPair(*local, remote, Params().GenesisBlock().GetHash(), round)};
+            BOOST_REQUIRE(ranking);
+            if (!ranking->eligible) continue;
             auto pair{holepunch::DerivePair(key, remote, *local, Params().GenesisBlock().GetHash())};
             BOOST_REQUIRE(pair);
-            if (pair->initiating == initiating) continue;
+            BOOST_REQUIRE(pair->initiating != initiating);
             auto candidate{holepunch::Schedule(*pair, round)};
             BOOST_REQUIRE(candidate);
-            if (!candidate->eligible) continue;
+            BOOST_REQUIRE(candidate->eligible);
             BOOST_REQUIRE(manager.AddDescriptor(remote));
             m_remote_pair = std::move(pair);
             schedule = candidate;
@@ -198,7 +206,7 @@ struct HolePunchPeerSetup : TestingSetup {
         Receive(NetMsg::Make(NetMsgType::FEATURE, std::string{holepunch::GetProfile(m_attempt->pair.local.format).feature_id}, proof));
     }
 
-    void CheckSuccess(bool initiating, uint8_t format = 0) EXCLUSIVE_LOCKS_REQUIRED(NetEventsInterface::g_msgproc_mutex)
+    void CheckSuccess(bool initiating, uint8_t format = holepunch::FORMAT) EXCLUSIVE_LOCKS_REQUIRED(NetEventsInterface::g_msgproc_mutex)
     {
         Start(initiating, format);
         Version();
@@ -272,9 +280,59 @@ BOOST_AUTO_TEST_CASE(fast_rejects_default_feature)
     LOCK(NetEventsInterface::g_msgproc_mutex);
     Start(false, holepunch::FAST_FORMAT);
     Version();
-    Receive(NetMsg::Make(NetMsgType::FEATURE, std::string{holepunch::GetProfile(0).feature_id}, Proof()));
+    Receive(NetMsg::Make(NetMsgType::FEATURE, std::string{holepunch::GetProfile(holepunch::FORMAT).feature_id}, Proof()));
     BOOST_REQUIRE(!m_peer->fDisconnect);
     Receive(NetMsg::Make(NetMsgType::VERACK));
+    BOOST_CHECK(m_peer->fDisconnect);
+    BOOST_CHECK(!m_peer->fSuccessfullyConnected);
+}
+
+BOOST_AUTO_TEST_CASE(default_rejects_retired_feature)
+{
+    LOCK(NetEventsInterface::g_msgproc_mutex);
+    Start(true);
+    Version();
+    Receive(NetMsg::Make(NetMsgType::FEATURE, std::string{"277db3e91161123f45dbd6d5300cd8642c855d6f36660390c2e713a314217fdb"}, Proof()));
+    BOOST_REQUIRE(!m_peer->fDisconnect);
+    Receive(NetMsg::Make(NetMsgType::VERACK));
+    BOOST_CHECK(m_peer->fDisconnect);
+    BOOST_CHECK(!m_peer->fSuccessfullyConnected);
+}
+
+BOOST_AUTO_TEST_CASE(fast_rejects_retired_feature)
+{
+    LOCK(NetEventsInterface::g_msgproc_mutex);
+    Start(false, holepunch::FAST_FORMAT);
+    Version();
+    Receive(NetMsg::Make(NetMsgType::FEATURE, std::string{"5282aeae4c7dbd76b35765093623f374efd0318378da760927c4d47cb0c019c5"}, Proof()));
+    BOOST_REQUIRE(!m_peer->fDisconnect);
+    Receive(NetMsg::Make(NetMsgType::VERACK));
+    BOOST_CHECK(m_peer->fDisconnect);
+    BOOST_CHECK(!m_peer->fSuccessfullyConnected);
+}
+
+BOOST_AUTO_TEST_CASE(retired_proof_format)
+{
+    LOCK(NetEventsInterface::g_msgproc_mutex);
+    Start(true);
+    Version();
+    auto proof{Proof()};
+    // The format byte is outside the MAC input: the otherwise valid MAC must
+    // not permit a retired format to authenticate the connection.
+    proof[0] = 0;
+    ReceiveProof(proof);
+    BOOST_CHECK(m_peer->fDisconnect);
+    BOOST_CHECK(!m_peer->fSuccessfullyConnected);
+}
+
+BOOST_AUTO_TEST_CASE(retired_fast_proof_format)
+{
+    LOCK(NetEventsInterface::g_msgproc_mutex);
+    Start(false, holepunch::FAST_FORMAT);
+    Version();
+    auto proof{Proof()};
+    proof[0] = 0xfe;
+    ReceiveProof(proof);
     BOOST_CHECK(m_peer->fDisconnect);
     BOOST_CHECK(!m_peer->fSuccessfullyConnected);
 }

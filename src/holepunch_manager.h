@@ -11,6 +11,7 @@
 #include <util/time.h>
 
 #include <chrono>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -30,6 +31,7 @@ struct Attempt {
 /** Nonpersistent experiment state, shared by the message and connection threads. */
 class Manager
 {
+    friend struct ManagerTestAccess;
     struct Observer {
         std::vector<unsigned char> group;
         std::optional<CService> endpoint;
@@ -43,6 +45,11 @@ class Manager
         bool complete{false};
         CService remote;
     };
+    struct CachedPair {
+        Descriptor local;
+        Descriptor remote;
+        std::optional<Pair> pair;
+    };
     const uint256 m_genesis;
     const bool m_participate;
     const std::optional<CService> m_manual_endpoint;
@@ -54,6 +61,8 @@ class Manager
     std::map<int64_t, Observer> m_observers GUARDED_BY(m_mutex);
     std::vector<std::shared_ptr<const Attempt>> m_scheduled GUARDED_BY(m_mutex);
     std::vector<Active> m_active GUARDED_BY(m_mutex);
+    std::map<CService, CachedPair> m_pairs GUARDED_BY(m_mutex);
+    std::map<CNetAddr, Clock::time_point> m_recent GUARDED_BY(m_mutex);
     std::vector<int64_t> m_disconnect GUARDED_BY(m_mutex);
     uint32_t m_key_epoch GUARDED_BY(m_mutex);
     uint64_t m_last_round GUARDED_BY(m_mutex);
@@ -68,9 +77,13 @@ public:
     static constexpr size_t MAX_ESTABLISHED{4};
     static constexpr size_t MAX_PENDING{4};
     static constexpr size_t MAX_OBSERVERS{4};
+    static constexpr size_t MAX_ROUND_ATTEMPTS{4};
+    static constexpr size_t MAX_RECENT{64};
+    static constexpr size_t MAX_ROUND_ECDH{4};
+    static constexpr size_t MAX_SOURCE_ROUND_ECDH{4};
     static constexpr size_t STEADY_OBSERVERS{3};
 
-    explicit Manager(const uint256& genesis, bool participate, std::optional<CService> manual_endpoint = std::nullopt, uint8_t format = 0);
+    explicit Manager(const uint256& genesis, bool participate, std::optional<CService> manual_endpoint = std::nullopt, uint8_t format = FORMAT);
     uint8_t GetFormat() const { return m_format; }
     bool AddDescriptor(const Descriptor& descriptor, const std::vector<unsigned char>& source_group = {},
                        const std::vector<unsigned char>& destination_group = {}) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
@@ -93,7 +106,8 @@ public:
         std::vector<int64_t> disconnect;
     };
     /** Advance timers and obtain sockets to start/close. Does not perform network I/O. */
-    Actions Poll(int64_t wall_ms, Clock::time_point now, bool network_active) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
+    Actions Poll(int64_t wall_ms, Clock::time_point now, bool network_active,
+                 const std::function<bool(const CService&)>& allowed = {}) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
 };
 } // namespace holepunch
 #endif // BITCOIN_HOLEPUNCH_MANAGER_H

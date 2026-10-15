@@ -979,7 +979,7 @@ bool AppInitParameterInteraction(const ArgsManager& args)
         }
         if (args.IsArgSet("-holepunchexternal") &&
             !holepunch::IsValidEndpoint(LookupNumeric(args.GetArg("-holepunchexternal", "")),
-                                      args.GetBoolArg("-holepunchfast", false) ? holepunch::FAST_FORMAT : 0)) {
+                                      args.GetBoolArg("-holepunchfast", false) ? holepunch::FAST_FORMAT : holepunch::FORMAT)) {
             return InitError(Untranslated("-holepunchexternal requires an allowed IPv4 address and nonzero port (local addresses require -holepunchfast)"));
         }
     } else if (args.IsArgSet("-holepunchbind")) {

@@ -3258,16 +3258,27 @@ void CConnman::ThreadHolePunch(CService binding)
         std::optional<holepunch::Clock::time_point> ready_since;
     };
     std::vector<Connecting> connecting;
+    std::set<CService> occupied;
     auto next_observer{holepunch::Clock::now()};
-    const auto allowed = [this](const CService& address) {
-        return holepunch::IsValidEndpoint(address, m_holepunch->GetFormat()) &&
+    const auto allowed = [this, &occupied](const CService& address) {
+        return !occupied.contains(address) && holepunch::IsValidEndpoint(address, m_holepunch->GetFormat()) &&
             g_reachable_nets.Contains(NET_IPV4) && !GetProxy(NET_IPV4) &&
             (m_holepunch->GetFormat() == holepunch::FAST_FORMAT || !IsLocal(address)) &&
             (!m_banman || (!m_banman->IsBanned(address) && !m_banman->IsDiscouraged(address)));
     };
     while (!m_interrupt_net->interrupted()) {
+        // Snapshot tuples before Poll takes the manager lock. DisconnectNodes
+        // takes these locks in the opposite order when removing a peer.
+        occupied.clear();
+        {
+            LOCK(m_nodes_mutex);
+            for (const auto* node : m_nodes) {
+                if (node->addrBind == binding) occupied.insert(node->addr);
+            }
+        }
+        for (const auto& pending : connecting) occupied.insert(pending.address);
         const auto now{holepunch::Clock::now()};
-        auto actions{m_holepunch->Poll(Ticks<std::chrono::milliseconds>(NodeClock::now().time_since_epoch()), now, fNetworkActive)};
+        auto actions{m_holepunch->Poll(Ticks<std::chrono::milliseconds>(NodeClock::now().time_since_epoch()), now, fNetworkActive, allowed)};
         if (!actions.disconnect.empty()) {
             LOCK(m_nodes_mutex);
             for (auto* node : m_nodes) {
@@ -3303,12 +3314,11 @@ void CConnman::ThreadHolePunch(CService binding)
         });
         for (auto& attempt : actions.start) {
             const auto& remote{attempt->pair.remote.endpoint};
-            if (allowed(remote)) {
-                auto sock{StartPunchConnect(binding, remote)};
-                if (sock || listening) {
-                    connecting.push_back({std::move(sock), CAddress{remote, NODE_P2P_V2}, attempt->start + 10s, attempt, {}});
-                    continue;
-                }
+            occupied.insert(remote); // Observer selection below shares the same binding.
+            auto sock{StartPunchConnect(binding, remote)};
+            if (sock || listening) {
+                connecting.push_back({std::move(sock), CAddress{remote, NODE_P2P_V2}, attempt->start + 10s, attempt, {}});
+                continue;
             }
             m_holepunch->FailAttempt(attempt);
         }
@@ -3788,7 +3798,7 @@ bool CConnman::Start(CScheduler& scheduler, const Options& connOptions)
     Init(connOptions);
     if (connOptions.m_holepunch_relay) {
         m_holepunch = std::make_unique<holepunch::Manager>(m_params.GenesisBlock().GetHash(), connOptions.m_holepunch, connOptions.m_holepunch_external,
-                                                          connOptions.m_holepunch_fast ? holepunch::FAST_FORMAT : 0);
+                                                          connOptions.m_holepunch_fast ? holepunch::FAST_FORMAT : holepunch::FORMAT);
     }
 
     if (fListen && !InitBinds(connOptions)) {

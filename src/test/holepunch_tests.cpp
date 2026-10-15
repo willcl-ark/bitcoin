@@ -87,12 +87,21 @@ BOOST_AUTO_TEST_CASE(published_vectors)
             BOOST_CHECK_EQUAL(HexStr(pair->auth_key), vector["keys"]["auth"].get_str());
             for (const auto& round_vector : vector["rounds"].getValues()) {
                 const auto round = round_vector["round"].getInt<uint64_t>();
+                const auto ranking = holepunch::RankPair(local, remote, chain, round);
+                BOOST_REQUIRE(ranking);
+                BOOST_CHECK_EQUAL(HexStr(ranking->draw), round_vector["draw"].get_str());
+                BOOST_CHECK_EQUAL(ranking->eligible, round_vector["eligible"].get_bool());
+                BOOST_CHECK_EQUAL(HexStr(ranking->priority), round_vector["priority"].get_str());
+                BOOST_CHECK_EQUAL(HexStr(ranking->endpoint_priority), round_vector["endpoint_priority"].get_str());
+                BOOST_CHECK_EQUAL(HexStr(ranking->tie_break), "0101010108080808");
+                BOOST_CHECK_EQUAL(HexStr(ranking->endpoint_tie_break), "01010101208d08080808480c");
                 const auto schedule = holepunch::Schedule(*pair, round);
                 BOOST_REQUIRE(schedule);
                 BOOST_CHECK_EQUAL(schedule->eligible, round_vector["eligible"].get_bool());
                 BOOST_CHECK_EQUAL(schedule->start_ms, round_vector["start_ms"].getInt<uint64_t>());
                 BOOST_CHECK_EQUAL(schedule->start_ms % 60000, round_vector["offset_ms"].getInt<uint64_t>());
                 BOOST_CHECK_EQUAL(HexStr(schedule->priority), round_vector["priority"].get_str());
+                BOOST_CHECK_EQUAL(HexStr(schedule->endpoint_priority), round_vector["endpoint_priority"].get_str());
             }
             BOOST_CHECK(!holepunch::Schedule(*pair, local.epoch * 60ULL - 1));
             BOOST_CHECK(!holepunch::Schedule(*pair, (local.epoch + 1) * 60ULL));
@@ -117,6 +126,65 @@ BOOST_AUTO_TEST_CASE(published_vectors)
             BOOST_CHECK(!holepunch::CheckProof(wrong_size, *pair, round, session_id));
         }
     }
+}
+
+BOOST_AUTO_TEST_CASE(public_ranking_invariants)
+{
+    const auto vectors = Vectors();
+    const auto local = Descriptor(vectors["pairs"][0]["descriptors"][0]);
+    const auto remote = Descriptor(vectors["pairs"][0]["descriptors"][1]);
+    const auto key = Secret(vectors["pairs"][0]["secrets"][0].get_str());
+    const uint256 chain{ParseHex(vectors["chain"].get_str())};
+    const uint256 session_id{ParseHex(vectors["session_id"].get_str())};
+    const auto pair = holepunch::DerivePair(key, local, remote, chain);
+    BOOST_REQUIRE(pair);
+
+    auto changed_key = remote;
+    changed_key.pubkey = Descriptor(vectors["pairs"][1]["descriptors"][1]).pubkey;
+    auto changed_port = remote;
+    changed_port.endpoint = CService{remote.endpoint, 8333};
+    auto changed_both = changed_key;
+    changed_both.endpoint = changed_port.endpoint;
+    for (const auto& changed : {changed_key, changed_port, changed_both}) {
+        const auto changed_pair = holepunch::DerivePair(key, local, changed, chain);
+        BOOST_REQUIRE(changed_pair);
+        BOOST_CHECK(changed_pair->schedule_key != pair->schedule_key);
+        BOOST_CHECK(changed_pair->auth_key != pair->auth_key);
+        for (uint64_t round{local.epoch * 60ULL}; round < (local.epoch + 1) * 60ULL; ++round) {
+            const auto original = holepunch::RankPair(local, remote, chain, round);
+            const auto ranking = holepunch::RankPair(local, changed, chain, round);
+            const auto reverse = holepunch::RankPair(changed, local, chain, round);
+            BOOST_REQUIRE(original);
+            BOOST_REQUIRE(ranking);
+            BOOST_REQUIRE(reverse);
+            BOOST_CHECK_EQUAL(ranking->eligible, original->eligible);
+            BOOST_CHECK(ranking->draw == original->draw);
+            BOOST_CHECK(ranking->priority == original->priority);
+            BOOST_CHECK(ranking->tie_break == original->tie_break);
+            BOOST_CHECK_EQUAL(ranking->endpoint_priority == original->endpoint_priority, changed.endpoint == remote.endpoint);
+            BOOST_CHECK(ranking->draw == reverse->draw);
+            BOOST_CHECK(ranking->priority == reverse->priority);
+            BOOST_CHECK(ranking->endpoint_priority == reverse->endpoint_priority);
+            BOOST_CHECK(ranking->endpoint_tie_break == reverse->endpoint_tie_break);
+        }
+        const auto round = vectors["pairs"][0]["proof_round"].getInt<uint64_t>();
+        BOOST_CHECK(holepunch::MakeProof(*changed_pair, round, session_id) != holepunch::MakeProof(*pair, round, session_id));
+    }
+
+    const uint64_t round{local.epoch * 60ULL};
+    const auto original = holepunch::RankPair(local, remote, chain, round);
+    auto changed_ip = remote;
+    changed_ip.endpoint = LookupNumeric("9.9.9.9", remote.endpoint.GetPort());
+    for (const auto& ranking : {holepunch::RankPair(local, changed_ip, chain, round),
+                                holepunch::RankPair(local, remote, uint256{}, round),
+                                holepunch::RankPair(local, remote, chain, round + 1)}) {
+        BOOST_REQUIRE(ranking);
+        BOOST_CHECK(ranking->draw != original->draw);
+        BOOST_CHECK(ranking->priority != original->priority);
+        BOOST_CHECK(ranking->endpoint_priority != original->endpoint_priority);
+    }
+    BOOST_CHECK(!holepunch::RankPair(local, remote, chain, round - 1));
+    BOOST_CHECK(!holepunch::RankPair(local, remote, chain, round + 60));
 }
 
 BOOST_AUTO_TEST_CASE(exact_schedule_boundaries)
@@ -198,6 +266,8 @@ BOOST_AUTO_TEST_CASE(fast_profile)
             BOOST_CHECK(!holepunch::CheckProof(proof, *draft_pair, round, session_id));
             proof[0] = 0;
             BOOST_CHECK(!holepunch::CheckProof(proof, *pairs[1 - side], round, session_id));
+            proof[0] = 0xfe;
+            BOOST_CHECK(!holepunch::CheckProof(proof, *pairs[1 - side], round, session_id));
         }
         BOOST_CHECK(!holepunch::Schedule(*pairs[side], first_round - 1));
         BOOST_CHECK(!holepunch::Schedule(*pairs[side], first_round + 2));
@@ -209,7 +279,7 @@ BOOST_AUTO_TEST_CASE(fast_profile_endpoints)
     for (const auto address : {"127.0.0.1", "10.1.1.1", "192.168.1.1", "169.254.1.1", "192.0.2.1"}) {
         const auto endpoint = LookupNumeric(address, 8333);
         BOOST_CHECK(holepunch::IsValidEndpoint(endpoint, holepunch::FAST_FORMAT));
-        BOOST_CHECK(!holepunch::IsValidEndpoint(endpoint, 0));
+        BOOST_CHECK(!holepunch::IsValidEndpoint(endpoint, holepunch::FORMAT));
         const std::array observations{holepunch::Observation{endpoint, {1}}, holepunch::Observation{endpoint, {2}}};
         BOOST_CHECK(holepunch::FindObservedEndpoint(observations, holepunch::FAST_FORMAT) == endpoint);
         BOOST_CHECK(!holepunch::FindObservedEndpoint(observations));
@@ -218,7 +288,8 @@ BOOST_AUTO_TEST_CASE(fast_profile_endpoints)
         BOOST_CHECK(!holepunch::IsValidEndpoint(LookupNumeric(address, 8333), holepunch::FAST_FORMAT));
     }
     BOOST_CHECK(!holepunch::IsValidEndpoint(LookupNumeric("127.0.0.1", 0), holepunch::FAST_FORMAT));
-    BOOST_CHECK(!holepunch::IsValidEndpoint(LookupNumeric("1.1.1.1", 8333), 1));
+    BOOST_CHECK(!holepunch::IsValidEndpoint(LookupNumeric("1.1.1.1", 8333), 0));
+    BOOST_CHECK(!holepunch::IsValidEndpoint(LookupNumeric("1.1.1.1", 8333), 0xfe));
 }
 
 BOOST_AUTO_TEST_CASE(invalid_descriptors_and_pairs)
@@ -236,12 +307,17 @@ BOOST_AUTO_TEST_CASE(invalid_descriptors_and_pairs)
         invalid.insert(invalid.end(), bytes.begin(), bytes.end());
         BOOST_CHECK(!holepunch::Descriptor::Parse(invalid, 8333));
         BOOST_CHECK(!key.ComputeECDHX(CPubKey{bytes}, shared));
+        auto invalid_remote = remote;
+        invalid_remote.pubkey = CPubKey{bytes};
+        BOOST_CHECK(!holepunch::DerivePair(key, local, invalid_remote, chain));
     }
     BOOST_CHECK(!CKey{}.ComputeECDHX(remote.pubkey, shared));
     auto payload = local.Payload();
     BOOST_CHECK(!holepunch::Descriptor::Parse(payload, 0));
-    payload[0] = 1;
-    BOOST_CHECK(!holepunch::Descriptor::Parse(payload, 8333));
+    for (const uint8_t format : {0, 2, 0xfe}) {
+        payload[0] = format;
+        BOOST_CHECK(!holepunch::Descriptor::Parse(payload, 8333));
+    }
     for (const auto address : {"0.0.0.0", "127.0.0.1", "10.1.1.1", "100.64.0.1", "169.254.1.1", "192.168.1.1", "192.0.2.1", "198.18.0.1", "224.0.0.1", "240.0.0.1", "255.255.255.255"}) {
         auto invalid = local;
         invalid.endpoint = LookupNumeric(address, 8333);
@@ -257,6 +333,9 @@ BOOST_AUTO_TEST_CASE(invalid_descriptors_and_pairs)
     remote = Descriptor(vectors["pairs"][0]["descriptors"][1]);
     remote.endpoint = local.endpoint;
     BOOST_CHECK(!holepunch::DerivePair(key, local, remote, chain));
+    remote.endpoint = CService{local.endpoint, static_cast<uint16_t>(local.endpoint.GetPort() + 1)};
+    BOOST_CHECK(!holepunch::DerivePair(key, local, remote, chain));
+    BOOST_CHECK(!holepunch::RankPair(local, remote, chain, local.epoch * 60ULL));
 }
 
 BOOST_AUTO_TEST_CASE(retention_conflicts_and_expiry)

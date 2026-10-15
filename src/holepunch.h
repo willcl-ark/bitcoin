@@ -19,15 +19,16 @@
 #include <string_view>
 #include <vector>
 
-/** Experimental coordinatorless IPv4 TCP hole punching, version 0. */
+/** Experimental coordinatorless IPv4 TCP hole punching, version 1. */
 namespace holepunch {
 
+inline constexpr uint8_t FORMAT{1};
 inline constexpr uint64_t ROUND_SECONDS{60};
 inline constexpr uint64_t EPOCH_SECONDS{3600};
 inline constexpr size_t PAYLOAD_SIZE{42};
 inline constexpr size_t PROOF_SIZE{105};
-inline constexpr std::string_view FEATURE_ID{"277db3e91161123f45dbd6d5300cd8642c855d6f36660390c2e713a314217fdb"};
-inline constexpr uint8_t FAST_FORMAT{0xfe};
+inline constexpr std::string_view FEATURE_ID{"a3f13a7f6c39ee3c031aa28cffd55bc3cdbf7be05e5c0a0264c6b277af0346bc"};
+inline constexpr uint8_t FAST_FORMAT{0xfd};
 using Bytes32 = std::array<unsigned char, 32>;
 
 /** Two fixed, incompatible profiles: the draft and an accelerated local test. */
@@ -41,7 +42,7 @@ struct Profile {
     std::string_view feature_id;
 };
 
-constexpr bool IsSupportedFormat(uint8_t format) { return format == 0 || format == FAST_FORMAT; }
+constexpr bool IsSupportedFormat(uint8_t format) { return format == FORMAT || format == FAST_FORMAT; }
 /** The caller must check IsSupportedFormat before looking up untrusted input. */
 const Profile& GetProfile(uint8_t format);
 
@@ -54,7 +55,7 @@ struct Descriptor {
     CService endpoint;
     uint32_t epoch{0};
     CPubKey pubkey;
-    uint8_t format{0};
+    uint8_t format{FORMAT};
 
     /** Cheap format, destination, and compressed-key encoding checks only. */
     bool IsValidStructure() const;
@@ -75,25 +76,40 @@ struct Pair {
     Descriptor remote;
     uint256 local_id;
     uint256 remote_id;
+    uint256 genesis_hash;
     bool initiating{false};
     Bytes32 schedule_key{};
     Bytes32 auth_key{};
-    std::array<unsigned char, 152> tie_break{};
     ~Pair();
 };
 
 std::optional<Pair> DerivePair(const CKey& key, const Descriptor& local, const Descriptor& remote, const uint256& genesis_hash);
+
+/** Public IPv4-group and endpoint rankings, independent of descriptor keys. */
+struct PublicSchedule {
+    bool eligible;
+    Bytes32 draw;
+    Bytes32 priority;
+    std::array<unsigned char, 8> tie_break;
+    Bytes32 endpoint_priority;
+    std::array<unsigned char, 12> endpoint_tie_break;
+};
+
+/** Cheap ranking before ECDH. Callers must validate descriptor keys separately. */
+std::optional<PublicSchedule> RankPair(const Descriptor& local, const Descriptor& remote, const uint256& genesis_hash, uint64_t round);
 
 struct RoundSchedule {
     bool eligible;
     uint64_t round;
     uint64_t start_ms;
     Bytes32 priority;
-    std::array<unsigned char, 152> tie_break;
+    std::array<unsigned char, 8> tie_break;
+    Bytes32 endpoint_priority;
+    std::array<unsigned char, 12> endpoint_tie_break;
 };
 
-bool IsEligible(const Bytes32& draw, uint8_t format = 0);
-uint32_t OffsetMillis(const Bytes32& draw, uint8_t format = 0);
+bool IsEligible(const Bytes32& draw, uint8_t format = FORMAT);
+uint32_t OffsetMillis(const Bytes32& draw, uint8_t format = FORMAT);
 /** Returns nullopt if the round is outside the pair's epoch. */
 std::optional<RoundSchedule> Schedule(const Pair& pair, uint64_t round);
 std::array<unsigned char, PROOF_SIZE> MakeProof(const Pair& pair, uint64_t round, const uint256& session_id);
@@ -139,7 +155,7 @@ struct Observation {
 };
 
 /** Reports must already be restricted to connected, fresh observers on the punch binding. */
-std::optional<CService> FindObservedEndpoint(std::span<const Observation> observations, uint8_t format = 0);
+std::optional<CService> FindObservedEndpoint(std::span<const Observation> observations, uint8_t format = FORMAT);
 
 } // namespace holepunch
 
