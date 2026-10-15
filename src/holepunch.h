@@ -23,19 +23,37 @@ namespace holepunch {
 
 inline constexpr uint64_t ROUND_SECONDS{60};
 inline constexpr uint64_t EPOCH_SECONDS{3600};
-inline constexpr uint64_t ROUNDS_PER_EPOCH{60};
 inline constexpr size_t PAYLOAD_SIZE{42};
 inline constexpr size_t PROOF_SIZE{105};
 inline constexpr std::string_view FEATURE_ID{"277db3e91161123f45dbd6d5300cd8642c855d6f36660390c2e713a314217fdb"};
+inline constexpr uint8_t FAST_FORMAT{0xfe};
 using Bytes32 = std::array<unsigned char, 32>;
+
+/** Two fixed, incompatible profiles: the draft and an accelerated local test. */
+struct Profile {
+    uint8_t format;
+    uint64_t round_seconds;
+    uint64_t epoch_seconds;
+    uint32_t offset_range; //!< Number of millisecond offsets, starting at 5,000 ms.
+    bool always_eligible;
+    std::string_view domain;
+    std::string_view feature_id;
+};
+
+constexpr bool IsSupportedFormat(uint8_t format) { return format == 0 || format == FAST_FORMAT; }
+/** The caller must check IsSupportedFormat before looking up untrusted input. */
+const Profile& GetProfile(uint8_t format);
 
 /** Globally routable IPv4 address with a nonzero TCP port. */
 bool IsGlobalEndpoint(const CService& endpoint);
+/** The fast test profile additionally permits private and loopback unicast IPv4. */
+bool IsValidEndpoint(const CService& endpoint, uint8_t format);
 
 struct Descriptor {
     CService endpoint;
     uint32_t epoch{0};
     CPubKey pubkey;
+    uint8_t format{0};
 
     bool IsValid() const;
     std::array<unsigned char, PAYLOAD_SIZE> Payload() const;
@@ -69,8 +87,8 @@ struct RoundSchedule {
     std::array<unsigned char, 152> tie_break;
 };
 
-bool IsEligible(const Bytes32& draw);
-uint32_t OffsetMillis(const Bytes32& draw);
+bool IsEligible(const Bytes32& draw, uint8_t format = 0);
+uint32_t OffsetMillis(const Bytes32& draw, uint8_t format = 0);
 /** Returns nullopt if the round is outside the pair's epoch. */
 std::optional<RoundSchedule> Schedule(const Pair& pair, uint64_t round);
 std::array<unsigned char, PROOF_SIZE> MakeProof(const Pair& pair, uint64_t round, const uint256& session_id);
@@ -103,7 +121,7 @@ struct Observation {
 };
 
 /** Reports must already be restricted to connected, fresh observers on the punch binding. */
-std::optional<CService> FindObservedEndpoint(std::span<const Observation> observations);
+std::optional<CService> FindObservedEndpoint(std::span<const Observation> observations, uint8_t format = 0);
 
 } // namespace holepunch
 

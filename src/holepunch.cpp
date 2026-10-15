@@ -18,11 +18,27 @@
 
 namespace holepunch {
 
+const Profile& GetProfile(uint8_t format)
+{
+    static constexpr Profile draft{0, ROUND_SECONDS, EPOCH_SECONDS, 30000, false, "BitcoinHolePunch/v0", FEATURE_ID};
+    static constexpr Profile fast{FAST_FORMAT, 30, 60, 5000, true, "BitcoinHolePunch/test-fast/v0",
+                                  "5282aeae4c7dbd76b35765093623f374efd0318378da760927c4d47cb0c019c5"};
+    assert(IsSupportedFormat(format));
+    return format == FAST_FORMAT ? fast : draft;
+}
+
 bool IsGlobalEndpoint(const CService& endpoint)
 {
     // IsRoutable alone does not exclude IPv4 multicast and reserved space.
     return endpoint.IsIPv4() && endpoint.IsRoutable() && endpoint.GetPort() != 0 &&
            endpoint.GetLinkedIPv4() < 0xe0000000;
+}
+
+bool IsValidEndpoint(const CService& endpoint, uint8_t format)
+{
+    if (format == 0) return IsGlobalEndpoint(endpoint);
+    return format == FAST_FORMAT && endpoint.IsIPv4() && endpoint.GetPort() != 0 &&
+           endpoint.GetLinkedIPv4() >= 0x01000000 && endpoint.GetLinkedIPv4() < 0xe0000000;
 }
 
 namespace {
@@ -42,6 +58,7 @@ Bytes32 RoundHash(const Bytes32& key, std::string_view label, uint64_t round)
 std::array<unsigned char, PROOF_SIZE> Proof(const Pair& pair, uint64_t round, const uint256& session_id, bool local)
 {
     std::array<unsigned char, PROOF_SIZE> result{};
+    result[0] = pair.local.format;
     WriteLE64(result.data() + 1, round);
     const auto& sender = local ? pair.local_id : pair.remote_id;
     const auto& receiver = local ? pair.remote_id : pair.local_id;
@@ -62,7 +79,7 @@ std::array<unsigned char, PROOF_SIZE> Proof(const Pair& pair, uint64_t round, co
 
 bool Descriptor::IsValid() const
 {
-    return IsGlobalEndpoint(endpoint) && pubkey.IsCompressed() && pubkey.IsFullyValid();
+    return IsValidEndpoint(endpoint, format) && pubkey.IsCompressed() && pubkey.IsFullyValid();
 }
 
 std::array<unsigned char, PAYLOAD_SIZE> Descriptor::Payload() const
@@ -70,6 +87,7 @@ std::array<unsigned char, PAYLOAD_SIZE> Descriptor::Payload() const
     assert(endpoint.IsIPv4());
     assert(pubkey.IsCompressed());
     std::array<unsigned char, PAYLOAD_SIZE> payload{};
+    payload[0] = format;
     in_addr ip;
     const bool ipv4 = endpoint.GetInAddr(&ip);
     assert(ipv4);
@@ -81,10 +99,10 @@ std::array<unsigned char, PAYLOAD_SIZE> Descriptor::Payload() const
 
 std::optional<Descriptor> Descriptor::Parse(std::span<const unsigned char> payload, uint16_t port)
 {
-    if (payload.size() != PAYLOAD_SIZE || payload[0] != 0) return std::nullopt;
+    if (payload.size() != PAYLOAD_SIZE || !IsSupportedFormat(payload[0])) return std::nullopt;
     in_addr ip;
     std::memcpy(&ip, payload.data() + 1, 4);
-    Descriptor descriptor{CService{CNetAddr{ip}, port}, ReadLE32(payload.data() + 5), CPubKey{payload.subspan(9)}};
+    Descriptor descriptor{CService{CNetAddr{ip}, port}, ReadLE32(payload.data() + 5), CPubKey{payload.subspan(9)}, payload[0]};
     if (!descriptor.IsValid()) return std::nullopt;
     return descriptor;
 }
@@ -115,7 +133,7 @@ Pair::~Pair()
 
 std::optional<Pair> DerivePair(const CKey& key, const Descriptor& local, const Descriptor& remote, const uint256& genesis_hash)
 {
-    if (!local.IsValid() || !remote.IsValid() || local.epoch != remote.epoch ||
+    if (!local.IsValid() || !remote.IsValid() || local.epoch != remote.epoch || local.format != remote.format ||
         local.endpoint == remote.endpoint || local.pubkey == remote.pubkey ||
         !key.IsValid() || key.GetPubKey() != local.pubkey) return std::nullopt;
     Pair pair;
@@ -129,7 +147,7 @@ std::optional<Pair> DerivePair(const CKey& key, const Descriptor& local, const D
     std::copy(lo.begin(), lo.end(), pair.tie_break.begin());
     std::copy(hi.begin(), hi.end(), pair.tie_break.begin() + lo.size());
 
-    constexpr std::string_view domain{"BitcoinHolePunch/v0"};
+    const auto domain = GetProfile(local.format).domain;
     Bytes32 salt;
     CSHA256{}.Write(reinterpret_cast<const unsigned char*>(domain.data()), domain.size())
         .Write(pair.tie_break.data(), pair.tie_break.size()).Finalize(salt.data());
@@ -150,29 +168,31 @@ std::optional<Pair> DerivePair(const CKey& key, const Descriptor& local, const D
     return pair;
 }
 
-bool IsEligible(const Bytes32& draw)
+bool IsEligible(const Bytes32& draw, uint8_t format)
 {
-    return draw[0] < 8;
+    return GetProfile(format).always_eligible || draw[0] < 8;
 }
 
-uint32_t OffsetMillis(const Bytes32& draw)
+uint32_t OffsetMillis(const Bytes32& draw, uint8_t format)
 {
     // Base-256 multiplication retains the carry above the 256-bit product,
-    // exactly floor(int256(draw) * 30000 / 2^256), without floating point.
+    // exactly floor(int256(draw) * range / 2^256), without floating point.
     uint32_t carry{0};
+    const uint32_t range = GetProfile(format).offset_range;
     for (auto it = draw.rbegin(); it != draw.rend(); ++it) {
-        carry = (uint32_t{*it} * 30000 + carry) >> 8;
+        carry = (uint32_t{*it} * range + carry) >> 8;
     }
     return 5000 + carry;
 }
 
 std::optional<RoundSchedule> Schedule(const Pair& pair, uint64_t round)
 {
-    if (round / ROUNDS_PER_EPOCH != pair.local.epoch) return std::nullopt;
+    const auto& profile = GetProfile(pair.local.format);
+    if (round / (profile.epoch_seconds / profile.round_seconds) != pair.local.epoch) return std::nullopt;
     return RoundSchedule{
-        IsEligible(RoundHash(pair.schedule_key, "eligibility", round)),
+        IsEligible(RoundHash(pair.schedule_key, "eligibility", round), profile.format),
         round,
-        round * ROUND_SECONDS * 1000 + OffsetMillis(RoundHash(pair.schedule_key, "time", round)),
+        round * profile.round_seconds * 1000 + OffsetMillis(RoundHash(pair.schedule_key, "time", round), profile.format),
         RoundHash(pair.schedule_key, "priority", round),
         pair.tie_break,
     };
@@ -242,11 +262,11 @@ void DescriptorCache::SetLocal(std::optional<Descriptor> descriptor)
     m_local = std::move(descriptor);
 }
 
-std::optional<CService> FindObservedEndpoint(std::span<const Observation> observations)
+std::optional<CService> FindObservedEndpoint(std::span<const Observation> observations, uint8_t format)
 {
     std::map<CService, std::set<std::vector<unsigned char>>> groups;
     for (const auto& observation : observations) {
-        if (IsGlobalEndpoint(observation.endpoint)) {
+        if (IsValidEndpoint(observation.endpoint, format)) {
             groups[observation.endpoint].insert(observation.network_group);
         }
     }

@@ -130,6 +130,97 @@ BOOST_AUTO_TEST_CASE(exact_schedule_boundaries)
     }
 }
 
+BOOST_AUTO_TEST_CASE(fast_profile)
+{
+    const auto vectors = Vectors();
+    const auto& profile = holepunch::GetProfile(holepunch::FAST_FORMAT);
+    BOOST_CHECK_EQUAL(profile.round_seconds, 30);
+    BOOST_CHECK_EQUAL(profile.epoch_seconds, 60);
+    BOOST_CHECK(profile.always_eligible);
+    const std::string feature_domain{std::string{profile.domain} + "/feature"};
+    holepunch::Bytes32 feature_hash;
+    CSHA256{}.Write(reinterpret_cast<const unsigned char*>(feature_domain.data()), feature_domain.size()).Finalize(feature_hash.data());
+    BOOST_CHECK_EQUAL(HexStr(feature_hash), profile.feature_id);
+    BOOST_CHECK(profile.feature_id != holepunch::FEATURE_ID);
+
+    holepunch::Bytes32 draw{};
+    BOOST_CHECK_EQUAL(holepunch::OffsetMillis(draw, profile.format), 5000);
+    draw[0] = 0x80;
+    BOOST_CHECK_EQUAL(holepunch::OffsetMillis(draw, profile.format), 7500);
+    draw.fill(0xff);
+    BOOST_CHECK_EQUAL(holepunch::OffsetMillis(draw, profile.format), 9999);
+    BOOST_CHECK(holepunch::IsEligible(draw, profile.format));
+
+    const std::array keys{Secret(vectors["pairs"][0]["secrets"][0].get_str()), Secret(vectors["pairs"][0]["secrets"][1].get_str())};
+    const uint256 chain{ParseHex(vectors["chain"].get_str())};
+    std::array descriptors{Descriptor(vectors["pairs"][0]["descriptors"][0]), Descriptor(vectors["pairs"][0]["descriptors"][1])};
+    const auto draft_pair = holepunch::DerivePair(keys[0], descriptors[0], descriptors[1], chain);
+    BOOST_REQUIRE(draft_pair);
+    descriptors[0].format = profile.format;
+    BOOST_CHECK(!holepunch::DerivePair(keys[0], descriptors[0], descriptors[1], chain));
+    descriptors[1].format = profile.format;
+    const auto fast_pair = holepunch::DerivePair(keys[0], descriptors[0], descriptors[1], chain);
+    BOOST_REQUIRE(fast_pair);
+    BOOST_CHECK(fast_pair->auth_key != draft_pair->auth_key);
+    BOOST_CHECK(fast_pair->schedule_key != draft_pair->schedule_key);
+    BOOST_CHECK(fast_pair->local_id != draft_pair->local_id);
+
+    // Local testing permits different ports on the same loopback address.
+    descriptors[0].endpoint = LookupNumeric("127.0.0.1", 8333);
+    descriptors[1].endpoint = LookupNumeric("127.0.0.1", 18444);
+    const std::array pairs{holepunch::DerivePair(keys[0], descriptors[0], descriptors[1], chain),
+                           holepunch::DerivePair(keys[1], descriptors[1], descriptors[0], chain)};
+    BOOST_REQUIRE(pairs[0]);
+    BOOST_REQUIRE(pairs[1]);
+    BOOST_CHECK(pairs[0]->initiating != pairs[1]->initiating);
+    BOOST_CHECK(pairs[0]->schedule_key == pairs[1]->schedule_key);
+    BOOST_CHECK(pairs[0]->auth_key == pairs[1]->auth_key);
+    const uint64_t first_round{descriptors[0].epoch * 2ULL};
+    const uint256 session_id{ParseHex(vectors["session_id"].get_str())};
+    for (size_t side{0}; side < 2; ++side) {
+        const auto& local = descriptors[side];
+        BOOST_CHECK(holepunch::Descriptor::Parse(local.Payload(), local.endpoint.GetPort()) == local);
+        BOOST_CHECK_EQUAL(local.Payload()[0], holepunch::FAST_FORMAT);
+        for (uint64_t round{first_round}; round < first_round + 2; ++round) {
+            const auto schedule = holepunch::Schedule(*pairs[side], round);
+            const auto peer_schedule = holepunch::Schedule(*pairs[1 - side], round);
+            BOOST_REQUIRE(schedule);
+            BOOST_REQUIRE(peer_schedule);
+            BOOST_CHECK(schedule->eligible);
+            BOOST_CHECK_EQUAL(schedule->start_ms, peer_schedule->start_ms);
+            BOOST_CHECK(schedule->priority == peer_schedule->priority);
+            BOOST_CHECK(schedule->tie_break == peer_schedule->tie_break);
+            BOOST_CHECK_GE(schedule->start_ms % 30000, 5000);
+            BOOST_CHECK_LT(schedule->start_ms % 30000, 10000);
+            auto proof = holepunch::MakeProof(*pairs[side], round, session_id);
+            BOOST_CHECK_EQUAL(proof[0], holepunch::FAST_FORMAT);
+            BOOST_CHECK(holepunch::CheckProof(proof, *pairs[1 - side], round, session_id));
+            BOOST_CHECK(!holepunch::CheckProof(proof, *draft_pair, round, session_id));
+            proof[0] = 0;
+            BOOST_CHECK(!holepunch::CheckProof(proof, *pairs[1 - side], round, session_id));
+        }
+        BOOST_CHECK(!holepunch::Schedule(*pairs[side], first_round - 1));
+        BOOST_CHECK(!holepunch::Schedule(*pairs[side], first_round + 2));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(fast_profile_endpoints)
+{
+    for (const auto address : {"127.0.0.1", "10.1.1.1", "192.168.1.1", "169.254.1.1", "192.0.2.1"}) {
+        const auto endpoint = LookupNumeric(address, 8333);
+        BOOST_CHECK(holepunch::IsValidEndpoint(endpoint, holepunch::FAST_FORMAT));
+        BOOST_CHECK(!holepunch::IsValidEndpoint(endpoint, 0));
+        const std::array observations{holepunch::Observation{endpoint, {1}}, holepunch::Observation{endpoint, {2}}};
+        BOOST_CHECK(holepunch::FindObservedEndpoint(observations, holepunch::FAST_FORMAT) == endpoint);
+        BOOST_CHECK(!holepunch::FindObservedEndpoint(observations));
+    }
+    for (const auto address : {"0.0.0.0", "0.1.1.1", "224.0.0.1", "240.0.0.1", "255.255.255.255", "::1"}) {
+        BOOST_CHECK(!holepunch::IsValidEndpoint(LookupNumeric(address, 8333), holepunch::FAST_FORMAT));
+    }
+    BOOST_CHECK(!holepunch::IsValidEndpoint(LookupNumeric("127.0.0.1", 0), holepunch::FAST_FORMAT));
+    BOOST_CHECK(!holepunch::IsValidEndpoint(LookupNumeric("1.1.1.1", 8333), 1));
+}
+
 BOOST_AUTO_TEST_CASE(invalid_descriptors_and_pairs)
 {
     const auto vectors = Vectors();
