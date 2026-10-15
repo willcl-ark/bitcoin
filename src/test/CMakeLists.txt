@@ -54,6 +54,7 @@ add_executable(test_bitcoin
   getarg_tests.cpp
   hash_tests.cpp
   headers_sync_chainwork_tests.cpp
+  holepunch_tests.cpp
   httpserver_tests.cpp
   i2p_tests.cpp
   interfaces_tests.cpp
@@ -150,6 +151,7 @@ target_json_data_sources(test_bitcoin
   data/bip341_wallet_vectors.json
   data/bip352_send_and_receive_vectors.json
   data/blockfilters.json
+  data/holepunch.json
   data/key_io_invalid.json
   data/key_io_valid.json
   data/script_tests.json

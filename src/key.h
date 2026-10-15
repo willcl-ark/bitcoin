@@ -215,6 +215,12 @@ public:
     ECDHSecret ComputeBIP324ECDHSecret(const EllSwiftPubKey& their_ellswift,
                                        const EllSwiftPubKey& our_ellswift,
                                        bool initiating) const;
+
+    /** Compute the raw big-endian x coordinate of ECDH, without hashing it.
+     * Returns false for an invalid key. Callers must apply a protocol-specific
+     * KDF and erase the output secret when finished with it.
+     */
+    bool ComputeECDHX(const CPubKey& pubkey, ECDHSecret& output) const;
     /** Compute a KeyPair
      *
      *  Wraps a `secp256k1_keypair` type.

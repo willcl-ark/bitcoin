@@ -11,6 +11,7 @@
 #include <random.h>
 
 #include <secp256k1.h>
+#include <secp256k1_ecdh.h>
 #include <secp256k1_ellswift.h>
 #include <secp256k1_extrakeys.h>
 #include <secp256k1_recovery.h>
@@ -324,6 +325,20 @@ EllSwiftPubKey CKey::EllSwiftCreate(std::span<const std::byte> ent32) const
     // Should always succeed for valid keys (asserted above).
     assert(success);
     return {encoded_pubkey};
+}
+
+bool CKey::ComputeECDHX(const CPubKey& pubkey, ECDHSecret& output) const
+{
+    if (!keydata) return false;
+    secp256k1_pubkey parsed;
+    if (!secp256k1_ec_pubkey_parse(secp256k1_context_static, &parsed, pubkey.data(), pubkey.size())) return false;
+    const auto copy_x = [](unsigned char* out, const unsigned char* x, const unsigned char*, void*) {
+        std::copy_n(x, 32, out);
+        return 1;
+    };
+    const bool success = secp256k1_ecdh(secp256k1_context_static, UCharCast(output.data()), &parsed, keydata->data(), copy_x, nullptr);
+    assert(success);
+    return true;
 }
 
 ECDHSecret CKey::ComputeBIP324ECDHSecret(const EllSwiftPubKey& their_ellswift, const EllSwiftPubKey& our_ellswift, bool initiating) const
