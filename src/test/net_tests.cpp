@@ -1376,6 +1376,30 @@ public:
 
 } // namespace
 
+BOOST_AUTO_TEST_CASE(holepunch_transport)
+{
+    V2Transport responder{0, /*initiating=*/false, /*allow_v1_fallback=*/false};
+    BOOST_CHECK(std::get<0>(responder.GetBytesToSend(false)).empty());
+    std::vector<uint8_t> prefix{Params().MessageStart().begin(), Params().MessageStart().end()};
+    const std::string command{"version"};
+    prefix.insert(prefix.end(), command.begin(), command.end());
+    prefix.resize(16, 0);
+    std::span<const uint8_t> bytes{prefix};
+    BOOST_CHECK(!responder.ReceivedBytes(bytes));
+    BOOST_CHECK(!responder.ShouldReconnectV1());
+    V2Transport initiator{1, /*initiating=*/true, /*allow_v1_fallback=*/false};
+    BOOST_CHECK(!std::get<0>(initiator.GetBytesToSend(false)).empty());
+    initiator.MarkBytesSent(24);
+    BOOST_CHECK(!initiator.ShouldReconnectV1());
+    // The protocol role is independent of which endpoint accepted the TCP connection.
+    CNode accepted{2, nullptr, CAddress{}, 0, 0, CService{}, "", ConnectionType::INBOUND,
+                   false, 0, CNodeOptions{.use_v2transport = true, .holepunch = true, .transport_initiator = true}};
+    BOOST_CHECK(!std::get<0>(accepted.m_transport->GetBytesToSend(false)).empty());
+    CNode connected{3, nullptr, CAddress{}, 0, 0, CService{}, "", ConnectionType::OUTBOUND_FULL_RELAY,
+                    false, 0, CNodeOptions{.use_v2transport = true, .holepunch = true, .transport_initiator = false}};
+    BOOST_CHECK(std::get<0>(connected.m_transport->GetBytesToSend(false)).empty());
+}
+
 BOOST_AUTO_TEST_CASE(v2transport_test)
 {
     // A mostly normal scenario, testing a transport in initiator mode.

@@ -586,6 +586,7 @@ private:
     BIP324Cipher m_cipher;
     /** Whether we are the initiator side. */
     const bool m_initiating;
+    const bool m_allow_v1_fallback;
     /** NodeId (for debug logging). */
     const NodeId m_nodeid;
     /** Encapsulate a V1Transport to fall back to. */
@@ -632,7 +633,7 @@ private:
     /** Put our public key + garbage in the send buffer. */
     void StartSendingHandshake() noexcept EXCLUSIVE_LOCKS_REQUIRED(m_send_mutex);
     /** Process bytes in m_recv_buffer, while in KEY_MAYBE_V1 state. */
-    void ProcessReceivedMaybeV1Bytes() noexcept EXCLUSIVE_LOCKS_REQUIRED(m_recv_mutex, !m_send_mutex);
+    bool ProcessReceivedMaybeV1Bytes() noexcept EXCLUSIVE_LOCKS_REQUIRED(m_recv_mutex, !m_send_mutex);
     /** Process bytes in m_recv_buffer, while in KEY state. */
     bool ProcessReceivedKeyBytes() noexcept EXCLUSIVE_LOCKS_REQUIRED(m_recv_mutex, !m_send_mutex);
     /** Process bytes in m_recv_buffer, while in GARB_GARBTERM state. */
@@ -647,11 +648,12 @@ public:
      *
      * @param[in] nodeid      the node's NodeId (only for debug log output).
      * @param[in] initiating  whether we are the initiator side.
+     * @param[in] allow_v1_fallback  permit detection of, or reconnection to, a v1 peer.
      */
-    V2Transport(NodeId nodeid, bool initiating) noexcept;
+    V2Transport(NodeId nodeid, bool initiating, bool allow_v1_fallback = true) noexcept;
 
     /** Construct a V2 transport with specified keys and garbage (test use only). */
-    V2Transport(NodeId nodeid, bool initiating, const CKey& key, std::span<const std::byte> ent32, std::vector<uint8_t> garbage) noexcept;
+    V2Transport(NodeId nodeid, bool initiating, const CKey& key, std::span<const std::byte> ent32, std::vector<uint8_t> garbage, bool allow_v1_fallback = true) noexcept;
 
     // Receive side functions.
     bool ReceivedMessageComplete() const noexcept override EXCLUSIVE_LOCKS_REQUIRED(!m_recv_mutex);
@@ -677,6 +679,10 @@ struct CNodeOptions
     bool prefer_evict = false;
     size_t recv_flood_size{DEFAULT_MAXRECEIVEBUFFER * 1000};
     bool use_v2transport = false;
+    /** Punched peers require v2, including when accepted by the TCP listener. */
+    bool holepunch = false;
+    /** Logical transport role, when different from the direction of the TCP connection. */
+    std::optional<bool> transport_initiator{};
 };
 
 /** Information about a peer */

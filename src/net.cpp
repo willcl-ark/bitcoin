@@ -1003,9 +1003,10 @@ void V2Transport::StartSendingHandshake() noexcept
     // We cannot wipe m_send_garbage as it will still be used as AAD later in the handshake.
 }
 
-V2Transport::V2Transport(NodeId nodeid, bool initiating, const CKey& key, std::span<const std::byte> ent32, std::vector<uint8_t> garbage) noexcept
+V2Transport::V2Transport(NodeId nodeid, bool initiating, const CKey& key, std::span<const std::byte> ent32, std::vector<uint8_t> garbage, bool allow_v1_fallback) noexcept
     : m_cipher{key, ent32},
       m_initiating{initiating},
+      m_allow_v1_fallback{allow_v1_fallback},
       m_nodeid{nodeid},
       m_v1_fallback{nodeid},
       m_recv_state{initiating ? RecvState::KEY : RecvState::KEY_MAYBE_V1},
@@ -1020,9 +1021,9 @@ V2Transport::V2Transport(NodeId nodeid, bool initiating, const CKey& key, std::s
     }
 }
 
-V2Transport::V2Transport(NodeId nodeid, bool initiating) noexcept
+V2Transport::V2Transport(NodeId nodeid, bool initiating, bool allow_v1_fallback) noexcept
     : V2Transport{nodeid, initiating, GenerateRandomKey(),
-                  MakeByteSpan(GetRandHash()), GenerateRandomGarbage()} {}
+                  MakeByteSpan(GetRandHash()), GenerateRandomGarbage(), allow_v1_fallback} {}
 
 void V2Transport::SetReceiveState(RecvState recv_state) noexcept
 {
@@ -1084,7 +1085,7 @@ bool V2Transport::ReceivedMessageComplete() const noexcept
     return m_recv_state == RecvState::APP_READY;
 }
 
-void V2Transport::ProcessReceivedMaybeV1Bytes() noexcept
+bool V2Transport::ProcessReceivedMaybeV1Bytes() noexcept
 {
     AssertLockHeld(m_recv_mutex);
     AssertLockNotHeld(m_send_mutex);
@@ -1104,6 +1105,7 @@ void V2Transport::ProcessReceivedMaybeV1Bytes() noexcept
         SetSendState(SendState::AWAITING_KEY);
         StartSendingHandshake();
     } else if (m_recv_buffer.size() == v1_prefix.size()) {
+        if (!m_allow_v1_fallback) return false;
         // Full match with the v1 prefix, so fall back to v1 behavior.
         LOCK(m_send_mutex);
         std::span<const uint8_t> feedback{m_recv_buffer};
@@ -1120,6 +1122,7 @@ void V2Transport::ProcessReceivedMaybeV1Bytes() noexcept
     } else {
         // We have not received enough to distinguish v1 from v2 yet. Wait until more bytes come.
     }
+    return true;
 }
 
 bool V2Transport::ProcessReceivedKeyBytes() noexcept
@@ -1137,7 +1140,7 @@ bool V2Transport::ProcessReceivedKeyBytes() noexcept
     // means we can log it.
     static constexpr std::array<uint8_t, 12> MATCH = {'v', 'e', 'r', 's', 'i', 'o', 'n', 0, 0, 0, 0, 0};
     static constexpr size_t OFFSET = std::tuple_size_v<MessageStartChars>;
-    if (!m_initiating && m_recv_buffer.size() >= OFFSET + MATCH.size()) {
+    if ((!m_initiating || !m_allow_v1_fallback) && m_recv_buffer.size() >= OFFSET + MATCH.size()) {
         if (std::equal(MATCH.begin(), MATCH.end(), m_recv_buffer.begin() + OFFSET)) {
             LogDebug(BCLog::NET, "V2 transport error: V1 peer with wrong MessageStart %s\n",
                      HexStr(std::span(m_recv_buffer).first(OFFSET)));
@@ -1385,7 +1388,7 @@ bool V2Transport::ReceivedBytes(std::span<const uint8_t>& msg_bytes) noexcept
         // Process data in the buffer.
         switch (m_recv_state) {
         case RecvState::KEY_MAYBE_V1:
-            ProcessReceivedMaybeV1Bytes();
+            if (!ProcessReceivedMaybeV1Bytes()) return false;
             if (m_recv_state == RecvState::V1) return true;
             break;
 
@@ -1563,7 +1566,7 @@ bool V2Transport::ShouldReconnectV1() const noexcept
     AssertLockNotHeld(m_send_mutex);
     AssertLockNotHeld(m_recv_mutex);
     // Only outgoing connections need reconnection.
-    if (!m_initiating) return false;
+    if (!m_initiating || !m_allow_v1_fallback) return false;
 
     LOCK(m_recv_mutex);
     // We only reconnect in the very first state and when the receive buffer is empty. Together
@@ -4100,10 +4103,10 @@ ServiceFlags CConnman::GetLocalServices() const
     return m_local_services;
 }
 
-static util::NotNullUniquePtr<Transport> MakeTransport(NodeId id, bool use_v2transport, bool inbound) noexcept
+static util::NotNullUniquePtr<Transport> MakeTransport(NodeId id, bool use_v2transport, bool inbound, const CNodeOptions& opts) noexcept
 {
     if (use_v2transport) {
-        return util::NotNull{std::make_unique<V2Transport>(id, /*initiating=*/!inbound)};
+        return util::NotNull{std::make_unique<V2Transport>(id, opts.transport_initiator.value_or(!inbound), /*allow_v1_fallback=*/!opts.holepunch)};
     } else {
         return util::NotNull{std::make_unique<V1Transport>(id)};
     }
@@ -4120,7 +4123,7 @@ CNode::CNode(NodeId idIn,
              bool inbound_onion,
              uint64_t network_key,
              CNodeOptions&& node_opts)
-    : m_transport{MakeTransport(idIn, node_opts.use_v2transport, conn_type_in == ConnectionType::INBOUND)},
+    : m_transport{MakeTransport(idIn, node_opts.use_v2transport, conn_type_in == ConnectionType::INBOUND, node_opts)},
       m_permission_flags{node_opts.permission_flags},
       m_sock{sock},
       m_connected{NodeClock::now()},
