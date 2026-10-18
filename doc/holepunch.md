@@ -50,6 +50,18 @@ boards whose local addresses cannot enter the address manager.
 
 ## Trying it on signet
 
+The minimal participant command with holepunch logging is:
+
+```bash
+./build/bin/bitcoind -signet -debug=holepunch -holepunch=1
+```
+
+Add `-prune=550` if desired. V2 transport is enabled by default, and the node
+automatically selects a random punch port per address family, fixed until
+shutdown. `-holepunchport` is an optional override. The more explicit commands
+below constrain the test to IPv4 and use a known port for firewall setup and
+diagnostics. These are test choices, not requirements for participation.
+
 Use this branch on every node. For an IPv4 test, arrange two publicly reachable
 boards in different network groups and two participants on different public IPs.
 Without `-asmap`, IPv4 groups are /16s; with it, choose different mapped ASNs.
