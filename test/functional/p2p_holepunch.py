@@ -96,7 +96,16 @@ class HolePunchTest(BitcoinTestFramework):
     def run_test(self):
         MESSAGEMAP[b"addrv2"] = RawAddrV2
         self.test_board()
-        self.test_punch()
+        expected_logs = [
+            "Board handshake complete, role=visitor",
+            "external endpoint confirmed by quorum",
+            "Received exact registration acknowledgement",
+            "Round height=",
+            "Session started role=",
+            "Punched v2 handshake complete, role=",
+        ]
+        with self.nodes[2].assert_debug_log(expected_logs, timeout=5), self.nodes[3].assert_debug_log(expected_logs, timeout=5):
+            self.test_punch()
 
     def test_board(self):
         board = self.nodes[0]

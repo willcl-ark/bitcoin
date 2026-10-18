@@ -1833,7 +1833,11 @@ void PeerManagerImpl::FinalizeNode(const CNode& node)
         }
         m_hp_reports.Remove(nodeid);
         for (const auto family : {NET_IPV4, NET_IPV6}) {
-            m_holepunch.SetExternal(family, m_hp_reports.External(family), GetTime());
+            const auto previous{m_holepunch.External(family)};
+            const auto external{m_hp_reports.External(family)};
+            if (m_holepunch.SetExternal(family, external, GetTime())) {
+                LogDebug(BCLog::HOLEPUNCH, "%s external endpoint %s%s", GetNetworkName(family), external ? (previous ? "changed" : "confirmed by quorum") : "lost quorum", fLogIPs && external ? strprintf(" endpoint=%s", external->ToStringAddrPort()) : "");
+            }
         }
         m_hp_board.Remove(nodeid, GetTime());
     }
@@ -2250,7 +2254,9 @@ void PeerManagerImpl::HolePunchBoardFailed(const CService& endpoint, int64_t now
 {
     const auto family{holepunch::Family(endpoint)};
     m_hp_failed_boards[endpoint] = now + 3600;
+    LogDebug(BCLog::HOLEPUNCH, "%s board connection failed, consecutive failures=%u", GetNetworkName(family), m_hp_failures[family] + 1);
     if (++m_hp_failures[family] >= 4) {
+        LogDebug(BCLog::HOLEPUNCH, "%s board discovery backing off for one hour", GetNetworkName(family));
         m_hp_backoff[family] = now + 3600;
         m_hp_failures[family] = 0;
     }
@@ -2291,8 +2297,12 @@ void PeerManagerImpl::HolePunchMaintenance()
         m_hp_board.Expire(now);
         m_holepunch.Expire(now);
         for (const auto family : {NET_IPV4, NET_IPV6}) {
-            m_holepunch.SetExternal(family, m_hp_reports.External(family), now);
-            m_holepunch.MaybeRotate(family, now);
+            const auto previous{m_holepunch.External(family)};
+            const auto external{m_hp_reports.External(family)};
+            if (m_holepunch.SetExternal(family, external, now)) {
+                LogDebug(BCLog::HOLEPUNCH, "%s external endpoint %s%s", GetNetworkName(family), external ? (previous ? "changed" : "confirmed by quorum") : "lost quorum", fLogIPs && external ? strprintf(" endpoint=%s", external->ToStringAddrPort()) : "");
+            }
+            if (m_holepunch.MaybeRotate(family, now)) LogDebug(BCLog::HOLEPUNCH, "Rotated %s announcement key", GetNetworkName(family));
         }
         for (const auto& [id, peer] : peers) {
             if (peer->m_hp_board) {
@@ -2305,6 +2315,7 @@ void PeerManagerImpl::HolePunchMaintenance()
             const auto family{holepunch::Family(address)};
             if (!capacity || now >= peer->m_hp_rotate_at ||
                 (peer->m_hp_ack_deadline && now >= peer->m_hp_ack_deadline)) {
+                LogDebug(BCLog::HOLEPUNCH, "Closing board connection: %s, peer=%d", !capacity ? "no free connection slot" : (now >= peer->m_hp_rotate_at ? "six-hour rotation" : "registration acknowledgement timed out"), id);
                 close.push_back(id);
                 continue;
             }
@@ -2312,12 +2323,16 @@ void PeerManagerImpl::HolePunchMaintenance()
             if (!external) {
                 // Two current reporters that still disagree cannot establish a usable mapping.
                 const auto count{std::count_if(visitors.begin(), visitors.end(), [family](const auto& item) { return holepunch::Family(item.second) == family; })};
-                if (count >= 2 && now > peer->m_hp_opened_at + 10 && close.empty()) close.push_back(id);
+                if (count >= 2 && now > peer->m_hp_opened_at + 10 && close.empty()) {
+                    LogDebug(BCLog::HOLEPUNCH, "Replacing %s board because endpoint reports disagree, peer=%d", GetNetworkName(family), id);
+                    close.push_back(id);
+                }
                 continue;
             }
             const auto key{m_holepunch.PubKey(family)};
             if (!peer->m_hp_announced || peer->m_hp_announced->endpoint != *external || peer->m_hp_announced->pubkey != key) {
                 holepunch::Announcement announcement{uint32_t(now), m_connman.GetLocalServices(), *external, key};
+                LogDebug(BCLog::HOLEPUNCH, "Announcing %s endpoint%s, waiting up to ten seconds for exact acknowledgement, peer=%d", GetNetworkName(family), fLogIPs ? strprintf(" endpoint=%s", external->ToStringAddrPort()) : "", id);
                 peer->m_hp_announced = announcement;
                 peer->m_hp_ack_deadline = now + 10;
                 send.emplace_back(id, std::vector<holepunch::Announcement>{announcement});
@@ -2360,6 +2375,7 @@ void PeerManagerImpl::HolePunchMaintenance()
             if (m_hp_backoff[family] > now || m_hp_failed_boards.contains(address)) continue;
         }
         if (m_connman.OpenHolePunchBoard(address)) {
+            LogDebug(BCLog::HOLEPUNCH, "Requested %s board connection from address manager", GetNetworkName(family));
             ++counts[family];
             groups.insert(HolePunchGroup(address));
         }
@@ -2382,11 +2398,16 @@ void PeerManagerImpl::HolePunchRound(const HolePunchTip& event)
         }
     }
     const bool advance{event.previous && tip->nHeight > event.previous->nHeight && !event.ibd};
+    if (!advance) LogDebug(BCLog::HOLEPUNCH, "Skipped round at height=%d: %s", tip->nHeight, event.ibd ? "initial block download" : (event.previous ? "active height did not increase" : "previous tip arrival unavailable"));
     for (const auto* index : connected | std::views::reverse) {
         const auto parent{index->pprev ? index->pprev->GetBlockHash() : uint256{}};
         const bool round{advance && index->nHeight > event.previous->nHeight};
         const auto eligible{m_holepunch.Tip(index->GetBlockHash(), parent, index->nHeight, now, !round)};
-        if (eligible && GetTime() < now + 120) HolePunchPickRound(index, *eligible, now);
+        if (eligible && GetTime() < now + 120) {
+            HolePunchPickRound(index, *eligible, now);
+        } else if (round) {
+            LogDebug(BCLog::HOLEPUNCH, "Skipped round at height=%d: %s", index->nHeight, eligible ? "round window expired" : "parent arrival unavailable or round already evaluated");
+        }
     }
 }
 
@@ -2394,7 +2415,10 @@ void PeerManagerImpl::HolePunchPickRound(const CBlockIndex* tip, int64_t parent_
 {
     std::set<holepunch::Group> groups, sources;
     size_t picks{0};
-    for (const auto& candidate : m_holepunch.Ranked(tip->GetBlockHash(), parent_time, now)) {
+    const auto candidates{m_holepunch.Ranked(tip->GetBlockHash(), parent_time, now)};
+    LogDebug(BCLog::HOLEPUNCH, "Round height=%d, table entries=%u, eligible=%u, ipv4 quorum=%d, ipv6 quorum=%d, outbound slot=%d, inbound slot=%d", tip->nHeight, m_holepunch.Entries().size(), candidates.size(), m_holepunch.External(NET_IPV4).has_value(), m_holepunch.External(NET_IPV6).has_value(), m_connman.HasHolePunchSlot(true), m_connman.HasHolePunchSlot(false));
+    if (candidates.empty() && !m_holepunch.Entries().empty()) LogDebug(BCLog::HOLEPUNCH, "No mature, unexpired entries with a confirmed endpoint at height=%d", tip->nHeight);
+    for (const auto& candidate : candidates) {
         const auto& endpoint{candidate.entry.announcement.endpoint};
         const auto group{HolePunchGroup(endpoint)};
         if (picks >= 3) break;
@@ -2419,6 +2443,7 @@ void PeerManagerImpl::HolePunchPickRound(const CBlockIndex* tip, int64_t parent_
             ++picks;
         }
     }
+    LogDebug(BCLog::HOLEPUNCH, "Round height=%d picked %u session(s)", tip->nHeight, picks);
     std::erase_if(m_hp_attempts, [now](const auto& item) { return item.second.empty() || item.second.back() <= now - 3600; });
 }
 
@@ -4232,6 +4257,7 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
                              msg_type == NetMsgType::PING || msg_type == NetMsgType::PONG || msg_type == NetMsgType::ADDRV2};
     if (!board_allowed && !pfrom.fSuccessfullyConnected) peer.m_hp_forbidden_before_feature = true;
     if ((peer.m_hp_board || peer.m_hp_visitor) && !board_allowed) {
+        LogDebug(BCLog::HOLEPUNCH, "Forbidden board message %s, %s", SanitizeString(msg_type), pfrom.LogPeer());
         pfrom.fDisconnect = true;
         return;
     }
@@ -4329,9 +4355,14 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         pfrom.SetAddrLocal(addrMe);
         if (m_opts.holepunch && pfrom.IsPunchSocket() && holepunch::Family(addrMe) == holepunch::Family(pfrom.addr)) {
             LOCK(m_holepunch_mutex);
+            LogDebug(BCLog::HOLEPUNCH, "Received %s endpoint report%s, %s", GetNetworkName(holepunch::Family(addrMe)), fLogIPs ? strprintf(" endpoint=%s", addrMe.ToStringAddrPort()) : "", pfrom.LogPeer());
             m_hp_reports.Set(pfrom.GetId(), HolePunchGroup(pfrom.addr), addrMe, HolePunchLocal());
             for (const auto family : {NET_IPV4, NET_IPV6}) {
-                m_holepunch.SetExternal(family, m_hp_reports.External(family), GetTime());
+                const auto previous{m_holepunch.External(family)};
+                const auto external{m_hp_reports.External(family)};
+                if (m_holepunch.SetExternal(family, external, GetTime())) {
+                    LogDebug(BCLog::HOLEPUNCH, "%s external endpoint %s%s", GetNetworkName(family), external ? (previous ? "changed" : "confirmed by quorum") : "lost quorum", fLogIPs && external ? strprintf(" endpoint=%s", external->ToStringAddrPort()) : "");
+                }
             }
         }
 
@@ -4424,6 +4455,7 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         if (peer.m_hp_visitor || peer.m_hp_board) {
             if (!peer.m_hp_feature_received || !(peer.m_their_services & NODE_P2P_V2) ||
                 !peer.m_wants_addrv2 || (peer.m_hp_visitor && !(peer.m_hp_flags & holepunch::BOARD))) {
+                LogDebug(BCLog::HOLEPUNCH, "Board handshake failed: missing feature, v2 service or addrv2 support, %s", pfrom.LogPeer());
                 pfrom.fDisconnect = true;
                 return;
             }
@@ -4434,11 +4466,13 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
                     admitted = m_hp_board.Admit(pfrom.GetId(), pfrom.addr, HolePunchGroup(pfrom.addr), GetTime());
                 }
                 if (!admitted || !m_connman.PromoteHolePunchBoard(pfrom.GetId())) {
+                    LogDebug(BCLog::HOLEPUNCH, "Rejected board visitor at admission, %s", pfrom.LogPeer());
                     pfrom.fDisconnect = true;
                     return;
                 }
             }
             if (peer.m_hp_deferred_version_reply) MakeAndPushMessage(pfrom, NetMsgType::VERACK);
+            LogDebug(BCLog::HOLEPUNCH, "Board handshake complete, role=%s, %s", peer.m_hp_visitor ? "visitor" : "board", pfrom.LogPeer());
             peer.m_addr_token_bucket = MAX_ADDR_PROCESSING_TOKEN_BUCKET;
             {
                 LOCK(m_holepunch_mutex);
@@ -4528,6 +4562,7 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         }
 
         pfrom.fSuccessfullyConnected = true;
+        if (pfrom.IsHolePunchConn()) LogDebug(BCLog::HOLEPUNCH, "Punched v2 handshake complete, role=%s, %s", pfrom.IsInboundConn() ? "responder" : "initiator", pfrom.LogPeer());
         return;
     }
 
@@ -4746,15 +4781,20 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
             if (!within_hour || !within_addr) continue;
             LOCK(m_holepunch_mutex);
             if (peer.m_hp_board) {
-                m_hp_board.Announce(pfrom.GetId(), wire, now);
+                const bool accepted{m_hp_board.Announce(pfrom.GetId(), wire, now)};
+                LogDebug(BCLog::HOLEPUNCH, "%s visitor announcement, %s", accepted ? "Accepted verified" : "Ignored unverifiable", pfrom.LogPeer());
             } else if (const auto announcement{holepunch::Decode(wire, HolePunchLocal())}) {
                 const auto& announced{peer.m_hp_announced};
                 if (announced && announced->endpoint == announcement->endpoint && announced->pubkey == announcement->pubkey) {
+                    if (peer.m_hp_ack_deadline) LogDebug(BCLog::HOLEPUNCH, "Received exact registration acknowledgement, %s", pfrom.LogPeer());
                     peer.m_hp_ack_deadline = 0;
                     m_hp_failures[holepunch::Family(announcement->endpoint)] = 0;
                 } else {
-                    m_holepunch.Add(pfrom.GetId(), HolePunchGroup(pfrom.addr), *announcement, now);
+                    const bool accepted{m_holepunch.Add(pfrom.GetId(), HolePunchGroup(pfrom.addr), *announcement, now)};
+                    LogDebug(BCLog::HOLEPUNCH, "%s board entry, table entries=%u, %s", accepted ? "Accepted" : "Ignored", m_holepunch.Entries().size(), pfrom.LogPeer());
                 }
+            } else {
+                LogDebug(BCLog::HOLEPUNCH, "Ignored invalid board entry, %s", pfrom.LogPeer());
             }
         }
         if (!ordinary.empty()) ProcessAddrs(msg_type, pfrom, peer, std::move(ordinary), interruptMsgProc);
