@@ -1,0 +1,422 @@
+{
+ "bip": "tcp-holepunch-coordinatorless",
+ "version": "0.4.0",
+ "feature_id": "https://delvingbitcoin.org/t/2497/22",
+ "feature_flags": {
+  "BOARD": 1,
+  "VISITOR": 2
+ },
+ "service_bit_board": 16777216,
+ "punchkey_network_id": 9,
+ "pair_tag": "tcp-holepunch/pair",
+ "feature_valid": [
+  {
+   "description": "version 0, no flags (neither board nor visiting)",
+   "hex": "0000000000",
+   "decoded": {
+    "version": 0,
+    "flags": 0
+   }
+  },
+  {
+   "description": "version 0, BOARD (sent by a board)",
+   "hex": "0001000000",
+   "decoded": {
+    "version": 0,
+    "flags": 1
+   }
+  },
+  {
+   "description": "version 0, VISITOR (sent by a visitor on a board connection)",
+   "hex": "0002000000",
+   "decoded": {
+    "version": 0,
+    "flags": 2
+   }
+  },
+  {
+   "description": "version 0, unknown high bit set (must be ignored)",
+   "hex": "0000000080",
+   "decoded": {
+    "version": 0,
+    "flags": 2147483648
+   }
+  },
+  {
+   "description": "version 1 (negotiates down to 0 with a version 0 peer, R-3.2)",
+   "hex": "0100000000",
+   "decoded": {
+    "version": 1,
+    "flags": 0
+   }
+  }
+ ],
+ "feature_invalid": [
+  {
+   "description": "truncated flags",
+   "hex": "0000",
+   "reason": "missing bytes",
+   "detected": "truncated flags"
+  },
+  {
+   "description": "trailing byte",
+   "hex": "000000000000",
+   "reason": "trailing bytes",
+   "detected": "trailing bytes"
+  }
+ ],
+ "punchkey_elements_valid": [
+  {
+   "description": "IPv4 announcer, key A (38 bytes)",
+   "element_hex": "c09ff068fd0908092601cb00710102f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9c3cb",
+   "addr_len": 38,
+   "decoded": {
+    "time": 1760600000,
+    "services": 2057,
+    "net": 9,
+    "addr": "01cb00710102f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9",
+    "port": 50123,
+    "punchkey": {
+     "net": 1,
+     "addr": "cb007101",
+     "pubkey": "02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9"
+    }
+   }
+  },
+  {
+   "description": "IPv4 announcer, key B (38 bytes)",
+   "element_hex": "c09ff068fd0908092601c633640202dff1d77f2a671c5f36183726db2341be58feae1da2deced843240f7b502ba659208f",
+   "addr_len": 38,
+   "decoded": {
+    "time": 1760600000,
+    "services": 2057,
+    "net": 9,
+    "addr": "01c633640202dff1d77f2a671c5f36183726db2341be58feae1da2deced843240f7b502ba659",
+    "port": 8335,
+    "punchkey": {
+     "net": 1,
+     "addr": "c6336402",
+     "pubkey": "02dff1d77f2a671c5f36183726db2341be58feae1da2deced843240f7b502ba659"
+    }
+   }
+  },
+  {
+   "description": "IPv6 announcer, key C (50 bytes)",
+   "element_hex": "c09ff068fd090809320220010db800000000000000000000000102dd308afec5777e13121fa72b9cc1b7cc0139715309b086c960e18fd969774eb8479f",
+   "addr_len": 50,
+   "decoded": {
+    "time": 1760600000,
+    "services": 2057,
+    "net": 9,
+    "addr": "0220010db800000000000000000000000102dd308afec5777e13121fa72b9cc1b7cc0139715309b086c960e18fd969774eb8",
+    "port": 18335,
+    "punchkey": {
+     "net": 2,
+     "addr": "20010db8000000000000000000000001",
+     "pubkey": "02dd308afec5777e13121fa72b9cc1b7cc0139715309b086c960e18fd969774eb8"
+    }
+   }
+  },
+  {
+   "description": "IPv6 announcer, key B (50 bytes)",
+   "element_hex": "c09ff068fd090809320220010db800000000000000000000000102dff1d77f2a671c5f36183726db2341be58feae1da2deced843240f7b502ba659479f",
+   "addr_len": 50,
+   "decoded": {
+    "time": 1760600000,
+    "services": 2057,
+    "net": 9,
+    "addr": "0220010db800000000000000000000000102dff1d77f2a671c5f36183726db2341be58feae1da2deced843240f7b502ba659",
+    "port": 18335,
+    "punchkey": {
+     "net": 2,
+     "addr": "20010db8000000000000000000000001",
+     "pubkey": "02dff1d77f2a671c5f36183726db2341be58feae1da2deced843240f7b502ba659"
+    }
+   }
+  }
+ ],
+ "punchkey_elements_invalid": [
+  {
+   "description": "length 39 (trailing byte in addr)",
+   "element_hex": "c09ff068fd0908092701cb00710102f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f900c3cb",
+   "reason": "R-5.1 invalid length",
+   "detected": "invalid PUNCHKEY length 39 (R-5.1)"
+  },
+  {
+   "description": "length 37 (truncated pubkey)",
+   "element_hex": "c09ff068fd0908092501cb00710102f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036c3cb",
+   "reason": "R-5.1 invalid length",
+   "detected": "invalid PUNCHKEY length 37 (R-5.1)"
+  },
+  {
+   "description": "length 38 with net IPV6 (truncated)",
+   "element_hex": "c09ff068fd0908092602cb00710102f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9c3cb",
+   "reason": "R-5.1 truncated",
+   "detected": "truncated pubkey"
+  },
+  {
+   "description": "length 50 with net IPV4 (padded)",
+   "element_hex": "c09ff068fd0908093201cb00710102f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9000000000000000000000000c3cb",
+   "reason": "R-5.1 invalid length",
+   "detected": "invalid PUNCHKEY length (R-5.1)"
+  },
+  {
+   "description": "net TORV3",
+   "element_hex": "c09ff068fd090809260453cd5648af46a92b5b74b7f8f6bd3bb86e5d9ab77c5f0e03a5b43a1b4bbef6ac0000000000c3cb",
+   "reason": "R-5.1 unknown net",
+   "detected": "unknown net (R-5.1)"
+  },
+  {
+   "description": "pubkey with prefix 0x04",
+   "element_hex": "c09ff068fd0908092601cb00710104f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9c3cb",
+   "reason": "R-5.1 not a compressed point",
+   "detected": "pubkey is not a compressed point (R-5.1)"
+  },
+  {
+   "description": "pubkey x not below the field size",
+   "element_hex": "c09ff068fd0908092601cb00710102fffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2fc3cb",
+   "reason": "R-5.1 invalid point",
+   "detected": "pubkey x not on the curve or not below the field size (R-5.1)"
+  },
+  {
+   "description": "pubkey x not on the curve",
+   "element_hex": "c09ff068fd0908092601cb007101020000000000000000000000000000000000000000000000000000000000000005c3cb",
+   "reason": "R-5.1 invalid point",
+   "detected": "pubkey x not on the curve or not below the field size (R-5.1)"
+  },
+  {
+   "description": "services without NODE_P2P_V2",
+   "element_hex": "c09ff06801092601cb00710102f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9c3cb",
+   "reason": "R-5.1 services lack NODE_P2P_V2",
+   "detected": "services lack NODE_P2P_V2 (R-5.1)"
+  },
+  {
+   "description": "port 0",
+   "element_hex": "c09ff068fd0908092601cb00710102f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f90000",
+   "reason": "R-5.1 port 0",
+   "detected": "port 0 (R-5.1)"
+  },
+  {
+   "description": "empty addr",
+   "element_hex": "c09ff068fd09080900c3cb",
+   "reason": "R-5.1 invalid length",
+   "detected": "invalid PUNCHKEY length 0 (R-5.1)"
+  }
+ ],
+ "pairing": [
+  {
+   "parties": [
+    "A",
+    "B"
+   ],
+   "secret_A": "0000000000000000000000000000000000000000000000000000000000000003",
+   "secret_B": "b7e151628aed2a6abf7158809cf4f3c762e7160f38b4da56a784d9045190cfef",
+   "pubkey_A": "02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9",
+   "pubkey_B": "02dff1d77f2a671c5f36183726db2341be58feae1da2deced843240f7b502ba659",
+   "endpoint_A": {
+    "net": 1,
+    "addr": "cb007101",
+    "port": 50123
+   },
+   "endpoint_B": {
+    "net": 1,
+    "addr": "c6336402",
+    "port": 8335
+   },
+   "endpoints_sorted_hex": "0104c6336402208f0104cb007101c3cb",
+   "shared_x": "f549c8c8f9b44c4aab3e352998dd736d1247a3dcac80f5b0360f54f7dafd2bd5",
+   "block": "genesis",
+   "block_hash_display": "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
+   "block_hash_bytes": "6fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000",
+   "pair": "3f1b2546b9e941cccb758cb5cadb6fb18587ac23b52209f113e6cb673c661513",
+   "role_bit": 1,
+   "initiator": "A"
+  },
+  {
+   "parties": [
+    "A",
+    "B"
+   ],
+   "secret_A": "0000000000000000000000000000000000000000000000000000000000000003",
+   "secret_B": "b7e151628aed2a6abf7158809cf4f3c762e7160f38b4da56a784d9045190cfef",
+   "pubkey_A": "02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9",
+   "pubkey_B": "02dff1d77f2a671c5f36183726db2341be58feae1da2deced843240f7b502ba659",
+   "endpoint_A": {
+    "net": 1,
+    "addr": "cb007101",
+    "port": 50123
+   },
+   "endpoint_B": {
+    "net": 1,
+    "addr": "c6336402",
+    "port": 8335
+   },
+   "endpoints_sorted_hex": "0104c6336402208f0104cb007101c3cb",
+   "shared_x": "f549c8c8f9b44c4aab3e352998dd736d1247a3dcac80f5b0360f54f7dafd2bd5",
+   "block": "block 1",
+   "block_hash_display": "00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048",
+   "block_hash_bytes": "4860eb18bf1b1620e37e9490fc8a427514416fd75159ab86688e9a8300000000",
+   "pair": "ecacc8d072e676b6c9b3ce1bd11a7ad3e76b14d0ab5202a52aeb2035a0d486f8",
+   "role_bit": 0,
+   "initiator": "B"
+  },
+  {
+   "parties": [
+    "A",
+    "C"
+   ],
+   "secret_A": "0000000000000000000000000000000000000000000000000000000000000003",
+   "secret_C": "c90fdaa22168c234c4c6628b80dc1cd129024e088a67cc74020bbea63b14e5c9",
+   "pubkey_A": "02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9",
+   "pubkey_C": "02dd308afec5777e13121fa72b9cc1b7cc0139715309b086c960e18fd969774eb8",
+   "endpoint_A": {
+    "net": 1,
+    "addr": "cb007101",
+    "port": 50123
+   },
+   "endpoint_C": {
+    "net": 1,
+    "addr": "c0000203",
+    "port": 40000
+   },
+   "endpoints_sorted_hex": "0104c00002039c400104cb007101c3cb",
+   "shared_x": "279ed027ae68b70e053737137f620ea14b4c124d5e640636db58d163719e2cc3",
+   "block": "genesis",
+   "block_hash_display": "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
+   "block_hash_bytes": "6fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000",
+   "pair": "c39b9af0f8dbf9915a7a297f4b3268dc0204ad8b4a7f309fa4ccd4c6e5c678ba",
+   "role_bit": 0,
+   "initiator": "C"
+  },
+  {
+   "parties": [
+    "A",
+    "C"
+   ],
+   "secret_A": "0000000000000000000000000000000000000000000000000000000000000003",
+   "secret_C": "c90fdaa22168c234c4c6628b80dc1cd129024e088a67cc74020bbea63b14e5c9",
+   "pubkey_A": "02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9",
+   "pubkey_C": "02dd308afec5777e13121fa72b9cc1b7cc0139715309b086c960e18fd969774eb8",
+   "endpoint_A": {
+    "net": 1,
+    "addr": "cb007101",
+    "port": 50123
+   },
+   "endpoint_C": {
+    "net": 1,
+    "addr": "c0000203",
+    "port": 40000
+   },
+   "endpoints_sorted_hex": "0104c00002039c400104cb007101c3cb",
+   "shared_x": "279ed027ae68b70e053737137f620ea14b4c124d5e640636db58d163719e2cc3",
+   "block": "block 1",
+   "block_hash_display": "00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048",
+   "block_hash_bytes": "4860eb18bf1b1620e37e9490fc8a427514416fd75159ab86688e9a8300000000",
+   "pair": "69273df02e226d91dcacc00c1a3094b61423fa0bd9a6a4c6eeb3f1f8414af782",
+   "role_bit": 0,
+   "initiator": "C"
+  },
+  {
+   "parties": [
+    "B",
+    "C"
+   ],
+   "secret_B": "b7e151628aed2a6abf7158809cf4f3c762e7160f38b4da56a784d9045190cfef",
+   "secret_C": "c90fdaa22168c234c4c6628b80dc1cd129024e088a67cc74020bbea63b14e5c9",
+   "pubkey_B": "02dff1d77f2a671c5f36183726db2341be58feae1da2deced843240f7b502ba659",
+   "pubkey_C": "02dd308afec5777e13121fa72b9cc1b7cc0139715309b086c960e18fd969774eb8",
+   "endpoint_B": {
+    "net": 1,
+    "addr": "c6336402",
+    "port": 8335
+   },
+   "endpoint_C": {
+    "net": 1,
+    "addr": "c0000203",
+    "port": 40000
+   },
+   "endpoints_sorted_hex": "0104c00002039c400104c6336402208f",
+   "shared_x": "ca77ad739864d3f6f599f93842f48c89d5a9a7d0c867b767d53bf96f03557627",
+   "block": "genesis",
+   "block_hash_display": "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
+   "block_hash_bytes": "6fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000",
+   "pair": "2737f0431de9ba173d785203ccc491c24ee6a62b13ff643afa0a6474039bfa5b",
+   "role_bit": 1,
+   "initiator": "B"
+  },
+  {
+   "parties": [
+    "B",
+    "C"
+   ],
+   "secret_B": "b7e151628aed2a6abf7158809cf4f3c762e7160f38b4da56a784d9045190cfef",
+   "secret_C": "c90fdaa22168c234c4c6628b80dc1cd129024e088a67cc74020bbea63b14e5c9",
+   "pubkey_B": "02dff1d77f2a671c5f36183726db2341be58feae1da2deced843240f7b502ba659",
+   "pubkey_C": "02dd308afec5777e13121fa72b9cc1b7cc0139715309b086c960e18fd969774eb8",
+   "endpoint_B": {
+    "net": 1,
+    "addr": "c6336402",
+    "port": 8335
+   },
+   "endpoint_C": {
+    "net": 1,
+    "addr": "c0000203",
+    "port": 40000
+   },
+   "endpoints_sorted_hex": "0104c00002039c400104c6336402208f",
+   "shared_x": "ca77ad739864d3f6f599f93842f48c89d5a9a7d0c867b767d53bf96f03557627",
+   "block": "block 1",
+   "block_hash_display": "00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048",
+   "block_hash_bytes": "4860eb18bf1b1620e37e9490fc8a427514416fd75159ab86688e9a8300000000",
+   "pair": "d8b1106f580e89cd84da722ab04a8610a8eb87cf2db9d38fcbfaa9ad15dc4727",
+   "role_bit": 1,
+   "initiator": "B"
+  }
+ ],
+ "ranking": [
+  {
+   "node": "A",
+   "own_endpoint": {
+    "net": 1,
+    "addr": "cb007101",
+    "port": 50123
+   },
+   "block": "genesis",
+   "block_hash_display": "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
+   "order": [
+    {
+     "entry": "B",
+     "pair": "3f1b2546b9e941cccb758cb5cadb6fb18587ac23b52209f113e6cb673c661513",
+     "role_of_A": "initiator"
+    },
+    {
+     "entry": "C",
+     "pair": "c39b9af0f8dbf9915a7a297f4b3268dc0204ad8b4a7f309fa4ccd4c6e5c678ba",
+     "role_of_A": "responder"
+    }
+   ]
+  },
+  {
+   "node": "A",
+   "own_endpoint": {
+    "net": 1,
+    "addr": "cb007101",
+    "port": 50123
+   },
+   "block": "block 1",
+   "block_hash_display": "00000000839a8e6886ab5951d76f411475428afc90947ee320161bbf18eb6048",
+   "order": [
+    {
+     "entry": "C",
+     "pair": "69273df02e226d91dcacc00c1a3094b61423fa0bd9a6a4c6eeb3f1f8414af782",
+     "role_of_A": "responder"
+    },
+    {
+     "entry": "B",
+     "pair": "ecacc8d072e676b6c9b3ce1bd11a7ad3e76b14d0ab5202a52aeb2035a0d486f8",
+     "role_of_A": "responder"
+    }
+   ]
+  }
+ ]
+}
