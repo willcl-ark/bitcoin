@@ -91,6 +91,10 @@ class PeerManager : public CValidationInterface, public NetEventsInterface
 {
 public:
     struct Options {
+        //! Participate in experimental coordinator-less TCP holepunching.
+        bool holepunch{false};
+        //! Serve verified holepunch announcements to visitors.
+        bool holepunch_board{false};
         //! Whether this node is running in -blocksonly mode
         bool ignore_incoming_txs{DEFAULT_BLOCKSONLY};
         //! Whether transaction reconciliation protocol is enabled

@@ -14,6 +14,9 @@ namespace node {
 
 void ApplyArgsManOptions(const ArgsManager& argsman, PeerManager::Options& options)
 {
+    options.holepunch = argsman.GetBoolArg("-holepunch", false);
+    options.holepunch_board = argsman.GetBoolArg("-holepunchboard", false);
+
     if (auto value{argsman.GetBoolArg("-txreconciliation")}) options.reconcile_txs = *value;
 
     if (auto value{argsman.GetIntArg("-blockreconstructionextratxn")}) {

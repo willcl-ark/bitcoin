@@ -616,6 +616,11 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
                    OptionsCategory::CONNECTION);
     argsman.AddArg("-proxyrandomize", strprintf("Randomize credentials for every proxy connection. This enables Tor stream isolation (default: %u)", DEFAULT_PROXYRANDOMIZE), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-seednode=<ip>", "Connect to a node to retrieve peer addresses, and disconnect. This option can be specified multiple times to connect to multiple nodes. During startup, seednodes will be tried before dnsseeds.", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
+    argsman.AddArg("-holepunch", "Participate in experimental coordinator-less TCP holepunching (requires -v2transport; default: 0)", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
+    argsman.AddArg("-holepunchboard", "Serve verified TCP holepunch announcements on dedicated board connections (requires -v2transport; default: 0)", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
+    argsman.AddArg("-holepunchport=<port>", "IPv4 TCP holepunch source and listening port (default: random port in 49152-65535)", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
+    argsman.AddArg("-holepunchportv6=<port>", "IPv6 TCP holepunch source and listening port (default: random port in 49152-65535)", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
+    argsman.AddArg("-holepunchbind=<addr>", "Bind TCP holepunch sockets to this stable local IPv4 or IPv6 address. May be specified once per family", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-networkactive", "Enable all P2P network activity (default: 1). Can be changed by the setnetworkactive RPC command", ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-timeout=<n>", strprintf("Specify socket connection timeout in milliseconds. If an initial attempt to connect is unsuccessful after this amount of time, drop it (minimum: 1, default: %d)", DEFAULT_CONNECT_TIMEOUT), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-peertimeout=<n>", strprintf("Specify a p2p connection timeout delay in seconds. After connecting to a peer, wait this amount of time before considering disconnection based on inactivity (minimum: 1, default: %d)", DEFAULT_PEER_CONNECT_TIMEOUT), ArgsManager::ALLOW_ANY | ArgsManager::DEBUG_ONLY, OptionsCategory::CONNECTION);
@@ -1016,6 +1021,21 @@ bool AppInitParameterInteraction(const ArgsManager& args)
         g_local_services = ServiceFlags(g_local_services | NODE_P2P_V2);
     }
 
+    if (args.GetBoolArg("-holepunch", false) || args.GetBoolArg("-holepunchboard", false)) {
+        if (!(g_local_services & NODE_P2P_V2)) {
+            return InitError(_("TCP holepunching requires -v2transport."));
+        }
+    }
+    if (args.GetBoolArg("-holepunchboard", false)) {
+        g_local_services = ServiceFlags(g_local_services | NODE_HOLEPUNCH_BOARD);
+    }
+    for (const auto* option : {"-holepunchport", "-holepunchportv6"}) {
+        const auto port{args.GetIntArg(option, 0)};
+        if (port < 0 || port > 65535) {
+            return InitError(Untranslated(strprintf("Invalid %s: expected a port in 1-65535, or 0 for random selection", option)));
+        }
+    }
+
     // Signal NODE_COMPACT_FILTERS if peerblockfilters and basic filters index are both enabled.
     if (args.GetBoolArg("-peerblockfilters", DEFAULT_PEERBLOCKFILTERS)) {
         if (!g_enabled_filter_types.contains(BlockFilterType::BASIC)) {
@@ -1108,10 +1128,15 @@ bool AppInitParameterInteraction(const ArgsManager& args)
         user_rpc_max_connections = 0;
     }
 
+    // Punching reserves two listeners, four boards, six sessions, eight held
+    // sockets and one extra outbound. A board also admits eight provisional
+    // handshakes outside its pool of 32 registered visitors.
+    const int holepunch_fds{(args.GetBoolArg("-holepunch", false) ? 21 : 0) +
+                            (args.GetBoolArg("-holepunchboard", false) ? 40 : 0)};
     // Reserve enough FDs to account for the bare minimum, plus any manual connections, plus the bound interfaces.
     // Every element is an int >= 0 so summing in int64_t cannot overflow.
     // RaiseFileDescriptorLimit() accepts an int so we check that limit before casting.
-    const int64_t total_fds = int64_t{MIN_CORE_FDS} +
+    const int64_t total_fds = int64_t{MIN_CORE_FDS} + holepunch_fds +
                               MAX_ADDNODE_CONNECTIONS +
                               num_p2p_bind +
                               num_rpc_bind +
@@ -1126,7 +1151,7 @@ bool AppInitParameterInteraction(const ArgsManager& args)
     }
 
     // Subset of total_fds must also be a safe int
-    int min_required_fds = MIN_CORE_FDS +
+    int min_required_fds = MIN_CORE_FDS + holepunch_fds +
                            MAX_ADDNODE_CONNECTIONS +
                            num_p2p_bind +
                            num_rpc_bind +
@@ -2210,6 +2235,23 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
 
     CConnman::Options connOptions;
     connOptions.m_local_services = g_local_services;
+    connOptions.m_holepunch = args.GetBoolArg("-holepunch", false);
+    connOptions.m_holepunch_board = args.GetBoolArg("-holepunchboard", false);
+    connOptions.m_holepunch_port = uint16_t(args.GetIntArg("-holepunchport", 0));
+    connOptions.m_holepunch_port_v6 = uint16_t(args.GetIntArg("-holepunchportv6", 0));
+    std::set<Network> punch_families;
+    for (const auto& bind : args.GetArgs("-holepunchbind")) {
+        const auto address{LookupHost(bind, /*fAllowLookup=*/false)};
+        if (!address || (!address->IsIPv4() && !address->IsIPv6())) {
+            return InitError(Untranslated(strprintf("Invalid -holepunchbind address: %s", bind)));
+        }
+        const auto family{address->IsIPv4() ? NET_IPV4 : NET_IPV6};
+        if (!punch_families.insert(family).second) {
+            return InitError(_("Specify -holepunchbind at most once per address family."));
+        }
+        connOptions.m_holepunch_binds.push_back(*address);
+    }
+
     connOptions.m_max_automatic_connections = num_p2p_max_connections;
     connOptions.m_full_relay_inbound_percent = std::clamp<int>(args.GetIntArg("-inboundrelaypercent", DEFAULT_FULL_RELAY_INBOUND_PCT), 0, 100);
     connOptions.uiInterface = &uiInterface;

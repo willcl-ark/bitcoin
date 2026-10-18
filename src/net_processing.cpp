@@ -21,6 +21,7 @@
 #include <deploymentstatus.h>
 #include <flatfile.h>
 #include <headerssync.h>
+#include <holepunch.h>
 #include <index/blockfilterindex.h>
 #include <kernel/types.h>
 #include <logging.h>
@@ -416,6 +417,22 @@ struct Peer {
     /** Time offset computed during the version handshake based on the
      * timestamp the peer sent in the version message. */
     std::atomic<std::chrono::seconds> m_time_offset{0s};
+
+    // Board connections never participate in ordinary address, block or transaction relay.
+    bool m_hp_visitor{false};
+    std::atomic<bool> m_hp_board{false};
+    bool m_hp_feature_received{false};
+    bool m_hp_feature_sent{false};
+    bool m_hp_forbidden_before_feature{false};
+    bool m_hp_deferred_version_reply{false};
+    std::optional<uint64_t> m_hp_deferred_recon_salt;
+    uint32_t m_hp_flags{0};
+    holepunch::RateLimit m_hp_received;
+    // Shared with the scheduler and protected by PeerManagerImpl::m_holepunch_mutex.
+    std::optional<holepunch::Announcement> m_hp_announced;
+    int64_t m_hp_ack_deadline{0};
+    int64_t m_hp_rotate_at{0};
+    int64_t m_hp_opened_at{0};
 
     explicit Peer(NodeId id, ServiceFlags our_services, bool is_inbound)
         : m_id{id}
@@ -819,6 +836,7 @@ private:
 
     /** Send a version message to a peer */
     void PushNodeVersion(CNode& pnode, const Peer& peer);
+    void SendVersionNegotiation(CNode& pfrom, Peer& peer, bool addr_sent = false) EXCLUSIVE_LOCKS_REQUIRED(g_msgproc_mutex);
 
     /** Send a ping message every PING_INTERVAL or if requested via RPC (peer.m_ping_queued is true). */
     void MaybeSendPing(CNode& node_to, Peer& peer, NodeClock::time_point now);
@@ -840,6 +858,33 @@ private:
 
     /** Send `feefilter` message. */
     void MaybeSendFeefilter(CNode& node, Peer& peer, std::chrono::microseconds current_time) EXCLUSIVE_LOCKS_REQUIRED(g_msgproc_mutex);
+
+    struct HolePunchTip {
+        const CBlockIndex* tip;
+        const CBlockIndex* previous;
+        int64_t arrived_at;
+        bool ibd;
+    };
+    Mutex m_hp_tip_mutex;
+    const CBlockIndex* m_hp_active_tip GUARDED_BY(m_hp_tip_mutex){nullptr};
+    std::deque<HolePunchTip> m_hp_tips GUARDED_BY(m_hp_tip_mutex);
+    Mutex m_holepunch_mutex;
+    holepunch::State m_holepunch GUARDED_BY(m_holepunch_mutex);
+    holepunch::Reports m_hp_reports GUARDED_BY(m_holepunch_mutex);
+    holepunch::Board m_hp_board GUARDED_BY(m_holepunch_mutex);
+    std::map<holepunch::Group, std::deque<int64_t>> m_hp_attempts GUARDED_BY(m_holepunch_mutex);
+    std::map<Network, unsigned int> m_hp_failures GUARDED_BY(m_holepunch_mutex);
+    std::map<Network, int64_t> m_hp_backoff GUARDED_BY(m_holepunch_mutex);
+    int64_t m_hp_discover_at GUARDED_BY(m_holepunch_mutex){0};
+    std::map<CService, int64_t> m_hp_failed_boards GUARDED_BY(m_holepunch_mutex);
+    bool HolePunchLocal() const { return m_chainparams.GetChainType() == ChainType::REGTEST; }
+    holepunch::Group HolePunchGroup(const CService& endpoint) const;
+    void HolePunchMaintenance();
+    void HolePunchBoardFailed(const CService& endpoint, int64_t now) EXCLUSIVE_LOCKS_REQUIRED(m_holepunch_mutex);
+    void HolePunchRound(const HolePunchTip& event);
+    void HolePunchPickRound(const CBlockIndex* tip, int64_t parent_time, int64_t started_at) EXCLUSIVE_LOCKS_REQUIRED(m_holepunch_mutex);
+    void SendHolePunch(CNode& node, std::span<const holepunch::Announcement> announcements);
+    bool TakeHolePunchAddress(Peer& peer, const CNode& node);
 
     FastRandomContext m_rng GUARDED_BY(NetEventsInterface::g_msgproc_mutex);
 
@@ -1667,10 +1712,10 @@ void PeerManagerImpl::PushNodeVersion(CNode& pnode, const Peer& peer)
         my_services = peer.m_our_services;
         my_time = TicksSinceEpoch<std::chrono::seconds>(NodeClock::now());
         your_services = addr.nServices;
-        your_addr = addr.IsRoutable() && !IsProxy(addr) && addr.IsAddrV1Compatible() ? CService{addr} : CService{};
+        your_addr = (addr.IsRoutable() || (HolePunchLocal() && m_opts.holepunch_board)) && !IsProxy(addr) && addr.IsAddrV1Compatible() ? CService{addr} : CService{};
         my_user_agent = strSubVersion;
         my_height = m_best_height;
-        my_tx_relay = !RejectIncomingTxs(pnode);
+        my_tx_relay = !pnode.IsHolePunchBoardConn() && !RejectIncomingTxs(pnode);
     }
 
     MakeAndPushMessage(
@@ -1716,6 +1761,7 @@ void PeerManagerImpl::InitializeNode(const CNode& node, ServiceFlags our_service
     }
 
     PeerRef peer = std::make_shared<Peer>(nodeid, our_services, node.IsInboundConn());
+    peer->m_hp_visitor = node.IsHolePunchBoardConn();
     {
         LOCK(m_peer_mutex);
         m_peer_map.emplace_hint(m_peer_map.end(), nodeid, peer);
@@ -1778,6 +1824,19 @@ void PeerManagerImpl::ReattemptPrivateBroadcast(CScheduler& scheduler)
 void PeerManagerImpl::FinalizeNode(const CNode& node)
 {
     NodeId nodeid = node.GetId();
+    if (m_opts.holepunch || m_opts.holepunch_board) {
+        const auto peer{GetPeerRef(nodeid)};
+        LOCK(m_holepunch_mutex);
+        if (peer && peer->m_hp_visitor &&
+            (!peer->m_hp_announced || peer->m_hp_ack_deadline || !m_holepunch.External(holepunch::Family(node.addr)))) {
+            HolePunchBoardFailed(node.addr, GetTime());
+        }
+        m_hp_reports.Remove(nodeid);
+        for (const auto family : {NET_IPV4, NET_IPV6}) {
+            m_holepunch.SetExternal(family, m_hp_reports.External(family), GetTime());
+        }
+        m_hp_board.Remove(nodeid, GetTime());
+    }
     {
     LOCK(cs_main);
     {
@@ -1832,7 +1891,7 @@ void PeerManagerImpl::FinalizeNode(const CNode& node)
     }
     } // cs_main
     if (node.fSuccessfullyConnected &&
-        !node.IsBlockOnlyConn() && !node.IsPrivateBroadcastConn() && !node.IsInboundConn()) {
+        !node.IsBlockOnlyConn() && !node.IsPrivateBroadcastConn() && !node.IsHolePunchBoardConn() && !node.IsHolePunchConn() && !node.IsInboundConn()) {
         // Only change visible addrman state for full outbound peers.  We don't
         // call Connected() for feeler connections since they don't have
         // fSuccessfullyConnected set. Also don't call Connected() for private broadcast
@@ -2135,7 +2194,8 @@ std::unique_ptr<PeerManager> PeerManager::make(CConnman& connman, AddrMan& addrm
 PeerManagerImpl::PeerManagerImpl(CConnman& connman, AddrMan& addrman,
                                  BanMan* banman, ChainstateManager& chainman,
                                  CTxMemPool& pool, node::Warnings& warnings, Options opts)
-    : m_rng{opts.deterministic_rng},
+    : m_hp_board{chainman.GetParams().GetChainType() == ChainType::REGTEST},
+      m_rng{opts.deterministic_rng},
       m_fee_filter_rounder{CFeeRate{DEFAULT_MIN_RELAY_TX_FEE}, m_rng},
       m_chainparams(chainman.GetParams()),
       m_connman(connman),
@@ -2156,8 +2216,219 @@ PeerManagerImpl::PeerManagerImpl(CConnman& connman, AddrMan& addrman,
     }
 }
 
+holepunch::Group PeerManagerImpl::HolePunchGroup(const CService& endpoint) const
+{
+    // Test nodes on one host have distinct peer endpoints but share a network group.
+    if (HolePunchLocal()) return holepunch::EncodeEndpoint(endpoint);
+    return m_connman.GetNetGroup(endpoint);
+}
+
+void PeerManagerImpl::SendHolePunch(CNode& node, std::span<const holepunch::Announcement> announcements)
+{
+    if (announcements.empty()) return;
+    std::vector<holepunch::WireAddress> wire;
+    wire.reserve(announcements.size());
+    for (const auto& announcement : announcements)
+        wire.push_back(holepunch::Encode(announcement));
+    MakeAndPushMessage(node, NetMsgType::ADDRV2, wire);
+}
+
+bool PeerManagerImpl::TakeHolePunchAddress(Peer& peer, const CNode& node)
+{
+    const auto now{NodeClock::now()};
+    const double increment{std::max(Ticks<SecondsDouble>(now - peer.m_addr_token_timestamp), 0.0) * MAX_ADDR_RATE_PER_SECOND};
+    peer.m_addr_token_bucket = std::min<double>(peer.m_addr_token_bucket + increment, MAX_ADDR_PROCESSING_TOKEN_BUCKET);
+    peer.m_addr_token_timestamp = now;
+    if (peer.m_addr_token_bucket >= 1.0) {
+        peer.m_addr_token_bucket -= 1.0;
+        return true;
+    }
+    return node.HasPermission(NetPermissionFlags::Addr);
+}
+
+void PeerManagerImpl::HolePunchBoardFailed(const CService& endpoint, int64_t now)
+{
+    const auto family{holepunch::Family(endpoint)};
+    m_hp_failed_boards[endpoint] = now + 3600;
+    if (++m_hp_failures[family] >= 4) {
+        m_hp_backoff[family] = now + 3600;
+        m_hp_failures[family] = 0;
+    }
+}
+
+void PeerManagerImpl::HolePunchMaintenance()
+{
+    if (!m_connman.GetNetworkActive()) return;
+    const int64_t now{GetTime()};
+    std::deque<HolePunchTip> tips;
+    {
+        LOCK(m_hp_tip_mutex);
+        tips.swap(m_hp_tips);
+    }
+    for (const auto& event : tips)
+        HolePunchRound(event);
+    std::vector<std::pair<NodeId, CService>> connections;
+    m_connman.ForEachNode([&](CNode* node) {
+        if (node->IsHolePunchBoardConn()) connections.emplace_back(node->GetId(), node->addr);
+    });
+    std::map<NodeId, PeerRef> peers;
+    std::vector<std::pair<NodeId, CService>> visitors;
+    for (const auto& [id, address] : connections) {
+        const auto peer{GetPeerRef(id)};
+        if (!peer) continue;
+        peers.emplace(id, peer);
+        if (peer->m_hp_visitor) visitors.emplace_back(id, address);
+    }
+    const auto failed_boards{m_connman.TakeHolePunchBoardFailures()};
+    const bool capacity{m_connman.HasHolePunchSlot(true) || m_connman.HasHolePunchSlot(false)};
+    std::vector<NodeId> close;
+    std::vector<std::pair<NodeId, std::vector<holepunch::Announcement>>> send;
+    bool discover{false};
+    {
+        LOCK(m_holepunch_mutex);
+        for (const auto& endpoint : failed_boards)
+            HolePunchBoardFailed(endpoint, now);
+        m_hp_board.Expire(now);
+        m_holepunch.Expire(now);
+        for (const auto family : {NET_IPV4, NET_IPV6}) {
+            m_holepunch.SetExternal(family, m_hp_reports.External(family), now);
+            m_holepunch.MaybeRotate(family, now);
+        }
+        for (const auto& [id, peer] : peers) {
+            if (peer->m_hp_board) {
+                auto announcements{m_hp_board.Drain(id, now)};
+                if (!announcements.empty()) send.emplace_back(id, std::move(announcements));
+            }
+        }
+        for (const auto& [id, address] : visitors) {
+            const auto& peer{peers.at(id)};
+            const auto family{holepunch::Family(address)};
+            if (!capacity || now >= peer->m_hp_rotate_at ||
+                (peer->m_hp_ack_deadline && now >= peer->m_hp_ack_deadline)) {
+                close.push_back(id);
+                continue;
+            }
+            const auto external{m_holepunch.External(family)};
+            if (!external) {
+                // Two current reporters that still disagree cannot establish a usable mapping.
+                const auto count{std::count_if(visitors.begin(), visitors.end(), [family](const auto& item) { return holepunch::Family(item.second) == family; })};
+                if (count >= 2 && now > peer->m_hp_opened_at + 10 && close.empty()) close.push_back(id);
+                continue;
+            }
+            const auto key{m_holepunch.PubKey(family)};
+            if (!peer->m_hp_announced || peer->m_hp_announced->endpoint != *external || peer->m_hp_announced->pubkey != key) {
+                holepunch::Announcement announcement{uint32_t(now), m_connman.GetLocalServices(), *external, key};
+                peer->m_hp_announced = announcement;
+                peer->m_hp_ack_deadline = now + 10;
+                send.emplace_back(id, std::vector<holepunch::Announcement>{announcement});
+            }
+        }
+        if (m_opts.holepunch && capacity && now >= m_hp_discover_at) {
+            m_hp_discover_at = now + 5;
+            discover = true;
+        }
+        std::erase_if(m_hp_failed_boards, [now](const auto& item) { return item.second <= now; });
+    }
+    for (const auto id : close)
+        m_connman.DisconnectNode(id);
+    for (const auto& [id, announcements] : send) {
+        m_connman.ForNode(id, [&](CNode* node) {
+            SendHolePunch(*node, announcements);
+            return true;
+        });
+    }
+    if (!discover) return;
+    std::map<Network, size_t> counts;
+    std::set<holepunch::Group> groups;
+    for (const auto& [id, address] : visitors) {
+        ++counts[holepunch::Family(address)];
+        groups.insert(HolePunchGroup(address));
+    }
+    if ((!m_connman.GetHolePunchPort(NET_IPV4) || counts[NET_IPV4] >= 2) &&
+        (!m_connman.GetHolePunchPort(NET_IPV6) || counts[NET_IPV6] >= 2)) return;
+    auto addresses{m_addrman.GetAddr(/*max_addresses=*/0, /*max_pct=*/0, /*network=*/std::nullopt)};
+    FastRandomContext rng;
+    std::shuffle(addresses.begin(), addresses.end(), rng);
+    for (const auto& address : addresses) {
+        const auto family{holepunch::Family(address)};
+        if ((family != NET_IPV4 && family != NET_IPV6) || counts[family] >= 2 ||
+            !(address.nServices & NODE_HOLEPUNCH_BOARD) || !(address.nServices & NODE_P2P_V2) ||
+            !m_connman.GetHolePunchPort(family) || !holepunch::ValidEndpoint(address, HolePunchLocal()) ||
+            groups.contains(HolePunchGroup(address))) continue;
+        {
+            LOCK(m_holepunch_mutex);
+            if (m_hp_backoff[family] > now || m_hp_failed_boards.contains(address)) continue;
+        }
+        if (m_connman.OpenHolePunchBoard(address)) {
+            ++counts[family];
+            groups.insert(HolePunchGroup(address));
+        }
+    }
+}
+
+void PeerManagerImpl::HolePunchRound(const HolePunchTip& event)
+{
+    LOCK(m_holepunch_mutex);
+    const auto* tip{event.tip};
+    const auto now{event.arrived_at};
+    // Every advancing block in a batch has the same arrival time. Reorganisation
+    // ancestors at or below the previous active height do not trigger rounds.
+    std::vector<const CBlockIndex*> connected{tip};
+    if (event.previous) {
+        const auto* fork{LastCommonAncestor(event.previous, tip)};
+        if (fork != tip) {
+            for (auto* index{tip->pprev}; index && index != fork && connected.size() < 288; index = index->pprev)
+                connected.push_back(index);
+        }
+    }
+    const bool advance{event.previous && tip->nHeight > event.previous->nHeight && !event.ibd};
+    for (const auto* index : connected | std::views::reverse) {
+        const auto parent{index->pprev ? index->pprev->GetBlockHash() : uint256{}};
+        const bool round{advance && index->nHeight > event.previous->nHeight};
+        const auto eligible{m_holepunch.Tip(index->GetBlockHash(), parent, index->nHeight, now, !round)};
+        if (eligible && GetTime() < now + 120) HolePunchPickRound(index, *eligible, now);
+    }
+}
+
+void PeerManagerImpl::HolePunchPickRound(const CBlockIndex* tip, int64_t parent_time, int64_t now)
+{
+    std::set<holepunch::Group> groups, sources;
+    size_t picks{0};
+    for (const auto& candidate : m_holepunch.Ranked(tip->GetBlockHash(), parent_time, now)) {
+        const auto& endpoint{candidate.entry.announcement.endpoint};
+        const auto group{HolePunchGroup(endpoint)};
+        if (picks >= 3) break;
+        if (groups.contains(group) || sources.contains(candidate.entry.source) ||
+            !holepunch::ValidEndpoint(endpoint, HolePunchLocal()) || IsBadPort(endpoint.GetPort()) ||
+            (!HolePunchLocal() && IsLocal(endpoint))) continue;
+        bool own{false};
+        for (const auto family : {NET_IPV4, NET_IPV6}) {
+            const auto external{m_holepunch.External(family)};
+            own |= external && static_cast<const CNetAddr&>(*external) == static_cast<const CNetAddr&>(endpoint);
+        }
+        if (own || (candidate.initiator && !m_connman.OutboundHolePunchAllowed(endpoint))) continue;
+        auto& attempts{m_hp_attempts[group]};
+        while (!attempts.empty() && attempts.front() <= now - 3600)
+            attempts.pop_front();
+        if (attempts.size() >= 4 || !m_connman.HasHolePunchSlot(candidate.initiator)) continue;
+        if (m_connman.StartHolePunch(endpoint, candidate.initiator, NodeClock::time_point{std::chrono::seconds{now}})) {
+            attempts.push_back(now);
+            groups.insert(group);
+            sources.insert(candidate.entry.source);
+            m_holepunch.Remove(candidate.entry);
+            ++picks;
+        }
+    }
+    std::erase_if(m_hp_attempts, [now](const auto& item) { return item.second.empty() || item.second.back() <= now - 3600; });
+}
+
 void PeerManagerImpl::StartScheduledTasks(CScheduler& scheduler)
 {
+    if (m_opts.holepunch || m_opts.holepunch_board) {
+        scheduler.scheduleEvery([this] { HolePunchMaintenance(); }, 1s);
+    }
+
+
     // Stale tip checking and peer eviction are on two different timers, but we
     // don't want them to get out of sync due to drift in the scheduler, so we
     // combine them in one function and schedule at the quicker (peer-eviction)
@@ -2180,6 +2451,15 @@ void PeerManagerImpl::ActiveTipChange(const CBlockIndex& new_tip, bool is_ibd)
     // m_tx_download_mutex waits on the mempool mutex.
     AssertLockNotHeld(m_mempool.cs);
     AssertLockNotHeld(m_tx_download_mutex);
+
+    if (m_opts.holepunch) {
+        // This synchronous notification captures arrival before queued validation
+        // callbacks or incoming announcements can change the timing of a round.
+        LOCK(m_hp_tip_mutex);
+        if (m_hp_tips.size() == 288) m_hp_tips.pop_front();
+        m_hp_tips.push_back({&new_tip, m_hp_active_tip, GetTime(), is_ibd});
+        m_hp_active_tip = &new_tip;
+    }
 
     if (!is_ibd) {
         LOCK(m_tx_download_mutex);
@@ -2267,7 +2547,7 @@ void PeerManagerImpl::NewPoWValidBlock(const CBlockIndex *pindex, const std::sha
     m_connman.ForEachNode([this, pindex, &lazy_ser, &hashBlock](CNode* pnode) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) {
         AssertLockHeld(::cs_main);
 
-        if (pnode->GetCommonVersion() < INVALID_CB_NO_BAN_VERSION || pnode->fDisconnect)
+        if (pnode->IsHolePunchBoardConn() || pnode->GetCommonVersion() < INVALID_CB_NO_BAN_VERSION || pnode->fDisconnect)
             return;
         ProcessBlockAvailability(pnode->GetId());
         CNodeState &state = *State(pnode->GetId());
@@ -2314,6 +2594,7 @@ void PeerManagerImpl::UpdatedBlockTip(const CBlockIndex *pindexNew, const CBlock
         for (auto& it : m_peer_map) {
             Peer& peer = *it.second;
             LOCK(peer.m_block_inv_mutex);
+            if (peer.m_hp_visitor || peer.m_hp_board) continue;
             for (const uint256& hash : vHashes | std::views::reverse) {
                 peer.m_blocks_for_headers_relay.push_back(hash);
             }
@@ -3831,6 +4112,115 @@ void PeerManagerImpl::PushPrivateBroadcastTx(CNode& node)
     MakeAndPushMessage(node, NetMsgType::INV, std::vector<CInv>{{CInv{MSG_TX, tx->GetHash().ToUint256()}}});
 }
 
+void PeerManagerImpl::SendVersionNegotiation(CNode& pfrom, Peer& peer, bool addr_sent)
+{
+    const int greatest_common_version{pfrom.GetCommonVersion()};
+    if (greatest_common_version >= WTXID_RELAY_VERSION) {
+        MakeAndPushMessage(pfrom, NetMsgType::WTXIDRELAY);
+    }
+
+    // Signal ADDRv2 support (BIP155).
+    if (greatest_common_version >= 70016 && !addr_sent) {
+        // BIP155 defines addrv2 and sendaddrv2 for all protocol versions, but some
+        // implementations reject messages they don't know. As a courtesy, don't send
+        // it to nodes with a version before 70016, as no software is known to support
+        // BIP155 that doesn't announce at least that protocol version number.
+        MakeAndPushMessage(pfrom, NetMsgType::SENDADDRV2);
+    }
+
+    if (greatest_common_version >= WTXID_RELAY_VERSION && m_txreconciliation) {
+        // Per BIP-330, we announce txreconciliation support if:
+        // - protocol version per the peer's VERSION message supports WTXID_RELAY;
+        // - transaction relay is supported per the peer's VERSION message
+        // - this is not a block-relay-only connection and not a feeler
+        // - this is not an addr fetch connection;
+        // - we are not in -blocksonly mode.
+        const auto* tx_relay = peer.GetTxRelay();
+        if (tx_relay && WITH_LOCK(tx_relay->m_bloom_filter_mutex, return tx_relay->m_relay_txs) &&
+            !pfrom.IsAddrFetchConn() && !m_opts.ignore_incoming_txs) {
+            const uint64_t recon_salt{peer.m_hp_deferred_recon_salt ? *peer.m_hp_deferred_recon_salt : m_txreconciliation->PreRegisterPeer(pfrom.GetId())};
+            MakeAndPushMessage(pfrom, NetMsgType::SENDTXRCNCL,
+                               TXRECONCILIATION_VERSION, recon_salt);
+        }
+    }
+
+    if (greatest_common_version >= FEATURE_VERSION &&
+        (m_opts.holepunch || m_opts.holepunch_board) && !peer.m_hp_feature_sent && !pfrom.IsFeelerConn() && !pfrom.IsAddrFetchConn()) {
+        MakeAndPushFeature(pfrom, holepunch::FEATURE_ID, holepunch::Feature{0, m_opts.holepunch_board ? holepunch::BOARD : 0});
+        peer.m_hp_feature_sent = true;
+    }
+
+    // If we have too many tx-relaying inbound peers, attempt to evict an existing one.
+    // Only if this fails, disconnect this peer.
+    if (MaybeDisconnectForTxRelayCapacity(pfrom, NetMsgType::VERSION, /*protect_peer=*/pfrom.GetId())) return;
+    MakeAndPushMessage(pfrom, NetMsgType::VERACK);
+
+    // Potentially mark this peer as a preferred download peer.
+    {
+        LOCK(cs_main);
+        CNodeState* state = State(pfrom.GetId());
+        state->fPreferredDownload = (!pfrom.IsInboundConn() || pfrom.HasPermission(NetPermissionFlags::NoBan)) && !pfrom.IsAddrFetchConn() && CanServeBlocks(peer);
+        m_num_preferred_download_peers += state->fPreferredDownload;
+    }
+
+    // Attempt to initialize address relay for outbound peers and use result
+    // to decide whether to send GETADDR, so that we don't send it to
+    // inbound, feelers, or outbound block-relay-only peers.
+    bool send_getaddr{false};
+    if (!pfrom.IsInboundConn()) {
+        send_getaddr = SetupAddressRelay(pfrom, peer);
+    }
+    if (send_getaddr) {
+        // Do a one-time address fetch to help populate/update our addrman.
+        // If we're starting up for the first time, our addrman may be pretty
+        // empty, so this mechanism is important to help us connect to the network.
+        // We skip this for block-relay-only peers. We want to avoid
+        // potentially leaking addr information and we do not want to
+        // indicate to the peer that we will participate in addr relay.
+        MakeAndPushMessage(pfrom, NetMsgType::GETADDR);
+        // When requesting a getaddr, accept an additional MAX_ADDR_TO_SEND addresses in response
+        // (bypassing the MAX_ADDR_PROCESSING_TOKEN_BUCKET limit).
+        peer.m_addr_token_bucket += MAX_ADDR_TO_SEND;
+    }
+
+    if (!pfrom.IsInboundConn()) {
+        // For non-inbound connections, we update the addrman to record
+        // connection success so that addrman will have an up-to-date
+        // notion of which peers are online and available.
+        //
+        // While we strive to not leak information about block-relay-only
+        // connections via the addrman, not moving an address to the tried
+        // table is also potentially detrimental because new-table entries
+        // are subject to eviction in the event of addrman collisions.  We
+        // mitigate the information-leak by never calling
+        // AddrMan::Connected() on block-relay-only peers; see
+        // FinalizeNode().
+        //
+        // This moves an address from New to Tried table in Addrman,
+        // resolves tried-table collisions, etc.
+        if (!pfrom.IsHolePunchConn()) m_addrman.Good(pfrom.addr);
+    }
+
+    if (!pfrom.IsInboundConn()) {
+        // Don't use timedata samples from inbound peers to make it
+        // harder for others to create false warnings about our clock being out of sync.
+        m_outbound_time_offsets.Add(peer.m_time_offset);
+        m_outbound_time_offsets.WarnIfOutOfSync();
+    }
+
+    // If the peer is old enough to have the old alert system, send it the final alert.
+    if (greatest_common_version <= 70012) {
+        constexpr auto finalAlert{"60010000000000000000000000ffffff7f00000000ffffff7ffeffff7f01ffffff7f00000000ffffff7f00ffffff7f002f555247454e543a20416c657274206b657920636f6d70726f6d697365642c2075706772616465207265717569726564004630440220653febd6410f470f6bae11cad19c48413becb1ac2c17f908fd0fd53bdc3abd5202206d0e9c96fe88d4a0f01ed9dedae2b6f9e00da94cad0fecaae66ecf689bf71b50"_hex};
+        MakeAndPushMessage(pfrom, "alert", finalAlert);
+    }
+
+    // Feeler connections exist only to verify if address is online.
+    if (pfrom.IsFeelerConn()) {
+        LogDebug(BCLog::NET, "feeler connection completed, %s", pfrom.DisconnectMsg());
+        pfrom.fDisconnect = true;
+    }
+}
+
 void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string& msg_type, DataStream& vRecv,
                                      const NodeClock::time_point time_received,
                                      const std::atomic<bool>& interruptMsgProc)
@@ -3838,6 +4228,14 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
     AssertLockHeld(g_msgproc_mutex);
 
     LogDebug(BCLog::NET, "received: %s (%u bytes) peer=%d\n", SanitizeString(msg_type), vRecv.size(), pfrom.GetId());
+    const bool board_allowed{msg_type == NetMsgType::VERSION || msg_type == NetMsgType::VERACK ||
+                             msg_type == NetMsgType::FEATURE || msg_type == NetMsgType::SENDADDRV2 ||
+                             msg_type == NetMsgType::PING || msg_type == NetMsgType::PONG || msg_type == NetMsgType::ADDRV2};
+    if (!board_allowed && !pfrom.fSuccessfullyConnected) peer.m_hp_forbidden_before_feature = true;
+    if ((peer.m_hp_board || peer.m_hp_visitor) && !board_allowed) {
+        pfrom.fDisconnect = true;
+        return;
+    }
 
 
     if (msg_type == NetMsgType::VERSION) {
@@ -3930,6 +4328,14 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         pfrom.m_has_all_wanted_services = HasAllDesirableServiceFlags(nServices);
         peer.m_their_services = nServices;
         pfrom.SetAddrLocal(addrMe);
+        if (m_opts.holepunch && pfrom.IsPunchSocket() && holepunch::Family(addrMe) == holepunch::Family(pfrom.addr)) {
+            LOCK(m_holepunch_mutex);
+            m_hp_reports.Set(pfrom.GetId(), HolePunchGroup(pfrom.addr), addrMe, HolePunchLocal());
+            for (const auto family : {NET_IPV4, NET_IPV6}) {
+                m_holepunch.SetExternal(family, m_hp_reports.External(family), GetTime());
+            }
+        }
+
         {
             LOCK(pfrom.m_subver_mutex);
             pfrom.cleanSubVer = cleanSubVer;
@@ -3941,7 +4347,7 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         // - fRelay=true (the peer wishes to receive transaction announcements)
         //   or we're offering NODE_BLOOM to this peer. NODE_BLOOM means that
         //   the peer may turn on transaction relay later.
-        if (!pfrom.IsBlockOnlyConn() &&
+        if (!peer.m_hp_visitor && !pfrom.IsBlockOnlyConn() &&
             !pfrom.IsFeelerConn() &&
             (fRelay || (peer.m_our_services & NODE_BLOOM))) {
             auto* const tx_relay = peer.SetTxRelay();
@@ -3969,110 +4375,34 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
             return;
         }
 
-        if (greatest_common_version >= WTXID_RELAY_VERSION) {
-            MakeAndPushMessage(pfrom, NetMsgType::WTXIDRELAY);
-        }
-
-        // Signal ADDRv2 support (BIP155).
-        if (greatest_common_version >= 70016) {
-            // BIP155 defines addrv2 and sendaddrv2 for all protocol versions, but some
-            // implementations reject messages they don't know. As a courtesy, don't send
-            // it to nodes with a version before 70016, as no software is known to support
-            // BIP155 that doesn't announce at least that protocol version number.
-            MakeAndPushMessage(pfrom, NetMsgType::SENDADDRV2);
-        }
-
-        if (greatest_common_version >= WTXID_RELAY_VERSION && m_txreconciliation) {
-            // Per BIP-330, we announce txreconciliation support if:
-            // - protocol version per the peer's VERSION message supports WTXID_RELAY;
-            // - transaction relay is supported per the peer's VERSION message
-            // - this is not a block-relay-only connection and not a feeler
-            // - this is not an addr fetch connection;
-            // - we are not in -blocksonly mode.
-            const auto* tx_relay = peer.GetTxRelay();
-            if (tx_relay && WITH_LOCK(tx_relay->m_bloom_filter_mutex, return tx_relay->m_relay_txs) &&
-                !pfrom.IsAddrFetchConn() && !m_opts.ignore_incoming_txs) {
-                const uint64_t recon_salt = m_txreconciliation->PreRegisterPeer(pfrom.GetId());
-                MakeAndPushMessage(pfrom, NetMsgType::SENDTXRCNCL,
-                                   TXRECONCILIATION_VERSION, recon_salt);
-            }
-        }
-
-        if (greatest_common_version >= FEATURE_VERSION) {
-            // announce supported features
-            // MakeAndPushFeature(pfrom, NetMsgFeature::FOO, uint32_t{1});
-        }
-
-        // If we have too many tx-relaying inbound peers, attempt to evict an existing one.
-        // Only if this fails, disconnect this peer.
-        if (MaybeDisconnectForTxRelayCapacity(pfrom, msg_type, /*protect_peer=*/pfrom.GetId())) return;
-        MakeAndPushMessage(pfrom, NetMsgType::VERACK);
-
-        // Potentially mark this peer as a preferred download peer.
-        {
-            LOCK(cs_main);
-            CNodeState* state = State(pfrom.GetId());
-            state->fPreferredDownload = (!pfrom.IsInboundConn() || pfrom.HasPermission(NetPermissionFlags::NoBan)) && !pfrom.IsAddrFetchConn() && CanServeBlocks(peer);
-            m_num_preferred_download_peers += state->fPreferredDownload;
-        }
-
-        // Attempt to initialize address relay for outbound peers and use result
-        // to decide whether to send GETADDR, so that we don't send it to
-        // inbound, feelers, or outbound block-relay-only peers.
-        bool send_getaddr{false};
-        if (!pfrom.IsInboundConn()) {
-            send_getaddr = SetupAddressRelay(pfrom, peer);
-        }
-        if (send_getaddr) {
-            // Do a one-time address fetch to help populate/update our addrman.
-            // If we're starting up for the first time, our addrman may be pretty
-            // empty, so this mechanism is important to help us connect to the network.
-            // We skip this for block-relay-only peers. We want to avoid
-            // potentially leaking addr information and we do not want to
-            // indicate to the peer that we will participate in addr relay.
-            MakeAndPushMessage(pfrom, NetMsgType::GETADDR);
-            // When requesting a getaddr, accept an additional MAX_ADDR_TO_SEND addresses in response
-            // (bypassing the MAX_ADDR_PROCESSING_TOKEN_BUCKET limit).
-            peer.m_addr_token_bucket += MAX_ADDR_TO_SEND;
-        }
-
-        if (!pfrom.IsInboundConn()) {
-            // For non-inbound connections, we update the addrman to record
-            // connection success so that addrman will have an up-to-date
-            // notion of which peers are online and available.
-            //
-            // While we strive to not leak information about block-relay-only
-            // connections via the addrman, not moving an address to the tried
-            // table is also potentially detrimental because new-table entries
-            // are subject to eviction in the event of addrman collisions.  We
-            // mitigate the information-leak by never calling
-            // AddrMan::Connected() on block-relay-only peers; see
-            // FinalizeNode().
-            //
-            // This moves an address from New to Tried table in Addrman,
-            // resolves tried-table collisions, etc.
-            m_addrman.Good(pfrom.addr);
-        }
-
         peer.m_time_offset = NodeSeconds{std::chrono::seconds{nTime}} - Now<NodeSeconds>();
-        if (!pfrom.IsInboundConn()) {
-            // Don't use timedata samples from inbound peers to make it
-            // harder for others to create false warnings about our clock being out of sync.
-            m_outbound_time_offsets.Add(peer.m_time_offset);
-            m_outbound_time_offsets.WarnIfOutOfSync();
+
+        // A board cannot know an inbound connection's purpose until FEATURE.
+        // Keep its initial reply within the board allowlist; ordinary relay starts at VERACK.
+        if (peer.m_hp_visitor || (m_opts.holepunch_board && pfrom.IsInboundConn() && greatest_common_version >= FEATURE_VERSION)) {
+            if (peer.m_hp_visitor && (greatest_common_version < FEATURE_VERSION || !(nServices & NODE_P2P_V2))) {
+                pfrom.fDisconnect = true;
+                return;
+            }
+            MakeAndPushMessage(pfrom, NetMsgType::SENDADDRV2);
+            MakeAndPushFeature(pfrom, holepunch::FEATURE_ID, holepunch::Feature{0, (m_opts.holepunch_board ? holepunch::BOARD : 0) | (peer.m_hp_visitor ? holepunch::VISITOR : 0)});
+            peer.m_hp_feature_sent = true;
+            if (peer.m_hp_visitor) {
+                MakeAndPushMessage(pfrom, NetMsgType::VERACK);
+            } else {
+                peer.m_hp_deferred_version_reply = true;
+                // The remote reconciliation offer precedes its VERACK. Register now,
+                // even though our offer must wait until this is known to be an ordinary peer.
+                const auto* tx_relay{peer.GetTxRelay()};
+                if (m_txreconciliation && tx_relay && !m_opts.ignore_incoming_txs &&
+                    WITH_LOCK(tx_relay->m_bloom_filter_mutex, return tx_relay->m_relay_txs)) {
+                    peer.m_hp_deferred_recon_salt = m_txreconciliation->PreRegisterPeer(pfrom.GetId());
+                }
+            }
+            return;
         }
 
-        // If the peer is old enough to have the old alert system, send it the final alert.
-        if (greatest_common_version <= 70012) {
-            constexpr auto finalAlert{"60010000000000000000000000ffffff7f00000000ffffff7ffeffff7f01ffffff7f00000000ffffff7f00ffffff7f002f555247454e543a20416c657274206b657920636f6d70726f6d697365642c2075706772616465207265717569726564004630440220653febd6410f470f6bae11cad19c48413becb1ac2c17f908fd0fd53bdc3abd5202206d0e9c96fe88d4a0f01ed9dedae2b6f9e00da94cad0fecaae66ecf689bf71b50"_hex};
-            MakeAndPushMessage(pfrom, "alert", finalAlert);
-        }
-
-        // Feeler connections exist only to verify if address is online.
-        if (pfrom.IsFeelerConn()) {
-            LogDebug(BCLog::NET, "feeler connection completed, %s", pfrom.DisconnectMsg());
-            pfrom.fDisconnect = true;
-        }
+        SendVersionNegotiation(pfrom, peer);
         return;
     }
 
@@ -4083,8 +4413,48 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
     }
 
     if (msg_type == NetMsgType::VERACK) {
+        if (pfrom.m_holepunch_deadline && NodeClock::now() >= *pfrom.m_holepunch_deadline) {
+            pfrom.fDisconnect = true;
+            return;
+        }
         if (pfrom.fSuccessfullyConnected) {
             LogDebug(BCLog::NET, "ignoring redundant verack message from peer=%d\n", pfrom.GetId());
+            return;
+        }
+
+        if (peer.m_hp_visitor || peer.m_hp_board) {
+            if (!peer.m_hp_feature_received || !(peer.m_their_services & NODE_P2P_V2) ||
+                !peer.m_wants_addrv2 || (peer.m_hp_visitor && !(peer.m_hp_flags & holepunch::BOARD))) {
+                pfrom.fDisconnect = true;
+                return;
+            }
+            if (peer.m_hp_board) {
+                bool admitted;
+                {
+                    LOCK(m_holepunch_mutex);
+                    admitted = m_hp_board.Admit(pfrom.GetId(), pfrom.addr, HolePunchGroup(pfrom.addr), GetTime());
+                }
+                if (!admitted || !m_connman.PromoteHolePunchBoard(pfrom.GetId())) {
+                    pfrom.fDisconnect = true;
+                    return;
+                }
+            }
+            if (peer.m_hp_deferred_version_reply) MakeAndPushMessage(pfrom, NetMsgType::VERACK);
+            peer.m_addr_token_bucket = MAX_ADDR_PROCESSING_TOKEN_BUCKET;
+            {
+                LOCK(m_holepunch_mutex);
+                peer.m_hp_opened_at = GetTime();
+                peer.m_hp_rotate_at = peer.m_hp_opened_at + 6 * 60 * 60;
+            }
+            pfrom.fSuccessfullyConnected = true;
+            return;
+        }
+        if (peer.m_hp_deferred_version_reply) {
+            SendVersionNegotiation(pfrom, peer, /*addr_sent=*/true);
+            if (pfrom.fDisconnect) return;
+        }
+        if (pfrom.m_holepunch_pending_inbound && !m_connman.FinalizeHolePunchInbound(pfrom.GetId())) {
+            pfrom.fDisconnect = true;
             return;
         }
 
@@ -4256,10 +4626,25 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
             return;
         }
 
-        // if (feature_id == NetMsgFeature::FOO) {
-        //     ...
-        //     return;
-        // }
+        if (feature_id == holepunch::FEATURE_ID && (m_opts.holepunch || m_opts.holepunch_board)) {
+            const auto feature{holepunch::ParseFeature(MakeUCharSpan(feature_data))};
+            if (!feature || peer.m_hp_feature_received || !(peer.m_their_services & NODE_P2P_V2)) {
+                pfrom.fDisconnect = true;
+                return;
+            }
+            peer.m_hp_feature_received = true;
+            peer.m_hp_flags = feature->flags;
+            if (feature->flags & holepunch::VISITOR) {
+                if (!m_opts.holepunch_board || !pfrom.IsInboundConn() || !peer.m_hp_feature_sent || pfrom.m_relays_txs || peer.m_hp_forbidden_before_feature) {
+                    pfrom.fDisconnect = true;
+                    return;
+                }
+                peer.m_hp_board = true;
+                LOCK(peer.m_block_inv_mutex);
+                peer.m_blocks_for_headers_relay.clear();
+            }
+            return;
+        }
 
         // ignore unknown feature_id
         LogDebug(BCLog::NET, "unknown feature advertised: %s", SanitizeString(feature_id));
@@ -4334,17 +4719,52 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         }
     }
 
-    if (msg_type == NetMsgType::ADDR || msg_type == NetMsgType::ADDRV2) {
-        const auto ser_params{
-            msg_type == NetMsgType::ADDRV2 ?
-            // Set V2 param so that the CNetAddr and CAddress
-            // unserialize methods know that an address in v2 format is coming.
-            CAddress::V2_NETWORK :
-            CAddress::V1_NETWORK,
-        };
+    if (msg_type == NetMsgType::ADDRV2) {
+        const auto count{ReadCompactSize(vRecv)};
+        if (count > MAX_ADDR_TO_SEND) {
+            Misbehaving(peer, strprintf("addrv2 message size = %u", count));
+            return;
+        }
+        std::vector<CAddress> ordinary;
+        for (uint64_t i{0}; i < count; ++i) {
+            holepunch::WireAddress wire;
+            vRecv >> wire;
+            if (wire.network != holepunch::PUNCHKEY) {
+                if (peer.m_hp_board || peer.m_hp_visitor) {
+                    pfrom.fDisconnect = true;
+                    return;
+                }
+                ordinary.push_back(holepunch::DecodeAddress(wire).value_or(CAddress{}));
+                continue;
+            }
+            if (!peer.m_hp_board && !peer.m_hp_visitor) {
+                pfrom.fDisconnect = true;
+                return;
+            }
+            const auto now{GetTime()};
+            const bool within_hour{peer.m_hp_received.Take(now)};
+            const bool within_addr{TakeHolePunchAddress(peer, pfrom)};
+            if (!within_hour || !within_addr) continue;
+            LOCK(m_holepunch_mutex);
+            if (peer.m_hp_board) {
+                m_hp_board.Announce(pfrom.GetId(), wire, now);
+            } else if (const auto announcement{holepunch::Decode(wire, HolePunchLocal())}) {
+                const auto& announced{peer.m_hp_announced};
+                if (announced && announced->endpoint == announcement->endpoint && announced->pubkey == announcement->pubkey) {
+                    peer.m_hp_ack_deadline = 0;
+                    m_hp_failures[holepunch::Family(announcement->endpoint)] = 0;
+                } else {
+                    m_holepunch.Add(pfrom.GetId(), HolePunchGroup(pfrom.addr), *announcement, now);
+                }
+            }
+        }
+        if (!ordinary.empty()) ProcessAddrs(msg_type, pfrom, peer, std::move(ordinary), interruptMsgProc);
+        return;
+    }
 
+    if (msg_type == NetMsgType::ADDR) {
         std::vector<CAddress> vAddr;
-        vRecv >> ser_params(vAddr);
+        vRecv >> CAddress::V1_NETWORK(vAddr);
         ProcessAddrs(msg_type, pfrom, peer, std::move(vAddr), interruptMsgProc);
         return;
     }
@@ -5432,7 +5852,7 @@ bool PeerManagerImpl::ProcessMessages(CNode& node, std::atomic<bool>& interruptM
 
     // For outbound connections, ensure that the initial VERSION message
     // has been sent first before processing any incoming messages
-    if (!node.IsInboundConn() && !peer.m_outbound_version_message_sent) return false;
+    if (node.m_conn_type != ConnectionType::INBOUND && !peer.m_outbound_version_message_sent) return false;
 
     {
         LOCK(peer.m_getdata_requests_mutex);
@@ -6069,7 +6489,7 @@ bool PeerManagerImpl::SendMessages(CNode& node)
     if (MaybeDiscourageAndDisconnect(node, peer)) return true;
 
     // Initiate version handshake for outbound connections
-    if (!node.IsInboundConn() && !peer.m_outbound_version_message_sent) {
+    if (node.m_conn_type != ConnectionType::INBOUND && !peer.m_outbound_version_message_sent) {
         PushNodeVersion(node, peer);
         peer.m_outbound_version_message_sent = true;
     }
@@ -6080,6 +6500,11 @@ bool PeerManagerImpl::SendMessages(CNode& node)
 
     const auto now{NodeClock::now()};
     const auto current_time{GetTime<std::chrono::microseconds>()};
+
+    if (peer.m_hp_board || peer.m_hp_visitor) {
+        MaybeSendPing(node, peer, now);
+        return true;
+    }
 
     // The logic below does not apply to private broadcast peers, so skip it.
     // Also in CConnman::PushMessage() we make sure that unwanted messages are
