@@ -11,6 +11,7 @@
 #include <random.h>
 
 #include <secp256k1.h>
+#include <secp256k1_ecdh.h>
 #include <secp256k1_ellswift.h>
 #include <secp256k1_extrakeys.h>
 #include <secp256k1_recovery.h>
@@ -191,6 +192,20 @@ CPubKey CKey::GetPubKey() const {
     secp256k1_ec_pubkey_serialize(secp256k1_context_static, (unsigned char*)result.begin(), &clen, &pubkey, fCompressed ? SECP256K1_EC_COMPRESSED : SECP256K1_EC_UNCOMPRESSED);
     assert(result.size() == clen);
     assert(result.IsValid());
+    return result;
+}
+
+std::optional<std::array<unsigned char, 32>> CKey::ComputeECDHSecret(const CPubKey& pubkey) const
+{
+    if (!IsValid() || !pubkey.IsCompressed()) return std::nullopt;
+    secp256k1_pubkey point;
+    if (!secp256k1_ec_pubkey_parse(secp256k1_context_static, &point, pubkey.data(), pubkey.size())) return std::nullopt;
+    std::array<unsigned char, 32> result;
+    const auto raw_x = [](unsigned char* out, const unsigned char* x, const unsigned char*, void*) {
+        std::copy_n(x, 32, out);
+        return 1;
+    };
+    if (!secp256k1_ecdh(secp256k1_context_sign, result.data(), &point, UCharCast(begin()), raw_x, nullptr)) return std::nullopt;
     return result;
 }
 

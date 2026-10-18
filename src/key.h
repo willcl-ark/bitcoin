@@ -151,6 +151,9 @@ public:
      */
     CPubKey GetPubKey() const;
 
+    /** Return the raw big-endian x coordinate of ECDH, without hashing it. */
+    std::optional<std::array<unsigned char, 32>> ComputeECDHSecret(const CPubKey& pubkey) const;
+
     /**
      * Create a DER-serialized signature.
      * The test_case parameter tweaks the deterministic nonce.

@@ -38,6 +38,20 @@ static const std::string strAddressBad = "1HV9Lc3sNHZxwj4Zk6fB38tEmBryq2cBiF";
 
 BOOST_FIXTURE_TEST_SUITE(key_tests, BasicTestingSetup)
 
+BOOST_AUTO_TEST_CASE(raw_ecdh)
+{
+    const auto secret_a = ParseHex("0000000000000000000000000000000000000000000000000000000000000003");
+    const auto secret_b = ParseHex("b7e151628aed2a6abf7158809cf4f3c762e7160f38b4da56a784d9045190cfef");
+    CKey a, b;
+    a.Set(secret_a.begin(), secret_a.end(), true);
+    b.Set(secret_b.begin(), secret_b.end(), true);
+    const auto shared = a.ComputeECDHSecret(b.GetPubKey());
+    BOOST_REQUIRE(shared);
+    BOOST_CHECK_EQUAL(HexStr(*shared), "f549c8c8f9b44c4aab3e352998dd736d1247a3dcac80f5b0360f54f7dafd2bd5");
+    BOOST_CHECK(shared == b.ComputeECDHSecret(a.GetPubKey()));
+    BOOST_CHECK(!a.ComputeECDHSecret(CPubKey{}));
+}
+
 BOOST_AUTO_TEST_CASE(key_test1)
 {
     CKey key1  = DecodeSecret(strSecret1);
