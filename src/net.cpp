@@ -3666,6 +3666,7 @@ bool CConnman::InitHolePunch(const Options& options)
             if (!sock || sock->Listen(8) == SOCKET_ERROR) continue;
             m_punch_listeners.push_back({local, std::move(sock)});
             LogInfo("Hole-punch listener bound to %s", local.ToStringAddrPort());
+            LogDebug(BCLog::HOLEPUNCH, "Listening family=%s port=%u bind=%s", network == NET_IPV4 ? "ipv4" : "ipv6", port, fLogIPs ? local.ToStringAddrPort() : "(hidden)");
             bound = true;
             break;
         }
@@ -3695,9 +3696,15 @@ bool CConnman::OutboundHolePunchAllowed(const CService& endpoint) const
     const auto group = m_netgroupman.GetGroup(endpoint);
     for (const auto* node : m_nodes) {
         if (node->fDisconnect) continue;
-        if (node->addr == endpoint) return false;
+        if (node->addr == endpoint) {
+            LogDebug(BCLog::HOLEPUNCH, "Outbound session skipped: endpoint already connected peer=%d endpoint=%s", node->GetId(), fLogIPs ? endpoint.ToStringAddrPort() : "(hidden)");
+            return false;
+        }
         if (!m_params.IsMockableChain() && !node->IsInboundConn() && !node->IsHolePunchBoardConn() &&
-            m_netgroupman.GetGroup(node->addr) == group) return false;
+            m_netgroupman.GetGroup(node->addr) == group) {
+            LogDebug(BCLog::HOLEPUNCH, "Outbound session skipped: network group already connected peer=%d endpoint=%s", node->GetId(), fLogIPs ? endpoint.ToStringAddrPort() : "(hidden)");
+            return false;
+        }
     }
     return true;
 }
@@ -3780,7 +3787,10 @@ bool CConnman::StartHolePunch(const CService& endpoint, bool initiator, NodeCloc
     LOCK2(m_nodes_mutex, m_punch_mutex);
     if (!HolePunchSlotAvailable(initiator)) return false;
     for (const auto* node : m_nodes) {
-        if (!node->fDisconnect && node->addr == endpoint) return false;
+        if (!node->fDisconnect && node->addr == endpoint) {
+            LogDebug(BCLog::HOLEPUNCH, "Session skipped: endpoint already connected peer=%d endpoint=%s", node->GetId(), fLogIPs ? endpoint.ToStringAddrPort() : "(hidden)");
+            return false;
+        }
     }
     if (std::count_if(m_punch_sessions.begin(), m_punch_sessions.end(), [](const auto& session) {
             return !session.board;
@@ -3793,6 +3803,7 @@ bool CConnman::StartHolePunch(const CService& endpoint, bool initiator, NodeCloc
         })) return false;
     const auto now = NodeClock::now();
     m_punch_sessions.push_back({endpoint, initiator, false, start, now});
+    LogDebug(BCLog::HOLEPUNCH, "Session started role=%s endpoint=%s remaining_ms=%d", initiator ? "initiator" : "responder", fLogIPs ? endpoint.ToStringAddrPort() : "(hidden)", Ticks<std::chrono::milliseconds>(start + 125s - now));
     // Claim a held socket at session start, before a later handler tick can expire it.
     auto held = std::find_if(m_held_punch_sockets.begin(), m_held_punch_sockets.end(), [&](const auto& entry) {
         return entry.endpoint == endpoint && entry.accepted + 10s > now;
@@ -3801,6 +3812,7 @@ bool CConnman::StartHolePunch(const CService& endpoint, bool initiator, NodeCloc
         auto& session = m_punch_sessions.back();
         session.sock = std::move(held->sock);
         session.connected = true;
+        LogDebug(BCLog::HOLEPUNCH, "Held accepted socket matched at session start endpoint=%s", fLogIPs ? endpoint.ToStringAddrPort() : "(hidden)");
         m_held_punch_sockets.erase(held);
     }
     return true;
@@ -3838,12 +3850,16 @@ bool CConnman::OpenHolePunchBoard(const CAddress& address)
     if (count >= 2) return false;
     const auto now = NodeClock::now();
     m_punch_sessions.push_back({address, true, true, now, now});
+    LogDebug(BCLog::HOLEPUNCH, "Board dial queued endpoint=%s", fLogIPs ? address.ToStringAddrPort() : "(hidden)");
     return true;
 }
 
 NodeId CConnman::AdoptPunchSocket(std::shared_ptr<Sock> sock, const CService& endpoint, bool initiator, bool board, NodeClock::time_point deadline)
 {
-    if (!fNetworkActive || m_interrupt_net->interrupted() || (m_banman && (m_banman->IsBanned(endpoint) || m_banman->IsDiscouraged(endpoint)))) return -1;
+    if (!fNetworkActive || m_interrupt_net->interrupted() || (m_banman && (m_banman->IsBanned(endpoint) || m_banman->IsDiscouraged(endpoint)))) {
+        LogDebug(BCLog::HOLEPUNCH, "Socket adoption rejected by network or ban policy endpoint=%s", fLogIPs ? endpoint.ToStringAddrPort() : "(hidden)");
+        return -1;
+    }
     const auto id = GetNewNodeId();
     const auto nonce = GetDeterministicRandomizer(RANDOMIZER_ID_LOCALHOSTNONCE).Write(id).Finalize();
     const int on{1};
@@ -3861,6 +3877,7 @@ NodeId CConnman::AdoptPunchSocket(std::shared_ptr<Sock> sock, const CService& en
                                                                                                   ConnectionType::INBOUND,
                            /*inbound_onion=*/false, network_key,
                            CNodeOptions{.recv_flood_size = nReceiveFloodSize, .use_v2transport = true, .holepunch = !board, .transport_initiator = initiator, .holepunch_deadline = board ? std::nullopt : std::optional{deadline}});
+    LogDebug(BCLog::HOLEPUNCH, "Adopting %s socket with v2 role=%s peer=%d endpoint=%s", board ? "board" : "punch", initiator ? "initiator" : "responder", id, fLogIPs ? endpoint.ToStringAddrPort() : "(hidden)");
     node->AddRef();
     m_msgproc->InitializeNode(*node, GetLocalServices());
     WITH_LOCK(m_nodes_mutex, m_nodes.push_back(node));
@@ -3884,6 +3901,9 @@ void CConnman::SocketHandlerHolePunch()
     {
         LOCK(m_punch_mutex);
         if (!fNetworkActive || m_interrupt_net->interrupted()) {
+            if (!m_punch_sessions.empty() || !m_held_punch_sockets.empty()) {
+                LogDebug(BCLog::HOLEPUNCH, "Cancelling sessions=%u held_sockets=%u: networking inactive or shutdown", m_punch_sessions.size(), m_held_punch_sockets.size());
+            }
             m_punch_sessions.clear();
             m_held_punch_sockets.clear();
             // Do not leave connections accepted by the kernel during network inactivity
@@ -3898,6 +3918,7 @@ void CConnman::SocketHandlerHolePunch()
             return;
         }
         while (!m_held_punch_sockets.empty() && m_held_punch_sockets.front().accepted + 10s <= now) {
+            LogDebug(BCLog::HOLEPUNCH, "Held socket expired after 10s endpoint=%s", fLogIPs ? m_held_punch_sockets.front().endpoint.ToStringAddrPort() : "(hidden)");
             m_held_punch_sockets.pop_front();
         }
         for (const auto& listener : m_punch_listeners) {
@@ -3910,20 +3931,27 @@ void CConnman::SocketHandlerHolePunch()
                 CService endpoint;
                 if (!endpoint.SetSockAddr(reinterpret_cast<sockaddr*>(&sa), len) || !sock->SetNonBlocking() ||
                     !sock->IsSelectable() || endpoint.GetSAFamily() != listener.bind.GetSAFamily()) continue;
-                if (m_held_punch_sockets.size() == 8) m_held_punch_sockets.pop_front();
+                if (m_held_punch_sockets.size() == 8) {
+                    LogDebug(BCLog::HOLEPUNCH, "Held socket displaced at capacity endpoint=%s", fLogIPs ? m_held_punch_sockets.front().endpoint.ToStringAddrPort() : "(hidden)");
+                    m_held_punch_sockets.pop_front();
+                }
+                LogDebug(BCLog::HOLEPUNCH, "Accepted socket held awaiting session endpoint=%s", fLogIPs ? endpoint.ToStringAddrPort() : "(hidden)");
                 m_held_punch_sockets.push_back({endpoint, std::move(sock), now});
             }
         }
         for (auto it = m_punch_sessions.begin(); it != m_punch_sessions.end();) {
             auto& session = *it;
             bool finished{false};
+            bool success{false};
             if (session.node) {
                 auto node = std::find_if(snapshot.Nodes().begin(), snapshot.Nodes().end(), [&](auto* candidate) {
                     return candidate->GetId() == *session.node;
                 });
                 finished = node == snapshot.Nodes().end() || (*node)->fDisconnect || (*node)->fSuccessfullyConnected;
+                success = node != snapshot.Nodes().end() && !(*node)->fDisconnect && (*node)->fSuccessfullyConnected;
             }
             if (finished || now >= session.start + 125s) {
+                LogDebug(BCLog::HOLEPUNCH, "%s session ended role=%s result=%s elapsed_ms=%d endpoint=%s", session.board ? "Board" : "Punch", session.initiator ? "initiator" : "responder", success ? "handshake complete" : finished ? "peer disconnected" : "absolute deadline", Ticks<std::chrono::milliseconds>(now - session.start), fLogIPs ? session.endpoint.ToStringAddrPort() : "(hidden)");
                 if (session.board && !session.node && m_punch_board_failures.size() < 32) {
                     m_punch_board_failures.push_back(session.endpoint);
                 }
@@ -3939,6 +3967,7 @@ void CConnman::SocketHandlerHolePunch()
                 return entry.bind.GetSAFamily() == session.endpoint.GetSAFamily();
             });
             if (listener == m_punch_listeners.end()) {
+                LogDebug(BCLog::HOLEPUNCH, "Session failed: family listener unavailable endpoint=%s", fLogIPs ? session.endpoint.ToStringAddrPort() : "(hidden)");
                 it = m_punch_sessions.erase(it);
                 continue;
             }
@@ -3948,9 +3977,13 @@ void CConnman::SocketHandlerHolePunch()
             if (held != m_held_punch_sockets.end() && !session.connected) {
                 session.sock = std::move(held->sock);
                 session.connected = true;
+                LogDebug(BCLog::HOLEPUNCH, "Accepted socket matched active session role=%s endpoint=%s", session.initiator ? "initiator" : "responder", fLogIPs ? session.endpoint.ToStringAddrPort() : "(hidden)");
                 m_held_punch_sockets.erase(held);
             }
             if (!session.connected && now >= session.start + 120s) {
+                if (!session.wait_accept || session.sock) {
+                    LogDebug(BCLog::HOLEPUNCH, "Connect window expired, waiting for matching accept endpoint=%s", fLogIPs ? session.endpoint.ToStringAddrPort() : "(hidden)");
+                }
                 session.sock.reset();
                 session.wait_accept = true;
             }
@@ -3959,9 +3992,11 @@ void CConnman::SocketHandlerHolePunch()
                 session.connected = false;
                 session.wait_accept = error == WSAEADDRINUSE || error == WSAEADDRNOTAVAIL;
                 session.next_attempt = now + session.retry;
+                LogDebug(BCLog::HOLEPUNCH, "Attempt failed error=%s action=%s retry_seconds=%d endpoint=%s", error ? NetworkErrorString(error) : "closed before responder received bytes", session.wait_accept ? "wait for matching accept" : "retry", session.wait_accept ? 0 : count_seconds(session.retry), fLogIPs ? session.endpoint.ToStringAddrPort() : "(hidden)");
                 session.retry = std::min(session.retry * 2, 128s);
             };
             if (!session.sock && !session.wait_accept && now >= session.next_attempt) {
+                LogDebug(BCLog::HOLEPUNCH, "%s connect attempt role=%s source_port=%u endpoint=%s", session.board ? "Board" : "Punch", session.initiator ? "initiator" : "responder", listener->bind.GetPort(), fLogIPs ? session.endpoint.ToStringAddrPort() : "(hidden)");
                 session.sock = CreatePunchSocket(listener->bind);
                 if (session.sock) {
                     sockaddr_storage sa;
@@ -3970,6 +4005,7 @@ void CConnman::SocketHandlerHolePunch()
                         failed(WSAEINVAL);
                     } else if (session.sock->Connect(reinterpret_cast<sockaddr*>(&sa), len) == 0) {
                         session.connected = true;
+                        LogDebug(BCLog::HOLEPUNCH, "Connect completed immediately role=%s endpoint=%s", session.initiator ? "initiator" : "responder", fLogIPs ? session.endpoint.ToStringAddrPort() : "(hidden)");
                     } else {
                         const int error = WSAGetLastError();
                         if (error != WSAEINPROGRESS && error != WSAEWOULDBLOCK && error != WSAEINTR) failed(error);
@@ -3986,8 +4022,10 @@ void CConnman::SocketHandlerHolePunch()
                     if (session.sock->GetSockOpt(SOL_SOCKET, SO_ERROR, &error, &len) == SOCKET_ERROR) error = WSAGetLastError();
                     if (error)
                         failed(error);
-                    else
+                    else {
                         session.connected = true;
+                        LogDebug(BCLog::HOLEPUNCH, "Connect completed role=%s endpoint=%s", session.initiator ? "initiator" : "responder", fLogIPs ? session.endpoint.ToStringAddrPort() : "(hidden)");
+                    }
                 }
             }
             if (session.connected && !session.initiator) {
