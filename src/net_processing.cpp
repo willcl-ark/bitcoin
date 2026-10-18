@@ -2398,7 +2398,7 @@ void PeerManagerImpl::HolePunchRound(const HolePunchTip& event)
         }
     }
     const bool advance{event.previous && tip->nHeight > event.previous->nHeight && !event.ibd};
-    if (!advance) LogDebug(BCLog::HOLEPUNCH, "Skipped round at height=%d: %s", tip->nHeight, event.ibd ? "initial block download" : (event.previous ? "active height did not increase" : "previous tip arrival unavailable"));
+    if (!advance) LogTrace(BCLog::HOLEPUNCH, "Skipped round at height=%d: %s", tip->nHeight, event.ibd ? "initial block download" : (event.previous ? "active height did not increase" : "previous tip arrival unavailable"));
     for (const auto* index : connected | std::views::reverse) {
         const auto parent{index->pprev ? index->pprev->GetBlockHash() : uint256{}};
         const bool round{advance && index->nHeight > event.previous->nHeight};
@@ -2406,18 +2406,21 @@ void PeerManagerImpl::HolePunchRound(const HolePunchTip& event)
         if (eligible && GetTime() < now + 120) {
             HolePunchPickRound(index, *eligible, now);
         } else if (round) {
-            LogDebug(BCLog::HOLEPUNCH, "Skipped round at height=%d: %s", index->nHeight, eligible ? "round window expired" : "parent arrival unavailable or round already evaluated");
+            LogTrace(BCLog::HOLEPUNCH, "Skipped round at height=%d: %s", index->nHeight, eligible ? "round window expired" : "parent arrival unavailable or round already evaluated");
         }
     }
 }
 
 void PeerManagerImpl::HolePunchPickRound(const CBlockIndex* tip, int64_t parent_time, int64_t now)
 {
+    std::erase_if(m_hp_attempts, [now](const auto& item) { return item.second.empty() || item.second.back() <= now - 3600; });
+    if (m_holepunch.Entries().empty()) return;
+
     std::set<holepunch::Group> groups, sources;
     size_t picks{0};
     const auto candidates{m_holepunch.Ranked(tip->GetBlockHash(), parent_time, now)};
     LogDebug(BCLog::HOLEPUNCH, "Round height=%d, table entries=%u, eligible=%u, ipv4 quorum=%d, ipv6 quorum=%d, outbound slot=%d, inbound slot=%d", tip->nHeight, m_holepunch.Entries().size(), candidates.size(), m_holepunch.External(NET_IPV4).has_value(), m_holepunch.External(NET_IPV6).has_value(), m_connman.HasHolePunchSlot(true), m_connman.HasHolePunchSlot(false));
-    if (candidates.empty() && !m_holepunch.Entries().empty()) LogDebug(BCLog::HOLEPUNCH, "No mature, unexpired entries with a confirmed endpoint at height=%d", tip->nHeight);
+    if (candidates.empty()) LogTrace(BCLog::HOLEPUNCH, "No mature, unexpired entries with a confirmed endpoint at height=%d", tip->nHeight);
     for (const auto& candidate : candidates) {
         const auto& endpoint{candidate.entry.announcement.endpoint};
         const auto group{HolePunchGroup(endpoint)};
@@ -2444,7 +2447,6 @@ void PeerManagerImpl::HolePunchPickRound(const CBlockIndex* tip, int64_t parent_
         }
     }
     LogDebug(BCLog::HOLEPUNCH, "Round height=%d picked %u session(s)", tip->nHeight, picks);
-    std::erase_if(m_hp_attempts, [now](const auto& item) { return item.second.empty() || item.second.back() <= now - 3600; });
 }
 
 void PeerManagerImpl::StartScheduledTasks(CScheduler& scheduler)
