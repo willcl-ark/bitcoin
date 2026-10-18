@@ -21,7 +21,7 @@ from test_framework.messages import (
     ser_string,
 )
 from test_framework.p2p import MESSAGEMAP, P2PInterface, p2p_lock
-from test_framework.test_framework import BitcoinTestFramework
+from test_framework.test_framework import BitcoinTestFramework, SkipTest
 from test_framework.util import assert_equal, p2p_port
 
 FEATURE_ID = "https://delvingbitcoin.org/t/2497/22"
@@ -78,6 +78,17 @@ class HolePunchTest(BitcoinTestFramework):
              f"-holepunchport={p2p_port(i) + 5000}"]
             for i in range(2, 4)
         ]
+
+    def skip_test_if_missing_module(self):
+        if not hasattr(socket, "SO_REUSEPORT"):
+            raise SkipTest("TCP holepunching requires SO_REUSEPORT")
+        try:
+            for address in ("127.0.0.2", "127.0.0.3", "127.0.0.10", "127.0.0.11"):
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+                    sock.bind((address, 0))
+        except OSError as error:
+            raise SkipTest(f"TCP holepunching requires reusable sockets on distinct loopback addresses: {error}")
 
     def setup_network(self):
         self.setup_nodes()
