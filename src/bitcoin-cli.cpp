@@ -455,6 +455,8 @@ private:
         if (conn_type == "block-relay-only") return "block";
         if (conn_type == "manual" || conn_type == "feeler") return conn_type;
         if (conn_type == "addr-fetch") return "addr";
+        if (conn_type == "holepunch") return "punch";
+        if (conn_type == "holepunch-board") return "board";
         if (conn_type == "private-broadcast") return "priv";
         return "";
     }
@@ -707,6 +709,8 @@ public:
         "           \"manual\" - peer we manually added using RPC addnode or the -addnode/-connect config options\n"
         "           \"feeler\" - short-lived connection for testing addresses\n"
         "           \"addr\"   - address fetch; short-lived connection for requesting addresses\n"
+        "           \"punch\"  - connection established by TCP hole punching\n"
+        "           \"board\"  - hole-punch bulletin-board connection\n"
         "           \"priv\"   - private broadcast; short-lived connection for broadcasting our transactions\n"
         "  net      Network the peer connected through (\"ipv4\", \"ipv6\", \"onion\", \"i2p\", \"cjdns\", or \"npr\" (not publicly routable))\n"
         "  serv     Services offered by the peer\n"

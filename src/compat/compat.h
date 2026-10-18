@@ -64,6 +64,7 @@ typedef unsigned int SOCKET;
 #define WSAEINTR            EINTR
 #define WSAEINPROGRESS      EINPROGRESS
 #define WSAEADDRINUSE       EADDRINUSE
+#define WSAEADDRNOTAVAIL    EADDRNOTAVAIL
 #define INVALID_SOCKET      (SOCKET)(~0)
 #define SOCKET_ERROR        -1
 #else

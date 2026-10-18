@@ -636,7 +636,7 @@ void CNode::CopyStats(CNodeStats& stats)
         LOCK(m_subver_mutex);
         X(cleanSubVer);
     }
-    stats.fInbound = IsInboundConn();
+    stats.fInbound = m_conn_type == ConnectionType::INBOUND;
     X(m_bip152_highbandwidth_to);
     X(m_bip152_highbandwidth_from);
     {
@@ -661,7 +661,7 @@ void CNode::CopyStats(CNodeStats& stats)
     CService addrLocalUnlocked = GetAddrLocal();
     stats.addrLocal = addrLocalUnlocked.IsValid() ? addrLocalUnlocked.ToStringAddrPort() : "";
 
-    X(m_conn_type);
+    stats.m_conn_type = IsHolePunchBoardConn() ? ConnectionType::HOLEPUNCH_BOARD : m_conn_type;
 }
 #undef X
 
@@ -1704,7 +1704,7 @@ bool CConnman::AttemptToEvictConnection(bool evict_tx_relay_peer_only, std::opti
 
         LOCK(m_nodes_mutex);
         for (const CNode* node : m_nodes) {
-            if (node->fDisconnect)
+            if (node->fDisconnect || node->IsHolePunchBoardConn() || node->m_holepunch_pending_inbound)
                 continue;
             if (protect_peer.has_value() && node->GetId() == protect_peer) {
                 continue;
@@ -1790,6 +1790,7 @@ void CConnman::CreateNodeFromAcceptedSocket(std::unique_ptr<Sock>&& sock,
     AssertLockNotHeld(m_nodes_mutex);
 
     int nInbound = 0;
+    unsigned pending_inbound{0};
 
     const bool inbound_onion = std::find(m_onion_binds.begin(), m_onion_binds.end(), addr_bind) != m_onion_binds.end();
 
@@ -1798,9 +1799,13 @@ void CConnman::CreateNodeFromAcceptedSocket(std::unique_ptr<Sock>&& sock,
     AddWhitelistPermissionFlags(permission_flags, inbound_onion ? std::optional<CNetAddr>{} : addr, vWhitelistedRangeIncoming);
 
     {
-        LOCK(m_nodes_mutex);
+        LOCK2(m_nodes_mutex, m_punch_mutex);
+        for (const auto& session : m_punch_sessions) {
+            if (!session.board && !session.initiator && !session.node) ++nInbound;
+        }
         for (const CNode* pnode : m_nodes) {
-            if (pnode->IsInboundConn()) nInbound++;
+            if (pnode->m_holepunch_pending_inbound) ++pending_inbound;
+            else if (pnode->IsInboundConn()) nInbound++;
         }
     }
 
@@ -1838,7 +1843,9 @@ void CConnman::CreateNodeFromAcceptedSocket(std::unique_ptr<Sock>&& sock,
         return;
     }
 
-    if (nInbound >= m_max_inbound)
+    if (m_holepunch_board && pending_inbound >= 8) return;
+
+    if (!m_holepunch_board && nInbound >= m_max_inbound)
     {
         if (!AttemptToEvictConnection(/*evict_tx_relay_peer_only=*/false)) {
             // No connection to evict, disconnect the new connection
@@ -1876,6 +1883,7 @@ void CConnman::CreateNodeFromAcceptedSocket(std::unique_ptr<Sock>&& sock,
                                  .recv_flood_size = nReceiveFloodSize,
                                  .use_v2transport = use_v2transport,
                              });
+    pnode->m_holepunch_pending_inbound = m_holepunch_board;
     pnode->AddRef();
     m_msgproc->InitializeNode(*pnode, local_services);
     {
@@ -1901,8 +1909,13 @@ bool CConnman::AddConnection(const std::string& address, ConnectionType conn_typ
     std::optional<int> max_connections;
     switch (conn_type) {
     case ConnectionType::INBOUND:
+    case ConnectionType::HOLEPUNCH:
     case ConnectionType::PRIVATE_BROADCAST:
         return false;
+    case ConnectionType::HOLEPUNCH_BOARD: {
+        const auto endpoint = Lookup(address, m_params.GetDefaultPort(), /*fAllowLookup=*/false);
+        return endpoint && use_v2transport && OpenHolePunchBoard(CAddress{*endpoint, NODE_NONE});
+    }
     // no separate per-type limit for MANUAL because semAddnode limits them
     case ConnectionType::MANUAL:
         break;
@@ -1976,7 +1989,7 @@ void CConnman::DisconnectNodes()
                 // Add to reconnection list if appropriate. We don't reconnect right here, because
                 // the creation of a connection is a blocking operation (up to several seconds),
                 // and we don't want to hold up the socket handler thread for that long.
-                if (network_active && pnode->m_transport->ShouldReconnectV1()) {
+                if (network_active && !pnode->IsHolePunchBoardConn() && pnode->m_transport->ShouldReconnectV1()) {
                     reconnections_to_add.push_back({
                         .proxy_override = pnode->m_proxy_override,
                         .addr_connect = pnode->addr,
@@ -2050,6 +2063,7 @@ bool CConnman::InactivityCheck(const CNode& node, NodeClock::time_point now) con
     const auto last_send{node.m_last_send.load()};
     const auto last_recv{node.m_last_recv.load()};
 
+    if (node.IsHolePunchConn() && !node.fSuccessfullyConnected) return false;
     if (!ShouldRunInactivityChecks(node, now)) return false;
 
     bool has_received{last_recv > NodeClock::epoch};
@@ -2151,6 +2165,8 @@ void CConnman::SocketHandler()
         // Service (send/receive) each of the already connected nodes.
         SocketHandlerConnected(snap.Nodes(), events_per_sock);
     }
+
+    SocketHandlerHolePunch();
 
     // Accept new connections from listening sockets.
     SocketHandlerListening(events_per_sock);
@@ -2746,6 +2762,8 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
                     // peers from addrman.
                     case ConnectionType::ADDR_FETCH:
                     case ConnectionType::FEELER:
+                    case ConnectionType::HOLEPUNCH:
+                    case ConnectionType::HOLEPUNCH_BOARD:
                     case ConnectionType::PRIVATE_BROADCAST:
                         break;
                     case ConnectionType::MANUAL:
@@ -3026,11 +3044,11 @@ std::vector<AddedNodeInfo> CConnman::GetAddedNodeInfo(bool include_connected) co
         LOCK(m_nodes_mutex);
         for (const CNode* pnode : m_nodes) {
             if (pnode->addr.IsValid()) {
-                mapConnected[pnode->addr] = pnode->IsInboundConn();
+                mapConnected[pnode->addr] = pnode->m_conn_type == ConnectionType::INBOUND;
             }
             std::string addrName{pnode->m_addr_name};
             if (!addrName.empty()) {
-                mapConnectedByName[std::move(addrName)] = std::make_pair(pnode->IsInboundConn(), static_cast<const CService&>(pnode->addr));
+                mapConnectedByName[std::move(addrName)] = std::make_pair(pnode->m_conn_type == ConnectionType::INBOUND, static_cast<const CService&>(pnode->addr));
             }
         }
     }
@@ -3587,6 +3605,429 @@ bool CConnman::InitBinds(const Options& options)
     return true;
 }
 
+std::unique_ptr<Sock> CConnman::CreatePunchSocket(const CService& bind) const
+{
+    auto sock = CreateSock(bind.GetSAFamily(), SOCK_STREAM, IPPROTO_TCP);
+    if (!sock) return nullptr;
+    const int on{1};
+    if (sock->SetSockOpt(SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on)) == SOCKET_ERROR) return nullptr;
+#ifdef SO_REUSEPORT
+    if (sock->SetSockOpt(SOL_SOCKET, SO_REUSEPORT, &on, sizeof(on)) == SOCKET_ERROR) return nullptr;
+#endif
+    if (bind.IsIPv6() && sock->SetSockOpt(IPPROTO_IPV6, IPV6_V6ONLY, &on, sizeof(on)) == SOCKET_ERROR) return nullptr;
+    sockaddr_storage sa;
+    socklen_t len{sizeof(sa)};
+    if (!bind.GetSockAddr(reinterpret_cast<sockaddr*>(&sa), &len) ||
+        sock->Bind(reinterpret_cast<sockaddr*>(&sa), len) == SOCKET_ERROR) return nullptr;
+    return sock;
+}
+
+bool CConnman::InitHolePunch(const Options& options)
+{
+    m_holepunch_board = options.m_holepunch_board;
+    if (!options.m_holepunch) return true;
+#ifndef SO_REUSEPORT
+    if (m_client_interface) {
+        m_client_interface->ThreadSafeMessageBox(
+            _("TCP hole punching requires SO_REUSEPORT support on this platform."),
+            CClientUIInterface::MSG_ERROR);
+    }
+    LogError("TCP hole punching requires SO_REUSEPORT support on this platform.");
+    return false;
+#endif
+    LOCK(m_punch_mutex);
+    for (const auto network : {NET_IPV4, NET_IPV6}) {
+        if (!g_reachable_nets.Contains(network)) continue;
+        CNetAddr bind = network == NET_IPV4 ? CNetAddr{in_addr{INADDR_ANY}} : CNetAddr{in6_addr(COMPAT_IN6ADDR_ANY_INIT)};
+        for (const auto& addr : options.m_holepunch_binds) {
+            if ((addr.IsIPv4() ? NET_IPV4 : NET_IPV6) == network) bind = addr;
+        }
+        const uint16_t configured = network == NET_IPV4 ? options.m_holepunch_port : options.m_holepunch_port_v6;
+        // Walk the dynamic port range from a random starting point, skipping occupied ports.
+        const uint16_t first = configured ? configured : 49152 + FastRandomContext{}.randrange(16384);
+        const unsigned attempts = configured ? 1 : 16384;
+        bool bound{false};
+        for (unsigned i = 0; i < attempts; ++i) {
+            const uint16_t port = configured ? first : 49152 + ((first - 49152 + i) % 16384);
+            if (IsBadPort(port)) continue;
+            const CService local{bind, port};
+            // REUSEPORT would otherwise allow two independent punch listeners on this port.
+            // Probe without reuse before creating the listener that must share with our connects.
+            {
+                auto probe = CreateSock(local.GetSAFamily(), SOCK_STREAM, IPPROTO_TCP);
+                const int on{1};
+                if (probe && local.IsIPv6() && probe->SetSockOpt(IPPROTO_IPV6, IPV6_V6ONLY, &on, sizeof(on)) == SOCKET_ERROR) continue;
+                sockaddr_storage sa;
+                socklen_t len{sizeof(sa)};
+                if (!probe || !local.GetSockAddr(reinterpret_cast<sockaddr*>(&sa), &len) ||
+                    probe->Bind(reinterpret_cast<sockaddr*>(&sa), len) == SOCKET_ERROR) continue;
+            }
+            auto sock = CreatePunchSocket(local);
+            if (!sock || sock->Listen(8) == SOCKET_ERROR) continue;
+            m_punch_listeners.push_back({local, std::move(sock)});
+            LogInfo("Hole-punch listener bound to %s", local.ToStringAddrPort());
+            bound = true;
+            break;
+        }
+        if (!bound && configured) return false;
+    }
+    return true;
+}
+
+uint16_t CConnman::GetHolePunchPort(Network network) const
+{
+    LOCK(m_punch_mutex);
+    for (const auto& listener : m_punch_listeners) {
+        if ((listener.bind.IsIPv4() ? NET_IPV4 : NET_IPV6) == network) return listener.bind.GetPort();
+    }
+    return 0;
+}
+
+std::vector<unsigned char> CConnman::GetNetGroup(const CNetAddr& addr) const
+{
+    // Regtest nodes on one host use distinct local addresses as independent peers.
+    return m_params.IsMockableChain() ? addr.GetAddrBytes() : m_netgroupman.GetGroup(addr);
+}
+
+bool CConnman::OutboundHolePunchAllowed(const CService& endpoint) const
+{
+    LOCK(m_nodes_mutex);
+    const auto group = m_netgroupman.GetGroup(endpoint);
+    for (const auto* node : m_nodes) {
+        if (node->fDisconnect) continue;
+        if (node->addr == endpoint) return false;
+        if (!m_params.IsMockableChain() && !node->IsInboundConn() && !node->IsHolePunchBoardConn() &&
+            m_netgroupman.GetGroup(node->addr) == group) return false;
+    }
+    return true;
+}
+
+bool CConnman::HasHolePunchSlot(bool initiator) const
+{
+    LOCK2(m_nodes_mutex, m_punch_mutex);
+    return HolePunchSlotAvailable(initiator);
+}
+
+bool CConnman::HolePunchSlotAvailable(bool initiator) const
+{
+    AssertLockHeld(m_nodes_mutex);
+    AssertLockHeld(m_punch_mutex);
+    unsigned used{0};
+    for (const auto* node : m_nodes) {
+        if (node->fDisconnect) continue;
+        if (initiator ? (node->IsHolePunchConn() && !node->IsInboundConn()) :
+                        (node->IsInboundConn() && !node->m_holepunch_pending_inbound)) ++used;
+    }
+    for (const auto& session : m_punch_sessions) {
+        if (!session.board && !session.node && session.initiator == initiator) ++used;
+    }
+    return used < (initiator ? 1U : static_cast<unsigned>(m_max_inbound));
+}
+
+bool CConnman::PromoteHolePunchBoard(NodeId id)
+{
+    LOCK(m_nodes_mutex);
+    CNode* candidate{nullptr};
+    for (auto* node : m_nodes) {
+        if (node->GetId() == id) candidate = node;
+    }
+    if (!candidate || candidate->fDisconnect || !m_holepunch_board) return false;
+    if (candidate->IsHolePunchBoardConn()) return true;
+    if (!candidate->m_holepunch_pending_inbound) return false;
+    unsigned total{0}, group_count{0};
+    const auto group = GetNetGroup(candidate->addr);
+    for (const auto* node : m_nodes) {
+        if (node == candidate || node->fDisconnect || !node->m_holepunch_board) continue;
+        if (static_cast<const CNetAddr&>(node->addr) == static_cast<const CNetAddr&>(candidate->addr)) return false;
+        ++total;
+        if (GetNetGroup(node->addr) == group) ++group_count;
+    }
+    if (total >= 32 || group_count >= 4) return false;
+    candidate->m_holepunch_board = true;
+    candidate->m_holepunch_pending_inbound = false;
+    return true;
+}
+
+bool CConnman::FinalizeHolePunchInbound(NodeId id)
+{
+    bool full{false};
+    {
+        LOCK2(m_nodes_mutex, m_punch_mutex);
+        CNode* candidate{nullptr};
+        unsigned used{0};
+        for (auto* node : m_nodes) {
+            if (node->GetId() == id) candidate = node;
+            if (!node->fDisconnect && node->IsInboundConn() && !node->m_holepunch_pending_inbound) ++used;
+        }
+        if (!candidate || candidate->fDisconnect) return false;
+        if (!candidate->m_holepunch_pending_inbound) return true;
+        for (const auto& session : m_punch_sessions) {
+            if (!session.board && !session.initiator && !session.node) ++used;
+        }
+        full = used >= static_cast<unsigned>(m_max_inbound);
+        // Count the ordinary candidate now, before releasing the locks for eviction. This
+        // reserves its slot against a concurrent session starting in the meantime.
+        candidate->m_holepunch_pending_inbound = false;
+    }
+    if (!full) return true;
+    // Classification is now complete. Only an ordinary inbound peer can evict a regular peer.
+    return AttemptToEvictConnection(/*evict_tx_relay_peer_only=*/false, id);
+}
+
+bool CConnman::StartHolePunch(const CService& endpoint, bool initiator, NodeClock::time_point start)
+{
+    if (!fNetworkActive || start + 125s <= NodeClock::now()) return false;
+    LOCK2(m_nodes_mutex, m_punch_mutex);
+    if (!HolePunchSlotAvailable(initiator)) return false;
+    for (const auto* node : m_nodes) {
+        if (!node->fDisconnect && node->addr == endpoint) return false;
+    }
+    if (std::count_if(m_punch_sessions.begin(), m_punch_sessions.end(), [](const auto& session) {
+            return !session.board;
+        }) >= 6) return false;
+    if (std::none_of(m_punch_listeners.begin(), m_punch_listeners.end(), [&](const auto& listener) {
+            return listener.bind.GetSAFamily() == endpoint.GetSAFamily();
+        })) return false;
+    if (std::any_of(m_punch_sessions.begin(), m_punch_sessions.end(), [&](const auto& session) {
+            return session.endpoint == endpoint;
+        })) return false;
+    const auto now = NodeClock::now();
+    m_punch_sessions.push_back({endpoint, initiator, false, start, now});
+    // Claim a held socket at session start, before a later handler tick can expire it.
+    auto held = std::find_if(m_held_punch_sockets.begin(), m_held_punch_sockets.end(), [&](const auto& entry) {
+        return entry.endpoint == endpoint && entry.accepted + 10s > now;
+    });
+    if (held != m_held_punch_sockets.end()) {
+        auto& session = m_punch_sessions.back();
+        session.sock = std::move(held->sock);
+        session.connected = true;
+        m_held_punch_sockets.erase(held);
+    }
+    return true;
+}
+
+std::vector<CService> CConnman::TakeHolePunchBoardFailures()
+{
+    LOCK(m_punch_mutex);
+    std::vector<CService> failures;
+    failures.swap(m_punch_board_failures);
+    return failures;
+}
+
+bool CConnman::OpenHolePunchBoard(const CAddress& address)
+{
+    if (!fNetworkActive || !GetHolePunchPort(address.IsIPv4() ? NET_IPV4 : NET_IPV6)) return false;
+    LOCK2(m_nodes_mutex, m_punch_mutex);
+    unsigned count{0};
+    const auto group = m_netgroupman.GetGroup(address);
+    for (const auto* node : m_nodes) {
+        if (node->fDisconnect) continue;
+        if (node->addr == static_cast<const CService&>(address)) return false;
+        if (node->m_conn_type == ConnectionType::HOLEPUNCH_BOARD && node->addr.GetSAFamily() == address.GetSAFamily()) {
+            if (!m_params.IsMockableChain() && m_netgroupman.GetGroup(node->addr) == group) return false;
+            ++count;
+        }
+    }
+    for (const auto& session : m_punch_sessions) {
+        if (session.endpoint == static_cast<const CService&>(address)) return false;
+        if (session.board && !session.node && session.endpoint.GetSAFamily() == address.GetSAFamily()) {
+            if (!m_params.IsMockableChain() && m_netgroupman.GetGroup(session.endpoint) == group) return false;
+            ++count;
+        }
+    }
+    if (count >= 2) return false;
+    const auto now = NodeClock::now();
+    m_punch_sessions.push_back({address, true, true, now, now});
+    return true;
+}
+
+NodeId CConnman::AdoptPunchSocket(std::shared_ptr<Sock> sock, const CService& endpoint, bool initiator, bool board, NodeClock::time_point deadline)
+{
+    if (!fNetworkActive || m_interrupt_net->interrupted() || (m_banman && (m_banman->IsBanned(endpoint) || m_banman->IsDiscouraged(endpoint)))) return -1;
+    const auto id = GetNewNodeId();
+    const auto nonce = GetDeterministicRandomizer(RANDOMIZER_ID_LOCALHOSTNONCE).Write(id).Finalize();
+    const int on{1};
+    if (sock->SetSockOpt(IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on)) == SOCKET_ERROR) {
+        LogDebug(BCLog::NET, "Unable to set TCP_NODELAY on hole-punch connection");
+    }
+    const CService bind = GetBindAddress(*sock);
+    const auto network_key = GetDeterministicRandomizer(RANDOMIZER_ID_NETWORKKEY)
+                                 .Write(endpoint.GetNetClass())
+                                 .Write(bind.GetAddrBytes())
+                                 .Write(bind.GetPort())
+                                 .Finalize();
+    auto* node = new CNode(id, std::move(sock), CAddress{endpoint, NODE_NONE}, CalculateKeyedNetGroup(endpoint),
+                           nonce, bind, "", board ? ConnectionType::HOLEPUNCH_BOARD : initiator ? ConnectionType::HOLEPUNCH :
+                                                                                                  ConnectionType::INBOUND,
+                           /*inbound_onion=*/false, network_key,
+                           CNodeOptions{.recv_flood_size = nReceiveFloodSize, .use_v2transport = true, .holepunch = !board, .transport_initiator = initiator, .holepunch_deadline = board ? std::nullopt : std::optional{deadline}});
+    node->AddRef();
+    m_msgproc->InitializeNode(*node, GetLocalServices());
+    WITH_LOCK(m_nodes_mutex, m_nodes.push_back(node));
+    WakeMessageHandler();
+    return id;
+}
+
+void CConnman::SocketHandlerHolePunch()
+{
+    const NodesSnapshot snapshot{*this, /*shuffle=*/false};
+    struct Ready {
+        CService endpoint;
+        bool initiator;
+        bool board;
+        std::shared_ptr<Sock> sock;
+        NodeClock::time_point deadline;
+    };
+    std::vector<Ready> ready;
+    std::vector<NodeId> disconnect;
+    const auto now = NodeClock::now();
+    {
+        LOCK(m_punch_mutex);
+        if (!fNetworkActive || m_interrupt_net->interrupted()) {
+            m_punch_sessions.clear();
+            m_held_punch_sockets.clear();
+            // Do not leave connections accepted by the kernel during network inactivity
+            // queued for a later session when networking is enabled again.
+            for (const auto& listener : m_punch_listeners) {
+                for (unsigned i = 0; i < 8; ++i) {
+                    sockaddr_storage sa;
+                    socklen_t len{sizeof(sa)};
+                    if (!listener.sock->Accept(reinterpret_cast<sockaddr*>(&sa), &len)) break;
+                }
+            }
+            return;
+        }
+        while (!m_held_punch_sockets.empty() && m_held_punch_sockets.front().accepted + 10s <= now) {
+            m_held_punch_sockets.pop_front();
+        }
+        for (const auto& listener : m_punch_listeners) {
+            // Accept at most eight per turn so a busy listener cannot starve existing peers.
+            for (unsigned i = 0; i < 8; ++i) {
+                sockaddr_storage sa;
+                socklen_t len{sizeof(sa)};
+                auto sock = listener.sock->Accept(reinterpret_cast<sockaddr*>(&sa), &len);
+                if (!sock) break;
+                CService endpoint;
+                if (!endpoint.SetSockAddr(reinterpret_cast<sockaddr*>(&sa), len) || !sock->SetNonBlocking() ||
+                    !sock->IsSelectable() || endpoint.GetSAFamily() != listener.bind.GetSAFamily()) continue;
+                if (m_held_punch_sockets.size() == 8) m_held_punch_sockets.pop_front();
+                m_held_punch_sockets.push_back({endpoint, std::move(sock), now});
+            }
+        }
+        for (auto it = m_punch_sessions.begin(); it != m_punch_sessions.end();) {
+            auto& session = *it;
+            bool finished{false};
+            if (session.node) {
+                auto node = std::find_if(snapshot.Nodes().begin(), snapshot.Nodes().end(), [&](auto* candidate) {
+                    return candidate->GetId() == *session.node;
+                });
+                finished = node == snapshot.Nodes().end() || (*node)->fDisconnect || (*node)->fSuccessfullyConnected;
+            }
+            if (finished || now >= session.start + 125s) {
+                if (session.board && !session.node && m_punch_board_failures.size() < 32) {
+                    m_punch_board_failures.push_back(session.endpoint);
+                }
+                if (!finished && session.node) disconnect.push_back(*session.node);
+                it = m_punch_sessions.erase(it);
+                continue;
+            }
+            if (session.node) {
+                ++it;
+                continue;
+            }
+            const auto listener = std::find_if(m_punch_listeners.begin(), m_punch_listeners.end(), [&](const auto& entry) {
+                return entry.bind.GetSAFamily() == session.endpoint.GetSAFamily();
+            });
+            if (listener == m_punch_listeners.end()) {
+                it = m_punch_sessions.erase(it);
+                continue;
+            }
+            auto held = std::find_if(m_held_punch_sockets.begin(), m_held_punch_sockets.end(), [&](const auto& entry) {
+                return entry.endpoint == session.endpoint;
+            });
+            if (held != m_held_punch_sockets.end() && !session.connected) {
+                session.sock = std::move(held->sock);
+                session.connected = true;
+                m_held_punch_sockets.erase(held);
+            }
+            if (!session.connected && now >= session.start + 120s) {
+                session.sock.reset();
+                session.wait_accept = true;
+            }
+            auto failed = [&](int error) {
+                session.sock.reset();
+                session.connected = false;
+                session.wait_accept = error == WSAEADDRINUSE || error == WSAEADDRNOTAVAIL;
+                session.next_attempt = now + session.retry;
+                session.retry = std::min(session.retry * 2, 128s);
+            };
+            if (!session.sock && !session.wait_accept && now >= session.next_attempt) {
+                session.sock = CreatePunchSocket(listener->bind);
+                if (session.sock) {
+                    sockaddr_storage sa;
+                    socklen_t len{sizeof(sa)};
+                    if (!session.endpoint.GetSockAddr(reinterpret_cast<sockaddr*>(&sa), &len)) {
+                        failed(WSAEINVAL);
+                    } else if (session.sock->Connect(reinterpret_cast<sockaddr*>(&sa), len) == 0) {
+                        session.connected = true;
+                    } else {
+                        const int error = WSAGetLastError();
+                        if (error != WSAEINPROGRESS && error != WSAEWOULDBLOCK && error != WSAEINTR) failed(error);
+                    }
+                } else {
+                    failed(WSAGetLastError());
+                }
+            }
+            if (session.sock && !session.connected) {
+                Sock::Event occurred{0};
+                if (session.sock->Wait(0ms, Sock::SendEvent | Sock::ErrorEvent, &occurred) && occurred) {
+                    int error{0};
+                    socklen_t len{sizeof(error)};
+                    if (session.sock->GetSockOpt(SOL_SOCKET, SO_ERROR, &error, &len) == SOCKET_ERROR) error = WSAGetLastError();
+                    if (error)
+                        failed(error);
+                    else
+                        session.connected = true;
+                }
+            }
+            if (session.connected && !session.initiator) {
+                // Do not create a peer until the initiator sends. A connection closed before
+                // any bytes arrive belongs to an early attempt and must leave the session alive.
+                unsigned char byte;
+                const auto received = session.sock->Recv(&byte, 1, MSG_PEEK | MSG_DONTWAIT);
+                if (received == 0)
+                    failed(0);
+                else if (received < 0 && IOErrorIsPermanent(WSAGetLastError()))
+                    failed(WSAGetLastError());
+                else if (received < 0) {
+                    ++it;
+                    continue;
+                }
+            }
+            if (session.connected) {
+                ready.push_back({session.endpoint, session.initiator, session.board, std::move(session.sock), session.start + 125s});
+            }
+            ++it;
+        }
+    }
+    for (auto* node : snapshot.Nodes()) {
+        if (std::find(disconnect.begin(), disconnect.end(), node->GetId()) != disconnect.end()) node->CloseSocketDisconnect();
+    }
+    // InitializeNode enters PeerManager, so no Connman lock may be held here.
+    for (auto& entry : ready) {
+        const auto id = AdoptPunchSocket(std::move(entry.sock), entry.endpoint, entry.initiator, entry.board, entry.deadline);
+        LOCK(m_punch_mutex);
+        for (auto& session : m_punch_sessions) {
+            if (session.endpoint == entry.endpoint) {
+                session.node = id;
+                if (id < 0 && entry.board && fNetworkActive && !m_interrupt_net->interrupted() && m_punch_board_failures.size() < 32) {
+                    m_punch_board_failures.push_back(entry.endpoint);
+                }
+            }
+        }
+    }
+}
+
 bool CConnman::Start(CScheduler& scheduler, const Options& connOptions)
 {
     AssertLockNotHeld(m_total_bytes_sent_mutex);
@@ -3600,6 +4041,8 @@ bool CConnman::Start(CScheduler& scheduler, const Options& connOptions)
         }
         return false;
     }
+
+    if (!InitHolePunch(connOptions)) return false;
 
     if (connOptions.m_i2p_accept_incoming) {
         if (const auto i2p_sam = GetProxy(NET_I2P)) {
@@ -3806,6 +4249,13 @@ void CConnman::StopNodes()
     m_nodes_disconnected.clear();
     WITH_LOCK(m_reconnections_mutex, m_reconnections.clear());
     vhListenSocket.clear();
+    {
+        LOCK(m_punch_mutex);
+        m_punch_sessions.clear();
+        m_held_punch_sockets.clear();
+        m_punch_listeners.clear();
+        m_punch_board_failures.clear();
+    }
     semOutbound.reset();
     semAddnode.reset();
 }
@@ -3917,7 +4367,7 @@ size_t CConnman::GetNodeCount(ConnectionDirection flags) const
 
     int nNum = 0;
     for (const auto& pnode : m_nodes) {
-        if (flags & (pnode->IsInboundConn() ? ConnectionDirection::In : ConnectionDirection::Out)) {
+        if (flags & (pnode->m_conn_type == ConnectionType::INBOUND ? ConnectionDirection::In : ConnectionDirection::Out)) {
             nNum++;
         }
     }
@@ -4125,6 +4575,8 @@ CNode::CNode(NodeId idIn,
              CNodeOptions&& node_opts)
     : m_transport{MakeTransport(idIn, node_opts.use_v2transport, conn_type_in == ConnectionType::INBOUND, node_opts)},
       m_permission_flags{node_opts.permission_flags},
+      m_holepunch{node_opts.holepunch},
+      m_holepunch_deadline{node_opts.holepunch_deadline},
       m_sock{sock},
       m_connected{NodeClock::now()},
       m_proxy_override{std::move(node_opts.proxy_override)},

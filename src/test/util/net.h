@@ -149,6 +149,8 @@ inline constexpr ConnectionType ALL_CONNECTION_TYPES[]{
     ConnectionType::BLOCK_RELAY,
     ConnectionType::ADDR_FETCH,
     ConnectionType::PRIVATE_BROADCAST,
+    ConnectionType::HOLEPUNCH,
+    ConnectionType::HOLEPUNCH_BOARD,
 };
 
 inline constexpr auto ALL_NETWORKS = std::array{

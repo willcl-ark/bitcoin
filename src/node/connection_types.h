@@ -82,6 +82,12 @@ enum class ConnectionType {
      * our own transactions) and closed afterwards.
      */
     PRIVATE_BROADCAST,
+
+    /** Additional outbound connection established by TCP hole punching. */
+    HOLEPUNCH,
+
+    /** Limited-purpose connection to a hole-punch bulletin board. */
+    HOLEPUNCH_BOARD,
 };
 
 /** Convert ConnectionType enum to a string value */

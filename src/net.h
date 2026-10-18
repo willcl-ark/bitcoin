@@ -683,6 +683,7 @@ struct CNodeOptions
     bool holepunch = false;
     /** Logical transport role, when different from the direction of the TCP connection. */
     std::optional<bool> transport_initiator{};
+    std::optional<NodeClock::time_point> holepunch_deadline{};
 };
 
 /** Information about a peer */
@@ -694,6 +695,12 @@ public:
     const util::NotNullUniquePtr<Transport> m_transport;
 
     const NetPermissionFlags m_permission_flags;
+    const bool m_holepunch;
+    const std::optional<NodeClock::time_point> m_holepunch_deadline;
+    /** Incoming visitor classified by FEATURE. Outgoing boards use their connection type. */
+    std::atomic_bool m_holepunch_board{false};
+    /** Board candidates awaiting classification, outside the regular inbound pool. */
+    std::atomic_bool m_holepunch_pending_inbound{false};
 
     /**
      * Socket used for communication with the node.
@@ -791,6 +798,8 @@ public:
             case ConnectionType::MANUAL:
             case ConnectionType::ADDR_FETCH:
             case ConnectionType::FEELER:
+            case ConnectionType::HOLEPUNCH:
+            case ConnectionType::HOLEPUNCH_BOARD:
             case ConnectionType::PRIVATE_BROADCAST:
                 return false;
         } // no default case, so the compiler can warn about missing cases
@@ -813,6 +822,8 @@ public:
         case ConnectionType::FEELER:
         case ConnectionType::BLOCK_RELAY:
         case ConnectionType::ADDR_FETCH:
+        case ConnectionType::HOLEPUNCH:
+        case ConnectionType::HOLEPUNCH_BOARD:
         case ConnectionType::PRIVATE_BROADCAST:
                 return false;
         case ConnectionType::OUTBOUND_FULL_RELAY:
@@ -847,8 +858,12 @@ public:
         return IsPrivateBroadcastConn() ? WTXID_RELAY_VERSION : PROTOCOL_VERSION;
     }
 
+    bool IsHolePunchConn() const { return m_holepunch; }
+    bool IsHolePunchBoardConn() const { return m_holepunch_board || m_conn_type == ConnectionType::HOLEPUNCH_BOARD; }
+    bool IsPunchSocket() const { return m_holepunch || m_conn_type == ConnectionType::HOLEPUNCH_BOARD; }
+
     bool IsInboundConn() const {
-        return m_conn_type == ConnectionType::INBOUND;
+        return m_conn_type == ConnectionType::INBOUND && !IsHolePunchBoardConn();
     }
 
     bool ExpectServicesFromConn() const {
@@ -860,6 +875,8 @@ public:
             case ConnectionType::OUTBOUND_FULL_RELAY:
             case ConnectionType::BLOCK_RELAY:
             case ConnectionType::ADDR_FETCH:
+            case ConnectionType::HOLEPUNCH:
+            case ConnectionType::HOLEPUNCH_BOARD:
             case ConnectionType::PRIVATE_BROADCAST:
                 return true;
         } // no default case, so the compiler can warn about missing cases
@@ -986,7 +1003,7 @@ public:
 
     void CopyStats(CNodeStats& stats) EXCLUSIVE_LOCKS_REQUIRED(!m_subver_mutex, !m_addr_local_mutex, !cs_vSend, !cs_vRecv);
 
-    std::string ConnectionTypeAsString() const { return ::ConnectionTypeAsString(m_conn_type); }
+    std::string ConnectionTypeAsString() const { return ::ConnectionTypeAsString(IsHolePunchBoardConn() ? ConnectionType::HOLEPUNCH_BOARD : m_conn_type); }
 
     /**
      * Helper function to log the peer id, optionally including IP address.
@@ -1120,6 +1137,11 @@ public:
         bool whitelist_forcerelay = DEFAULT_WHITELISTFORCERELAY;
         bool whitelist_relay = DEFAULT_WHITELISTRELAY;
         bool m_capture_messages = false;
+        bool m_holepunch = false;
+        bool m_holepunch_board = false;
+        uint16_t m_holepunch_port{0};
+        uint16_t m_holepunch_port_v6{0};
+        std::vector<CNetAddr> m_holepunch_binds;
     };
 
     void Init(const Options& connOptions) EXCLUSIVE_LOCKS_REQUIRED(!m_added_nodes_mutex, !m_total_bytes_sent_mutex)
@@ -1187,6 +1209,16 @@ public:
     };
 
     void Interrupt() EXCLUSIVE_LOCKS_REQUIRED(!mutexMsgProc);
+    uint16_t GetHolePunchPort(Network network) const;
+    std::vector<unsigned char> GetNetGroup(const CNetAddr& addr) const;
+    bool OpenHolePunchBoard(const CAddress& address);
+    std::vector<CService> TakeHolePunchBoardFailures();
+    bool StartHolePunch(const CService& endpoint, bool initiator, NodeClock::time_point start);
+    bool HasHolePunchSlot(bool initiator) const;
+    bool OutboundHolePunchAllowed(const CService& endpoint) const;
+    bool PromoteHolePunchBoard(NodeId id);
+    bool FinalizeHolePunchInbound(NodeId id);
+
     bool GetNetworkActive() const { return fNetworkActive; };
     bool GetUseAddrmanOutgoing() const { return m_use_addrman_outgoing; };
     void SetNetworkActive(bool active) EXCLUSIVE_LOCKS_REQUIRED(!m_anchors_mutex, !m_nodes_mutex);
@@ -1715,6 +1747,39 @@ private:
      * \sa Peer::our_services
      */
     std::atomic<ServiceFlags> m_local_services;
+
+    struct PunchListener {
+        CService bind;
+        std::shared_ptr<Sock> sock;
+    };
+    struct PunchSession {
+        CService endpoint;
+        bool initiator;
+        bool board;
+        NodeClock::time_point start;
+        NodeClock::time_point next_attempt;
+        std::chrono::seconds retry{1};
+        std::shared_ptr<Sock> sock{};
+        std::optional<NodeId> node{};
+        bool wait_accept{false};
+        bool connected{false};
+    };
+    struct HeldPunchSocket {
+        CService endpoint;
+        std::shared_ptr<Sock> sock;
+        NodeClock::time_point accepted;
+    };
+    mutable Mutex m_punch_mutex;
+    std::vector<PunchListener> m_punch_listeners GUARDED_BY(m_punch_mutex);
+    std::vector<PunchSession> m_punch_sessions GUARDED_BY(m_punch_mutex);
+    std::vector<CService> m_punch_board_failures GUARDED_BY(m_punch_mutex);
+    std::deque<HeldPunchSocket> m_held_punch_sockets GUARDED_BY(m_punch_mutex);
+    bool m_holepunch_board{false};
+    bool InitHolePunch(const Options& options);
+    bool HolePunchSlotAvailable(bool initiator) const EXCLUSIVE_LOCKS_REQUIRED(m_nodes_mutex, m_punch_mutex);
+    std::unique_ptr<Sock> CreatePunchSocket(const CService& bind) const;
+    void SocketHandlerHolePunch();
+    NodeId AdoptPunchSocket(std::shared_ptr<Sock> sock, const CService& endpoint, bool initiator, bool board, NodeClock::time_point deadline);
 
     std::unique_ptr<std::counting_semaphore<>> semOutbound;
     std::unique_ptr<std::counting_semaphore<>> semAddnode;

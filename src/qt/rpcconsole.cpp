@@ -491,6 +491,10 @@ RPCConsole::RPCConsole(interfaces::Node& node, const PlatformStyle *_platformSty
         /*: Explanatory text for a short-lived outbound peer connection that is used
             to request addresses from a peer. */
         tr("Outbound Address Fetch: short-lived, for soliciting addresses"),
+        //: Explanatory text for a connection established by TCP hole punching.
+        tr("Hole punch: additional outbound connection established by TCP hole punching"),
+        //: Explanatory text for a connection to a hole-punch bulletin board.
+        tr("Hole punch board: limited-purpose bulletin-board connection"),
         /*: Explanatory text for a short-lived outbound peer connection that is used
             to broadcast privacy-sensitive data (like our transactions). */
         tr("Private broadcast: short-lived, for broadcasting privacy-sensitive transactions")};
