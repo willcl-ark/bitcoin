@@ -21,6 +21,10 @@ and four per network group. Board connections carry verified announcements and
 keepalives. Their announcements are held in memory and never enter the address
 manager or ordinary address gossip.
 
+The board-only message restrictions begin when the `VISITOR`/`BOARD` feature
+exchange establishes the connection's role. An earlier `wtxidrelay` negotiation
+message is accepted. Board connections still do not relay transactions or blocks.
+
 `-holepunchport=<port>` and `-holepunchportv6=<port>` select the IPv4 and IPv6
 source and listening ports. Each defaults to a random port in 49152-65535 that
 stays fixed until shutdown. `-holepunchbind=<address>` selects a stable local

@@ -14,9 +14,9 @@ from test_framework.messages import (
     deser_compact_size,
     deser_string,
     msg_feature,
-    msg_getaddr,
     msg_sendaddrv2,
     msg_verack,
+    msg_wtxidrelay,
     ser_compact_size,
     ser_string,
 )
@@ -52,15 +52,24 @@ class RawAddrV2:
 
 
 class Visitor(P2PInterface):
+    def __init__(self, *, feature_flags=2, send_verack=True):
+        super().__init__()
+        self.feature_flags = feature_flags
+        self.send_verack = send_verack
+
     def peer_connect_send_version(self, services):
         super().peer_connect_send_version(services)
         self.on_connection_send_msg.relay = False
 
     def on_version(self, message):
+        if not self.p2p_connected_to_node:
+            self.send_version()
         self.nServices = message.nServices
+        self.send_without_ping(msg_wtxidrelay())
         self.send_without_ping(msg_sendaddrv2())
-        self.send_without_ping(msg_feature(FEATURE_ID, b"\x00" + (2).to_bytes(4, "little")))
-        self.send_without_ping(msg_verack())
+        self.send_without_ping(msg_feature(FEATURE_ID, b"\x00" + self.feature_flags.to_bytes(4, "little")))
+        if self.send_verack:
+            self.send_without_ping(msg_verack())
 
     def on_addrv2(self, message):
         pass
@@ -96,6 +105,7 @@ class HolePunchTest(BitcoinTestFramework):
     def run_test(self):
         MESSAGEMAP[b"addrv2"] = RawAddrV2
         self.test_board()
+        self.test_outbound_board_negotiation()
         expected_logs = [
             "Board handshake complete, role=visitor",
             "external endpoint confirmed by quorum",
@@ -135,8 +145,8 @@ class HolePunchTest(BitcoinTestFramework):
                 assert_equal(peer.message_count[forbidden], 0)
         assert_equal(board.getnodeaddresses(), [])
 
-        self.log.info("Ordinary messages close board connections")
-        peer.send_without_ping(msg_getaddr())
+        self.log.info("WTXIDRELAY after feature negotiation closes board connections")
+        peer.send_without_ping(msg_wtxidrelay())
         peer.wait_for_disconnect()
         board.disconnect_p2ps()
         self.wait_until(lambda: not board.getpeerinfo())
@@ -148,6 +158,20 @@ class HolePunchTest(BitcoinTestFramework):
         board.disconnect_p2ps()
         self.wait_until(lambda: not board.getpeerinfo())
         assert_equal(board.getnodeaddresses(), [])
+
+    def test_outbound_board_negotiation(self):
+        self.log.info("An outbound board connection accepts WTXIDRELAY before FEATURE")
+        node = self.nodes[2]
+        node.add_outbound_p2p_connection(Visitor(feature_flags=1), p2p_idx=0, connection_type="holepunch-board")
+        node.disconnect_p2ps()
+        self.wait_until(lambda: not node.getpeerinfo())
+
+        self.log.info("WTXIDRELAY after FEATURE is rejected even before VERACK")
+        peer = node.add_outbound_p2p_connection(Visitor(feature_flags=1, send_verack=False), p2p_idx=0, connection_type="holepunch-board", wait_for_verack=False)
+        peer.send_without_ping(msg_wtxidrelay())
+        peer.wait_for_disconnect()
+        node.disconnect_p2ps()
+        self.wait_until(lambda: not node.getpeerinfo())
 
     def test_punch(self):
         self.log.info("Two visitors use two boards and their fixed source ports")

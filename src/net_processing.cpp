@@ -423,7 +423,6 @@ struct Peer {
     std::atomic<bool> m_hp_board{false};
     bool m_hp_feature_received{false};
     bool m_hp_feature_sent{false};
-    bool m_hp_forbidden_before_feature{false};
     bool m_hp_deferred_version_reply{false};
     std::optional<uint64_t> m_hp_deferred_recon_salt;
     uint32_t m_hp_flags{0};
@@ -4257,8 +4256,9 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
     const bool board_allowed{msg_type == NetMsgType::VERSION || msg_type == NetMsgType::VERACK ||
                              msg_type == NetMsgType::FEATURE || msg_type == NetMsgType::SENDADDRV2 ||
                              msg_type == NetMsgType::PING || msg_type == NetMsgType::PONG || msg_type == NetMsgType::ADDRV2};
-    if (!board_allowed && !pfrom.fSuccessfullyConnected) peer.m_hp_forbidden_before_feature = true;
-    if ((peer.m_hp_board || peer.m_hp_visitor) && !board_allowed) {
+    const bool board_connection{peer.m_hp_board || (peer.m_hp_visitor && peer.m_hp_feature_sent &&
+                                                    peer.m_hp_feature_received && (peer.m_hp_flags & holepunch::BOARD))};
+    if (board_connection && !board_allowed) {
         LogDebug(BCLog::HOLEPUNCH, "Forbidden board message %s, %s", SanitizeString(msg_type), pfrom.LogPeer());
         pfrom.fDisconnect = true;
         return;
@@ -4671,7 +4671,7 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
             peer.m_hp_feature_received = true;
             peer.m_hp_flags = feature->flags;
             if (feature->flags & holepunch::VISITOR) {
-                if (!m_opts.holepunch_board || !pfrom.IsInboundConn() || !peer.m_hp_feature_sent || pfrom.m_relays_txs || peer.m_hp_forbidden_before_feature) {
+                if (!m_opts.holepunch_board || !pfrom.IsInboundConn() || !peer.m_hp_feature_sent || pfrom.m_relays_txs) {
                     pfrom.fDisconnect = true;
                     return;
                 }
