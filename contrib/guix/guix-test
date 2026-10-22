@@ -1,0 +1,176 @@
+#!/usr/bin/env python3
+# Copyright (c) The Bitcoin Core developers
+# Distributed under the MIT software license, see the accompanying
+# file COPYING or https://opensource.org/license/mit.
+"""Test native Linux Guix artifacts for the current commit, without rebuilding."""
+
+import argparse
+import configparser
+import hashlib
+import importlib.util
+import os
+from pathlib import Path
+import platform
+import shutil
+import signal
+import subprocess
+import sys
+import tarfile
+import tempfile
+
+
+def run_logged(command, log, cwd, env):
+    with log.open("wb") as output:
+        with subprocess.Popen(command, cwd=cwd, env=env, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, start_new_session=True) as process:
+            try:
+                for line in process.stdout:
+                    output.write(line)
+                    output.flush()
+                    sys.stdout.buffer.write(line)
+                    sys.stdout.flush()
+                status = process.wait()
+            except BaseException:
+                os.killpg(process.pid, signal.SIGTERM)
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    pass
+                # The runner may exit before descendants that ignored SIGTERM.
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait()
+                raise
+    if status:
+        raise subprocess.CalledProcessError(status, command)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, epilog="Arguments after -- are forwarded to the functional runner.")
+    parser.add_argument("--build-dir", type=Path, help="Guix build directory (default: guix-build-<version> in the repository)")
+    suites = parser.add_mutually_exclusive_group()
+    suites.add_argument("--unit-only", action="store_true", help="run only test_bitcoin")
+    suites.add_argument("--functional-only", action="store_true", help="run only the functional suite")
+    argv = sys.argv[1:]
+    separator = argv.index("--") if "--" in argv else len(argv)
+    args = parser.parse_args(argv[:separator])
+    runner_args = argv[separator + 1:]
+    if args.unit_only and runner_args:
+        parser.error("functional arguments cannot be used with --unit-only")
+    if any(arg.startswith(("-h", "-?")) or (arg.startswith("--") and "--help".startswith(arg)) for arg in runner_args):
+        parser.error("runner help does not run tests; see test/functional/README.md for runner options")
+
+    targets = {
+        "x86_64": "x86_64-linux-gnu",
+        "armv7l": "arm-linux-gnueabihf",
+        "aarch64": "aarch64-linux-gnu",
+        "riscv64": "riscv64-linux-gnu",
+        "ppc64": "powerpc64-linux-gnu",
+        "ppc64le": "powerpc64le-linux-gnu",
+    }
+    if platform.system() != "Linux" or platform.machine() not in targets:
+        parser.error(f"unsupported native host: {platform.system()} {platform.machine()}")
+    for tool in ("bash", "git"):
+        if not shutil.which(tool):
+            parser.error(f"required tool not found: {tool}")
+    if not hasattr(tarfile, "data_filter"):
+        parser.error("Python with tarfile extraction filters is required (3.10.12 or newer)")
+
+    repo = Path(__file__).resolve().parents[2]
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    # Reuse Guix's tag/hash naming without prelude.bash's build environment.
+    version = subprocess.check_output(
+        ["bash", "-c", "source contrib/shell/git-utils.bash; git_head_version"],
+        cwd=repo, text=True).strip()
+    target = targets[platform.machine()]
+    distname = f"bitcoin-{version}"
+    build = (args.build_dir or repo / f"guix-build-{version}").resolve()
+    out = build / "output"
+    binary = out / target / f"{distname}-{target}.tar.gz"
+    support = out / target / f"{distname}-{target}-test-support.tar.gz"
+    source = out / "dist-archive" / f"{distname}.tar.gz"
+    sums = out / target / "SHA256SUMS.part"
+    for path in (binary, support, source, sums):
+        if not path.is_file():
+            parser.error(f"missing artifact: {path}")
+
+    checksums = {}
+    for line in sums.read_text().splitlines():
+        digest, name = line.split(maxsplit=1)
+        if name in checksums:
+            parser.error(f"duplicate checksum entry: {name}")
+        checksums[name] = digest
+    for path in (binary, support, source):
+        digest = hashlib.sha256()
+        with path.open("rb") as archive:
+            for chunk in iter(lambda: archive.read(1024 * 1024), b""):
+                digest.update(chunk)
+        if checksums.get(path.relative_to(out).as_posix()) != digest.hexdigest():
+            parser.error(f"missing or mismatched checksum: {path}")
+    with tarfile.open(source) as archive:
+        if archive.pax_headers.get("comment") != commit:
+            parser.error(f"source archive does not match current commit {commit}")
+
+    results = Path(tempfile.mkdtemp(prefix="guix-test-"))
+    stage = results / "stage"
+    stage.mkdir()
+    selected = "unit" if args.unit_only else "functional" if args.functional_only else "unit, functional"
+    print(f"Commit: {commit}\nTarget: {target}\nBinary: {binary}\nSource: {source}\n"
+          f"Test support: {support}\nSuites: {selected}\nLogs: {results}", flush=True)
+    try:
+        for path, destination in ((binary, stage / "release"), (source, stage / "source"), (support, stage)):
+            with tarfile.open(path) as archive:
+                archive.extractall(destination, filter="data")
+        release = stage / "release" / distname
+        src = stage / "source" / distname
+        test = release / "test"
+        test.mkdir()
+        (test / "functional").symlink_to(src / "test" / "functional", target_is_directory=True)
+        shutil.copyfile(stage / "test-support" / "with_sanitizer_env.py", test / "with_sanitizer_env.py")
+        config = configparser.ConfigParser()
+        with (stage / "test-support" / "config.ini").open() as file:
+            config.read_file(file)
+        config["environment"].update(SRCDIR=str(src), BUILDDIR=str(release),
+                                     RPCAUTH=str(src / "share" / "rpcauth" / "rpcauth.py"))
+        configfile = test / "config.ini"
+        with configfile.open("w") as file:
+            config.write(file)
+
+        env = os.environ.copy()
+        for name in ("BITCOIN_BIN", "BITCOIND", "BITCOIN_BENCH", "BITCOINCLI", "BITCOINUTIL",
+                     "BITCOINTX", "BITCOINCHAINSTATE", "BITCOINWALLET", "BITCOIN_CMD"):
+            env.pop(name, None)
+        env["PATH"] = str(release / "bin") + os.pathsep + env["PATH"]
+        if not args.unit_only:
+            for feature, module in (("ENABLE_WALLET", "sqlite3"), ("ENABLE_ZMQ", "zmq"), ("ENABLE_IPC", "capnp")):
+                if config.getboolean("components", feature) and importlib.util.find_spec(module) is None:
+                    print(f"Python module {module} is unavailable; affected functional tests will report skips.", flush=True)
+        if not args.functional_only:
+            run_logged([release / "libexec" / "test_bitcoin"], results / "unit.log", results, env)
+        if not args.unit_only:
+            # Put controlled paths last so forwarded arguments cannot select a developer build.
+            run_logged([sys.executable, src / "test" / "functional" / "test_runner.py", *runner_args,
+                        f"--configfile={configfile}", f"--tmpdirprefix={results}"],
+                       results / "functional.log", results, env)
+    except BaseException:
+        print(f"Failed; logs and test files retained at {results}", file=sys.stderr)
+        raise
+    shutil.rmtree(stage)
+    print(f"Passed ({selected}); logs retained at {results}")
+
+
+if __name__ == "__main__":
+    def interrupt(signum, frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, interrupt)
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.exit(130)
+    except subprocess.CalledProcessError as error:
+        sys.exit(error.returncode if error.returncode > 0 else 128 - error.returncode)
+    except (OSError, ValueError, configparser.Error, tarfile.TarError) as error:
+        sys.exit(f"guix-test: {error}")

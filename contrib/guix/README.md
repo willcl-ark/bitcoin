@@ -64,6 +64,43 @@ following from the top of a clean repository:
 ./contrib/guix/guix-build
 ```
 
+## Testing native Linux build outputs
+
+After a native Linux Guix build, run the packaged unit tests and normal
+functional suite on the host:
+
+```sh
+./contrib/guix/guix-test
+./contrib/guix/guix-test --unit-only
+./contrib/guix/guix-test --functional-only -- --filter=wallet_basic --jobs=2
+./contrib/guix/guix-test --build-dir=/path/to/guix-build-directory
+```
+
+The default build directory is `guix-build-<version>` in the repository, using
+the same exact-tag or commit naming as `guix-build`. An explicit directory
+changes the location, not the required commit. The binary, source, and
+`*-test-support.tar.gz` archives must match `SHA256SUMS.part`, and the source
+archive must identify the checkout's full current commit. Older builds without
+the test-support archive are not supported. Tests and fixtures come from the
+source archive, so local source edits do not affect the run.
+
+Supported native hosts are x86_64, ARMv7, AArch64, RISC-V 64, and big- or
+little-endian PowerPC 64 Linux. Bash, Git, and Python 3.10.12 or newer with
+tarfile extraction filters are required. See [test dependencies](../../test/README.md)
+for optional Python modules; the normal functional feature checks still apply.
+Matching the architecture does not guarantee runtime compatibility. Missing
+loaders and executable startup errors fail the run.
+
+Arguments after `--` go to the functional runner, including test names,
+filters, and job controls. Unit tests run first; a failure stops the run.
+The command prints the tested commit, archives, target, and log directory.
+Logs are retained in a fresh `guix-test-*` directory under the host's temporary
+directory. On failure or interruption, extracted artifacts and test directories
+are retained there too. Successful runs remove the extracted artifacts.
+
+This tests release executables on the host, separately from reproducible artifact
+construction. It does not build Bitcoin Core or require a developer build.
+
 ## Codesigning build outputs
 
 The `guix-codesign` command attaches codesignatures (produced by codesigners) to
