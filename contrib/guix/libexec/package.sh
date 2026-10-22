@@ -72,6 +72,14 @@ set -o errexit -o pipefail
                     | tar --create --no-recursion --mode='u+rw,go+r-w,a+X' --null --files-from=- \
                     | gzip -9n > "${OUTDIR}/${DISTNAME}-${HOST}-debug.tar.gz" \
                     || ( rm -f "${OUTDIR}/${DISTNAME}-${HOST}-debug.tar.gz" && exit 1 )
+                (
+                    cd "$DISTSRC"
+                    find test-support -print0 \
+                        | sort --zero-terminated \
+                        | tar --create --no-recursion --mode='u+rw,go+r-w,a+X' --null --files-from=- \
+                        | gzip -9n > "${OUTDIR}/${DISTNAME}-${HOST}-test-support.tar.gz" \
+                        || ( rm -f "${OUTDIR}/${DISTNAME}-${HOST}-test-support.tar.gz" && exit 1 )
+                )
                 ;;
             *darwin*)
                 find "${DISTNAME}" -print0 \

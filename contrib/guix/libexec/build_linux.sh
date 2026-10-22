@@ -69,6 +69,10 @@ mkdir -p "$DISTSRC"
 
     # Install built Bitcoin Core
     cmake --install build
+
+    # Preserve the native test configuration before the GUI build replaces it.
+    mkdir -p test-support
+    cp build/test/config.ini build/test/with_sanitizer_env.py test-support/
 )
 
 rm -rf "$DISTSRC"/build
