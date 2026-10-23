@@ -1,0 +1,38 @@
+# Copyright (c) 2026-present The Bitcoin Core developers
+# Distributed under the MIT software license, see the accompanying
+# file COPYING or https://opensource.org/license/mit.
+
+name: USDT payloads
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  usdt-payloads:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes build-essential cmake ninja-build libboost-dev libsqlite3-dev python3 gdb systemtap-sdt-dev
+
+      - name: Configure
+        run: >-
+          cmake -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DWITH_USDT=ON
+          -DENABLE_IPC=OFF
+          -DBUILD_TESTS=OFF
+          -DBUILD_GUI=OFF
+          -DCMAKE_COMPILE_WARNING_AS_ERROR=ON
+
+      - name: Build bitcoind
+        run: cmake --build build --target bitcoind --parallel "$(nproc)"
+
+      - name: Verify USDT payloads
+        run: python3 contrib/tracing/test_usdt.py --configfile=build/test/config.ini
