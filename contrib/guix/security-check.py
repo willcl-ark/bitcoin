@@ -83,7 +83,6 @@ def check_ELF_SEPARATE_CODE(binary):
         '.eh_frame': R,
         '.qtmetadata': R,
         '.gcc_except_table': R,
-        '.stapsdt.base': R,
         # Writable data
         '.init_array': R | W,
         '.fini_array': R | W,
