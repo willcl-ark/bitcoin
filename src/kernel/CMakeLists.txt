@@ -103,7 +103,6 @@ target_link_libraries(bitcoinkernel
     kernel_warn_interface
     secp256k1_objs
     $<$<PLATFORM_ID:Windows>:bcrypt>
-    $<TARGET_NAME_IF_EXISTS:USDT::headers>
     Boost::headers
 )
 

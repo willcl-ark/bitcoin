@@ -15,6 +15,5 @@ export BUILD_TARGETS="all deploy"
 printf -v BITCOIN_CONFIG "%q " \
   --preset=dev-mode \
   -DENABLE_IPC=OFF \
-  -DWITH_USDT=OFF \
   -DREDUCE_EXPORTS=ON
 export BITCOIN_CONFIG

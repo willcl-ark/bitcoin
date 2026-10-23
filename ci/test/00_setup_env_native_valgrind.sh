@@ -14,7 +14,6 @@ export NO_DEPENDS=1
 printf -v BITCOIN_CONFIG "%q " \
  --preset=dev-mode \
  -DBUILD_GUI=OFF  `# GUI disabled, because it only passes with a DEBUG=1 depends build` \
- -DWITH_USDT=OFF \
  -DCMAKE_C_COMPILER=clang \
  -DCMAKE_CXX_COMPILER=clang++
 export BITCOIN_CONFIG

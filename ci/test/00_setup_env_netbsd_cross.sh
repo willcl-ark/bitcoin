@@ -29,8 +29,7 @@ export DEP_OPTS="build_CC=clang build_CXX=clang++ \
 printf -v BITCOIN_CONFIG "%q " \
  --preset=dev-mode \
  -DBUILD_GUI=OFF \
- -DREDUCE_EXPORTS=ON \
- -DWITH_USDT=OFF
+ -DREDUCE_EXPORTS=ON
 export BITCOIN_CONFIG
 export RUN_UNIT_TESTS=false
 export RUN_FUNCTIONAL_TESTS=false

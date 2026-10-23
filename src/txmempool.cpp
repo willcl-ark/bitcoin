@@ -22,7 +22,6 @@
 #include <util/overflow.h>
 #include <util/result.h>
 #include <util/time.h>
-#include <util/trace.h>
 #include <util/translation.h>
 #include <validationinterface.h>
 
@@ -33,9 +32,6 @@
 #include <ranges>
 #include <string_view>
 #include <utility>
-
-TRACEPOINT_SEMAPHORE(mempool, added);
-TRACEPOINT_SEMAPHORE(mempool, removed);
 
 bool TestLockPointValidity(CChain& active_chain, const LockPoints& lp)
 {
@@ -252,12 +248,6 @@ void CTxMemPool::addNewTransaction(CTxMemPool::txiter newit)
 
     txns_randomized.emplace_back(tx.GetWitnessHash(), newit);
     newit->idx_randomized = txns_randomized.size() - 1;
-
-    TRACEPOINT(mempool, added,
-        entry.GetTx().GetHash().data(),
-        entry.GetTxSize(),
-        entry.GetFee()
-    );
 }
 
 void CTxMemPool::removeUnchecked(txiter it, MemPoolRemovalReason reason)
@@ -273,13 +263,6 @@ void CTxMemPool::removeUnchecked(txiter it, MemPoolRemovalReason reason)
         // notification.
         m_opts.signals->TransactionRemovedFromMempool(it->GetSharedTx(), reason, mempool_sequence);
     }
-    TRACEPOINT(mempool, removed,
-        it->GetTx().GetHash().data(),
-        RemovalReasonToString(reason).c_str(),
-        it->GetTxSize(),
-        it->GetFee(),
-        std::chrono::duration_cast<std::chrono::duration<std::uint64_t>>(it->GetTime()).count()
-    );
 
     for (const CTxIn& txin : it->GetTx().vin)
         mapNextTx.erase(txin.prevout);

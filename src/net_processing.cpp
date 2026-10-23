@@ -61,7 +61,6 @@
 #include <util/strencodings.h>
 #include <util/time.h>
 #include <util/tokenbucket.h>
-#include <util/trace.h>
 #include <validation.h>
 
 #include <algorithm>
@@ -91,9 +90,6 @@
 
 using kernel::ChainstateRole;
 using namespace util::hex_literals;
-
-TRACEPOINT_SEMAPHORE(net, inbound_message);
-TRACEPOINT_SEMAPHORE(net, misbehaving_connection);
 
 /** Headers download timeout.
  *  Timeout = base + per_header * (expected number of headers) */
@@ -2025,10 +2021,6 @@ void PeerManagerImpl::Misbehaving(Peer& peer, const std::string& message)
     const std::string message_prefixed = message.empty() ? "" : (": " + message);
     peer.m_should_discourage = true;
     LogDebug(BCLog::NET, "Misbehaving: peer=%d%s\n", peer.m_id, message_prefixed);
-    TRACEPOINT(net, misbehaving_connection,
-        peer.m_id,
-        message.c_str()
-    );
 }
 
 void PeerManagerImpl::MaybePunishNodeForBlock(NodeId nodeid, const BlockValidationState& state,
@@ -5467,15 +5459,6 @@ bool PeerManagerImpl::ProcessMessages(CNode& node, std::atomic<bool>& interruptM
 
     CNetMessage& msg{poll_result->first};
     bool fMoreWork = poll_result->second;
-
-    TRACEPOINT(net, inbound_message,
-        node.GetId(),
-        node.m_addr_name.c_str(),
-        node.ConnectionTypeAsString().c_str(),
-        msg.m_type.c_str(),
-        msg.m_recv.size(),
-        msg.m_recv.data()
-    );
 
     if (m_opts.capture_messages) {
         CaptureMessage(node.addr, msg.m_type, MakeUCharSpan(msg.m_recv), /*is_incoming=*/true);

@@ -19,6 +19,5 @@ export RUN_FUNCTIONAL_TESTS=false
 export BUILD_TARGETS="all deploy"
 printf -v BITCOIN_CONFIG "%q " \
  --preset=dev-mode \
- -DWITH_USDT=OFF \
  -DREDUCE_EXPORTS=ON
 export BITCOIN_CONFIG

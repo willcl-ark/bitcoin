@@ -159,13 +159,6 @@ else()
   set(ENABLE_WALLET ON CACHE BOOL "")
 endif()
 
-if("@usdt_packages@" MATCHES "^[ ]*$")
-  set(WITH_USDT OFF CACHE BOOL "")
-else()
-  set(WITH_USDT ON CACHE BOOL "")
-  set(USDT_INCLUDE_DIR "${CMAKE_CURRENT_LIST_DIR}/systemtap/include" CACHE PATH "")
-endif()
-
 set(ipc_packages @ipc_packages@)
 if("${ipc_packages}" STREQUAL "")
   set(ENABLE_IPC OFF CACHE BOOL "")

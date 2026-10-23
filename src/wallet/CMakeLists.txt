@@ -44,5 +44,4 @@ target_link_libraries(bitcoin_wallet
     SQLite3::SQLite3
     univalue
     Boost::headers
-    $<TARGET_NAME_IF_EXISTS:USDT::headers>
 )

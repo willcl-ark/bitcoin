@@ -154,7 +154,6 @@ target_link_libraries(bitcoin_common
     bitcoin_util
     univalue
     secp256k1
-    $<TARGET_NAME_IF_EXISTS:USDT::headers>
     $<$<PLATFORM_ID:Windows>:ws2_32>
 )
 
@@ -295,7 +294,6 @@ target_link_libraries(bitcoin_node
     minisketch
     univalue
     $<TARGET_NAME_IF_EXISTS:Boost::headers>
-    $<TARGET_NAME_IF_EXISTS:USDT::headers>
 )
 if(WITH_EMBEDDED_ASMAP)
   target_compile_definitions(bitcoin_node PRIVATE ENABLE_EMBEDDED_ASMAP=1)

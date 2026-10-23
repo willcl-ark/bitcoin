@@ -15,7 +15,6 @@ export NO_DEPENDS=1
 export OSX_SDK=""
 printf -v BITCOIN_CONFIG "%q " \
   --preset=dev-mode \
-  -DWITH_USDT=OFF \
   -DREDUCE_EXPORTS=ON \
   -DCMAKE_EXE_LINKER_FLAGS="-Wl,-stack_size -Wl,0x80000"
 export BITCOIN_CONFIG
