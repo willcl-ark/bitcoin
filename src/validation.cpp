@@ -62,6 +62,7 @@
 #include <util/string.h>
 #include <util/threadpool.h>
 #include <util/time.h>
+#include <util/trace.h>
 #include <util/translation.h>
 #include <validationinterface.h>
 
@@ -119,6 +120,11 @@ static bool ShouldCompactChainstate(bool in_ibd)
     static constexpr uint32_t flush_ratio{320}; // Roughly every 2 weeks with hourly flushes
     return !in_ibd && FastRandomContext().randrange(flush_ratio) == 0;
 }
+
+TRACEPOINT_SEMAPHORE(validation, block_connected);
+TRACEPOINT_SEMAPHORE(utxocache, flush);
+TRACEPOINT_SEMAPHORE(mempool, replaced);
+TRACEPOINT_SEMAPHORE(mempool, rejected);
 
 const CBlockIndex* Chainstate::FindForkInGlobalIndex(const CBlockLocator& locator) const
 {
@@ -1191,22 +1197,36 @@ void MemPoolAccept::FinalizeSubpackage(const ATMPArgs& args)
                                       it->GetFee(),
                                       it->GetTxSize());
         FeeFrac feerate{m_subpackage.m_total_modified_fees, int32_t(m_subpackage.m_total_vsize)};
-        if (m_subpackage.m_changeset->GetTxCount() == 1) {
+        uint256 tx_or_package_hash{};
+        const bool replaced_with_tx{m_subpackage.m_changeset->GetTxCount() == 1};
+        if (replaced_with_tx) {
             const CTransaction& tx = m_subpackage.m_changeset->GetAddedTxn(0);
+            tx_or_package_hash = tx.GetHash().ToUint256();
             log_string += strprintf("New tx %s (wtxid=%s, fees=%s, vsize=%s)",
                                     tx.GetHash().ToString(),
                                     tx.GetWitnessHash().ToString(),
                                     feerate.fee,
                                     feerate.size);
         } else {
+            tx_or_package_hash = GetPackageHash(m_subpackage.m_changeset->GetAddedTxns());
             log_string += strprintf("New package %s with %lu txs, fees=%s, vsize=%s",
-                                    GetPackageHash(m_subpackage.m_changeset->GetAddedTxns()).ToString(),
+                                    tx_or_package_hash.ToString(),
                                     m_subpackage.m_changeset->GetTxCount(),
                                     feerate.fee,
                                     feerate.size);
 
         }
         LogDebug(BCLog::MEMPOOL, "%s\n", log_string);
+        TRACEPOINT(mempool, replaced,
+                it->GetTx().GetHash().data(),
+                it->GetTxSize(),
+                it->GetFee(),
+                std::chrono::duration_cast<std::chrono::duration<std::uint64_t>>(it->GetTime()).count(),
+                tx_or_package_hash.data(),
+                feerate.size,
+                feerate.fee,
+                replaced_with_tx
+        );
         m_subpackage.m_replaced_transactions.push_back(it->GetSharedTx());
     }
     m_subpackage.m_changeset->Apply();
@@ -1768,6 +1788,10 @@ MempoolAcceptResult AcceptToMemoryPool(Chainstate& active_chainstate, const CTra
 
         for (const COutPoint& hashTx : coins_to_uncache)
             active_chainstate.CoinsTip().Uncache(hashTx);
+        TRACEPOINT(mempool, rejected,
+                tx->GetHash().data(),
+                result.m_state.GetRejectReason().c_str()
+        );
     }
     // After we've (potentially) uncached entries, ensure our coins cache is still within its size limits
     BlockValidationState state_dummy;
@@ -2634,6 +2658,15 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
              Ticks<SecondsDouble>(m_chainman.time_index),
              Ticks<MillisecondsDouble>(m_chainman.time_index) / m_chainman.num_blocks_total);
 
+    TRACEPOINT(validation, block_connected,
+        block_hash.data(),
+        pindex->nHeight,
+        block.vtx.size(),
+        nInputs,
+        nSigOpsCost,
+        Ticks<std::chrono::nanoseconds>(time_5 - time_start)
+    );
+
     return true;
 }
 
@@ -2673,6 +2706,9 @@ bool Chainstate::FlushStateToDisk(
     assert(this->CanFlushToDisk());
     std::set<int> setFilesToPrune;
     bool full_flush_completed = false;
+
+    [[maybe_unused]] const size_t coins_count{CoinsTip().GetCacheSize()};
+    [[maybe_unused]] const size_t coins_mem_usage{CoinsTip().DynamicMemoryUsage()};
 
     try {
     {
@@ -2776,6 +2812,12 @@ bool Chainstate::FlushStateToDisk(
                 empty_cache ? CoinsTip().Flush() : CoinsTip().Sync();
                 m_last_flushed_block = m_blockman.LookupBlockIndex(CoinsTip().GetBestBlock());
                 full_flush_completed = true;
+                TRACEPOINT(utxocache, flush,
+                    int64_t{Ticks<std::chrono::microseconds>(NodeClock::now() - nNow)},
+                    (uint32_t)mode,
+                    (uint64_t)coins_count,
+                    (uint64_t)coins_mem_usage,
+                    (bool)fFlushForPrune);
             }
         }
 

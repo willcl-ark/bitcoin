@@ -10,9 +10,14 @@
 #include <uint256.h>
 #include <util/log.h>
 #include <util/threadpool.h>
+#include <util/trace.h>
 
 #include <ranges>
 #include <unordered_set>
+
+TRACEPOINT_SEMAPHORE(utxocache, add);
+TRACEPOINT_SEMAPHORE(utxocache, spent);
+TRACEPOINT_SEMAPHORE(utxocache, uncache);
 
 SaltedCoinsCacheHasher::SaltedCoinsCacheHasher(bool deterministic)
     : m_hasher{
@@ -107,6 +112,12 @@ void CCoinsViewCache::AddCoin(const COutPoint &outpoint, Coin&& coin, bool possi
     ++m_dirty_count;
     if (fresh) CCoinsCacheEntry::SetFresh(*it, m_sentinel);
     cachedCoinsUsage += it->second.coin.DynamicMemoryUsage();
+    TRACEPOINT(utxocache, add,
+           outpoint.hash.data(),
+           (uint32_t)outpoint.n,
+           (uint32_t)it->second.coin.nHeight,
+           (int64_t)it->second.coin.out.nValue,
+           (bool)it->second.coin.IsCoinBase());
 }
 
 void CCoinsViewCache::EmplaceCoinInternalDANGER(const COutPoint& outpoint, Coin&& coin) {
@@ -135,6 +146,12 @@ bool CCoinsViewCache::SpendCoin(const COutPoint &outpoint, Coin* moveout) {
     if (it == cacheCoins.end()) return false;
     Assume(TrySub(m_dirty_count, it->second.IsDirty()));
     Assume(TrySub(cachedCoinsUsage, it->second.coin.DynamicMemoryUsage()));
+    TRACEPOINT(utxocache, spent,
+           outpoint.hash.data(),
+           (uint32_t)outpoint.n,
+           (uint32_t)it->second.coin.nHeight,
+           (int64_t)it->second.coin.out.nValue,
+           (bool)it->second.coin.IsCoinBase());
     if (moveout) {
         *moveout = std::move(it->second.coin);
     }
@@ -288,6 +305,12 @@ void CCoinsViewCache::Uncache(const COutPoint& hash)
     CCoinsMap::iterator it = cacheCoins.find(hash);
     if (it != cacheCoins.end() && !it->second.IsDirty()) {
         Assume(TrySub(cachedCoinsUsage, it->second.coin.DynamicMemoryUsage()));
+        TRACEPOINT(utxocache, uncache,
+               hash.hash.data(),
+               (uint32_t)hash.n,
+               (uint32_t)it->second.coin.nHeight,
+               (int64_t)it->second.coin.out.nValue,
+               (bool)it->second.coin.IsCoinBase());
         cacheCoins.erase(it);
     }
 }

@@ -34,6 +34,7 @@
 #include <util/strencodings.h>
 #include <util/thread.h>
 #include <util/threadinterrupt.h>
+#include <util/trace.h>
 #include <util/translation.h>
 #include <util/vector.h>
 
@@ -46,6 +47,12 @@
 #include <optional>
 #include <string_view>
 #include <unordered_map>
+
+TRACEPOINT_SEMAPHORE(net, closed_connection);
+TRACEPOINT_SEMAPHORE(net, evicted_inbound_connection);
+TRACEPOINT_SEMAPHORE(net, inbound_connection);
+TRACEPOINT_SEMAPHORE(net, outbound_connection);
+TRACEPOINT_SEMAPHORE(net, outbound_message);
 
 /** Maximum number of block-relay-only anchor connections */
 static constexpr size_t MAX_BLOCK_RELAY_ONLY_ANCHORS = 2;
@@ -559,6 +566,13 @@ void CNode::CloseSocketDisconnect()
     if (m_sock) {
         LogDebug(BCLog::NET, "Resetting socket for %s", LogPeer());
         m_sock.reset();
+
+        TRACEPOINT(net, closed_connection,
+            GetId(),
+            m_addr_name.c_str(),
+            ConnectionTypeAsString().c_str(),
+            ConnectedThroughNetwork(),
+            TicksSinceEpoch<std::chrono::seconds>(m_connected));
     }
     m_i2p_sam_session.reset();
 }
@@ -1722,6 +1736,12 @@ bool CConnman::AttemptToEvictConnection(bool evict_tx_relay_peer_only, std::opti
     for (CNode* pnode : m_nodes) {
         if (pnode->GetId() == *node_id_to_evict) {
             LogDebug(BCLog::NET, "selected %s connection for eviction, %s", pnode->ConnectionTypeAsString(), pnode->DisconnectMsg());
+            TRACEPOINT(net, evicted_inbound_connection,
+                pnode->GetId(),
+                pnode->m_addr_name.c_str(),
+                pnode->ConnectionTypeAsString().c_str(),
+                pnode->ConnectedThroughNetwork(),
+                TicksSinceEpoch<std::chrono::seconds>(pnode->m_connected));
             pnode->fDisconnect = true;
             return true;
         }
@@ -1860,6 +1880,12 @@ void CConnman::CreateNodeFromAcceptedSocket(std::unique_ptr<Sock>&& sock,
         m_nodes.push_back(pnode);
     }
     LogDebug(BCLog::NET, "connection from %s accepted\n", addr.ToStringAddrPort());
+    TRACEPOINT(net, inbound_connection,
+        pnode->GetId(),
+        pnode->m_addr_name.c_str(),
+        pnode->ConnectionTypeAsString().c_str(),
+        pnode->ConnectedThroughNetwork(),
+        GetNodeCount(ConnectionDirection::In));
 
     // We received a new connection, harvest entropy from the time (and our peer count)
     RandAddEvent((uint32_t)id);
@@ -3121,6 +3147,13 @@ bool CConnman::OpenNetworkConnection(const CAddress& addrConnect,
         if (pnode->IsManualOrFullOutboundConn()) ++m_network_conn_counts[pnode->addr.GetNetwork()];
     }
 
+    TRACEPOINT(net, outbound_connection,
+        pnode->GetId(),
+        pnode->m_addr_name.c_str(),
+        pnode->ConnectionTypeAsString().c_str(),
+        pnode->ConnectedThroughNetwork(),
+        GetNodeCount(ConnectionDirection::Out));
+
     return true;
 }
 
@@ -4188,6 +4221,15 @@ void CConnman::PushMessage(CNode* pnode, CSerializedNetMsg&& msg)
     if (m_capture_messages) {
         CaptureMessage(pnode->addr, msg.m_type, msg.data, /*is_incoming=*/false);
     }
+
+    TRACEPOINT(net, outbound_message,
+        pnode->GetId(),
+        pnode->m_addr_name.c_str(),
+        pnode->ConnectionTypeAsString().c_str(),
+        msg.m_type.c_str(),
+        msg.data.size(),
+        msg.data.data()
+    );
 
     size_t nBytesSent = 0;
     {
