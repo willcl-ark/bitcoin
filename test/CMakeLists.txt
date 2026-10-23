@@ -27,7 +27,6 @@ function(create_test_config)
   set_configure_variable(WITH_ZMQ ENABLE_ZMQ)
   set_configure_variable(WITH_EMBEDDED_ASMAP ENABLE_EMBEDDED_ASMAP)
   set_configure_variable(ENABLE_EXTERNAL_SIGNER ENABLE_EXTERNAL_SIGNER)
-  set_configure_variable(WITH_USDT ENABLE_USDT_TRACEPOINTS)
   set_configure_variable(ENABLE_IPC ENABLE_IPC)
   set_configure_variable(BUILD_GUI BUILD_GUI)
 

@@ -12,7 +12,6 @@ from importlib.util import find_spec
 import logging
 import os
 from pathlib import Path
-import platform
 import pdb
 import random
 import re
@@ -1010,29 +1009,6 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
         except ImportError:
             raise SkipTest("capnp module not available.")
 
-    def skip_if_no_python_bcc(self):
-        """Attempt to import the bcc package and skip the tests if the import fails."""
-        try:
-            import bcc  # type: ignore[import] # noqa: F401
-        except ImportError:
-            raise SkipTest("bcc python module not available")
-
-    def skip_if_no_bitcoind_tracepoints(self):
-        """Skip the running test if bitcoind has not been compiled with USDT tracepoint support."""
-        if not self.is_usdt_compiled():
-            raise SkipTest("bitcoind has not been built with USDT tracepoints enabled.")
-
-    def skip_if_no_bpf_permissions(self):
-        """Skip the running test if we don't have permissions to do BPF syscalls and load BPF maps."""
-        # check for 'root' permissions
-        if os.geteuid() != 0:
-            raise SkipTest("no permissions to use BPF (please review the tests carefully before running them with higher privileges)")
-
-    def skip_if_platform_not_linux(self):
-        """Skip the running test if we are not on a Linux platform"""
-        if platform.system() != "Linux":
-            raise SkipTest("not on a Linux system")
-
     def skip_if_no_lsof_on_nonlinux(self):
         """Skip the running test if the lsof utility is not available on non-Linux platforms."""
         if sys.platform != "linux" and shutil.which("lsof") is None:
@@ -1167,10 +1143,6 @@ class BitcoinTestFramework(metaclass=BitcoinTestMetaClass):
     def is_embedded_asmap_compiled(self):
         """Checks whether ASMap data was embedded during compilation."""
         return self.config.getboolean("components", "ENABLE_EMBEDDED_ASMAP")
-
-    def is_usdt_compiled(self):
-        """Checks whether the USDT tracepoints were compiled."""
-        return self.config.getboolean("components", "ENABLE_USDT_TRACEPOINTS")
 
     def is_ipc_compiled(self):
         """Checks whether ipc was compiled."""
