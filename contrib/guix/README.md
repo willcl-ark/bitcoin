@@ -64,6 +64,37 @@ following from the top of a clean repository:
 ./contrib/guix/guix-build
 ```
 
+## Development builds
+
+For native development on x86_64 or aarch64 Linux, `guix-dev` uses the release
+build's pinned manifests, compiler, and patched glibc with your current source
+tree, including uncommitted changes. It builds without the GUI in `./build` and
+keeps a persistent ccache. These builds are for development and do not carry a
+reproducibility guarantee.
+
+The checkout has the same absolute path inside and outside the container, so
+the generated tests in `./build` can also run directly on the host.
+
+Complete the normal [Guix setup](./INSTALL.md) first. The first invocation may
+take a long time to build the toolchain; `SUBSTITUTE_URLS` works as described
+below. Run these commands from the repository root:
+
+```sh
+./contrib/guix/guix-dev                       # Configure if needed, then build
+./contrib/guix/guix-dev configure -DCMAKE_BUILD_TYPE=Debug
+JOBS=4 ./contrib/guix/guix-dev build           # Build with four jobs
+./contrib/guix/guix-dev test                  # Run unit and functional tests
+./contrib/guix/guix-dev shell                 # Open an interactive build environment
+```
+
+`configure` accepts extra CMake arguments, which subsequent builds preserve.
+Set custom compiler flags using `-DCMAKE_C_FLAGS=...` and
+`-DCMAKE_CXX_FLAGS=...`; the pure environment does not inherit host `CFLAGS` or
+`CXXFLAGS`. `SOURCES_PATH`, `BASE_CACHE`, and `CCACHE_DIR` can select persistent
+caches. If `./build` contains a build made with another toolchain, use a clean
+separate worktree or remove that build directory manually before running
+`guix-dev`.
+
 ## Codesigning build outputs
 
 The `guix-codesign` command attaches codesignatures (produced by codesigners) to

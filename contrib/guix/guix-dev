@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# Copyright (c) The Bitcoin Core developers
+# Distributed under the MIT software license, see the accompanying
+# file COPYING or https://opensource.org/license/mit.
+export LC_ALL=C.UTF-8
+set -o errexit -o pipefail
+
+# shellcheck source=libexec/prelude.bash
+source "$(dirname "${BASH_SOURCE[0]}")/libexec/prelude.bash"
+
+case "${1:-build}" in
+    configure|build|test|shell) action="${1:-build}" ;;
+    *) echo "Usage: $0 [configure [CMake options...]|build|test|shell]"; exit 1 ;;
+esac
+if [ "$#" -gt 0 ]; then shift; fi
+if [ "$action" != configure ] && [ "$#" -gt 0 ]; then
+    echo "Only configure accepts additional arguments."
+    exit 1
+fi
+
+case "$(uname -s):$(uname -m)" in
+    Linux:x86_64) export HOST=x86_64-linux-gnu ;;
+    Linux:aarch64) export HOST=aarch64-linux-gnu ;;
+    *) echo "guix-dev supports native x86_64 and aarch64 Linux builds."; exit 1 ;;
+esac
+check_tools guix make curl
+JOBS="${JOBS:-$(nproc)}"
+CCACHE_DIR="${CCACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/bitcoin-guix/ccache}"
+SOURCES_PATH="${SOURCES_PATH:-$PWD/depends/sources}"
+BASE_CACHE="${BASE_CACHE:-$PWD/depends/built}"
+mkdir -p "$CCACHE_DIR" "$SOURCES_PATH" "$BASE_CACHE"
+CCACHE_DIR="$(realpath "$CCACHE_DIR")"
+SOURCES_PATH="$(realpath "$SOURCES_PATH")"
+BASE_CACHE="$(realpath "$BASE_CACHE")"
+
+# Do not reuse a build directory configured outside this environment.
+if [ -e build/CMakeCache.txt ] && [ ! -e build/.guix/environment ]; then
+    echo "An existing CMake build was found. Use a fresh ./build directory."
+    exit 1
+fi
+package_path="$PWD/build/.guix/modules"
+mkdir -p "$package_path"
+ln -sfn "$PWD/contrib/guix/toolchains.scm" "$package_path/toolchains.scm"
+ln -sfn "$PWD/contrib/guix/patches" "$package_path/patches"
+
+# Like guix-build, download dependency sources before entering the container.
+if [ "$action" = configure ] || [ "$action" = build ]; then
+    make -C depends --jobs="$JOBS" download-linux NO_QT=1 SOURCES_PATH="$SOURCES_PATH"
+fi
+
+time-machine shell \
+    --manifest="$PWD/contrib/guix/manifest_build.scm" \
+    --container \
+    --writable-root \
+    --pure \
+    --no-cwd \
+    --load-path="$package_path" \
+    --cores="$JOBS" \
+    --keep-failed \
+    --fallback \
+    --link-profile \
+    ${SUBSTITUTE_URLS:+--substitute-urls="$SUBSTITUTE_URLS"} \
+    --manifest=contrib/guix/linux_static.scm \
+    --root="$PWD/build/.guix/profile" \
+    --network \
+    --share="$PWD" \
+    --cwd="$PWD" \
+    --share="$CCACHE_DIR=/ccache" \
+    --share="$SOURCES_PATH" \
+    --share="$BASE_CACHE" \
+    --expose="$(git rev-parse --path-format=absolute --git-common-dir)" \
+    ccache python python-pyzmq \
+    -- env HOST="$HOST" JOBS="$JOBS" CCACHE_DIR=/ccache \
+       SOURCES_PATH="$SOURCES_PATH" BASE_CACHE="$BASE_CACHE" \
+       bash "$PWD/contrib/guix/libexec/dev.sh" "$action" "$@"
