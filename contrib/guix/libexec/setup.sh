@@ -54,14 +54,9 @@ export BASEPREFIX="${PWD}/depends"
 # shellcheck source=toolchain.sh
 source "$(dirname "${BASH_SOURCE[0]}")/toolchain.sh"
 
-# Disable Guix ld auto-rpath behavior
-export GUIX_LD_WRAPPER_DISABLE_RPATH=yes
-
-# Make /usr/bin if it doesn't exist
-[ -e /usr/bin ] || mkdir -p /usr/bin
-
-# Symlink env to a conventional path
-[ -e /usr/bin/env ]  || ln -s --no-dereference "$(command -v env)"  /usr/bin/env
+# shellcheck source=environment.sh
+source "$(dirname "${BASH_SOURCE[0]}")/environment.sh"
+setup_container_environment
 
 ###########################
 # Source Tarball Building #
@@ -77,9 +72,4 @@ fi
 
 mkdir -p "$OUTDIR"
 
-unset LIBRARY_PATH
-unset CPATH
-unset C_INCLUDE_PATH
-unset CPLUS_INCLUDE_PATH
-unset OBJC_INCLUDE_PATH
-unset OBJCPLUS_INCLUDE_PATH
+clear_compiler_paths
