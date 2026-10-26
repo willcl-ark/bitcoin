@@ -87,6 +87,10 @@ JOBS=4 ./contrib/guix/guix-dev build           # Build with four jobs
 ./contrib/guix/guix-dev shell                 # Open an interactive build environment
 ```
 
+With `just` installed, `just build` runs `guix-dev`, `just test` runs unit and
+functional tests directly on the host, and `just lint` runs the containerized
+lint checks. Run `just` to list the available recipes.
+
 `configure` accepts extra CMake arguments, which subsequent builds preserve.
 Set custom compiler flags using `-DCMAKE_C_FLAGS=...` and
 `-DCMAKE_CXX_FLAGS=...`; the pure environment does not inherit host `CFLAGS` or
