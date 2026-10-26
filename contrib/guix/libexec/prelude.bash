@@ -80,6 +80,28 @@ time-machine() {
                       -- "$@"
 }
 
+# Prepare local modules and common options for a pinned Guix shell.
+setup_guix_shell() {
+    local package_path="$1"
+    mkdir -p "$package_path"
+    ln -sfn "$PWD/contrib/guix/toolchains.scm" "$package_path/toolchains.scm"
+    ln -sfn "$PWD/contrib/guix/patches" "$package_path/patches"
+
+    shell_opts=(
+        --manifest="$PWD/contrib/guix/manifest_build.scm"
+        --container
+        --writable-root
+        --pure
+        --no-cwd
+        --load-path="$package_path"
+        --cores="$JOBS"
+        --keep-failed
+        --fallback
+        --link-profile
+        ${SUBSTITUTE_URLS:+--substitute-urls="$SUBSTITUTE_URLS"}
+    )
+}
+
 # Usage: distsrc_for_host HOST [SUFFIX] [BASE]
 #
 #   HOST: The current platform triple we're building for

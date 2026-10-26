@@ -328,9 +328,7 @@ for host in $HOSTS; do
         # --load-path, rather than exported via GUIX_PACKAGE_PATH, so they are
         # only seen by the pinned Guix.
         package_path="${VERSION_BASE}/guix-package-path"
-        mkdir -p "$package_path"
-        ln -sfn "${PWD}/contrib/guix/toolchains.scm" "${package_path}/toolchains.scm"
-        ln -sfn "${PWD}/contrib/guix/patches" "${package_path}/patches"
+        setup_guix_shell "$package_path"
 
 cat << EOF
 INFO: Building ${VERSION:?not set} for platform triple ${HOST:?not set}:
@@ -422,12 +420,7 @@ EOF
         read -ra _guix_common_flags <<< "$ADDITIONAL_GUIX_COMMON_FLAGS"
         read -ra _guix_env_flags <<< "$ADDITIONAL_GUIX_ENVIRONMENT_FLAGS"
 
-        shell_opts=(
-            --manifest="${PWD}/contrib/guix/manifest_build.scm"
-            --container
-            --writable-root
-            --pure
-            --no-cwd
+        shell_opts+=(
             --share="$PWD=/bitcoin"
             --share="$DISTSRC_BASE=/distsrc-base"
             --share="$OUTDIR_BASE=/outdir-base"
@@ -435,12 +428,6 @@ EOF
             ${SOURCES_PATH:+--share="$SOURCES_PATH"}
             ${BASE_CACHE:+--share="$BASE_CACHE"}
             ${SDK_PATH:+--share="$SDK_PATH"}
-            --load-path="$package_path"
-            --cores="$JOBS"
-            --keep-failed
-            --fallback
-            --link-profile
-            ${SUBSTITUTE_URLS:+--substitute-urls="$SUBSTITUTE_URLS"}
             "${_guix_common_flags[@]}" "${_guix_env_flags[@]}"
             -- env HOST="$host" \
                 DISTNAME="$DISTNAME"
