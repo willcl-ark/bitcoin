@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   check-certificate:
-    if: github.repository == 'bitcoin/bitcoin'
+    if: github.repository == 'willcl-ark/bitcoin'
     runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:
@@ -30,11 +30,11 @@ jobs:
       - name: Check certificate expiry
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: bitcoin/bitcoin
+          GH_REPO: willcl-ark/bitcoin
         shell: bash
         run: |
           CERT=contrib/windeploy/win-codesign.cert
-          WARNING_DAYS=30
+          WARNING_DAYS=365
           # The first certificate in the PEM bundle is the code signing certificate.
           # Parse it before checking expiry so malformed input fails the job.
           DETAILS=$(openssl x509 -in "$CERT" -noout -subject -issuer -dates -sha256 -fingerprint)
