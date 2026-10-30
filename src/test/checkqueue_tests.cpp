@@ -64,6 +64,28 @@ struct FixedCheck
     std::optional<int> operator()() const { return m_result; }
 };
 
+struct BatchedCheckState {
+    std::mutex mutex;
+    std::condition_variable cv;
+    int entered{0};
+    bool release{false};
+};
+
+struct BatchedCheck {
+    BatchedCheckState* state;
+    bool fails;
+
+    BatchableResult operator()() const
+    {
+        if (!fails) return std::vector<SchnorrSignatureToVerify>{};
+        std::unique_lock lock(state->mutex);
+        ++state->entered;
+        state->cv.notify_all();
+        state->cv.wait(lock, [&] { return state->release; });
+        return ScriptFailureResult{SCRIPT_ERR_EVAL_FALSE, "failed check"};
+    }
+};
+
 struct UniqueCheck {
     static Mutex m;
     static std::unordered_multiset<size_t> results GUARDED_BY(m);
@@ -257,6 +279,28 @@ BOOST_AUTO_TEST_CASE(test_CheckQueue_Recovers_From_Failure)
             bool r = !control.Complete().has_value();
             BOOST_REQUIRE(r != end_fails);
         }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(test_CheckQueue_Batched_Recovers_From_Two_Failures)
+{
+    BatchedCheckState state;
+    CCheckQueue<BatchedCheck, ScriptFailureResult> queue{/*batch_size=*/1, /*worker_threads_num=*/2};
+    {
+        CCheckQueueControl<BatchedCheck, ScriptFailureResult> control(queue);
+        control.Add({{&state, true}, {&state, true}});
+        {
+            std::unique_lock lock(state.mutex);
+            state.cv.wait(lock, [&] { return state.entered == 2; });
+            state.release = true;
+        }
+        state.cv.notify_all();
+        BOOST_REQUIRE(control.Complete().has_value());
+    }
+    {
+        CCheckQueueControl<BatchedCheck, ScriptFailureResult> control(queue);
+        control.Add({{&state, false}});
+        BOOST_CHECK(!control.Complete().has_value());
     }
 }
 
