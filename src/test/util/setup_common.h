@@ -227,6 +227,8 @@ struct TestChain100Setup : public TestingSetup {
      * (between 1 and 24). Transactions may or may not be dependent upon each other; if dependencies
      * exit, every parent will always be somewhere in the list before the child so each transaction
      * can be submitted in the same order they appear in the list.
+     * @param[in,out] det_rand  Random source for transaction construction.
+     * @param[in] num_transactions Target number of transactions to submit when submit is true.
      * @param[in]   submit      When true, submit transactions to the mempool.
      *                          When false, return them but don't submit them.
      * @returns A vector of transactions that can be submitted to the mempool.

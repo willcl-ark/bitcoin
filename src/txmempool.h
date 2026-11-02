@@ -326,6 +326,7 @@ public:
      * the entries' cached LockPoints if needed.  The mempool does not have any knowledge of
      * consensus rules. It just applies the callable function and removes the ones for which it
      * returns true.
+     * @param[in]   chain                    Chain against which cached LockPoints are checked.
      * @param[in]   filter_final_and_mature   Predicate that checks the relevant validation rules
      *                                        and updates an entry's LockPoints.
      * */

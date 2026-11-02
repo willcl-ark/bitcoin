@@ -45,7 +45,7 @@ public:
             vchData.resize(nPos);
     }
 /**
- * (other params same as above)
+ * @copydoc VectorWriter::VectorWriter(std::vector<unsigned char>&,size_t)
  * @param[in]  args  A list of items to serialize starting at nPosIn.
 */
     template <typename... Args>

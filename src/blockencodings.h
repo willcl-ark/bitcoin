@@ -110,6 +110,7 @@ public:
     CBlockHeaderAndShortTxIDs() = default;
 
     /**
+     * @param[in]  block  Block to encode as a compact block.
      * @param[in]  nonce  This should be randomly generated, and is used for the siphash secret key
      */
     CBlockHeaderAndShortTxIDs(const CBlock& block, uint64_t nonce);

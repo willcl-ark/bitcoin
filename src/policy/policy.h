@@ -152,6 +152,7 @@ inline constexpr decltype(CTransaction::version) TX_MAX_STANDARD_VERSION{3};
 bool IsStandardTx(const CTransaction& tx, const std::optional<unsigned>& max_datacarrier_bytes, bool permit_bare_multisig, const CFeeRate& dust_relay_fee, std::string& reason);
 /**
  * Check for standard transaction types
+ * @param[in] tx              The transaction whose inputs are checked
  * @param[in] mapInputs       Map of previous transactions that have outputs we're spending
  * @returns valid TxValidationState if all inputs (scriptSigs) use only standard transaction forms else returns
  * invalid TxValidationState which states why the first invalid input is not standard

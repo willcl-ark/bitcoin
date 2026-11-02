@@ -91,6 +91,7 @@ namespace GUIUtil
 
     /** Copy a field of the currently selected entry of a view to the clipboard. Does nothing if nothing
         is selected.
+       @param[in] view    View containing the selected entry
        @param[in] column  Data column to extract from the model
        @param[in] role    Data role to extract from the model
        @see  TransactionView::copyLabel, TransactionView::copyAmount, TransactionView::copyAddress
@@ -99,12 +100,14 @@ namespace GUIUtil
 
     /** Return a field of the currently selected entry as a QString. Does nothing if nothing
         is selected.
+       @param[in] view    View containing the selected entry
        @param[in] column  Data column to extract from the model
        @see  TransactionView::copyLabel, TransactionView::copyAmount, TransactionView::copyAddress
      */
     QList<QModelIndex> getEntryData(const QAbstractItemView *view, int column);
 
     /** Returns true if the specified field of the currently selected view entry is not empty.
+       @param[in] view    View containing the selected entry
        @param[in] column  Data column to extract from the model
        @param[in] role    Data role to extract from the model
        @see  TransactionView::contextualMenu

@@ -49,6 +49,7 @@ static_assert(TRUC_MAX_VSIZE + TRUC_CHILD_MAX_VSIZE <= DEFAULT_CLUSTER_SIZE_LIMI
  *
  *
  * @param[in]   pool                    A reference to the mempool.
+ * @param[in]   ptx                     The transaction to check.
  * @param[in]   mempool_parents         The in-mempool ancestors of ptx.
  * @param[in]   direct_conflicts        In-mempool transactions this tx conflicts with. These conflicts
  *                                      are used to more accurately calculate the resulting descendant

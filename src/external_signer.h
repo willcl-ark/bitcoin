@@ -63,6 +63,7 @@ public:
     //! Calls `<command> --stdin --fingerprint <fingerprint> --chain <chain>` and passes the
     //! `signtx` command and PSBT via stdin.
     //! @param[in,out] psbt  PartiallySignedTransaction to be signed
+    //! @param[out] error Error message if signing fails.
     bool SignTransaction(PartiallySignedTransaction& psbt, std::string& error);
 };
 

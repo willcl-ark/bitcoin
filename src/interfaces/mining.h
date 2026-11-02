@@ -211,6 +211,7 @@ public:
 
 //! Return implementation of Mining interface.
 //!
+//! @param[in] node Node context used by the mining interface.
 //! @param[in] wait_loaded waits for chainstate data to be loaded before
 //!                        returning. Used to prevent external clients from
 //!                        being able to crash the node during startup.

@@ -59,6 +59,8 @@ RBFTransactionState IsRBFOptInEmptyMempool(const CTransaction& tx);
 /** Get all descendants of iters_conflicting. Checks that there are no more than
  * MAX_REPLACEMENT_CANDIDATES distinct clusters affected.
  *
+ * @param[in]   tx                  The replacement transaction, identified in error messages.
+ * @param[in]   pool                The mempool containing the conflicting transactions.
  * @param[in]   iters_conflicting   The set of iterators to mempool entries.
  * @param[out]  all_conflicts       Populated with all the mempool entries that would be replaced,
  *                                  which includes iters_conflicting and all entries' descendants.

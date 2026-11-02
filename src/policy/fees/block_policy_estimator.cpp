@@ -139,8 +139,10 @@ public:
      * Create new TxConfirmStats. This is called by BlockPolicyEstimator's
      * constructor with default values.
      * @param defaultBuckets contains the upper limits for the bucket boundaries
+     * @param defaultBucketMap maps bucket upper limits to bucket indices
      * @param maxPeriods max number of periods to track
      * @param decay how much to decay the historical moving average per block
+     * @param scale number of blocks per confirmation period
      */
     TxConfirmStats(const std::vector<double>& defaultBuckets, const std::map<double, unsigned int>& defaultBucketMap,
                    unsigned int maxPeriods, double decay, unsigned int scale);
@@ -175,6 +177,7 @@ public:
      * @param sufficientTxVal required average number of transactions per block in a bucket range
      * @param minSuccess the success probability we require
      * @param nBlockHeight the current block height
+     * @param[out] result optional output for the passing and failing bucket statistics
      */
     double EstimateMedianVal(int confTarget, double sufficientTxVal,
                              double minSuccess, unsigned int nBlockHeight,

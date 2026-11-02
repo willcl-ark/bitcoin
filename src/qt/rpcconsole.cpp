@@ -138,6 +138,7 @@ public:
  * @param[in]    strCommand  Command line to split
  * @param[in]    fExecute    set true if you want the command to be executed
  * @param[out]   pstrFilteredOut  Command line, filtered to remove any sensitive data
+ * @param[in]    wallet_name  Wallet on which to execute the command, or empty for the default endpoint
  */
 
 bool RPCConsole::RPCParseCommandLine(interfaces::Node* node, std::string &strResult, const std::string &strCommand, const bool fExecute, std::string * const pstrFilteredOut, const QString& wallet_name)

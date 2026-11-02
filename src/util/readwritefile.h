@@ -16,6 +16,7 @@
  * Returns a pair <status, string>.
  * If an error occurred, status will be false, otherwise status will be true and the data will be returned in string.
  *
+ * @param filename File to read.
  * @param maxsize Puts a maximum size limit on the file that is read. If the file is larger than this, truncated data
  *         (with len > maxsize) will be returned.
  */

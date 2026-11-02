@@ -1274,6 +1274,7 @@ static UniValue CallRPC(BaseRequestHandler* rh, const std::string& strMethod, co
  *
  * @param[in] rh         Pointer to RequestHandler.
  * @param[in] strMethod  Reference to const string method to forward to CallRPC.
+ * @param[in] args       Command arguments to forward to CallRPC.
  * @param[in] rpcwallet  Reference to const optional string wallet name to forward to CallRPC.
  * @returns the RPC response as a UniValue object.
  * @throws a CConnectionFailed std::runtime_error if connection failed or RPC server still in warmup.

@@ -140,6 +140,7 @@ public:
      * It is assumed that all entries are unique and their values are correct, otherwise results
      * computed by MiniMiner may be incorrect. Callers should check IsReadyToCalculate() after
      * construction.
+     * @param[in] manual_entries The transaction entries to use instead of reading the mempool.
      * @param[in] descendant_caches A map from each transaction to the set of txids of this
      *                              transaction's descendant set, including itself. Each tx in
      *                              manual_entries must have a corresponding entry in this map, and

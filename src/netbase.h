@@ -206,6 +206,9 @@ extern DNSLookupFn g_dns_lookup;
  * @param name    The string representing a host. Could be a name or a numerical
  *                IP address (IPv6 addresses in their bracketed form are
  *                allowed).
+ * @param nMaxSolutions Maximum number of results, or 0 for all results.
+ * @param fAllowLookup Whether hostname lookups may perform external queries.
+ * @param dns_lookup_function DNS resolver to use for hostname lookups.
  *
  * @returns The resulting network addresses to which the specified host
  *          string resolved.
@@ -240,6 +243,7 @@ std::optional<CNetAddr> LookupHost(const std::string& name, bool fAllowLookup, D
  *                     external queries may be performed.
  * @param nMaxSolutions The maximum number of results we want, specifying 0
  *                      means "as many solutions as we get."
+ * @param dns_lookup_function DNS resolver to use for hostname lookups.
  *
  * @returns The resulting services to which the specified service string
  *          resolved.

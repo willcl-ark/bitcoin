@@ -1205,8 +1205,10 @@ BITCOINKERNEL_API const btck_BlockTreeEntry* btck_block_tree_entry_get_ancestor(
  *                             associate with this kernel context for the duration of their lifetimes.
  * @param[in] data_directory   Path string of the directory containing the chainstate data. If the directory
  *                             does not exist yet, it will be created.
+ * @param[in] data_directory_len Length of data_directory in bytes.
  * @param[in] blocks_directory Path string of the directory containing the block data. If the directory
  *                             does not exist yet, it will be created.
+ * @param[in] blocks_directory_len Length of blocks_directory in bytes.
  * @return                     The allocated chainstate manager options, or null on error (e.g. if a path is invalid).
  */
 BITCOINKERNEL_API btck_ChainstateManagerOptions* BITCOINKERNEL_WARN_UNUSED_RESULT btck_chainstate_manager_options_create(

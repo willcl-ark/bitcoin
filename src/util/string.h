@@ -105,6 +105,8 @@ void ReplaceAll(std::string& in_out, std::string_view search, std::string_view s
  *
  * If sep does not occur in sp, a singleton with the entirety of sp is returned.
  *
+ * @param[in] sp The string to split.
+ * @param[in] separators Characters at which to split the string.
  * @param[in] include_sep Whether to include the separator at the end of the left side of the splits.
  *
  * Note that this function does not care about braces, so splitting

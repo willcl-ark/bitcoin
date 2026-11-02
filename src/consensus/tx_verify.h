@@ -23,6 +23,10 @@ namespace Consensus {
 /**
  * Check whether all inputs of this transaction are valid (no double spends and amounts)
  * This does not modify the UTXO set. This does not check scripts and sigs.
+ * @param[in] tx Transaction whose inputs are checked.
+ * @param[out] state Validation failure details, if any.
+ * @param[in] inputs UTXO view containing the transaction inputs.
+ * @param[in] nSpendHeight Height at which the transaction would be included.
  * @param[out] txfee Set to the transaction fee if successful.
  * Preconditions: tx.IsCoinBase() is false.
  */
@@ -41,6 +45,7 @@ unsigned int GetLegacySigOpCount(const CTransaction& tx);
 /**
  * Count ECDSA signature operations in pay-to-script-hash inputs.
  *
+ * @param[in] tx Transaction whose inputs are counted.
  * @param[in] mapInputs Map of previous transactions that have outputs we're spending
  * @return maximum number of sigops required to validate this transaction's inputs
  * @see CTransaction::FetchInputs

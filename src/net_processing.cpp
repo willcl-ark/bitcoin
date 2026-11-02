@@ -654,6 +654,9 @@ private:
     /**
      * Potentially mark a node discouraged based on the contents of a BlockValidationState object
      *
+     * @param[in] nodeid Peer that provided the block.
+     * @param[in] state Block validation result.
+     * @param[in] message Reason to log if the peer is marked as misbehaving.
      * @param[in] via_compact_block this bool is passed in because net_processing should
      * punish peers differently depending on whether the data was provided in a compact
      * block message or not. If the compact block had a valid header, but contained invalid
@@ -686,6 +689,9 @@ private:
                                            std::optional<NodeId> protect_peer = std::nullopt);
 
     /** Handle a transaction whose result was not MempoolAcceptResult::ResultType::VALID.
+     * @param[in] nodeid Peer that provided the transaction.
+     * @param[in] tx Transaction that was rejected.
+     * @param[in] result Transaction validation result.
      * @param[in]   first_time_failure            Whether we should consider inserting into vExtraTxnForCompact, adding
      *                                            a new orphan to resolve, or looking for a package to submit.
      *                                            Set to true for transactions just received over p2p.

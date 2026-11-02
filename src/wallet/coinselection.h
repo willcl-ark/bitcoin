@@ -304,6 +304,7 @@ typedef std::map<CoinEligibilityFilter, OutputGroupTypeMap> FilteredOutputGroups
  *
  * @param[in]   payment_value   Average payment value of the transaction output(s).
  * @param[in]   change_fee      Fee for creating a change output.
+ * @param[in,out] rng           Random number generator used to choose the target.
  */
 [[nodiscard]] CAmount GenerateChangeTarget(CAmount payment_value, CAmount change_fee, FastRandomContext& rng);
 

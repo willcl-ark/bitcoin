@@ -101,6 +101,7 @@ static bool RESTERR(HTTPRequest* req, enum HTTPStatusCode status, std::string me
 /**
  * Get the node context.
  *
+ * @param[in] context The context containing the node context.
  * @param[in]  req  The HTTP request, whose status code will be set if node
  *                  context is not found.
  * @returns         Pointer to the node context or nullptr if not found.
@@ -118,6 +119,7 @@ static NodeContext* GetNodeContext(const std::any& context, HTTPRequest* req)
 /**
  * Get the node context mempool.
  *
+ * @param[in] context The context containing the node context.
  * @param[in]  req The HTTP request, whose status code will be set if node
  *                 context mempool is not found.
  * @returns        Pointer to the mempool or nullptr if no mempool found.
@@ -135,6 +137,7 @@ static CTxMemPool* GetMemPool(const std::any& context, HTTPRequest* req)
 /**
  * Get the node context chainstatemanager.
  *
+ * @param[in] context The context containing the node context.
  * @param[in]  req The HTTP request, whose status code will be set if node
  *                 context chainstatemanager is not found.
  * @returns        Pointer to the chainstatemanager or nullptr if none found.

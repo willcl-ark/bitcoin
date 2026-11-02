@@ -277,6 +277,9 @@ MempoolAcceptResult AcceptToMemoryPool(Chainstate& active_chainstate, const CTra
 /**
 * Validate (and maybe submit) a package to the mempool. See doc/policy/packages.md for full details
 * on package validation rules.
+* @param[in]    active_chainstate   Chainstate used to validate the package.
+* @param[in,out] pool               Mempool to validate against and optionally submit to.
+* @param[in]    txns                Package of transactions in topological order.
 * @param[in]    test_accept         When true, run validation checks but don't submit to mempool.
 * @param[in]    client_maxfeerate    If exceeded by an individual transaction, rest of (sub)package evaluation is aborted.
 *                                   Only for sanity checks against local submission of transactions.

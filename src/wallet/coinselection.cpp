@@ -670,6 +670,7 @@ util::Result<SelectionResult> SelectCoinsSRD(const std::vector<OutputGroup>& utx
 
 /** Find a subset of the OutputGroups that is at least as large as, but as close as possible to, the
  * target amount; solve subset sum.
+ * @param[in,out] insecure_rand Random number generator used to choose subsets.
  * @param[in]   groups          OutputGroups to choose from, sorted by value in descending order.
  * @param[in]   nTotalLower     Total (effective) value of the UTXOs in groups.
  * @param[in]   nTargetValue    Subset sum target, not including change.

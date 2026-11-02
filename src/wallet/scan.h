@@ -115,6 +115,8 @@ public:
      * @param[in] start_height Height of start_block
      * @param[in] max_height  Optional max scanning height. If unset there is
      *                        no maximum and scanning can continue to the tip
+     * @param[in] reserver   Reservation held for the duration of the scan
+     * @param[in] save_progress Whether to periodically save the scan position to the wallet database
      *
      * @return ScanResult returning scan information and indicating success or
      *         failure. Return status will be set to SUCCESS if scan was

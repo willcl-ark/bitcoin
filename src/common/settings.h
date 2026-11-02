@@ -55,6 +55,9 @@ bool WriteSettings(const fs::path& path,
 //! Get settings value from combined sources: forced settings, command line
 //! arguments, runtime read-write settings, and the read-only config file.
 //!
+//! @param settings - combined settings sources to search
+//! @param section - config file section to search before the default section
+//! @param name - setting name to look up
 //! @param ignore_default_section_config - ignore values in the default section
 //!                                        of the config file (part before any
 //!                                        [section] keywords)

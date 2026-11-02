@@ -1019,6 +1019,11 @@ CoinStatsHashType ParseHashType(std::string_view hash_type_input)
 /**
  * Calculate statistics about the unspent transaction output set
  *
+ * @param[in] view UTXO database to read when the index is not used.
+ * @param[in] blockman Block manager used to look up blocks.
+ * @param[in] hash_type Hash to compute for the UTXO set, or none.
+ * @param[in] interruption_point Callback to check for interruption while scanning the UTXO set.
+ * @param[in] pindex Block to query, or nullptr for the view's best block.
  * @param[in] index_requested Signals if the coinstatsindex should be used (when available).
  */
 static std::optional<kernel::CCoinsStats> GetUTXOStats(const CCoinsViewDB& view, node::BlockManager& blockman,

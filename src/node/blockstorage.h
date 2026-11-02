@@ -248,6 +248,8 @@ private:
      *
      * @param[out]   setFilesToPrune   The set of file indices that can be unlinked will be returned
      * @param        last_prune        The last height we're able to prune, according to the prune locks
+     * @param[in]    chain             The chain whose block files are being pruned
+     * @param        chainman          Chainstate manager providing pruning and synchronization state
      */
     void FindFilesToPrune(
         std::set<int>& setFilesToPrune,

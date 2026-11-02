@@ -672,6 +672,7 @@ public:
      * @param[in] comment The user's comment for this transaction
      * @param[in] comment_to The comment for this transaction indicating where coins are sent to
      * @param[in] messages The BIP 21 URI messages to attach to this transaction
+     * @param[in] payment_requests The serialized BIP 70 payment requests to attach to this transaction
      */
     void CommitTransaction(
         CTransactionRef tx,
