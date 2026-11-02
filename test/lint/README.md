@@ -49,6 +49,7 @@ or `--help`:
 
 | Lint test | Dependency |
 |-----------|:----------:|
+| [`lint-doxygen.py`](/test/lint/lint-doxygen.py) | [Doxygen](https://www.doxygen.nl/)
 | [`lint-python.py`](/test/lint/lint-python.py) | [lief](https://github.com/lief-project/LIEF)
 | [`lint-python.py`](/test/lint/lint-python.py) | [mypy](https://github.com/python/mypy)
 | [`lint-python.py`](/test/lint/lint-python.py) | [pyzmq](https://github.com/zeromq/pyzmq)
@@ -67,6 +68,14 @@ Individual tests can be run by directly calling the test script, e.g.:
 ```
 test/lint/lint-files.py
 ```
+
+lint-doxygen.py
+===============
+
+Run `test/lint/lint-doxygen.py` to check existing developer documentation.
+This uses the project Doxyfile with warnings treated as errors and writes
+generated documentation into a temporary directory. Graphviz is not required.
+The CI container uses Ubuntu's Doxygen package; other versions may report different warnings.
 
 check-doc.py
 ============
