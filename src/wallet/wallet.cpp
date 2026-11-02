@@ -499,7 +499,7 @@ CWallet::~CWallet()
 ChainScanner& CWallet::Scanner() { return *m_scanner; }
 const ChainScanner& CWallet::Scanner() const { return *m_scanner; }
 
-/** @defgroup mapWallet
+/** @defgroup mapWallet Wallet transactions
  *
  * @{
  */

@@ -106,7 +106,7 @@ bool static IsCompressedPubKey(const valtype &vchPubKey) {
 }
 
 /**
- * A canonical signature exists of: <30> <total len> <02> <len R> <R> <02> <len S> <S> <hashtype>
+ * A canonical signature exists of: `<30> <total len> <02> <len R> <R> <02> <len S> <S> <hashtype>`
  * Where R and S are not negative (their first byte has its highest bit not set), and not
  * excessively padded (do not start with a 0 byte, unless an otherwise negative number follows,
  * in which case a single 0 byte is necessary and even required).
@@ -1467,11 +1467,13 @@ PrecomputedTransactionData::PrecomputedTransactionData(const T& txTo)
     Init(txTo, {});
 }
 
+/// @cond DOXYGEN_IGNORE
 // explicit instantiation
 template void PrecomputedTransactionData::Init(const CTransaction& txTo, std::vector<CTxOut>&& spent_outputs, bool force);
 template void PrecomputedTransactionData::Init(const CMutableTransaction& txTo, std::vector<CTxOut>&& spent_outputs, bool force);
 template PrecomputedTransactionData::PrecomputedTransactionData(const CTransaction& txTo);
 template PrecomputedTransactionData::PrecomputedTransactionData(const CMutableTransaction& txTo);
+/// @endcond
 
 const HashWriter HASHER_TAPSIGHASH{TaggedHash("TapSighash")};
 const HashWriter HASHER_TAPLEAF{TaggedHash("TapLeaf")};

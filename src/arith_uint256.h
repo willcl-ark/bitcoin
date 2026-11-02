@@ -186,7 +186,7 @@ public:
         return ret;
     }
 
-    /** Numeric ordering (unlike \ref base_blob::Compare) */
+    /** Numeric ordering (unlike \ref base_blob) */
     int CompareTo(const base_uint& b) const;
     bool EqualTo(uint64_t b) const;
 

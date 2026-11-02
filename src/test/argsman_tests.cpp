@@ -854,7 +854,7 @@ struct ArgsMergeTestingSetup : public BasicTestingSetup {
         });
     }
 
-    //! Translate actions into a list of <key>=<value> setting strings.
+    //! Translate actions into a list of `<key>=<value>` setting strings.
     std::vector<std::string> GetValues(const ActionList& actions,
         const std::string& section,
         const std::string& name,

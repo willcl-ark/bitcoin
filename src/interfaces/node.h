@@ -97,22 +97,22 @@ public:
     //! Return whether shutdown was requested.
     virtual bool shutdownRequested() = 0;
 
-    //! Return whether a particular setting in <datadir>/settings.json is or
+    //! Return whether a particular setting in `<datadir>/settings.json` is or
     //! would be ignored because it is also specified in the command line.
     virtual bool isSettingIgnored(const std::string& name) = 0;
 
-    //! Return setting value from <datadir>/settings.json or bitcoin.conf.
+    //! Return setting value from `<datadir>/settings.json` or bitcoin.conf.
     virtual common::SettingsValue getPersistentSetting(const std::string& name) = 0;
 
-    //! Update a setting in <datadir>/settings.json.
+    //! Update a setting in `<datadir>/settings.json`.
     virtual void updateRwSetting(const std::string& name, const common::SettingsValue& value) = 0;
 
     //! Force a setting value to be applied, overriding any other configuration
     //! source, but not being persisted.
     virtual void forceSetting(const std::string& name, const common::SettingsValue& value) = 0;
 
-    //! Clear all settings in <datadir>/settings.json and store a backup of
-    //! previous settings in <datadir>/settings.json.bak.
+    //! Clear all settings in `<datadir>/settings.json` and store a backup of
+    //! previous settings in `<datadir>/settings.json.bak`.
     virtual void resetSettings() = 0;
 
     //! Map port.

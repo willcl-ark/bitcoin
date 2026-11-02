@@ -64,7 +64,7 @@ public:
     /** outputs the keystream into out, whose length must be a multiple of BLOCKLEN. */
     void Keystream(std::span<std::byte> out) noexcept;
 
-    /** en/deciphers the message <input> and write the result into <output>
+    /** en/deciphers the message `input` and write the result into `output`
      *
      * The size of input and output must be equal, and be a multiple of BLOCKLEN.
      */
@@ -105,7 +105,7 @@ public:
         m_bufleft = 0;
     }
 
-    /** en/deciphers the message <in_bytes> and write the result into <out_bytes>
+    /** en/deciphers the message `in_bytes` and write the result into `out_bytes`
      *
      * The size of in_bytes and out_bytes must be equal.
      */

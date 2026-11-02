@@ -93,7 +93,7 @@ struct NodeContext {
     std::thread background_init_thread;
 
     //! Declare default constructor and destructor that are not inline, so code
-    //! instantiating the NodeContext struct doesn't need to #include class
+    //! instantiating the NodeContext struct doesn't need to `#include` class
     //! definitions for all the unique_ptr members.
     NodeContext();
     ~NodeContext();

@@ -18,7 +18,7 @@
  *
  * This class should not be used in a signal handler. It uses thread
  * synchronization primitives that are not safe to use with signals. If sending
- * an interrupt from a signal handler is necessary, the \ref SignalInterrupt
+ * an interrupt from a signal handler is necessary, the \ref util::SignalInterrupt
  * class can be used instead.
  */
 

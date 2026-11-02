@@ -25,6 +25,7 @@ static util::Result<SelectionResult> ErrorMaxWeightExceeded()
                          "Please try sending a smaller amount or manually consolidating your wallet's UTXOs")};
 }
 
+/// @cond DOXYGEN_IGNORE
 // Sort by descending (effective) value prefer lower waste on tie
 struct {
     bool operator()(const OutputGroup& a, const OutputGroup& b) const
@@ -48,6 +49,7 @@ struct {
         return a.GetSelectionAmount() > b.GetSelectionAmount();
     }
 } descending_effval_weight;
+/// @endcond
 
 static const size_t TOTAL_TRIES = 100000;
 

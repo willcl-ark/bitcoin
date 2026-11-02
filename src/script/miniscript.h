@@ -47,7 +47,7 @@ namespace miniscript {
  *   - When satisfied, pushes a nonzero value of up to 4 bytes onto the stack.
  *   - When dissatisfied, pushes a 0 onto the stack.
  *   - This is used for most expressions, and required for the top level one.
- *   - For example: older(n) = <n> OP_CHECKSEQUENCEVERIFY.
+ *   - For example: `older(n) = <n> OP_CHECKSEQUENCEVERIFY`.
  * - "V" Verify:
  *   - Takes its inputs from the top of the stack.
  *   - When satisfied, pushes nothing.
@@ -55,28 +55,28 @@ namespace miniscript {
  *   - This can be obtained by adding an OP_VERIFY to a B, modifying the last opcode
  *     of a B to its -VERIFY version (only for OP_CHECKSIG, OP_CHECKSIGVERIFY,
  *     OP_NUMEQUAL and OP_EQUAL), or by combining a V fragment under some conditions.
- *   - For example vc:pk_k(key) = <key> OP_CHECKSIGVERIFY
+ *   - For example `vc:pk_k(key) = <key> OP_CHECKSIGVERIFY`
  * - "K" Key:
  *   - Takes its inputs from the top of the stack.
  *   - Becomes a B when followed by OP_CHECKSIG.
  *   - Always pushes a public key onto the stack, for which a signature is to be
  *     provided to satisfy the expression.
- *   - For example pk_h(key) = OP_DUP OP_HASH160 <Hash160(key)> OP_EQUALVERIFY
+ *   - For example `pk_h(key) = OP_DUP OP_HASH160 <Hash160(key)> OP_EQUALVERIFY`
  * - "W" Wrapped:
  *   - Takes its input from one below the top of the stack.
  *   - When satisfied, pushes a nonzero value (like B) on top of the stack, or one below.
  *   - When dissatisfied, pushes 0 op top of the stack or one below.
  *   - Is always "OP_SWAP [B]" or "OP_TOALTSTACK [B] OP_FROMALTSTACK".
- *   - For example sc:pk_k(key) = OP_SWAP <key> OP_CHECKSIG
+ *   - For example `sc:pk_k(key) = OP_SWAP <key> OP_CHECKSIG`
  *
  * There are type properties that help reasoning about correctness:
  * - "z" Zero-arg:
  *   - Is known to always consume exactly 0 stack elements.
- *   - For example after(n) = <n> OP_CHECKLOCKTIMEVERIFY
+ *   - For example `after(n) = <n> OP_CHECKLOCKTIMEVERIFY`
  * - "o" One-arg:
  *   - Is known to always consume exactly 1 stack element.
  *   - Conflicts with property 'z'
- *   - For example sha256(hash) = OP_SIZE 32 OP_EQUALVERIFY OP_SHA256 <hash> OP_EQUAL
+ *   - For example `sha256(hash) = OP_SIZE 32 OP_EQUALVERIFY OP_SHA256 <hash> OP_EQUAL`
  * - "n" Nonzero:
  *   - For every way this expression can be satisfied, a satisfaction exists that never needs
  *     a zero top stack element.

@@ -42,7 +42,7 @@ inline constexpr unsigned int MAX_VECTOR_ALLOCATE{5'000'000};
  *
  * By convention, a constructor of a type T with signature
  *
- *   template <typename Stream> T::T(deserialize_type, Stream& s)
+ *   `template <typename Stream> T::T(deserialize_type, Stream& s)`
  *
  * is a deserializing constructor, which builds the type by
  * deserializing it from s. If T contains const fields, this

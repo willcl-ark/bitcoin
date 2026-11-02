@@ -25,7 +25,7 @@ struct Error {
 //! util::Expected, std::optional, std::variant, or custom structs
 //! and enum types to return function results.
 //!
-//! Usage examples can be found in \example ../test/result_tests.cpp, but in
+//! Usage examples can be found in \ref test/result_tests.cpp, but in
 //! general code returning `util::Result<T>` values is very similar to code
 //! returning `std::optional<T>` values. Existing functions returning
 //! `std::optional<T>` can be updated to return `util::Result<T>` and return
