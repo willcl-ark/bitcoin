@@ -34,7 +34,8 @@ case ${1:-} in
                 -DBUILD_GUI=OFF -DBUILD_TESTS=OFF -DBUILD_BENCH=OFF \
                 -DENABLE_IPC=OFF
             cmake --build "$1/build" --target bitcoind --parallel "$2"
-            "$1/build/bin/bitcoind" -version
+            mkdir -p "$1/version-check"
+            "$1/build/bin/bitcoind" -datadir="$1/version-check" -nosettings -version
         ' bash "$WORK" "$JOBS" 2>&1 | tee "$WORK/build.log"
         nix shell "$TIME_FLAKE" --command time --version > "$WORK/time-version.txt"
         ;;
@@ -52,6 +53,13 @@ case ${1:-} in
         findmnt --mountpoint /data >/dev/null
         df -h / /data
         mkdir -p "$WORK"
+        # status is assigned when the EXIT trap runs.
+        # shellcheck disable=SC2154
+        trap 'status=$?; {
+            date --iso-8601=seconds
+            printf "Run exit status: %s (0 means target height reached)\n" "$status"
+            if [[ -f $WORK/time.txt ]]; then cat "$WORK/time.txt"; fi
+        } > "$WORK/results.txt"' EXIT
         systemctl list-units --type=service --state=active --no-legend \
             'github*' 'actions.runner*' | awk '{print $1}' >> "$WORK/stopped-services.txt"
         sort -u -o "$WORK/stopped-services.txt" "$WORK/stopped-services.txt"

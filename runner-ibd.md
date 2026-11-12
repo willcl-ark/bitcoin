@@ -53,6 +53,14 @@ runs in the foreground with no RPC server or incoming connections.
 Default assumevalid remains enabled. This measures network IBD with the
 branch defaults; it is not a full historical script-validation measurement.
 
+`results.txt` records the finish timestamp, overall exit status, and timing
+output on completion or failure. Exit status zero means the height check passed.
+For unattended operation use tmux or nohup, for example:
+
+```bash
+nohup ./runner-ibd.sh run > /root/pr-201-launch.log 2>&1 < /dev/null &
+```
+
 GNU time records elapsed wall time, CPU time, and maximum resident memory in
 `/root/pr-201-ibd/time.txt`. The interval includes startup and shutdown, but
 excludes cloning, building, and Nix setup. `run-info.txt` records commits,
