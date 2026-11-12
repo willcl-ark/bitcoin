@@ -48,6 +48,7 @@ systemctl start github-runner-ax52.service
 ```
 
 The node uses mainnet peer discovery, `-dbcache=35000`, `-prune=0`,
+`-par=16`, `-prevoutfetchthreads=16`, `-connectwindow=64`,
 `-disablewallet`, and `-stopatheight=975073`. It reads no bitcoin.conf and
 runs in the foreground with no RPC server or incoming connections.
 Default assumevalid remains enabled. This measures network IBD with the

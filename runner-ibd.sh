@@ -74,6 +74,7 @@ case ${1:-} in
         mkdir -p "$DATADIR" "$BLOCKSDIR"
         args=(-datadir="$DATADIR" -blocksdir="$BLOCKSDIR" -conf=/dev/null
               -chain=main -disablewallet -daemon=0 -server=0 -listen=0
+              -par=16 -prevoutfetchthreads=16 -connectwindow=64
               -dbcache=35000 -prune=0 -stopatheight=975073 -printtoconsole=0)
         {
             date --iso-8601=seconds
