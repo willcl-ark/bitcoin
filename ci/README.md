@@ -77,6 +77,10 @@ to hold `ccache` results.
 For direct downloads, checksums are generally used to protect against transport
 errors.
 
+Lint dependencies are an exception: `lint/flake.lock` pins the Nix environment
+used by PR CI. See [the lint documentation](../test/lint/README.md) for running
+the locked environment locally.
+
 Other CI dependencies are not generally pinned by hash. This is intentional,
 because pins can delay normal and security updates until the next bump, and
 require recurring manual review and maintenance. Moreover, a hash pin only

@@ -12,8 +12,6 @@ set -o errexit -o pipefail -o xtrace
 # of the mounted bitcoin src dir.
 git config --global --add safe.directory /bitcoin
 
-export PATH="/python_env/bin:${PATH}"
-
 if [ -n "${LINT_CI_IS_PR}" ]; then
   export COMMIT_RANGE="HEAD~..HEAD"
   if [ "$(git rev-list -1 HEAD)" != "$(git rev-list -1 --merges HEAD)" ]; then
@@ -22,7 +20,7 @@ if [ -n "${LINT_CI_IS_PR}" ]; then
   fi
 fi
 
-RUST_BACKTRACE=1 cargo run --manifest-path "./test/lint/test_runner/Cargo.toml" -- "$@"
+RUST_BACKTRACE=1 cargo run --locked --offline --manifest-path "./test/lint/test_runner/Cargo.toml" -- "$@"
 
 if [ "${LINT_CI_SANITY_CHECK_COMMIT_SIG}" = "1" ] ; then
     # Sanity check only the last few commits to get notified of missing sigs,

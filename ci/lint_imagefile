@@ -4,20 +4,20 @@
 
 # See test/lint/README.md for usage.
 
-FROM mirror.gcr.io/ubuntu:26.04
-
-# Pin uv and ruff to minor version to avoid breaking changes
-# https://docs.astral.sh/uv/reference/policies/versioning/
-# https://docs.astral.sh/ruff/versioning/
-COPY --from=ghcr.io/astral-sh/uv:0.13 /uv /uvx /bin/
-COPY --from=ghcr.io/astral-sh/ruff:0.17 /ruff /bin/
+FROM ghcr.io/nixos/nix:2.34.9
 
 COPY ./ci/retry/retry /ci_retry
-COPY ./.python-version /.python-version
-COPY ./ci/lint/requirements.txt /ci/lint/requirements.txt
-COPY ./ci/lint/01_install.sh /install.sh
+COPY ./ci/lint/flake.nix ./ci/lint/flake.lock /lint/
 
-RUN /install.sh && \
-  rm -rf /var/lib/apt/lists/*
+RUN nix --extra-experimental-features "nix-command flakes" build \
+      --no-update-lock-file --out-link /lint-env path:/lint && \
+    mkdir -p /bin /usr/bin && \
+    ln -sf /lint-env/bin/bash /bin/sh && \
+    ln -sf /lint-env/bin/env /usr/bin/env && \
+    ln -sf /lint-env/etc/os-release /etc/os-release
+
+ENV CI_RETRY_EXE="/ci_retry"
 
 WORKDIR /bitcoin
+ENTRYPOINT ["/lint-env/bin/with-lint-env"]
+CMD ["bash"]

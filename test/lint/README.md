@@ -56,9 +56,14 @@ or `--help`:
 | `py_lint` | [ruff](https://github.com/astral-sh/ruff)
 | markdown link check | [mlc](https://github.com/becheran/mlc)
 
-Dependency versions and installation instructions are available in the [CI setup](../../ci/lint/01_install.sh) and the [lint_imagefile](../../ci/lint_imagefile) (for tools where an OCI imagefile exists).
+All lint dependencies, including Python and its packages, are supplied by the
+[Nix flake](../../ci/lint/flake.nix). The committed
+[lock file](../../ci/lint/flake.lock) pins nixpkgs and thus the tool versions used
+by the [container](../../ci/lint_imagefile). Running `./ci/lint.py` only requires
+Python 3 and Docker or Podman on the host; Nix runs inside the container.
 
-Please be aware that on Linux distributions all dependencies are usually available as packages, but could be outdated.
+With Nix installed locally, `nix run ./ci/lint -- bash --norc` opens a shell with the
+same tool paths, locale and certificate settings as the container.
 
 #### Running the tests
 
@@ -75,8 +80,8 @@ Check for missing documentation of command line options.
 commit-script-check.sh
 ======================
 Verification of [scripted diffs](/doc/developer-notes.md#scripted-diffs).
-Scripted diffs are only assumed to run on the latest LTS release of Ubuntu. Running them on other operating systems
-might require installing GNU tools, such as GNU sed.
+Scripted diffs run with the GNU tools supplied by the lint flake. Running them
+outside that environment might require installing GNU tools, such as GNU sed.
 
 git-subtree-check.sh
 ====================
