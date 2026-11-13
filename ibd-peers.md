@@ -171,8 +171,9 @@ rate is not below a third of the median:
   once per block.
 - When an IBD connection goes away, an info line gives how long it lasted,
   why (`holding up block download`, `stalling block download`, a block
-  download timeout, `initial block download finished`, or `not by block
-  download`: closed by the peer, timed out, or another reason), how many
+  download timeout, `initial block download finished`, `before completing the
+  handshake` for an attempt the peer refused or let time out, or `not by
+  block download`: closed by the peer, timed out, or another reason), how many
   blocks and MB it delivered, and its rate.
 - The shutdown log reports block cache hits and misses
   (`Block cache: N blocks connected from it, M not in it`) and the number of

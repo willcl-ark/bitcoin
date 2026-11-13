@@ -2180,7 +2180,8 @@ void PeerManagerImpl::FinalizeNode(const CNode& node)
         const BlockDeliveries& deliveries{state->m_block_deliveries};
         LogInfo("IBD peer=%d gone after %ds (%s): %u blocks, %.1f MB delivered, rate %.0f kB/s",
                 nodeid, count_seconds(std::chrono::duration_cast<std::chrono::seconds>(NodeClock::now() - node.m_connected)),
-                state->m_ibd_disconnect_reason.empty() ? "not by block download" : state->m_ibd_disconnect_reason,
+                !state->m_ibd_disconnect_reason.empty() ? state->m_ibd_disconnect_reason :
+                node.fSuccessfullyConnected            ? "not by block download" : "before completing the handshake",
                 deliveries.blocks, deliveries.total_bytes / 1e6, deliveries.BytesPerSecond() / 1000);
     }
 
