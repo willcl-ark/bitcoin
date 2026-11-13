@@ -1051,6 +1051,10 @@ private:
      *  at most count entries.
      */
     void FindNextBlocksToDownload(const Peer& peer, unsigned int count, std::vector<const CBlockIndex*>& vBlocks, NodeId& nodeStaller) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    /** The highest block the block cache can hold, from the active tip on, at the size of the blocks it holds now;
+     *  none while it is disabled or empty. During initial block download no block above it is requested, so that
+     *  every block downloaded is kept in memory until it is connected rather than read back from disk. */
+    std::optional<int> BlockCacheHorizon() const EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
     /** Record the delivery of a block a peer was asked for, from the bytes of its `block` message. */
     void RecordBlockDelivery(NodeId peer, const DataStream& recv, NodeClock::time_point received);
@@ -1670,10 +1674,23 @@ void PeerManagerImpl::FindNextBlocksToDownload(const Peer& peer, unsigned int co
     // Never fetch further than the best block we know the peer has, or more than BLOCK_DOWNLOAD_WINDOW + 1 beyond the last
     // linked block we have in common with this peer. The +1 is so we can detect stalling, namely if we would be able to
     // download that next block if the window were 1 larger.
-    const int window{static_cast<int>(m_chainman.IsInitialBlockDownload() ? IBD_BLOCK_DOWNLOAD_WINDOW : BLOCK_DOWNLOAD_WINDOW)};
+    const bool ibd{m_chainman.IsInitialBlockDownload()};
+    const int window{static_cast<int>(ibd ? IBD_BLOCK_DOWNLOAD_WINDOW : BLOCK_DOWNLOAD_WINDOW)};
     int nWindowEnd = state->pindexLastCommonBlock->nHeight + window;
+    if (const auto horizon{ibd ? BlockCacheHorizon() : std::nullopt}) nWindowEnd = std::min(nWindowEnd, *horizon);
 
     FindNextBlocks(vBlocks, peer, state, pindexWalk, count, nWindowEnd, &m_chainman.ActiveChain(), &nodeStaller);
+}
+
+std::optional<int> PeerManagerImpl::BlockCacheHorizon() const
+{
+    const auto& cache{m_chainman.m_block_cache};
+    const size_t count{cache.Count()};
+    if (cache.Budget() == 0 || count == 0) return std::nullopt;
+    const size_t block_bytes{std::max<size_t>(cache.Bytes() / count, 1)};
+    // At least a peer's worth of blocks, so that the blocks the connector needs next can always be requested.
+    const size_t blocks{std::clamp<size_t>(cache.Budget() / block_bytes, MAX_BLOCKS_IN_TRANSIT_PER_PEER, IBD_BLOCK_DOWNLOAD_WINDOW)};
+    return m_chainman.ActiveHeight() + static_cast<int>(blocks);
 }
 
 void PeerManagerImpl::TryDownloadingHistoricalBlocks(const Peer& peer, unsigned int count, std::vector<const CBlockIndex*>& vBlocks, const CBlockIndex *from_tip, const CBlockIndex* target_block)
