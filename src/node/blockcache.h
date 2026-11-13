@@ -9,6 +9,7 @@
 #include <sync.h>
 #include <uint256.h>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -30,7 +31,7 @@ namespace node {
 class BlockCache
 {
     mutable Mutex m_mutex;
-    const size_t m_budget;
+    std::atomic<size_t> m_budget;
     struct Entry {
         std::shared_ptr<const CBlock> block;
         size_t bytes;
@@ -41,6 +42,8 @@ class BlockCache
     uint64_t m_hits GUARDED_BY(m_mutex){0};
     uint64_t m_misses GUARDED_BY(m_mutex){0};
 
+    void TrimToBudget() EXCLUSIVE_LOCKS_REQUIRED(m_mutex);
+
 public:
     explicit BlockCache(size_t budget) : m_budget{budget} {}
 
@@ -49,7 +52,9 @@ public:
     //! The block `hash` at `height`, removed from the cache; null when it is not here.
     std::shared_ptr<const CBlock> Take(int height, const uint256& hash) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
 
-    size_t Budget() const { return m_budget; }
+    //! Change the budget, dropping the highest blocks until the cache is within it.
+    void SetBudget(size_t budget) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
+    size_t Budget() const { return m_budget.load(); }
     size_t Bytes() const EXCLUSIVE_LOCKS_REQUIRED(!m_mutex) { return WITH_LOCK(m_mutex, return m_bytes); }
     size_t Count() const EXCLUSIVE_LOCKS_REQUIRED(!m_mutex) { return WITH_LOCK(m_mutex, return m_blocks.size()); }
     //! Takes that found the block, and takes that did not.

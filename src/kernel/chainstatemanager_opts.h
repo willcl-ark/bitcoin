@@ -26,7 +26,11 @@ inline constexpr auto DEFAULT_MAX_TIP_AGE{24h};
 //! The connect pool's threads when nothing derives them from the machine. bitcoind does: see
 //! node::DefaultPrevoutFetchThreads().
 inline constexpr int32_t DEFAULT_PREVOUTFETCH_THREADS{8};
-inline constexpr size_t DEFAULT_BLOCK_CACHE_BYTES{128_MiB};
+//! During initial block download blocks arrive well ahead of the tip, and every one the cache cannot hold is read back
+//! from disk and deserialized again to be connected.
+inline constexpr size_t DEFAULT_BLOCK_CACHE_BYTES{sizeof(size_t) > 4 ? 4096_MiB : 512_MiB};
+//! Once initial block download is over blocks arrive in order and are connected at once, so the cache is cut to this.
+inline constexpr size_t BLOCK_CACHE_BYTES_AFTER_IBD{128_MiB};
 
 namespace kernel {
 

@@ -4265,6 +4265,7 @@ void ChainstateManager::UpdateIBDStatus()
     if (!CurrentChainstate().m_chain.IsTipRecent(MinimumChainWork(), m_options.max_tip_age)) return;
     LogInfo("Leaving InitialBlockDownload (latching to false)");
     m_cached_is_ibd.store(false, std::memory_order_relaxed);
+    m_block_cache.SetBudget(std::min(m_block_cache.Budget(), BLOCK_CACHE_BYTES_AFTER_IBD));
 }
 
 bool Chainstate::NotifyTipAdvanced(CBlockIndex* pindexNewTip, const CBlockIndex* pindexFork, bool still_in_ibd)

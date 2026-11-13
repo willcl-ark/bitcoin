@@ -29,6 +29,18 @@ void BlockCache::Insert(int height, const std::shared_ptr<const CBlock>& block, 
     const auto [it, inserted]{m_blocks.try_emplace({height, block->GetHash()}, Entry{block, bytes})};
     if (!inserted) return;
     m_bytes += bytes;
+    TrimToBudget();
+}
+
+void BlockCache::SetBudget(size_t budget)
+{
+    m_budget = budget;
+    LOCK(m_mutex);
+    TrimToBudget();
+}
+
+void BlockCache::TrimToBudget()
+{
     // Over budget: the highest blocks go first, the lowest connect next.
     while (m_bytes > m_budget) {
         const auto last{std::prev(m_blocks.end())};
