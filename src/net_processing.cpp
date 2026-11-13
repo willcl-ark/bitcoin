@@ -138,11 +138,14 @@ static const unsigned int MAX_INV_SZ = 50000;
 static const unsigned int MAX_GETDATA_SZ = 1000;
 /** Number of blocks that can be requested at any given time from a single peer. */
 static const int MAX_BLOCKS_IN_TRANSIT_PER_PEER = 16;
-/** During initial block download, a peer of the median block rate has as many blocks in flight as it delivers in
- *  this long. A faster peer has more, by its rate relative to the median squared, a slower one fewer, so that the
- *  blocks it has in flight take this long times its relative rate to arrive: the fast peers hold most of them, and
- *  what a slow peer holds is not long in coming. */
+/** During initial block download, a peer's blocks are to arrive within this long of their request, times its block
+ *  rate relative to the median's (from IBD_IN_TRANSIT_RELATIVE_RATE_MIN to _MAX times). The blocks it may have in
+ *  flight grow by one for each block that does and halve when one does not, so they follow the time the blocks
+ *  actually take, whatever their size: a faster peer holds more blocks than in proportion to its rate, and what a
+ *  slower one holds is not long in coming. */
 static constexpr double IBD_IN_TRANSIT_SECONDS{1};
+static constexpr double IBD_IN_TRANSIT_RELATIVE_RATE_MIN{0.25};
+static constexpr double IBD_IN_TRANSIT_RELATIVE_RATE_MAX{4};
 static constexpr int MIN_IBD_BLOCKS_IN_TRANSIT_PER_PEER{4};
 static constexpr int MAX_IBD_BLOCKS_IN_TRANSIT_PER_PEER{64};
 /** Default time during which a peer must stall block download progress before being disconnected.
@@ -520,6 +523,10 @@ struct CNodeState {
     //! The peer was too slow to serve blocks: it is not asked for blocks again until initial block download ends.
     bool m_slow_in_ibd{false};
     bool m_ibd_conn{false};
+    //! During initial block download, the blocks this peer may have in flight (see IBD_IN_TRANSIT_SECONDS).
+    double m_in_transit_limit{MAX_BLOCKS_IN_TRANSIT_PER_PEER};
+    //! When m_in_transit_limit was last halved: blocks requested before were requested under the larger limit.
+    NodeClock::time_point m_in_transit_limit_cut{};
     //! Why block download disconnected this IBD connection, if it did.
     std::string m_ibd_disconnect_reason;
     //! The peer holds the block initial block download waits for and is slow (see CheckBlockDownloadPeers()).
@@ -1109,7 +1116,6 @@ private:
     LinkRate m_link_rate GUARDED_BY(cs_main);
     /** Moving average of the size of the blocks delivered. */
     double m_avg_block_bytes GUARDED_BY(cs_main){0};
-    double m_last_block_bytes GUARDED_BY(cs_main){0};
     NodeClock::time_point m_next_block_download_peer_check GUARDED_BY(cs_main){};
     NodeClock::time_point m_next_block_download_summary GUARDED_BY(cs_main){};
     const CBlockIndex* m_logged_block_wait GUARDED_BY(cs_main){nullptr};
@@ -1777,8 +1783,19 @@ void PeerManagerImpl::RecordBlockDelivery(NodeId peer_id, const DataStream& recv
     ++deliveries.blocks;
     deliveries.last = received;
     m_avg_block_bytes = m_avg_block_bytes == 0 ? bytes : (1 - BLOCK_SIZE_WEIGHT) * m_avg_block_bytes + BLOCK_SIZE_WEIGHT * bytes;
-    m_last_block_bytes = bytes;
     m_link_rate.period_bytes += recv.size();
+
+    if (m_chainman.IsInitialBlockDownload()) {
+        const double relative{m_median_block_rate ? std::clamp(deliveries.BytesPerSecond() / *m_median_block_rate,
+                                                               IBD_IN_TRANSIT_RELATIVE_RATE_MIN, IBD_IN_TRANSIT_RELATIVE_RATE_MAX)
+                                                  : 1.0};
+        if (Ticks<SecondsDouble>(received - queued->requested) <= IBD_IN_TRANSIT_SECONDS * relative) {
+            state.m_in_transit_limit = std::min<double>(state.m_in_transit_limit + 1, MAX_IBD_BLOCKS_IN_TRANSIT_PER_PEER);
+        } else if (queued->requested > state.m_in_transit_limit_cut) {
+            state.m_in_transit_limit = std::max<double>(state.m_in_transit_limit / 2, MIN_IBD_BLOCKS_IN_TRANSIT_PER_PEER);
+            state.m_in_transit_limit_cut = received;
+        }
+    }
 
     LogDebug(BCLog::NET, "block %s (%d, %u bytes) from peer=%d arrived %.3fs after its request, in %.3fs; peer rate %.0f kB/s\n",
              hash.ToString(), queued->pindex->nHeight, recv.size(), peer_id,
@@ -1818,14 +1835,8 @@ std::optional<double> PeerManagerImpl::MedianBlockRate() const
 
 int PeerManagerImpl::BlocksInTransitLimit(const CNodeState& state) const
 {
-    if (!m_chainman.IsInitialBlockDownload() || !m_median_block_rate || m_avg_block_bytes == 0) return MAX_BLOCKS_IN_TRANSIT_PER_PEER;
-    if (state.m_block_deliveries.blocks == 0) return MIN_IBD_BLOCKS_IN_TRANSIT_PER_PEER;
-    const double rate{state.m_block_deliveries.BytesPerSecond()};
-    // Blocks grow along the chain, and blocks asked for stay in flight however much larger they turn out to be: a
-    // larger block just delivered counts at once, rather than once the average has caught up.
-    const double block_bytes{std::max(m_avg_block_bytes, m_last_block_bytes)};
-    const double blocks{rate / *m_median_block_rate * rate * IBD_IN_TRANSIT_SECONDS / block_bytes};
-    return static_cast<int>(std::clamp<double>(blocks, MIN_IBD_BLOCKS_IN_TRANSIT_PER_PEER, MAX_IBD_BLOCKS_IN_TRANSIT_PER_PEER));
+    if (!m_chainman.IsInitialBlockDownload()) return MAX_BLOCKS_IN_TRANSIT_PER_PEER;
+    return static_cast<int>(state.m_in_transit_limit);
 }
 
 void PeerManagerImpl::LogBlockDownloadSummary(bool saturated) const

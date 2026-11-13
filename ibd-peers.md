@@ -100,17 +100,23 @@ during IBD instead of disconnecting.
 
 ## Blocks in flight per peer
 
-Outside IBD a peer may have 16 blocks in flight. During IBD the limit follows
-its rate (`BlocksInTransitLimit`): a peer at the median rate gets as many
-blocks as it delivers in 1s, and a peer at `k` times the median gets `k²`
-times that, so its blocks take about `k` seconds to arrive. Fast peers hold
-most of the blocks in flight, and what a slow peer holds arrives soon, so
-slow peers keep adding bandwidth instead of holding up the tip. The limit is
-at least 4 and at most 64; an unmeasured peer gets 4, and every peer gets 16
-until a median rate is known. Block size is the larger of the moving average
-and the block just delivered, so the limit drops as soon as larger blocks
-arrive; blocks already in flight stay in flight, so a peer's queue only
-shrinks as it delivers. With small early blocks the limit is mostly 64.
+Outside IBD a peer may have 16 blocks in flight. During IBD each peer has its
+own limit, set by how long its blocks take to arrive after being requested,
+much as TCP sizes its congestion window:
+
+- A block is on time when it arrives within 1s × the peer's rate relative to
+  the median (clamped to between 0.25 and 4), so a peer at twice the median
+  may take 2s and one at half the median 0.5s. Faster peers end up holding
+  more blocks than in proportion to their rate, and what a slow peer holds
+  arrives soon.
+- Each block on time raises the limit by one; a late one halves it, once for
+  the blocks requested before that cut, since those were requested under the
+  larger limit.
+- It starts at 16 and stays between 4 and 64.
+
+This follows the time blocks actually take, so it doesn't depend on guessing
+block sizes, which around height 200k swing from about 1 kB to 500 kB from
+one block to the next.
 
 ## Hedged requests
 
