@@ -9,14 +9,13 @@ P2P and network changes
   `getpeerinfo` and `-netinfo`. No more are opened while the node's own
   connection is already saturated.
 
-- During initial block download, a peer holding the block that block
-  download waits for while serving blocks much more slowly than the other
-  peers is no longer asked for blocks: an `ibd` connection is closed and
-  replaced, and any other peer is kept connected but is not asked for blocks
-  again until initial block download ends. The same applies to peers that
-  stall block download or time out on a block during initial block download,
-  instead of disconnecting them. Peers are judged against each other, not
-  against fixed limits, so nodes on slow connections are not affected.
+- During initial block download, an `ibd` connection holding the block that
+  block download waits for while serving blocks much more slowly than the
+  other peers is closed and replaced. Peers are judged against each other,
+  not against fixed limits, so nodes on slow connections are not affected.
+  Other peers that stall block download or time out on a block during initial
+  block download are no longer disconnected: the blocks they hold are
+  requested elsewhere and they are asked for fewer blocks at a time.
 
 - During initial block download, when the next block to be validated is late
   at a peer that is not slow overall, it is also requested from the peer

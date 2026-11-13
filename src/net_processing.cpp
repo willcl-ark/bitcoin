@@ -520,8 +520,6 @@ struct CNodeState {
     std::chrono::microseconds m_downloading_since{0us};
     //! Time before which block requests should not be sent to this peer.
     std::chrono::microseconds m_block_download_paused_until{0us};
-    //! The peer was too slow to serve blocks: it is not asked for blocks again until initial block download ends.
-    bool m_slow_in_ibd{false};
     bool m_ibd_conn{false};
     //! During initial block download, the blocks this peer may have in flight (see IBD_IN_TRANSIT_SECONDS).
     double m_in_transit_limit{MAX_BLOCKS_IN_TRANSIT_PER_PEER};
@@ -1088,7 +1086,7 @@ private:
     void RecordBlockDelivery(NodeId peer, const DataStream& recv, NodeClock::time_point received);
     void UpdateLinkRate(NodeClock::time_point now) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
     bool LinkSaturated(NodeClock::time_point now) const EXCLUSIVE_LOCKS_REQUIRED(cs_main);
-    /** The median block rate of the peers that have delivered blocks and are still asked for them; none while
+    /** The median block rate of the peers that have delivered blocks; none while
      *  fewer than MIN_PEERS_FOR_MEDIAN_BLOCK_RATE have. */
     std::optional<double> MedianBlockRate() const EXCLUSIVE_LOCKS_REQUIRED(cs_main);
     /** How many blocks may be in flight from a peer at once (see IBD_IN_TRANSIT_SECONDS). */
@@ -1102,7 +1100,8 @@ private:
      */
     void CheckBlockDownloadPeers(NodeClock::time_point now) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
     /** During initial block download, stop downloading blocks from a peer that is too slow: an IBD connection is
-     *  replaced, any other peer is not asked for blocks again until initial block download ends. */
+     *  replaced; any other peer stays connected, with the blocks it holds asked for elsewhere and its blocks in
+     *  flight cut to the least. */
     void StopBlockDownloadFrom(CNode& node, CNodeState& state, std::chrono::microseconds current_time, std::string_view reason) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
     /** The rate of block bytes received from all peers together. */
@@ -1825,7 +1824,7 @@ std::optional<double> PeerManagerImpl::MedianBlockRate() const
 {
     std::vector<double> rates;
     for (const auto& [_, state] : m_node_states) {
-        if (state.m_block_deliveries.blocks > 0 && !state.m_slow_in_ibd) rates.push_back(state.m_block_deliveries.BytesPerSecond());
+        if (state.m_block_deliveries.blocks > 0) rates.push_back(state.m_block_deliveries.BytesPerSecond());
     }
     if (rates.size() < MIN_PEERS_FOR_MEDIAN_BLOCK_RATE) return std::nullopt;
     const auto median{rates.begin() + rates.size() / 2};
@@ -1842,18 +1841,16 @@ int PeerManagerImpl::BlocksInTransitLimit(const CNodeState& state) const
 void PeerManagerImpl::LogBlockDownloadSummary(bool saturated) const
 {
     int ibd_peers{0};
-    int barred{0};
     for (const auto& [_, state] : m_node_states) {
         ibd_peers += state.m_ibd_conn;
-        barred += state.m_slow_in_ibd;
     }
     const auto median{MedianBlockRate()};
     const auto horizon{BlockCacheHorizon()};
     const int tip{m_chainman.ActiveHeight()};
     const node::BlockCache& cache{m_chainman.m_block_cache};
-    LogInfo("Block download: tip %d, ibd peers %d/%d (%u dropped), peers barred %d, in flight %u, "
+    LogInfo("Block download: tip %d, ibd peers %d/%d (%u dropped), in flight %u, "
             "link %.1f MB/s (peak %.1f%s), median peer %s, cache %u/%u MiB %u blocks, horizon %s, prefetched %u, hedged %u",
-            tip, ibd_peers, m_connman.MaxIBDPeers(), m_connman.SlowIBDPeerCount(), barred, mapBlocksInFlight.size(),
+            tip, ibd_peers, m_connman.MaxIBDPeers(), m_connman.SlowIBDPeerCount(), mapBlocksInFlight.size(),
             m_link_rate.bytes_per_second / 1e6, m_link_rate.peak / 1e6, saturated ? ", saturated" : "",
             median ? strprintf("%.0f kB/s", *median / 1000) : "-",
             cache.Bytes() / 1_MiB, cache.Budget() / 1_MiB, cache.Count(),
@@ -1913,21 +1910,22 @@ void PeerManagerImpl::CheckBlockDownloadPeers(NodeClock::time_point now)
     const double late{std::max(MIN_LATE_BLOCK_SECONDS, LATE_BLOCK_FACTOR * (ahead + 1) * m_avg_block_bytes / median_rate)};
     if (waited < late) return;
 
-    if (state.m_block_deliveries.BytesPerSecond() < SLOW_PEER_BLOCK_RATE_FRACTION * median_rate) {
+    // An IBD connection is replaced; any other peer stays, and hedging makes up for it.
+    if (state.m_ibd_conn && state.m_block_deliveries.BytesPerSecond() < SLOW_PEER_BLOCK_RATE_FRACTION * median_rate) {
         LogDebug(BCLog::NET, "peer=%d holds up block download: block %d waited for %.3fs (late after %.3fs), peer rate %.0f kB/s, median %.0f kB/s\n",
                  holder, lowest->pindex->nHeight, waited, late, state.m_block_deliveries.BytesPerSecond() / 1000, median_rate / 1000);
         state.m_holding_up_download = true;
         return;
     }
 
-    // A peer that is not slow can still hold the block for long, with other blocks to send before it or after a
-    // pause. It is also asked for from the peer expected to deliver it soonest, and the first copy is used.
+    // A peer that is not slow, or not an IBD connection, can still hold the block for long, with other blocks to
+    // send before it or after a pause. It is also asked for from the peer expected to deliver it soonest, and the first copy is used.
     if (mapBlocksInFlight.count(lowest->pindex->GetBlockHash()) > 1) return;
     const auto current_time{std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch())};
     NodeId fastest{-1};
     double soonest{std::numeric_limits<double>::max()};
     for (auto& [id, candidate] : m_node_states) {
-        if (id == holder || candidate.m_slow_in_ibd || candidate.m_hedged_block || candidate.m_block_deliveries.blocks == 0) continue;
+        if (id == holder || candidate.m_hedged_block || candidate.m_block_deliveries.blocks == 0) continue;
         if (current_time < candidate.m_block_download_paused_until) continue;
         if (!candidate.pindexBestKnownBlock || candidate.pindexBestKnownBlock->GetAncestor(lowest->pindex->nHeight) != lowest->pindex) continue;
         const auto on_the_wire{std::ranges::count_if(candidate.vBlocksInFlight, [](const QueuedBlock& block) { return !block.with_pool; })};
@@ -1954,14 +1952,9 @@ void PeerManagerImpl::StopBlockDownloadFrom(CNode& node, CNodeState& state, std:
         node.fDisconnect = true;
         return;
     }
-    if (m_connman.MaxIBDPeers() > 0) {
-        LogInfo("Peer is %s, not asking it for blocks again during initial block download, peer=%d", reason, node.GetId());
-        state.m_slow_in_ibd = true;
-    } else {
-        // Without IBD connections to download from instead, barring every slow peer for good could leave none.
-        LogInfo("Peer is %s, pausing block downloads from it for %d seconds, peer=%d", reason, count_seconds(MANUAL_PEER_BLOCK_DOWNLOAD_COOLDOWN), node.GetId());
-        state.m_block_download_paused_until = current_time + MANUAL_PEER_BLOCK_DOWNLOAD_COOLDOWN;
-    }
+    LogInfo("Peer is %s, asking for its blocks elsewhere, peer=%d", reason, node.GetId());
+    state.m_in_transit_limit = MIN_IBD_BLOCKS_IN_TRANSIT_PER_PEER;
+    state.m_in_transit_limit_cut = NodeClock::now();
     // The blocks it is still to send are asked for from other peers. Those with the connect pool are being stored.
     for (auto it{state.vBlocksInFlight.begin()}; it != state.vBlocksInFlight.end();) {
         const QueuedBlock& queued{*it++};
@@ -7106,8 +7099,7 @@ bool PeerManagerImpl::SendMessages(CNode& node)
         // Message: getdata (blocks)
         //
         std::vector<CInv> vGetData;
-        const bool can_request_blocks_from_peer{current_time >= state.m_block_download_paused_until &&
-                                                !(state.m_slow_in_ibd && m_chainman.IsInitialBlockDownload())};
+        const bool can_request_blocks_from_peer{current_time >= state.m_block_download_paused_until};
         // Blocks the peer still has to send: a block that arrived and is with the connect pool keeps its
         // request until it is stored, and is not one of them.
         auto get_inflight_budget = [&]() EXCLUSIVE_LOCKS_REQUIRED(cs_main) {

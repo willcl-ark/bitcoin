@@ -73,8 +73,9 @@ IBD:
 
 - It finds the peer holding the lowest block in flight, which is the block
   validation is waiting for.
-- That peer is flagged if the block is late and its rate is below a third of
-  the median peer rate. Late means it was requested longer ago than 3× the
+- If that peer is an IBD connection, it is flagged when the block is late and
+  its rate is below a third of the median peer rate. Regular peers are never
+  flagged: a late block they hold is hedged instead (see below). Late means it was requested longer ago than 3× the
   time the median peer takes for a block of average size, counting it and
   each block the peer still has to send before it, and at least 1s.
 - Judging only happens with at least 3 measured peers. It goes on while the
@@ -86,17 +87,18 @@ on a slow connection does not drop all its peers.
 
 `StopBlockDownloadFrom` handles a flagged peer as follows:
 
-- **IBD connection:** disconnected and its address remembered. The timer then
-  replaces it with another random peer.
-- **Any other peer, including the 8 full outbounds:** stays connected but is
-  not asked for blocks again until IBD ends (`m_slow_in_ibd`). With
-  `-maxibdpeers=0` this is a cooldown instead, so the node isn't left with no
-  peers to download from.
+- **IBD connection:** disconnected and its address remembered, then replaced
+  by another random peer.
+- **Any other peer, including the 8 full outbounds:** only reached through
+  stall detection or the block download timeout, which use this path during
+  IBD instead of disconnecting. The peer stays connected and keeps being
+  asked for blocks; its in-flight limit drops to the minimum of 4 and grows
+  back as its blocks arrive on time.
 - Either way, the peer's outstanding requests are removed so they can be
   re-requested elsewhere. Blocks already on the connect pool are left alone.
 
-The existing stall detection and block download timeout use the same path
-during IBD instead of disconnecting.
+Regular peers are never barred from block download, so the diverse outbound
+peers always keep serving blocks, whatever IBD connections there are.
 
 ## Blocks in flight per peer
 
@@ -127,7 +129,7 @@ rate is not below a third of the median:
 
 - It is also requested from the peer expected to deliver it soonest: the
   lowest `(blocks on the wire + 1) × average block size / rate` among peers
-  that have the block, have delivered blocks, and aren't barred or paused.
+  that have the block, have delivered blocks, and aren't paused.
   The request may take a peer one block over its in-flight limit, since peers
   fill up to their limits and none would otherwise have room.
 - The first copy to arrive is used, and both requests are cleared once it's
@@ -196,8 +198,6 @@ rate is not below a third of the median:
 - IBD peers can still be opened when the node is limited by validation rather
   than bandwidth, if the burst while the window first filled set a high peak
   rate.
-- If few addresses are available for IBD peers, the regular peers could all be
-  barred from block download.
 - Per-peer rates are not shown in `getpeerinfo`.
 - Only the peer holding the lowest in-flight block is judged on each check.
 - `HighestTaken()` does not reset after a reorg.
