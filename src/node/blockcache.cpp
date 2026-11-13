@@ -9,6 +9,7 @@
 #include <sync.h>
 #include <uint256.h>
 
+#include <algorithm>
 #include <iterator>
 #include <memory>
 #include <utility>
@@ -49,10 +50,24 @@ void BlockCache::TrimToBudget()
     }
 }
 
+bool BlockCache::Contains(int height, const uint256& hash) const
+{
+    LOCK(m_mutex);
+    return m_blocks.contains({height, hash});
+}
+
+std::optional<size_t> BlockCache::BlocksHeld() const
+{
+    LOCK(m_mutex);
+    if (m_budget == 0 || m_blocks.empty()) return std::nullopt;
+    return m_budget / std::max<size_t>(m_bytes / m_blocks.size(), 1);
+}
+
 std::shared_ptr<const CBlock> BlockCache::Take(int height, const uint256& hash)
 {
     if (m_budget == 0) return nullptr;
     LOCK(m_mutex);
+    m_highest_taken = std::max(m_highest_taken, height);
     const auto it{m_blocks.find({height, hash})};
     if (it == m_blocks.end()) {
         ++m_misses;

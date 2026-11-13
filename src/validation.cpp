@@ -5969,6 +5969,80 @@ void ChainstateManager::StopConnector()
     if (m_connector_thread.joinable()) m_connector_thread.join();
 }
 
+void ChainstateManager::StartPrefetcher()
+{
+    if (m_block_cache.Budget() == 0) return;
+    LOCK(m_prefetch_mutex);
+    if (m_prefetch_thread.joinable() || m_prefetch_stop) return;
+    m_prefetch_thread = std::thread(&util::TraceThread, "prefetch", std::function<void()>{[this] { PrefetchLoop(); }});
+}
+
+void ChainstateManager::StopPrefetcher()
+{
+    {
+        LOCK(m_prefetch_mutex);
+        m_prefetch_stop = true;
+    }
+    m_prefetch_cv.notify_all();
+    if (m_prefetch_thread.joinable()) m_prefetch_thread.join();
+}
+
+void ChainstateManager::PrefetchLoop()
+{
+    static constexpr auto PREFETCH_INTERVAL{100ms};
+    while (!m_interrupt && IsInitialBlockDownload()) {
+        // While it finds blocks to read it goes straight on; otherwise it looks again a little later.
+        if (PrefetchBlocks() > 0) continue;
+        WAIT_LOCK(m_prefetch_mutex, lock);
+        if (m_prefetch_cv.wait_for(lock, PREFETCH_INTERVAL, [&]() EXCLUSIVE_LOCKS_REQUIRED(m_prefetch_mutex) { return m_prefetch_stop; })) return;
+    }
+}
+
+size_t ChainstateManager::PrefetchBlocks()
+{
+    // Blocks read in one go before the walk is done again from the tip, which by then has moved on.
+    static constexpr size_t PREFETCH_BATCH{16};
+    // How far above the tip blocks are read at most, however many small blocks the cache could hold.
+    static constexpr int PREFETCH_MAX_AHEAD{4096};
+    struct Stored {
+        int height;
+        uint256 hash;
+        FlatFilePos pos;
+    };
+    std::vector<Stored> to_read;
+    {
+        LOCK(::cs_main);
+        const CBlockIndex* tip{ActiveChain().Tip()};
+        const CBlockIndex* target{m_best_header};
+        if (!tip || !target || target->nHeight <= tip->nHeight || target->GetAncestor(tip->nHeight) != tip) return 0;
+        // As far ahead as the cache holds at the size of the blocks in it; with none in it yet, a batch.
+        const size_t held{std::min<size_t>(m_block_cache.BlocksHeld().value_or(PREFETCH_BATCH), PREFETCH_MAX_AHEAD)};
+        const int last{std::min(target->nHeight, tip->nHeight + static_cast<int>(held))};
+        // From the lowest the connector has not taken yet up to the first block not stored yet. The blocks it took
+        // are being connected, read by the connect window's workers if they were not here.
+        for (int height{std::max(tip->nHeight, m_block_cache.HighestTaken()) + 1}; height <= last && to_read.size() < PREFETCH_BATCH; ++height) {
+            const CBlockIndex& block{*Assert(target->GetAncestor(height))};
+            if (!(block.nStatus & BLOCK_HAVE_DATA)) break;
+            if (m_block_cache.Contains(height, block.GetBlockHash())) continue;
+            to_read.push_back({height, block.GetBlockHash(), block.GetBlockPos()});
+        }
+    }
+    size_t read{0};
+    for (const Stored& stored : to_read) {
+        if (m_interrupt || WITH_LOCK(m_prefetch_mutex, return m_prefetch_stop)) break;
+        std::shared_ptr<CBlock> block{NewBlock()};
+        if (!m_blockman.ReadBlock(*block, stored.pos, stored.hash)) {
+            // The connector reads it itself, and fails there if it must.
+            LogDebug(BCLog::VALIDATION, "Prefetcher could not read block %s (%d)\n", stored.hash.ToString(), stored.height);
+            break;
+        }
+        m_block_cache.Insert(stored.height, block, WITH_LOCK(::cs_main, return ActiveHeight()));
+        ++read;
+    }
+    m_blocks_prefetched += read;
+    return read;
+}
+
 MempoolAcceptResult ChainstateManager::ProcessTransaction(const CTransactionRef& tx, bool test_accept)
 {
     AssertLockHeld(cs_main);
@@ -7720,6 +7794,10 @@ std::shared_ptr<CBlock> ChainstateManager::NewBlock(bool on_pool) const
 ChainstateManager::~ChainstateManager()
 {
     StopConnector();
+    StopPrefetcher();
+    if (m_blocks_prefetched > 0) {
+        LogInfo("Block prefetcher: %u blocks read from disk into the block cache", m_blocks_prefetched.load());
+    }
     if (m_options.signals) m_options.signals->SetPreSyncHook({});
     if (m_block_cache.Budget() > 0) {
         const auto [hits, misses]{m_block_cache.HitsAndMisses()};

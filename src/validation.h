@@ -1271,6 +1271,16 @@ private:
     bool m_connector_stop GUARDED_BY(m_connector_mutex){false};
     void ConnectorLoop() EXCLUSIVE_LOCKS_REQUIRED(!m_connector_mutex);
 
+    //! The prefetcher thread (see StartPrefetcher()).
+    std::thread m_prefetch_thread;
+    Mutex m_prefetch_mutex;
+    std::condition_variable m_prefetch_cv;
+    bool m_prefetch_stop GUARDED_BY(m_prefetch_mutex){false};
+    std::atomic<uint64_t> m_blocks_prefetched{0};
+    void PrefetchLoop() EXCLUSIVE_LOCKS_REQUIRED(!m_prefetch_mutex);
+    //! Read into the block cache the next blocks to connect that are stored but not in it. Returns how many were read.
+    size_t PrefetchBlocks() EXCLUSIVE_LOCKS_REQUIRED(!m_prefetch_mutex, !::cs_main);
+
     //! Timers and counters used for benchmarking validation in both background
     //! and active chainstates.
     SteadyClock::duration GUARDED_BY(::cs_main) time_check{};
@@ -1615,6 +1625,17 @@ public:
     void StopConnector() EXCLUSIVE_LOCKS_REQUIRED(!m_connector_mutex);
 
     /**
+     * Start the prefetcher thread: during initial block download it reads the blocks the connector will connect
+     * next from disk into the block cache, from the tip up to what the cache holds, so that the connector takes
+     * them from memory instead of waiting for them to be read. That is the case for blocks stored before a
+     * restart, during a reindex, and for blocks the cache had no room for when they arrived. It ends with
+     * initial block download. Not started with the block cache disabled.
+     */
+    void StartPrefetcher() EXCLUSIVE_LOCKS_REQUIRED(!m_prefetch_mutex);
+    //! Stop the prefetcher thread and wait for it. Called at shutdown and, idempotently, by the destructor.
+    void StopPrefetcher() EXCLUSIVE_LOCKS_REQUIRED(!m_prefetch_mutex);
+
+    /**
      * Process incoming block headers.
      *
      * May not be called in a
@@ -1793,7 +1814,7 @@ public:
     //! How many blocks the window validates at once: -connectwindow, or twice the connect pool's worker count.
     int ConnectWindow() const;
 
-    ~ChainstateManager() EXCLUSIVE_LOCKS_REQUIRED(!m_connector_mutex);
+    ~ChainstateManager() EXCLUSIVE_LOCKS_REQUIRED(!m_connector_mutex, !m_prefetch_mutex);
 
     //! List of chainstates. Note: in general, it is not safe to delete
     //! Chainstate objects once they are added to this list because there is no

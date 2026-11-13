@@ -1684,12 +1684,10 @@ void PeerManagerImpl::FindNextBlocksToDownload(const Peer& peer, unsigned int co
 
 std::optional<int> PeerManagerImpl::BlockCacheHorizon() const
 {
-    const auto& cache{m_chainman.m_block_cache};
-    const size_t count{cache.Count()};
-    if (cache.Budget() == 0 || count == 0) return std::nullopt;
-    const size_t block_bytes{std::max<size_t>(cache.Bytes() / count, 1)};
+    const auto held{m_chainman.m_block_cache.BlocksHeld()};
+    if (!held) return std::nullopt;
     // At least a peer's worth of blocks, so that the blocks the connector needs next can always be requested.
-    const size_t blocks{std::clamp<size_t>(cache.Budget() / block_bytes, MAX_BLOCKS_IN_TRANSIT_PER_PEER, IBD_BLOCK_DOWNLOAD_WINDOW)};
+    const size_t blocks{std::clamp<size_t>(*held, MAX_BLOCKS_IN_TRANSIT_PER_PEER, IBD_BLOCK_DOWNLOAD_WINDOW)};
     return m_chainman.ActiveHeight() + static_cast<int>(blocks);
 }
 

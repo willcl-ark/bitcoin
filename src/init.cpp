@@ -355,6 +355,7 @@ void Shutdown(NodeContext& node)
     // window; it ends its pass now that the node is interrupted. It goes before the scheduler, whose
     // queue a pass waits on, and before anything that flushes or resets the chainstate.
     if (node.chainman) node.chainman->StopConnector();
+    if (node.chainman) node.chainman->StopPrefetcher();
 
     // After everything has been shut down, but before things get flushed, stop the
     // the scheduler. After this point, SyncWithValidationInterfaceQueue() should not be called anymore
@@ -2146,6 +2147,9 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     /// \anchor initload
     node.background_init_thread = std::thread(&util::TraceThread, "initload", [=, &chainman, &args, &kernel_notifications, &node] {
         ScheduleBatchPriority();
+        // Blocks stored but not connected yet, from before a restart or being reindexed, are read ahead of the
+        // connector from here on.
+        chainman.StartPrefetcher();
         // Import blocks and ActivateBestChain()
         ImportBlocks(chainman, vImportFiles);
         // An interrupted import may return without activating genesis. Wake

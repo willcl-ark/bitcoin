@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <utility>
 
 namespace node {
@@ -25,8 +26,9 @@ namespace node {
  * rarely the one that just arrived.
  *
  * Bounded by a byte budget: when it is exceeded the highest blocks are dropped first, since the lowest connect
- * next; blocks at or below the active tip are dropped on insertion. An object taken from here still carries
- * CBlock::fChecked, so ConnectBlock() does not run CheckBlock() on it again. A budget of zero disables it.
+ * next; blocks at or below the active tip are dropped on insertion. An object received from a peer and taken from
+ * here still carries CBlock::fChecked, so ConnectBlock() does not run CheckBlock() on it again; one the prefetcher
+ * read from disk does not. A budget of zero disables it.
  */
 class BlockCache
 {
@@ -41,6 +43,7 @@ class BlockCache
     size_t m_bytes GUARDED_BY(m_mutex){0};
     uint64_t m_hits GUARDED_BY(m_mutex){0};
     uint64_t m_misses GUARDED_BY(m_mutex){0};
+    int m_highest_taken GUARDED_BY(m_mutex){-1};
 
     void TrimToBudget() EXCLUSIVE_LOCKS_REQUIRED(m_mutex);
 
@@ -49,6 +52,13 @@ public:
 
     //! Keep `block`, accepted at `height`, when the budget allows, after dropping blocks at or below `tip_height`.
     void Insert(int height, const std::shared_ptr<const CBlock>& block, int tip_height) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
+    bool Contains(int height, const uint256& hash) const EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
+    //! How many blocks the budget holds at the average size of the blocks here now; none while it is disabled
+    //! or empty.
+    std::optional<size_t> BlocksHeld() const EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
+    //! The highest height asked for by Take(), found or not: the connector takes blocks in order, so the blocks
+    //! up to it are being connected or have been.
+    int HighestTaken() const EXCLUSIVE_LOCKS_REQUIRED(!m_mutex) { return WITH_LOCK(m_mutex, return m_highest_taken); }
     //! The block `hash` at `height`, removed from the cache; null when it is not here.
     std::shared_ptr<const CBlock> Take(int height, const uint256& hash) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
 
