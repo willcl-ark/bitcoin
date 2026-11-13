@@ -50,8 +50,9 @@ slow peers rather than validating. These changes do three things:
 - They are disconnected when IBD ends.
 - An IBD peer dropped for being slow has its address remembered
   (`AddSlowIBDPeer`), and that address is not used for another IBD connection.
-- No new IBD connections are opened while the node's own link is saturated,
-  since more peers would not help.
+- They are opened from the start of IBD, during headers sync, so they're ready
+  when blocks are first requested. No new IBD connections are opened while the
+  node's own link is saturated, since more peers would not help.
 
 ## Measuring peers
 

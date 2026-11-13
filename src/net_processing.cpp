@@ -1821,8 +1821,9 @@ void PeerManagerImpl::CheckBlockDownloadPeers(NodeClock::time_point now)
     UpdateLinkRate(now);
     const bool ibd{m_chainman.IsInitialBlockDownload()};
     const bool saturated{LinkSaturated(now)};
-    // Blocks have started to arrive and our link could take more of them.
-    m_connman.SetOpenIBDPeers(ibd && m_link_rate.peak > 0 && !saturated);
+    // From the start, so that they are there when headers are synced and blocks are requested, until our link is
+    // found to take no more.
+    m_connman.SetOpenIBDPeers(ibd && (m_link_rate.peak == 0 || !saturated));
     if (ibd && now >= m_next_block_download_summary) {
         m_next_block_download_summary = now + BLOCK_DOWNLOAD_SUMMARY_INTERVAL;
         LogBlockDownloadSummary(saturated);
