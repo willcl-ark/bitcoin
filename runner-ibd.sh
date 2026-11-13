@@ -2,7 +2,7 @@
 # Prepare locally or on the runner; run only after the current job finishes.
 set -euo pipefail
 
-CORE_COMMIT=eb76028a6ddfcdacfcf8998f750048d4ae5b7976
+CORE_COMMIT=f8895cf09db2a12a273ddd6f9774dd9c2f2a26ec
 BIX_COMMIT=eef14aeccfca9af88ab2a60487e71ab5fdcb123e
 TIME_FLAKE=github:NixOS/nixpkgs/20b1ddd1aa5ace70c9468305030aa4f9ef79671b#time
 WORK=${WORK:-$HOME/pr-201-ibd}
