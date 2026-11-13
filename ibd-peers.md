@@ -30,10 +30,13 @@ slow peers rather than validating. These changes do three things:
 ## IBD connections
 
 - A new `ConnectionType::IBD` (`ibd` in `getpeerinfo`, `-netinfo` and the GUI).
-- While in IBD, `ThreadOpenConnections` opens one every `IBD_PEER_INTERVAL`
-  (10s), up to `-maxibdpeers` (default 50). The 10s gap lets more `addr`
-  messages arrive between connections, so later ones have more addresses to
-  choose from.
+- While in IBD, `ThreadOpenConnections` opens the first `IBD_PEERS_AT_ONCE`
+  (10) straight away, then one every `IBD_PEER_INTERVAL` (10s), up to
+  `-maxibdpeers` (default 50). With the 8 outbound peers that gives about 18
+  download peers at once: enough for a stable median rate to judge peers by,
+  and very likely enough fast ones to fill the link. The 10s gap after that
+  lets more `addr` messages arrive between connections. IBD connections don't
+  wait for the regular outbound slots to fill.
 - They have their own semaphore and file descriptor allowance, outside
   `-maxconnections`. They count towards netgroup diversity.
 - They behave like block-relay-only connections: no transaction relay, no

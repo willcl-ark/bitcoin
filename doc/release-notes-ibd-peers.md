@@ -2,8 +2,8 @@ P2P and network changes
 -----------------------
 
 - During initial block download the node now makes extra outbound
-  connections, one every 10 seconds up to `-maxibdpeers` (default: 50), used
-  only to download blocks. They relay neither transactions nor addresses,
+  connections, 10 straight away and then one every 10 seconds up to
+  `-maxibdpeers` (default: 50), used only to download blocks. They relay neither transactions nor addresses,
   are counted separately from `-maxconnections`, and are closed once initial
   block download ends. They show up with the connection type `ibd` in
   `getpeerinfo` and `-netinfo`. No more are opened while the node's own

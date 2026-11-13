@@ -2719,7 +2719,8 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
 
         PerformReconnections();
 
-        CountingSemaphoreGrant<> grant(*semOutbound);
+        // While IBD connections are wanted, waiting for an outbound slot would hold them up too.
+        CountingSemaphoreGrant<> grant(*semOutbound, /*fTry=*/m_open_ibd_peers.load());
         if (m_interrupt_net->interrupted()) {
             return;
         }
@@ -2843,7 +2844,20 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
         // popped and then dropped by OpenNetworkConnection(), losing them for the
         // next activation and for the dump at shutdown.
         const bool have_anchors{fNetworkActive && WITH_LOCK(m_anchors_mutex, return !m_anchors.empty())};
-        if (have_anchors && (nOutboundBlockRelay < m_max_outbound_block_relay)) {
+        // During initial block download, extra connections to download blocks from, with slots of their own: the
+        // first IBD_PEERS_AT_ONCE straight away, the rest one at a time so that the addresses learned in between
+        // are there to choose from.
+        CountingSemaphoreGrant<> ibd_grant;
+        if (m_open_ibd_peers && outbound_ibd < m_max_ibd_peers && (outbound_ibd < IBD_PEERS_AT_ONCE || now > next_ibd_peer)) {
+            ibd_grant = CountingSemaphoreGrant<>(*semIBD, /*fTry=*/true);
+        }
+        if (ibd_grant) {
+            next_ibd_peer = now + IBD_PEER_INTERVAL;
+            conn_type = ConnectionType::IBD;
+            grant = std::move(ibd_grant);
+        } else if (!grant) {
+            continue;
+        } else if (have_anchors && (nOutboundBlockRelay < m_max_outbound_block_relay)) {
             conn_type = ConnectionType::BLOCK_RELAY;
             anchor = true;
         } else if (nOutboundFullRelay < m_max_outbound_full_relay) {
@@ -2852,14 +2866,6 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
             conn_type = ConnectionType::BLOCK_RELAY;
         } else if (GetTryNewOutboundPeer()) {
             // OUTBOUND_FULL_RELAY
-        } else if (m_open_ibd_peers && outbound_ibd < m_max_ibd_peers && now > next_ibd_peer) {
-            // During initial block download, extra connections to download blocks from. They are opened
-            // one at a time so that the addresses learned in between are there to choose from, and use
-            // slots of their own.
-            next_ibd_peer = now + IBD_PEER_INTERVAL;
-            conn_type = ConnectionType::IBD;
-            grant = CountingSemaphoreGrant<>(*semIBD, /*fTry=*/true);
-            if (!grant) continue;
         } else if (now > next_extra_block_relay && m_start_extra_block_relay_peers) {
             // Periodically connect to a peer (using regular outbound selection
             // methodology from addrman) and stay connected long enough to sync
