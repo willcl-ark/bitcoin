@@ -514,6 +514,8 @@ struct CNodeState {
     bool m_ibd_conn{false};
     //! The peer holds the block initial block download waits for and is slow (see CheckBlockDownloadPeers()).
     bool m_holding_up_download{false};
+    //! A block held up at another peer, to be asked for from this one as well (see CheckBlockDownloadPeers()).
+    const CBlockIndex* m_hedged_block{nullptr};
     BlockDeliveries m_block_deliveries;
     //! Whether we consider this a preferred download peer.
     bool fPreferredDownload{false};
@@ -1098,6 +1100,7 @@ private:
     NodeClock::time_point m_next_block_download_peer_check GUARDED_BY(cs_main){};
     NodeClock::time_point m_next_block_download_summary GUARDED_BY(cs_main){};
     const CBlockIndex* m_logged_block_wait GUARDED_BY(cs_main){nullptr};
+    uint64_t m_blocks_hedged GUARDED_BY(cs_main){0};
 
     /** Request blocks for the background chainstate, if one is in use. */
     void TryDownloadingHistoricalBlocks(const Peer& peer, unsigned int count, std::vector<const CBlockIndex*>& vBlocks, const CBlockIndex* from_tip, const CBlockIndex* target_block) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
@@ -1809,13 +1812,13 @@ void PeerManagerImpl::LogBlockDownloadSummary(bool saturated) const
     const int tip{m_chainman.ActiveHeight()};
     const node::BlockCache& cache{m_chainman.m_block_cache};
     LogInfo("Block download: tip %d, ibd peers %d/%d (%u dropped), peers barred %d, in flight %u, "
-            "link %.1f MB/s (peak %.1f%s), median peer %s, cache %u/%u MiB %u blocks, horizon %s, prefetched %u",
+            "link %.1f MB/s (peak %.1f%s), median peer %s, cache %u/%u MiB %u blocks, horizon %s, prefetched %u, hedged %u",
             tip, ibd_peers, m_connman.MaxIBDPeers(), m_connman.SlowIBDPeerCount(), barred, mapBlocksInFlight.size(),
             m_link_rate.bytes_per_second / 1e6, m_link_rate.peak / 1e6, saturated ? ", saturated" : "",
             median ? strprintf("%.0f kB/s", *median / 1000) : "-",
             cache.Bytes() / 1_MiB, cache.Budget() / 1_MiB, cache.Count(),
             horizon ? strprintf("tip+%d", *horizon - tip) : "-",
-            m_chainman.BlocksPrefetched());
+            m_chainman.BlocksPrefetched(), m_blocks_hedged);
 }
 
 void PeerManagerImpl::CheckBlockDownloadPeers(NodeClock::time_point now)
@@ -1838,13 +1841,15 @@ void PeerManagerImpl::CheckBlockDownloadPeers(NodeClock::time_point now)
     // The lowest block still being sent is the one validation will wait for first.
     const QueuedBlock* lowest{nullptr};
     NodeId holder{-1};
-    for (const auto& [_, in_flight] : mapBlocksInFlight) {
+    for (const auto& [hash, in_flight] : mapBlocksInFlight) {
         const auto& [id, queued]{in_flight};
         if (queued->with_pool) continue;
-        if (!lowest || queued->pindex->nHeight < lowest->pindex->nHeight) {
-            lowest = &*queued;
-            holder = id;
-        }
+        if (lowest && queued->pindex->nHeight >= lowest->pindex->nHeight) continue;
+        // Asked for from more than one peer, it may have arrived from another and be being stored.
+        const auto [first, last]{mapBlocksInFlight.equal_range(hash)};
+        if (std::any_of(first, last, [](const auto& entry) { return entry.second.second->with_pool; })) continue;
+        lowest = &*queued;
+        holder = id;
     }
     if (!lowest) return;
 
@@ -1865,11 +1870,37 @@ void PeerManagerImpl::CheckBlockDownloadPeers(NodeClock::time_point now)
     const double waited{Ticks<SecondsDouble>(now - lowest->requested)};
     const auto ahead{std::ranges::count_if(state.vBlocksInFlight, [&](const QueuedBlock& block) { return !block.with_pool && block.requested < lowest->requested; })};
     const double late{std::max(MIN_LATE_BLOCK_SECONDS, LATE_BLOCK_FACTOR * (ahead + 1) * m_avg_block_bytes / median_rate)};
-    if (waited < late || state.m_block_deliveries.BytesPerSecond() >= SLOW_PEER_BLOCK_RATE_FRACTION * median_rate) return;
+    if (waited < late) return;
 
-    LogDebug(BCLog::NET, "peer=%d holds up block download: block %d waited for %.3fs (late after %.3fs), peer rate %.0f kB/s, median %.0f kB/s\n",
-             holder, lowest->pindex->nHeight, waited, late, state.m_block_deliveries.BytesPerSecond() / 1000, median_rate / 1000);
-    state.m_holding_up_download = true;
+    if (state.m_block_deliveries.BytesPerSecond() < SLOW_PEER_BLOCK_RATE_FRACTION * median_rate) {
+        LogDebug(BCLog::NET, "peer=%d holds up block download: block %d waited for %.3fs (late after %.3fs), peer rate %.0f kB/s, median %.0f kB/s\n",
+                 holder, lowest->pindex->nHeight, waited, late, state.m_block_deliveries.BytesPerSecond() / 1000, median_rate / 1000);
+        state.m_holding_up_download = true;
+        return;
+    }
+
+    // A peer that is not slow can still hold the block for long, with other blocks to send before it or after a
+    // pause. It is also asked for from the peer expected to deliver it soonest, and the first copy is used.
+    if (mapBlocksInFlight.count(lowest->pindex->GetBlockHash()) > 1) return;
+    const auto current_time{std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch())};
+    NodeId fastest{-1};
+    double soonest{std::numeric_limits<double>::max()};
+    for (auto& [id, candidate] : m_node_states) {
+        if (id == holder || candidate.m_slow_in_ibd || candidate.m_hedged_block || candidate.m_block_deliveries.blocks == 0) continue;
+        if (current_time < candidate.m_block_download_paused_until) continue;
+        if (!candidate.pindexBestKnownBlock || candidate.pindexBestKnownBlock->GetAncestor(lowest->pindex->nHeight) != lowest->pindex) continue;
+        const auto on_the_wire{std::ranges::count_if(candidate.vBlocksInFlight, [](const QueuedBlock& block) { return !block.with_pool; })};
+        if (on_the_wire >= MAX_BLOCKS_IN_TRANSIT_PER_PEER) continue;
+        const double delivery{(on_the_wire + 1) * m_avg_block_bytes / candidate.m_block_deliveries.BytesPerSecond()};
+        if (delivery < soonest) {
+            soonest = delivery;
+            fastest = id;
+        }
+    }
+    if (fastest == -1) return;
+    LogDebug(BCLog::NET, "block %d held by peer=%d for %.3fs (late after %.3fs), also requesting it from peer=%d\n",
+             lowest->pindex->nHeight, holder, waited, late, fastest);
+    State(fastest)->m_hedged_block = lowest->pindex;
 }
 
 void PeerManagerImpl::StopBlockDownloadFrom(CNode& node, CNodeState& state, std::chrono::microseconds current_time, std::string_view reason)
@@ -7028,6 +7059,14 @@ bool PeerManagerImpl::SendMessages(CNode& node)
             const auto on_the_wire{std::ranges::count_if(state.vBlocksInFlight, [](const QueuedBlock& block) { return !block.with_pool; })};
             return std::max(0, MAX_BLOCKS_IN_TRANSIT_PER_PEER - static_cast<int>(on_the_wire));
         };
+        if (const CBlockIndex* hedged{std::exchange(state.m_hedged_block, nullptr)};
+            hedged && can_request_blocks_from_peer && IsBlockRequested(hedged->GetBlockHash()) && !(hedged->nStatus & BLOCK_HAVE_DATA) &&
+            BlockRequested(node.GetId(), *hedged)) {
+            vGetData.emplace_back(MSG_BLOCK | GetFetchFlags(peer), hedged->GetBlockHash());
+            ++m_blocks_hedged;
+            LogDebug(BCLog::NET, "Requesting block %s (%d) peer=%d, also in flight from another peer\n", hedged->GetBlockHash().ToString(),
+                     hedged->nHeight, node.GetId());
+        }
         if (CanServeBlocks(peer) && can_request_blocks_from_peer && ((sync_blocks_and_headers_from_peer && !IsLimitedPeer(peer)) || !m_chainman.IsInitialBlockDownload()) && get_inflight_budget() > 0) {
             std::vector<const CBlockIndex*> vToDownload;
             NodeId staller = -1;

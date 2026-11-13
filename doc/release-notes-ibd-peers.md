@@ -18,6 +18,10 @@ P2P and network changes
   instead of disconnecting them. Peers are judged against each other, not
   against fixed limits, so nodes on slow connections are not affected.
 
+- During initial block download, when the next block to be validated is late
+  at a peer that is not slow overall, it is also requested from the peer
+  expected to deliver it soonest, and whichever copy arrives first is used.
+
 Updated settings
 ----------------
 

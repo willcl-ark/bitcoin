@@ -99,6 +99,24 @@ on a slow connection does not drop all its peers.
 The existing stall detection and block download timeout use the same path
 during IBD instead of disconnecting.
 
+## Hedged requests
+
+A peer that isn't slow can still hold the next block for seconds, with other
+blocks queued before it or after a pause, and validation stalls behind it.
+When the lowest block in flight is late by the test above but its holder's
+rate is not below a third of the median:
+
+- It is also requested from the peer expected to deliver it soonest: the
+  lowest `(blocks on the wire + 1) × average block size / rate` among peers
+  that have the block, have delivered blocks, aren't barred or paused, and
+  have room for another request.
+- The first copy to arrive is used, and both requests are cleared once it's
+  stored. A block is requested from at most two peers this way, and a peer
+  has at most one such request waiting to be sent.
+- A block that arrived from either peer and is being stored is skipped when
+  looking for the lowest block in flight.
+- The per-minute summary line counts these requests as `hedged`.
+
 ## Download window and block cache
 
 - The download window is 4096 blocks during IBD (`IBD_BLOCK_DOWNLOAD_WINDOW`),
