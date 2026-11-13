@@ -156,6 +156,10 @@ static_assert(MAX_BLOCKTXN_DEPTH <= MIN_BLOCKS_TO_KEEP, "MAX_BLOCKTXN_DEPTH too 
  *  degree of disordering of blocks on disk (which make reindexing and pruning harder). We'll probably
  *  want to make this a per-peer adaptive value at some point. */
 static const unsigned int BLOCK_DOWNLOAD_WINDOW = 1024;
+/** The block download window during initial block download. With many peers each downloading several blocks,
+ *  a window of BLOCK_DOWNLOAD_WINDOW is nearly all in flight, so one late block at its bottom leaves every other
+ *  peer without blocks to download. */
+static const unsigned int IBD_BLOCK_DOWNLOAD_WINDOW = 4096;
 /** How often the peers we download blocks from are checked for one holding up initial block download. */
 static constexpr auto BLOCK_DOWNLOAD_PEER_CHECK_INTERVAL{250ms};
 /** Period over which the rate of block bytes received from all peers together is measured. */
@@ -1666,7 +1670,8 @@ void PeerManagerImpl::FindNextBlocksToDownload(const Peer& peer, unsigned int co
     // Never fetch further than the best block we know the peer has, or more than BLOCK_DOWNLOAD_WINDOW + 1 beyond the last
     // linked block we have in common with this peer. The +1 is so we can detect stalling, namely if we would be able to
     // download that next block if the window were 1 larger.
-    int nWindowEnd = state->pindexLastCommonBlock->nHeight + BLOCK_DOWNLOAD_WINDOW;
+    const int window{static_cast<int>(m_chainman.IsInitialBlockDownload() ? IBD_BLOCK_DOWNLOAD_WINDOW : BLOCK_DOWNLOAD_WINDOW)};
+    int nWindowEnd = state->pindexLastCommonBlock->nHeight + window;
 
     FindNextBlocks(vBlocks, peer, state, pindexWalk, count, nWindowEnd, &m_chainman.ActiveChain(), &nodeStaller);
 }
