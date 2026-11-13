@@ -1936,6 +1936,9 @@ bool CConnman::AddConnection(const std::string& address, ConnectionType conn_typ
     // no limit for FEELER connections since they're short-lived
     case ConnectionType::FEELER:
         break;
+    // only opened automatically, during initial block download
+    case ConnectionType::IBD:
+        return false;
     } // no default case, so the compiler can warn about missing cases
 
     // Count existing connections
@@ -2517,6 +2520,19 @@ void CConnman::StartExtraBlockRelayPeers()
     m_start_extra_block_relay_peers = true;
 }
 
+void CConnman::SetOpenIBDPeers(bool open)
+{
+    if (m_open_ibd_peers.exchange(open) != open) {
+        LogDebug(BCLog::NET, "%s opening IBD connections", open ? "start" : "stop");
+    }
+}
+
+void CConnman::AddSlowIBDPeer(const CNetAddr& addr)
+{
+    LOCK(m_slow_ibd_peers_mutex);
+    m_slow_ibd_peers.insert(addr);
+}
+
 // Return the number of outbound connections that are full relay (not blocks only)
 int CConnman::GetFullOutboundConnCount() const
 {
@@ -2669,6 +2685,7 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
     auto next_feeler = start + rng.rand_exp_duration(FEELER_INTERVAL);
     auto next_extra_block_relay = start + rng.rand_exp_duration(EXTRA_BLOCK_RELAY_ONLY_PEER_INTERVAL);
     auto next_extra_network_peer{start + rng.rand_exp_duration(EXTRA_NETWORK_PEER_INTERVAL)};
+    auto next_ibd_peer{start};
     const bool dnsseed = gArgs.GetBoolArg("-dnsseed", DEFAULT_DNSSEED);
     bool add_fixed_seeds = gArgs.GetBoolArg("-fixedseeds", DEFAULT_FIXEDSEEDS);
     const bool use_seednodes{!gArgs.GetArgs("-seednode").empty()};
@@ -2754,6 +2771,7 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
         // Only connect out to one peer per ipv4/ipv6 network group (/16 for IPv4).
         int nOutboundFullRelay = 0;
         int nOutboundBlockRelay = 0;
+        int outbound_ibd = 0;
         int outbound_privacy_network_peers = 0;
         std::set<std::vector<unsigned char>> outbound_ipv46_peer_netgroups;
 
@@ -2762,6 +2780,7 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
             for (const CNode* pnode : m_nodes) {
                 if (pnode->IsFullOutboundConn()) nOutboundFullRelay++;
                 if (pnode->IsBlockOnlyConn()) nOutboundBlockRelay++;
+                if (pnode->IsIBDConn()) outbound_ibd++;
 
                 // Make sure our persistent outbound slots to ipv4/ipv6 peers belong to different netgroups.
                 switch (pnode->m_conn_type) {
@@ -2778,6 +2797,7 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
                     case ConnectionType::MANUAL:
                     case ConnectionType::OUTBOUND_FULL_RELAY:
                     case ConnectionType::BLOCK_RELAY:
+                    case ConnectionType::IBD:
                         const CAddress address{pnode->addr};
                         if (address.IsTor() || address.IsI2P() || address.IsCJDNS()) {
                             // Since our addrman-groups for these networks are
@@ -2832,6 +2852,14 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
             conn_type = ConnectionType::BLOCK_RELAY;
         } else if (GetTryNewOutboundPeer()) {
             // OUTBOUND_FULL_RELAY
+        } else if (m_open_ibd_peers && outbound_ibd < m_max_ibd_peers && now > next_ibd_peer) {
+            // During initial block download, extra connections to download blocks from. They are opened
+            // one at a time so that the addresses learned in between are there to choose from, and use
+            // slots of their own.
+            next_ibd_peer = now + IBD_PEER_INTERVAL;
+            conn_type = ConnectionType::IBD;
+            grant = CountingSemaphoreGrant<>(*semIBD, /*fTry=*/true);
+            if (!grant) continue;
         } else if (now > next_extra_block_relay && m_start_extra_block_relay_peers) {
             // Periodically connect to a peer (using regular outbound selection
             // methodology from addrman) and stay connected long enough to sync
@@ -2939,6 +2967,10 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
                 std::tie(addr, addr_last_try) = preferred_net.has_value()
                     ? addrman.get().Select(false, {*preferred_net})
                     : addrman.get().Select(false, reachable_nets);
+            }
+
+            if (conn_type == ConnectionType::IBD && WITH_LOCK(m_slow_ibd_peers_mutex, return m_slow_ibd_peers.contains(addr))) {
+                continue;
             }
 
             // Require outbound IPv4/IPv6 connections, other than feelers, to be to distinct network groups
@@ -3679,6 +3711,9 @@ bool CConnman::Start(CScheduler& scheduler, const Options& connOptions)
         // initialize semaphore
         semAddnode = std::make_unique<std::counting_semaphore<>>(m_max_addnode);
     }
+    if (semIBD == nullptr) {
+        semIBD = std::make_unique<std::counting_semaphore<>>(m_max_ibd_peers);
+    }
 
     //
     // Start threads
@@ -3847,6 +3882,7 @@ void CConnman::StopNodes()
     vhListenSocket.clear();
     semOutbound.reset();
     semAddnode.reset();
+    semIBD.reset();
 }
 
 void CConnman::DeleteNode(CNode* pnode)

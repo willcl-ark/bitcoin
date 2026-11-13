@@ -42,6 +42,7 @@
 #include <optional>
 #include <queue>
 #include <semaphore>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -80,6 +81,10 @@ inline constexpr int MAX_BLOCK_RELAY_ONLY_CONNECTIONS = 2;
 inline constexpr int MAX_FEELER_CONNECTIONS = 1;
 /** Maximum number of private broadcast connections */
 inline constexpr size_t MAX_PRIVATE_BROADCAST_CONNECTIONS{64};
+/** Default for -maxibdpeers, the maximum number of IBD connections */
+inline constexpr int DEFAULT_MAX_IBD_PEERS{50};
+/** Time between opening IBD connections, so that addresses learned meanwhile can be chosen from */
+inline constexpr auto IBD_PEER_INTERVAL{10s};
 /** -listen default */
 inline constexpr bool DEFAULT_LISTEN = true;
 /** The maximum number of peer connections to maintain. */
@@ -791,6 +796,7 @@ public:
             case ConnectionType::ADDR_FETCH:
             case ConnectionType::FEELER:
             case ConnectionType::PRIVATE_BROADCAST:
+            case ConnectionType::IBD:
                 return false;
         } // no default case, so the compiler can warn about missing cases
 
@@ -813,6 +819,7 @@ public:
         case ConnectionType::BLOCK_RELAY:
         case ConnectionType::ADDR_FETCH:
         case ConnectionType::PRIVATE_BROADCAST:
+        case ConnectionType::IBD:
                 return false;
         case ConnectionType::OUTBOUND_FULL_RELAY:
         case ConnectionType::MANUAL:
@@ -824,6 +831,10 @@ public:
 
     bool IsBlockOnlyConn() const {
         return m_conn_type == ConnectionType::BLOCK_RELAY;
+    }
+
+    bool IsIBDConn() const {
+        return m_conn_type == ConnectionType::IBD;
     }
 
     bool IsFeelerConn() const {
@@ -860,6 +871,7 @@ public:
             case ConnectionType::BLOCK_RELAY:
             case ConnectionType::ADDR_FETCH:
             case ConnectionType::PRIVATE_BROADCAST:
+            case ConnectionType::IBD:
                 return true;
         } // no default case, so the compiler can warn about missing cases
 
@@ -1096,6 +1108,7 @@ public:
         ServiceFlags m_local_services = NODE_NONE;
         int m_max_automatic_connections = DEFAULT_MAX_PEER_CONNECTIONS;
         int m_full_relay_inbound_percent = DEFAULT_FULL_RELAY_INBOUND_PCT;
+        int m_max_ibd_peers = DEFAULT_MAX_IBD_PEERS;
         CClientUIInterface* uiInterface = nullptr;
         NetEventsInterface* m_msgproc = nullptr;
         BanMan* m_banman = nullptr;
@@ -1132,6 +1145,7 @@ public:
         m_max_automatic_outbound = m_max_outbound_full_relay + m_max_outbound_block_relay + m_max_feeler;
         m_max_inbound = std::max(0, m_max_automatic_connections - m_max_automatic_outbound);
         m_max_inbound_full_relay = std::max(0, static_cast<int>(connOptions.m_full_relay_inbound_percent / 100.0 * m_max_inbound));
+        m_max_ibd_peers = std::max(0, connOptions.m_max_ibd_peers);
         m_use_addrman_outgoing = connOptions.m_use_addrman_outgoing;
         m_client_interface = connOptions.uiInterface;
         m_banman = connOptions.m_banman;
@@ -1341,6 +1355,13 @@ public:
     bool GetTryNewOutboundPeer() const;
 
     void StartExtraBlockRelayPeers();
+
+    /** Whether to open IBD connections, one every IBD_PEER_INTERVAL up to m_max_ibd_peers. Set by the block
+     *  download logic while in initial block download and our own link has room for more. */
+    void SetOpenIBDPeers(bool open);
+    int MaxIBDPeers() const { return m_max_ibd_peers; }
+    /** Do not open an IBD connection to `addr` again: it was too slow to serve blocks. */
+    void AddSlowIBDPeer(const CNetAddr& addr) EXCLUSIVE_LOCKS_REQUIRED(!m_slow_ibd_peers_mutex);
 
     // Count the number of full-relay peer we have.
     int GetFullOutboundConnCount() const EXCLUSIVE_LOCKS_REQUIRED(!m_nodes_mutex);
@@ -1717,6 +1738,8 @@ private:
 
     std::unique_ptr<std::counting_semaphore<>> semOutbound;
     std::unique_ptr<std::counting_semaphore<>> semAddnode;
+    /** IBD connections have slots of their own, so they never take one a regular outbound connection needs. */
+    std::unique_ptr<std::counting_semaphore<>> semIBD;
 
     /**
      * Maximum number of automatic connections permitted, excluding manual
@@ -1739,6 +1762,7 @@ private:
 
     int m_max_addnode{MAX_ADDNODE_CONNECTIONS};
     int m_max_feeler{MAX_FEELER_CONNECTIONS};
+    int m_max_ibd_peers{0};
     int m_max_automatic_outbound;
     int m_max_inbound;
     int m_max_inbound_full_relay;
@@ -1798,6 +1822,10 @@ private:
      *  as these connections are intended to be short-lived and low-bandwidth.
      */
     std::atomic_bool m_start_extra_block_relay_peers{false};
+
+    std::atomic_bool m_open_ibd_peers{false};
+    Mutex m_slow_ibd_peers_mutex;
+    std::set<CNetAddr> m_slow_ibd_peers GUARDED_BY(m_slow_ibd_peers_mutex);
 
     /**
      * A vector of -bind=<address>:<port>=onion arguments each of which is

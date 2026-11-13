@@ -588,6 +588,7 @@ void SetupServerArgs(ArgsManager& argsman, bool can_listen_ipc)
                                                     "It does not apply to short-lived private broadcast connections either, which have a separate limit of %u.",
                                                     DEFAULT_MAX_PEER_CONNECTIONS, MAX_PEER_CONNECTIONS, MAX_OUTBOUND_FULL_RELAY_CONNECTIONS + MAX_BLOCK_RELAY_ONLY_CONNECTIONS + MAX_FEELER_CONNECTIONS, MAX_ADDNODE_CONNECTIONS, MAX_PRIVATE_BROADCAST_CONNECTIONS),
                    ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
+    argsman.AddArg("-maxibdpeers=<n>", strprintf("During initial block download, make up to <n> extra outbound connections only to download blocks from, replacing any that serve blocks slowly. They are counted separately from the -maxconnections limit and closed once initial block download ends (default: %u)", DEFAULT_MAX_IBD_PEERS), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-inboundrelaypercent=<n>", strprintf("Permit a maximum percent of inbound connections to relay transactions, to limit memory utilization (0 to 100, default: %u).", DEFAULT_FULL_RELAY_INBOUND_PCT), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-maxreceivebuffer=<n>", strprintf("Maximum per-connection receive buffer, <n>*1000 bytes (default: %u)", DEFAULT_MAXRECEIVEBUFFER), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
     argsman.AddArg("-maxsendbuffer=<n>", strprintf("Maximum per-connection memory usage for the send buffer, <n>*1000 bytes (default: %u)", DEFAULT_MAXSENDBUFFER), ArgsManager::ALLOW_ANY, OptionsCategory::CONNECTION);
@@ -1111,6 +1112,7 @@ bool AppInitParameterInteraction(const ArgsManager& args)
     const size_t max_private{args.GetBoolArg("-privatebroadcast", DEFAULT_PRIVATE_BROADCAST)
                              ? MAX_PRIVATE_BROADCAST_CONNECTIONS
                              : 0};
+    const int max_ibd_peers{std::max<int>(0, args.GetIntArg("-maxibdpeers", DEFAULT_MAX_IBD_PEERS))};
     // HTTP server listen sockets: by default two (IPv4 and IPv6 loopback), or one per -rpcbind entry
     int num_rpc_bind = std::max(args.GetArgs("-rpcbind").size(), size_t(2));
     // HTTP server connected client sockets
@@ -1133,7 +1135,8 @@ bool AppInitParameterInteraction(const ArgsManager& args)
                               user_rpc_max_connections +
                               user_p2p_max_connections +
                               static_cast<int64_t>(ipc_fds) +
-                              static_cast<int64_t>(max_private);
+                              static_cast<int64_t>(max_private) +
+                              max_ibd_peers;
     if (total_fds > std::numeric_limits<int>::max()) {
         return InitError(Untranslated("Too many file descriptors requested. Try lower values for -rpcmaxconnections "
                                       "or -maxconnections, or fewer settings of "
@@ -2228,6 +2231,7 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     CConnman::Options connOptions;
     connOptions.m_local_services = g_local_services;
     connOptions.m_max_automatic_connections = num_p2p_max_connections;
+    connOptions.m_max_ibd_peers = std::max<int>(0, args.GetIntArg("-maxibdpeers", DEFAULT_MAX_IBD_PEERS));
     connOptions.m_full_relay_inbound_percent = std::clamp<int>(args.GetIntArg("-inboundrelaypercent", DEFAULT_FULL_RELAY_INBOUND_PCT), 0, 100);
     connOptions.uiInterface = &uiInterface;
     connOptions.m_banman = node.banman.get();

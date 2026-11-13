@@ -82,6 +82,15 @@ enum class ConnectionType {
      * our own transactions) and closed afterwards.
      */
     PRIVATE_BROADCAST,
+
+    /**
+     * IBD connections are extra outbound connections made only during
+     * initial block download, to download blocks from as fast as we can
+     * validate them. They relay neither transactions nor addresses. One that
+     * serves blocks slowly is disconnected and replaced by another, and all
+     * are disconnected once initial block download ends.
+     */
+    IBD,
 };
 
 /** Convert ConnectionType enum to a string value */

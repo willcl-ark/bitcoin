@@ -1891,7 +1891,7 @@ void PeerManagerImpl::FinalizeNode(const CNode& node)
     }
     } // cs_main
     if (node.fSuccessfullyConnected &&
-        !node.IsBlockOnlyConn() && !node.IsPrivateBroadcastConn() && !node.IsInboundConn()) {
+        !node.IsBlockOnlyConn() && !node.IsIBDConn() && !node.IsPrivateBroadcastConn() && !node.IsInboundConn()) {
         // Only change visible addrman state for full outbound peers.  We don't
         // call Connected() for feeler connections since they don't have
         // fSuccessfullyConnected set. Also don't call Connected() for private broadcast
@@ -4169,12 +4169,13 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         }
 
         // Only initialize the Peer::TxRelay m_relay_txs data structure if:
-        // - this isn't an outbound block-relay-only connection, and
+        // - this isn't an outbound block-relay-only or IBD connection, and
         // - this isn't an outbound feeler connection, and
         // - fRelay=true (the peer wishes to receive transaction announcements)
         //   or we're offering NODE_BLOOM to this peer. NODE_BLOOM means that
         //   the peer may turn on transaction relay later.
         if (!pfrom.IsBlockOnlyConn() &&
+            !pfrom.IsIBDConn() &&
             !pfrom.IsFeelerConn() &&
             (fRelay || (peer.m_our_services & NODE_BLOOM))) {
             auto* const tx_relay = peer.SetTxRelay();
@@ -6050,9 +6051,9 @@ void PeerManagerImpl::MaybeSendFeefilter(CNode& pto, Peer& peer, std::chrono::mi
     if (pto.GetCommonVersion() < FEEFILTER_VERSION) return;
     // peers with the forcerelay permission should not filter txs to us
     if (pto.HasPermission(NetPermissionFlags::ForceRelay)) return;
-    // Don't send feefilter messages to outbound block-relay-only peers since they should never announce
+    // Don't send feefilter messages to outbound block-relay-only or IBD peers since they should never announce
     // transactions to us, regardless of feefilter state.
-    if (pto.IsBlockOnlyConn()) return;
+    if (pto.IsBlockOnlyConn() || pto.IsIBDConn()) return;
 
     CAmount currentFilter = m_mempool.GetMinFee().GetFeePerK();
 
@@ -6088,8 +6089,8 @@ void PeerManagerImpl::MaybeSendFeefilter(CNode& pto, Peer& peer, std::chrono::mi
 
 bool PeerManagerImpl::RejectIncomingTxs(const CNode& peer) const
 {
-    // block-relay-only peers may never send txs to us
-    if (peer.IsBlockOnlyConn()) return true;
+    // block-relay-only and IBD peers may never send txs to us
+    if (peer.IsBlockOnlyConn() || peer.IsIBDConn()) return true;
     if (peer.IsFeelerConn()) return true;
     // In -blocksonly mode, peers need the 'relay' permission to send txs to us
     if (m_opts.ignore_incoming_txs && !peer.HasPermission(NetPermissionFlags::Relay)) return true;
@@ -6160,8 +6161,9 @@ bool PeerManagerImpl::SetupAddressRelay(const CNode& node, Peer& peer)
 {
     // We don't participate in addr relay with outbound block-relay-only
     // connections to prevent providing adversaries with the additional
-    // information of addr traffic to infer the link.
-    if (node.IsBlockOnlyConn()) return false;
+    // information of addr traffic to infer the link. IBD connections are
+    // there only to download blocks and go away when initial block download ends.
+    if (node.IsBlockOnlyConn() || node.IsIBDConn()) return false;
 
     // We don't participate in addr relay with feeler connections because
     // they are disconnected shortly after the handshake completes,

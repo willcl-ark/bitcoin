@@ -456,6 +456,7 @@ private:
         if (conn_type == "manual" || conn_type == "feeler") return conn_type;
         if (conn_type == "addr-fetch") return "addr";
         if (conn_type == "private-broadcast") return "priv";
+        if (conn_type == "ibd") return "ibd";
         return "";
     }
     std::string FormatServices(const UniValue& services)

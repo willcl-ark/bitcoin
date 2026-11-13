@@ -75,7 +75,8 @@ const std::vector<std::string> CONNECTION_TYPE_DOC{
         "manual (added via addnode RPC or -addnode/-connect configuration options)",
         "addr-fetch (short-lived automatic connection for soliciting addresses)",
         "feeler (short-lived automatic connection for testing addresses)",
-        "private-broadcast (short-lived automatic connection for broadcasting privacy-sensitive transactions)"
+        "private-broadcast (short-lived automatic connection for broadcasting privacy-sensitive transactions)",
+        "ibd (automatic connection for downloading blocks during initial block download; does not relay transactions or addresses)"
 };
 
 const std::vector<std::string> TRANSPORT_TYPE_DOC{
