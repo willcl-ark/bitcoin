@@ -16,8 +16,7 @@ P2P and network changes
   again until initial block download ends. The same applies to peers that
   stall block download or time out on a block during initial block download,
   instead of disconnecting them. Peers are judged against each other, not
-  against fixed limits, and not at all while the node's own connection is
-  saturated, so nodes on slow connections are not affected.
+  against fixed limits, so nodes on slow connections are not affected.
 
 Updated settings
 ----------------

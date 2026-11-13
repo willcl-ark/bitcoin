@@ -69,9 +69,10 @@ IBD:
   validation is waiting for.
 - That peer is flagged if the block is late and its rate is below a third of
   the median peer rate. Late means it has been waiting longer than 3× the
-  expected time at the peer's rate, and at least 1s.
-- Judging only happens with at least 3 measured peers, and never while the
-  link is saturated.
+  time the median peer takes for a block of average size, and at least 1s.
+- Judging only happens with at least 3 measured peers. It goes on while the
+  link is saturated: a straggler then holds up a link that is full, and
+  comparing peers with each other still holds.
 
 Because peers are judged against each other rather than fixed limits, a node
 on a slow connection does not drop all its peers.

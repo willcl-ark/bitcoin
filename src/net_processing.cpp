@@ -168,7 +168,7 @@ static constexpr auto BLOCK_DOWNLOAD_SUMMARY_INTERVAL{60s};
 static constexpr auto LINK_RATE_PERIOD{10s};
 /** Our own link is taken as saturated while the rate of block bytes received is at least this fraction of the
  *  highest rate seen, and that highest rate has not grown by LINK_RATE_GROWTH for LINK_RATE_PLATEAU. Then
- *  more peers would only share the same bandwidth, and slow deliveries are our own link's doing. */
+ *  more peers would only share the same bandwidth. */
 static constexpr double LINK_SATURATED_FRACTION{0.85};
 static constexpr double LINK_RATE_GROWTH{1.05};
 static constexpr auto LINK_RATE_PLATEAU{60s};
@@ -1070,9 +1070,8 @@ private:
     /**
      * During initial block download, find the peer holding up block download: the one with the lowest block
      * still being sent, when that block is late and the peer serves blocks slowly compared to the others. Both
-     * are measured against the median peer, and nothing is judged while our own link is saturated, so that a
-     * node on a slow connection does not blame its peers for it. Also asks for IBD connections while the
-     * link has room for more.
+     * are measured against the median peer, so that a node on a slow connection, whose peers are all slow, does
+     * not blame them for it. Also asks for IBD connections while the link has room for more.
      */
     void CheckBlockDownloadPeers(NodeClock::time_point now) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
     /** During initial block download, stop downloading blocks from a peer that is too slow: an IBD connection is
@@ -1825,7 +1824,7 @@ void PeerManagerImpl::CheckBlockDownloadPeers(NodeClock::time_point now)
         m_next_block_download_summary = now + BLOCK_DOWNLOAD_SUMMARY_INTERVAL;
         LogBlockDownloadSummary(saturated);
     }
-    if (!ibd || saturated) return;
+    if (!ibd) return;
 
     const auto median{MedianBlockRate()};
     if (!median) return;
