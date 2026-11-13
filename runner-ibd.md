@@ -10,11 +10,12 @@ never removes benchmark data. It reports free space but does not enforce a
 space budget. Pruning is disabled; monitor available space during the run.
 
 The local source snapshot is `/home/will/.cache/pr-201-ibd/pr-201.bundle`, containing commit
-`7d313e9322523798aee63728fb1c2003d87e1bad`. Copy it alongside the script on the runner. Regenerating the same snapshot:
+`eb76028a6ddfcdacfcf8998f750048d4ae5b7976`. Copy it alongside the script on the runner. Regenerating the same snapshot:
 
 ```bash
-test "$(git rev-parse HEAD)" = 7d313e9322523798aee63728fb1c2003d87e1bad
-git bundle create /home/will/.cache/pr-201-ibd/pr-201.bundle HEAD
+git fetch benchcoin refs/pull/201/head:refs/remotes/benchcoin/pr-201-run
+test "$(git rev-parse benchcoin/pr-201-run)" = eb76028a6ddfcdacfcf8998f750048d4ae5b7976
+git bundle create /home/will/.cache/pr-201-ibd/pr-201.bundle benchcoin/pr-201-run
 ```
 
 After the active benchmark finishes, copy the files from this checkout:
