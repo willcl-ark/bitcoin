@@ -182,7 +182,8 @@ static constexpr double BLOCK_SIZE_WEIGHT{0.1};
 static constexpr size_t MIN_PEERS_FOR_MEDIAN_BLOCK_RATE{3};
 /** A peer serves blocks slowly when its rate is below this fraction of the median peer's. */
 static constexpr double SLOW_PEER_BLOCK_RATE_FRACTION{1.0 / 3};
-/** A block is late once it takes this many times what the median peer takes for a block of average size... */
+/** A block is late once it was requested this many times what the median peer takes for a block of average size
+ *  ago, for it and for each block the peer has still to send before it... */
 static constexpr double LATE_BLOCK_FACTOR{3};
 /** ...and at least this long. */
 static constexpr double MIN_LATE_BLOCK_SECONDS{1};
@@ -1859,8 +1860,11 @@ void PeerManagerImpl::CheckBlockDownloadPeers(NodeClock::time_point now)
 
     if (!median) return;
     const double median_rate{*median};
-    const double waited{Ticks<SecondsDouble>(now - std::max(lowest->requested, state.m_block_deliveries.last))};
-    const double late{std::max(MIN_LATE_BLOCK_SECONDS, LATE_BLOCK_FACTOR * m_avg_block_bytes / median_rate)};
+    // From its request, which the peer's other deliveries do not reset; the blocks it was asked for before this
+    // one and has still to send come first.
+    const double waited{Ticks<SecondsDouble>(now - lowest->requested)};
+    const auto ahead{std::ranges::count_if(state.vBlocksInFlight, [&](const QueuedBlock& block) { return !block.with_pool && block.requested < lowest->requested; })};
+    const double late{std::max(MIN_LATE_BLOCK_SECONDS, LATE_BLOCK_FACTOR * (ahead + 1) * m_avg_block_bytes / median_rate)};
     if (waited < late || state.m_block_deliveries.BytesPerSecond() >= SLOW_PEER_BLOCK_RATE_FRACTION * median_rate) return;
 
     LogDebug(BCLog::NET, "peer=%d holds up block download: block %d waited for %.3fs (late after %.3fs), peer rate %.0f kB/s, median %.0f kB/s\n",

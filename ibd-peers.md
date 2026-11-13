@@ -75,8 +75,9 @@ IBD:
 - It finds the peer holding the lowest block in flight, which is the block
   validation is waiting for.
 - That peer is flagged if the block is late and its rate is below a third of
-  the median peer rate. Late means it has been waiting longer than 3× the
-  time the median peer takes for a block of average size, and at least 1s.
+  the median peer rate. Late means it was requested longer ago than 3× the
+  time the median peer takes for a block of average size, counting it and
+  each block the peer still has to send before it, and at least 1s.
 - Judging only happens with at least 3 measured peers. It goes on while the
   link is saturated: a straggler then holds up a link that is full, and
   comparing peers with each other still holds.
