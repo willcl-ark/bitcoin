@@ -2686,6 +2686,7 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
     auto next_extra_block_relay = start + rng.rand_exp_duration(EXTRA_BLOCK_RELAY_ONLY_PEER_INTERVAL);
     auto next_extra_network_peer{start + rng.rand_exp_duration(EXTRA_NETWORK_PEER_INTERVAL)};
     auto next_ibd_peer{start};
+    bool ibd_turn{true};
     const bool dnsseed = gArgs.GetBoolArg("-dnsseed", DEFAULT_DNSSEED);
     bool add_fixed_seeds = gArgs.GetBoolArg("-fixedseeds", DEFAULT_FIXEDSEEDS);
     const bool use_seednodes{!gArgs.GetArgs("-seednode").empty()};
@@ -2846,11 +2847,14 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
         const bool have_anchors{fNetworkActive && WITH_LOCK(m_anchors_mutex, return !m_anchors.empty())};
         // During initial block download, extra connections to download blocks from, with slots of their own: the
         // first IBD_PEERS_AT_ONCE straight away, the rest one at a time so that the addresses learned in between
-        // are there to choose from.
+        // are there to choose from. While outbound slots are still to be filled, they take turns with those.
+        const bool outbound_slots_open{nOutboundFullRelay < m_max_outbound_full_relay || nOutboundBlockRelay < m_max_outbound_block_relay};
         CountingSemaphoreGrant<> ibd_grant;
-        if (m_open_ibd_peers && outbound_ibd < m_max_ibd_peers && (outbound_ibd < IBD_PEERS_AT_ONCE || now > next_ibd_peer)) {
+        if (m_open_ibd_peers && (ibd_turn || !outbound_slots_open) &&
+            outbound_ibd < m_max_ibd_peers && (outbound_ibd < IBD_PEERS_AT_ONCE || now > next_ibd_peer)) {
             ibd_grant = CountingSemaphoreGrant<>(*semIBD, /*fTry=*/true);
         }
+        ibd_turn = !ibd_grant;
         if (ibd_grant) {
             next_ibd_peer = now + IBD_PEER_INTERVAL;
             conn_type = ConnectionType::IBD;
