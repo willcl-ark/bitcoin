@@ -2687,6 +2687,7 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
     auto next_extra_network_peer{start + rng.rand_exp_duration(EXTRA_NETWORK_PEER_INTERVAL)};
     auto next_ibd_peer{start};
     bool ibd_turn{true};
+    bool ibd_burst{false};
     const bool dnsseed = gArgs.GetBoolArg("-dnsseed", DEFAULT_DNSSEED);
     bool add_fixed_seeds = gArgs.GetBoolArg("-fixedseeds", DEFAULT_FIXEDSEEDS);
     const bool use_seednodes{!gArgs.GetArgs("-seednode").empty()};
@@ -2714,7 +2715,9 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
 
         ProcessAddrFetch();
 
-        if (!m_interrupt_net->sleep_for(500ms)) {
+        // While the first IBD connections are being picked, without waiting for their attempts, the next is
+        // picked sooner.
+        if (!m_interrupt_net->sleep_for(ibd_burst ? 100ms : 500ms)) {
             return;
         }
 
@@ -2816,6 +2819,17 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
                 } // no default case, so the compiler can warn about missing cases
             }
         }
+        {
+            LOCK(m_ibd_attempts_mutex);
+            for (const CAddress& address : m_ibd_attempting) {
+                ++outbound_ibd;
+                if (address.IsTor() || address.IsI2P() || address.IsCJDNS()) {
+                    ++outbound_privacy_network_peers;
+                } else {
+                    outbound_ipv46_peer_netgroups.insert(m_netgroupman.GetGroup(address));
+                }
+            }
+        }
 
         if (!seed_nodes.empty() && nOutboundFullRelay < SEED_OUTBOUND_CONNECTION_THRESHOLD) {
             if (NodeClock::now() > seed_node_timer + ADD_NEXT_SEEDNODE) {
@@ -2855,6 +2869,7 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
             ibd_grant = CountingSemaphoreGrant<>(*semIBD, /*fTry=*/true);
         }
         ibd_turn = !ibd_grant;
+        ibd_burst = ibd_grant && outbound_ibd + 1 < IBD_PEERS_AT_ONCE;
         if (ibd_grant) {
             next_ibd_peer = now + IBD_PEER_INTERVAL;
             conn_type = ConnectionType::IBD;
@@ -2982,6 +2997,9 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
             if (conn_type == ConnectionType::IBD && WITH_LOCK(m_slow_ibd_peers_mutex, return m_slow_ibd_peers.contains(addr))) {
                 continue;
             }
+            if (conn_type == ConnectionType::IBD && WITH_LOCK(m_ibd_attempts_mutex, return std::ranges::find(m_ibd_attempting, addr) != m_ibd_attempting.end())) {
+                continue;
+            }
 
             // Require outbound IPv4/IPv6 connections, other than feelers, to be to distinct network groups
             if (!fFeeler && outbound_ipv46_peer_netgroups.contains(m_netgroupman.GetGroup(addr))) {
@@ -3049,6 +3067,15 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
             const bool count_failures{((int)outbound_ipv46_peer_netgroups.size() + outbound_privacy_network_peers) >= std::min(m_max_automatic_connections - 1, 2)};
             // Use BIP324 transport when both us and them have NODE_V2_P2P set.
             const bool use_v2transport(addrConnect.nServices & GetLocalServices() & NODE_P2P_V2);
+            if (conn_type == ConnectionType::IBD) {
+                {
+                    LOCK(m_ibd_attempts_mutex);
+                    m_ibd_attempting.push_back(addrConnect);
+                    m_ibd_attempts.push_back({addrConnect, std::move(grant), count_failures, use_v2transport});
+                }
+                m_ibd_attempts_cv.notify_one();
+                continue;
+            }
             OpenNetworkConnection(/*addrConnect=*/addrConnect,
                                   /*fCountFailure=*/count_failures,
                                   /*grant_outbound=*/std::move(grant),
@@ -3057,6 +3084,24 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
                                   /*use_v2transport=*/use_v2transport,
                                   /*proxy_override=*/std::nullopt);
         }
+    }
+}
+
+void CConnman::ThreadOpenIBDConnections()
+{
+    while (true) {
+        IBDConnectionAttempt attempt;
+        {
+            WAIT_LOCK(m_ibd_attempts_mutex, lock);
+            m_ibd_attempts_cv.wait(lock, [&]() EXCLUSIVE_LOCKS_REQUIRED(m_ibd_attempts_mutex) { return m_ibd_attempts_stop || !m_ibd_attempts.empty(); });
+            if (m_ibd_attempts_stop) return;
+            attempt = std::move(m_ibd_attempts.front());
+            m_ibd_attempts.pop_front();
+        }
+        OpenNetworkConnection(attempt.addr, attempt.count_failure, std::move(attempt.grant), /*pszDest=*/nullptr,
+                              ConnectionType::IBD, attempt.use_v2transport, /*proxy_override=*/std::nullopt);
+        LOCK(m_ibd_attempts_mutex);
+        m_ibd_attempting.erase(std::ranges::find(m_ibd_attempting, attempt.addr));
     }
 }
 
@@ -3760,6 +3805,12 @@ bool CConnman::Start(CScheduler& scheduler, const Options& connOptions)
         threadOpenConnections = std::thread(
             &util::TraceThread, "opencon",
             [this, connect = connOptions.m_specified_outgoing, seed_nodes = std::move(seed_nodes)] { ThreadOpenConnections(connect, seed_nodes); });
+        if (connOptions.m_use_addrman_outgoing && m_max_ibd_peers > 0) {
+            WITH_LOCK(m_ibd_attempts_mutex, m_ibd_attempts_stop = false);
+            for (int i{0}; i < IBD_PEERS_AT_ONCE; ++i) {
+                m_ibd_connection_threads.emplace_back(&util::TraceThread, strprintf("ibdcon.%d", i), [this] { ThreadOpenIBDConnections(); });
+            }
+        }
     }
 
     // Process messages
@@ -3827,6 +3878,9 @@ void CConnman::Interrupt()
 
     m_private_broadcast.m_sem_conn_max.release();
     m_private_broadcast.NumToOpenAdd(1); // Just unblock NumToOpenWait() to be able to continue with shutdown.
+
+    WITH_LOCK(m_ibd_attempts_mutex, m_ibd_attempts_stop = true);
+    m_ibd_attempts_cv.notify_all();
 }
 
 void CConnman::StopThreads()
@@ -3841,6 +3895,10 @@ void CConnman::StopThreads()
         threadMessageHandler.join();
     if (threadOpenConnections.joinable())
         threadOpenConnections.join();
+    for (std::thread& thread : m_ibd_connection_threads) thread.join();
+    m_ibd_connection_threads.clear();
+    // Their grants are released before semIBD goes.
+    WITH_LOCK(m_ibd_attempts_mutex, m_ibd_attempts.clear(); m_ibd_attempting.clear());
     if (threadOpenAddedConnections.joinable())
         threadOpenAddedConnections.join();
     if (threadDNSAddressSeed.joinable())

@@ -1501,7 +1501,11 @@ private:
                                  !m_nodes_mutex,
                                  !m_reconnections_mutex,
                                  !m_unused_i2p_sessions_mutex,
-                                 !m_anchors_mutex);
+                                 !m_anchors_mutex,
+                                 !m_ibd_attempts_mutex);
+    /** Opens the IBD connections ThreadOpenConnections() picked, IBD_PEERS_AT_ONCE threads of it, so that attempts
+     *  that take until they time out do not hold up the others. */
+    void ThreadOpenIBDConnections() EXCLUSIVE_LOCKS_REQUIRED(!m_nodes_mutex, !m_unused_i2p_sessions_mutex, !m_ibd_attempts_mutex);
 
     /// \anchor msghand
     void ThreadMessageHandler() EXCLUSIVE_LOCKS_REQUIRED(!m_nodes_mutex, !mutexMsgProc);
@@ -1812,6 +1816,7 @@ private:
     std::thread threadSocketHandler;
     std::thread threadOpenAddedConnections;
     std::thread threadOpenConnections;
+    std::vector<std::thread> m_ibd_connection_threads;
     std::thread threadMessageHandler;
     std::thread threadI2PAcceptIncoming;
     std::thread threadPrivateBroadcast;
@@ -1830,6 +1835,20 @@ private:
     std::atomic_bool m_open_ibd_peers{false};
     mutable Mutex m_slow_ibd_peers_mutex;
     std::set<CNetAddr> m_slow_ibd_peers GUARDED_BY(m_slow_ibd_peers_mutex);
+    struct IBDConnectionAttempt {
+        CAddress addr;
+        CountingSemaphoreGrant<> grant;
+        bool count_failure;
+        bool use_v2transport;
+    };
+    Mutex m_ibd_attempts_mutex;
+    std::condition_variable m_ibd_attempts_cv;
+    //! IBD connections picked and not opened yet.
+    std::deque<IBDConnectionAttempt> m_ibd_attempts GUARDED_BY(m_ibd_attempts_mutex);
+    //! The addresses of the IBD connections picked whose attempt has not finished: they count as connected when
+    //! picking more.
+    std::vector<CAddress> m_ibd_attempting GUARDED_BY(m_ibd_attempts_mutex);
+    bool m_ibd_attempts_stop GUARDED_BY(m_ibd_attempts_mutex){false};
 
     /**
      * A vector of -bind=<address>:<port>=onion arguments each of which is
