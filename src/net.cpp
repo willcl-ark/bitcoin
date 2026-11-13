@@ -2685,7 +2685,6 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
     auto next_feeler = start + rng.rand_exp_duration(FEELER_INTERVAL);
     auto next_extra_block_relay = start + rng.rand_exp_duration(EXTRA_BLOCK_RELAY_ONLY_PEER_INTERVAL);
     auto next_extra_network_peer{start + rng.rand_exp_duration(EXTRA_NETWORK_PEER_INTERVAL)};
-    auto next_ibd_peer{start};
     bool ibd_turn{true};
     bool ibd_burst{false};
     const bool dnsseed = gArgs.GetBoolArg("-dnsseed", DEFAULT_DNSSEED);
@@ -2777,6 +2776,7 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
         int nOutboundFullRelay = 0;
         int nOutboundBlockRelay = 0;
         int outbound_ibd = 0;
+        int ibd_attempts = 0;
         int outbound_privacy_network_peers = 0;
         std::set<std::vector<unsigned char>> outbound_ipv46_peer_netgroups;
 
@@ -2821,6 +2821,7 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
         }
         {
             LOCK(m_ibd_attempts_mutex);
+            ibd_attempts = m_ibd_attempting.size();
             for (const CAddress& address : m_ibd_attempting) {
                 ++outbound_ibd;
                 if (address.IsTor() || address.IsI2P() || address.IsCJDNS()) {
@@ -2859,19 +2860,17 @@ void CConnman::ThreadOpenConnections(const std::vector<std::string> connect, std
         // popped and then dropped by OpenNetworkConnection(), losing them for the
         // next activation and for the dump at shutdown.
         const bool have_anchors{fNetworkActive && WITH_LOCK(m_anchors_mutex, return !m_anchors.empty())};
-        // During initial block download, extra connections to download blocks from, with slots of their own: the
-        // first IBD_PEERS_AT_ONCE straight away, the rest one at a time so that the addresses learned in between
-        // are there to choose from. While outbound slots are still to be filled, they take turns with those.
+        // During initial block download, extra connections to download blocks from, with slots of their own, as
+        // fast as they can be opened. While outbound slots are still to be filled, they take turns with those.
         const bool outbound_slots_open{nOutboundFullRelay < m_max_outbound_full_relay || nOutboundBlockRelay < m_max_outbound_block_relay};
         CountingSemaphoreGrant<> ibd_grant;
         if (m_open_ibd_peers && (ibd_turn || !outbound_slots_open) &&
-            outbound_ibd < m_max_ibd_peers && (outbound_ibd < IBD_PEERS_AT_ONCE || now > next_ibd_peer)) {
+            outbound_ibd < m_max_ibd_peers && ibd_attempts < IBD_CONNECTION_ATTEMPTS) {
             ibd_grant = CountingSemaphoreGrant<>(*semIBD, /*fTry=*/true);
         }
         ibd_turn = !ibd_grant;
-        ibd_burst = ibd_grant && outbound_ibd + 1 < IBD_PEERS_AT_ONCE;
+        ibd_burst = ibd_grant && outbound_ibd + 1 < m_max_ibd_peers;
         if (ibd_grant) {
-            next_ibd_peer = now + IBD_PEER_INTERVAL;
             conn_type = ConnectionType::IBD;
             grant = std::move(ibd_grant);
         } else if (!grant) {
@@ -3807,7 +3806,7 @@ bool CConnman::Start(CScheduler& scheduler, const Options& connOptions)
             [this, connect = connOptions.m_specified_outgoing, seed_nodes = std::move(seed_nodes)] { ThreadOpenConnections(connect, seed_nodes); });
         if (connOptions.m_use_addrman_outgoing && m_max_ibd_peers > 0) {
             WITH_LOCK(m_ibd_attempts_mutex, m_ibd_attempts_stop = false);
-            for (int i{0}; i < IBD_PEERS_AT_ONCE; ++i) {
+            for (int i{0}; i < IBD_CONNECTION_ATTEMPTS; ++i) {
                 m_ibd_connection_threads.emplace_back(&util::TraceThread, strprintf("ibdcon.%d", i), [this] { ThreadOpenIBDConnections(); });
             }
         }

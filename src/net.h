@@ -83,11 +83,8 @@ inline constexpr int MAX_FEELER_CONNECTIONS = 1;
 inline constexpr size_t MAX_PRIVATE_BROADCAST_CONNECTIONS{64};
 /** Default for -maxibdpeers, the maximum number of IBD connections */
 inline constexpr int DEFAULT_MAX_IBD_PEERS{50};
-/** Time between opening IBD connections beyond the first IBD_PEERS_AT_ONCE, so that addresses learned meanwhile can be chosen from */
-inline constexpr auto IBD_PEER_INTERVAL{10s};
-/** IBD connections opened without waiting for IBD_PEER_INTERVAL: with the outbound peers, enough for a stable median
- *  block rate to judge peers by, and very likely enough fast peers to fill our own link. */
-inline constexpr int IBD_PEERS_AT_ONCE{10};
+/** IBD connection attempts in progress at once, each on a thread of its own. */
+inline constexpr int IBD_CONNECTION_ATTEMPTS{10};
 /** -listen default */
 inline constexpr bool DEFAULT_LISTEN = true;
 /** The maximum number of peer connections to maintain. */
@@ -1359,7 +1356,7 @@ public:
 
     void StartExtraBlockRelayPeers();
 
-    /** Whether to open IBD connections: IBD_PEERS_AT_ONCE straight away, then one every IBD_PEER_INTERVAL up to m_max_ibd_peers. Set by the block
+    /** Whether to open IBD connections, as fast as they can be opened up to m_max_ibd_peers. Set by the block
      *  download logic while in initial block download and our own link has room for more. */
     void SetOpenIBDPeers(bool open);
     int MaxIBDPeers() const { return m_max_ibd_peers; }
@@ -1503,7 +1500,7 @@ private:
                                  !m_unused_i2p_sessions_mutex,
                                  !m_anchors_mutex,
                                  !m_ibd_attempts_mutex);
-    /** Opens the IBD connections ThreadOpenConnections() picked, IBD_PEERS_AT_ONCE threads of it, so that attempts
+    /** Opens the IBD connections ThreadOpenConnections() picked, IBD_CONNECTION_ATTEMPTS threads of it, so that attempts
      *  that take until they time out do not hold up the others. */
     void ThreadOpenIBDConnections() EXCLUSIVE_LOCKS_REQUIRED(!m_nodes_mutex, !m_unused_i2p_sessions_mutex, !m_ibd_attempts_mutex);
 

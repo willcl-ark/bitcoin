@@ -30,18 +30,17 @@ slow peers rather than validating. These changes do three things:
 ## IBD connections
 
 - A new `ConnectionType::IBD` (`ibd` in `getpeerinfo`, `-netinfo` and the GUI).
-- While in IBD, `ThreadOpenConnections` opens the first `IBD_PEERS_AT_ONCE`
-  (10) straight away, then one every `IBD_PEER_INTERVAL` (10s), up to
-  `-maxibdpeers` (default 50). With the 8 outbound peers that gives about 18
-  download peers at once: enough for a stable median rate to judge peers by,
-  and very likely enough fast ones to fill the link. The 10s gap after that
-  lets more `addr` messages arrive between connections. IBD connections don't
-  wait for the regular outbound slots to fill; while those are still open the
-  two take turns.
+- While in IBD and the link isn't saturated, `ThreadOpenConnections` opens
+  them as fast as they can be opened, up to `-maxibdpeers` (default 50). Each
+  peer has at most 16 blocks in flight, so throughput grows with the number
+  of peers until the link is full; dropped and departed peers are replaced
+  straight away. IBD connections don't wait for the regular outbound slots to
+  fill; while those are still open the two take turns.
 - `ThreadOpenConnections` only picks the address of an IBD connection. The
-  attempt itself runs on one of 10 `ibdcon` threads, so attempts that wait to
-  time out don't hold up the others. While the first 10 are being picked, the
-  loop picks the next after 100ms rather than 500ms. Attempts in progress
+  attempt itself runs on one of `IBD_CONNECTION_ATTEMPTS` (10) `ibdcon`
+  threads, so attempts that wait to time out don't hold up the others; no
+  more are picked while 10 are in progress. While IBD connections are wanted,
+  the loop picks the next after 100ms rather than 500ms. Attempts in progress
   count as connected for the IBD count and netgroup diversity.
 - They have their own semaphore and file descriptor allowance, outside
   `-maxconnections`. They count towards netgroup diversity.
