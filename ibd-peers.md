@@ -107,7 +107,10 @@ times that, so its blocks take about `k` seconds to arrive. Fast peers hold
 most of the blocks in flight, and what a slow peer holds arrives soon, so
 slow peers keep adding bandwidth instead of holding up the tip. The limit is
 at least 4 and at most 64; an unmeasured peer gets 4, and every peer gets 16
-until a median rate is known. With small early blocks the limit is mostly 64.
+until a median rate is known. Block size is the larger of the moving average
+and the block just delivered, so the limit drops as soon as larger blocks
+arrive; blocks already in flight stay in flight, so a peer's queue only
+shrinks as it delivers. With small early blocks the limit is mostly 64.
 
 ## Hedged requests
 

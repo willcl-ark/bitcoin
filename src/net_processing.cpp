@@ -1109,6 +1109,7 @@ private:
     LinkRate m_link_rate GUARDED_BY(cs_main);
     /** Moving average of the size of the blocks delivered. */
     double m_avg_block_bytes GUARDED_BY(cs_main){0};
+    double m_last_block_bytes GUARDED_BY(cs_main){0};
     NodeClock::time_point m_next_block_download_peer_check GUARDED_BY(cs_main){};
     NodeClock::time_point m_next_block_download_summary GUARDED_BY(cs_main){};
     const CBlockIndex* m_logged_block_wait GUARDED_BY(cs_main){nullptr};
@@ -1776,6 +1777,7 @@ void PeerManagerImpl::RecordBlockDelivery(NodeId peer_id, const DataStream& recv
     ++deliveries.blocks;
     deliveries.last = received;
     m_avg_block_bytes = m_avg_block_bytes == 0 ? bytes : (1 - BLOCK_SIZE_WEIGHT) * m_avg_block_bytes + BLOCK_SIZE_WEIGHT * bytes;
+    m_last_block_bytes = bytes;
     m_link_rate.period_bytes += recv.size();
 
     LogDebug(BCLog::NET, "block %s (%d, %u bytes) from peer=%d arrived %.3fs after its request, in %.3fs; peer rate %.0f kB/s\n",
@@ -1819,7 +1821,10 @@ int PeerManagerImpl::BlocksInTransitLimit(const CNodeState& state) const
     if (!m_chainman.IsInitialBlockDownload() || !m_median_block_rate || m_avg_block_bytes == 0) return MAX_BLOCKS_IN_TRANSIT_PER_PEER;
     if (state.m_block_deliveries.blocks == 0) return MIN_IBD_BLOCKS_IN_TRANSIT_PER_PEER;
     const double rate{state.m_block_deliveries.BytesPerSecond()};
-    const double blocks{rate / *m_median_block_rate * rate * IBD_IN_TRANSIT_SECONDS / m_avg_block_bytes};
+    // Blocks grow along the chain, and blocks asked for stay in flight however much larger they turn out to be: a
+    // larger block just delivered counts at once, rather than once the average has caught up.
+    const double block_bytes{std::max(m_avg_block_bytes, m_last_block_bytes)};
+    const double blocks{rate / *m_median_block_rate * rate * IBD_IN_TRANSIT_SECONDS / block_bytes};
     return static_cast<int>(std::clamp<double>(blocks, MIN_IBD_BLOCKS_IN_TRANSIT_PER_PEER, MAX_IBD_BLOCKS_IN_TRANSIT_PER_PEER));
 }
 
