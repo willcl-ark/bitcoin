@@ -71,5 +71,21 @@ and `console.log`. Success requires exit status zero and a logged UpdateTip
 height of at least 975073. The node can process extra blocks during shutdown.
 
 WORK, CORE_SOURCE, DATADIR, BLOCKSDIR, and JOBS are environment overrides.
-For another run, choose fresh workspace/datadir/blocksdir paths; the script
+For another IBD run, choose fresh workspace/datadir/blocksdir paths; the script
 will not resume an existing run or silently time a partial sync.
+
+## Timed chainstate reindex
+
+After a successful IBD, keep both data directories and use the same binary:
+
+```bash
+cd /root
+nohup ./runner-ibd.sh reindex-chainstate > /root/pr-201-reindex-launch.log 2>&1 < /dev/null &
+```
+
+This retains the IBD parameters and adds `-reindex-chainstate -networkactive=0`.
+It rebuilds chainstate from the existing block files without peer connections.
+Timing includes startup and shutdown. The original IBD outputs remain intact;
+a new `reindex-chainstate-<UTC timestamp>-<suffix>` directory under the workspace
+contains `run-info.txt`, `debug.log`, `console.log`, `time.txt`, and `results.txt`.
+The launch log prints that directory. The height check uses this new debug log.
