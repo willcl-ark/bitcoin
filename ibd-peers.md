@@ -98,6 +98,17 @@ on a slow connection does not drop all its peers.
 The existing stall detection and block download timeout use the same path
 during IBD instead of disconnecting.
 
+## Blocks in flight per peer
+
+Outside IBD a peer may have 16 blocks in flight. During IBD the limit follows
+its rate (`BlocksInTransitLimit`): a peer at the median rate gets as many
+blocks as it delivers in 1s, and a peer at `k` times the median gets `k²`
+times that, so its blocks take about `k` seconds to arrive. Fast peers hold
+most of the blocks in flight, and what a slow peer holds arrives soon, so
+slow peers keep adding bandwidth instead of holding up the tip. The limit is
+at least 4 and at most 64; an unmeasured peer gets 4, and every peer gets 16
+until a median rate is known. With small early blocks the limit is mostly 64.
+
 ## Hedged requests
 
 A peer that isn't slow can still hold the next block for seconds, with other

@@ -138,6 +138,13 @@ static const unsigned int MAX_INV_SZ = 50000;
 static const unsigned int MAX_GETDATA_SZ = 1000;
 /** Number of blocks that can be requested at any given time from a single peer. */
 static const int MAX_BLOCKS_IN_TRANSIT_PER_PEER = 16;
+/** During initial block download, a peer of the median block rate has as many blocks in flight as it delivers in
+ *  this long. A faster peer has more, by its rate relative to the median squared, a slower one fewer, so that the
+ *  blocks it has in flight take this long times its relative rate to arrive: the fast peers hold most of them, and
+ *  what a slow peer holds is not long in coming. */
+static constexpr double IBD_IN_TRANSIT_SECONDS{1};
+static constexpr int MIN_IBD_BLOCKS_IN_TRANSIT_PER_PEER{4};
+static constexpr int MAX_IBD_BLOCKS_IN_TRANSIT_PER_PEER{64};
 /** Default time during which a peer must stall block download progress before being disconnected.
  * the actual timeout is increased temporarily if peers are disconnected for hitting the timeout */
 static constexpr auto BLOCK_STALLING_TIMEOUT_DEFAULT{2s};
@@ -1077,6 +1084,8 @@ private:
     /** The median block rate of the peers that have delivered blocks and are still asked for them; none while
      *  fewer than MIN_PEERS_FOR_MEDIAN_BLOCK_RATE have. */
     std::optional<double> MedianBlockRate() const EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    /** How many blocks may be in flight from a peer at once (see IBD_IN_TRANSIT_SECONDS). */
+    int BlocksInTransitLimit(const CNodeState& state) const EXCLUSIVE_LOCKS_REQUIRED(cs_main);
     void LogBlockDownloadSummary(bool saturated) const EXCLUSIVE_LOCKS_REQUIRED(cs_main);
     /**
      * During initial block download, find the peer holding up block download: the one with the lowest block
@@ -1103,6 +1112,8 @@ private:
     NodeClock::time_point m_next_block_download_peer_check GUARDED_BY(cs_main){};
     NodeClock::time_point m_next_block_download_summary GUARDED_BY(cs_main){};
     const CBlockIndex* m_logged_block_wait GUARDED_BY(cs_main){nullptr};
+    //! MedianBlockRate() as of the last CheckBlockDownloadPeers() during initial block download.
+    std::optional<double> m_median_block_rate GUARDED_BY(cs_main);
     uint64_t m_blocks_hedged GUARDED_BY(cs_main){0};
 
     /** Request blocks for the background chainstate, if one is in use. */
@@ -1803,6 +1814,15 @@ std::optional<double> PeerManagerImpl::MedianBlockRate() const
     return *median;
 }
 
+int PeerManagerImpl::BlocksInTransitLimit(const CNodeState& state) const
+{
+    if (!m_chainman.IsInitialBlockDownload() || !m_median_block_rate || m_avg_block_bytes == 0) return MAX_BLOCKS_IN_TRANSIT_PER_PEER;
+    if (state.m_block_deliveries.blocks == 0) return MIN_IBD_BLOCKS_IN_TRANSIT_PER_PEER;
+    const double rate{state.m_block_deliveries.BytesPerSecond()};
+    const double blocks{rate / *m_median_block_rate * rate * IBD_IN_TRANSIT_SECONDS / m_avg_block_bytes};
+    return static_cast<int>(std::clamp<double>(blocks, MIN_IBD_BLOCKS_IN_TRANSIT_PER_PEER, MAX_IBD_BLOCKS_IN_TRANSIT_PER_PEER));
+}
+
 void PeerManagerImpl::LogBlockDownloadSummary(bool saturated) const
 {
     int ibd_peers{0};
@@ -1841,6 +1861,7 @@ void PeerManagerImpl::CheckBlockDownloadPeers(NodeClock::time_point now)
         LogBlockDownloadSummary(saturated);
     }
     if (!ibd) return;
+    m_median_block_rate = MedianBlockRate();
 
     // The lowest block still being sent is the one validation will wait for first.
     const QueuedBlock* lowest{nullptr};
@@ -1858,7 +1879,7 @@ void PeerManagerImpl::CheckBlockDownloadPeers(NodeClock::time_point now)
     if (!lowest) return;
 
     CNodeState& state{*Assert(State(holder))};
-    const auto median{MedianBlockRate()};
+    const auto median{m_median_block_rate};
     if (now - lowest->requested >= LOGGED_BLOCK_WAIT && lowest->pindex != m_logged_block_wait) {
         m_logged_block_wait = lowest->pindex;
         LogInfo("Block download waits for block %d (tip+%d) from peer=%d: requested %.1fs ago, %u blocks in flight from it, peer rate %.0f kB/s, median %s",
@@ -1894,7 +1915,7 @@ void PeerManagerImpl::CheckBlockDownloadPeers(NodeClock::time_point now)
         if (current_time < candidate.m_block_download_paused_until) continue;
         if (!candidate.pindexBestKnownBlock || candidate.pindexBestKnownBlock->GetAncestor(lowest->pindex->nHeight) != lowest->pindex) continue;
         const auto on_the_wire{std::ranges::count_if(candidate.vBlocksInFlight, [](const QueuedBlock& block) { return !block.with_pool; })};
-        if (on_the_wire >= MAX_BLOCKS_IN_TRANSIT_PER_PEER) continue;
+        if (on_the_wire >= BlocksInTransitLimit(candidate)) continue;
         const double delivery{(on_the_wire + 1) * m_avg_block_bytes / candidate.m_block_deliveries.BytesPerSecond()};
         if (delivery < soonest) {
             soonest = delivery;
@@ -7071,9 +7092,9 @@ bool PeerManagerImpl::SendMessages(CNode& node)
                                                 !(state.m_slow_in_ibd && m_chainman.IsInitialBlockDownload())};
         // Blocks the peer still has to send: a block that arrived and is with the connect pool keeps its
         // request until it is stored, and is not one of them.
-        auto get_inflight_budget = [&state]() {
+        auto get_inflight_budget = [&]() EXCLUSIVE_LOCKS_REQUIRED(cs_main) {
             const auto on_the_wire{std::ranges::count_if(state.vBlocksInFlight, [](const QueuedBlock& block) { return !block.with_pool; })};
-            return std::max(0, MAX_BLOCKS_IN_TRANSIT_PER_PEER - static_cast<int>(on_the_wire));
+            return std::max(0, BlocksInTransitLimit(state) - static_cast<int>(on_the_wire));
         };
         if (const CBlockIndex* hedged{std::exchange(state.m_hedged_block, nullptr)};
             hedged && can_request_blocks_from_peer && IsBlockRequested(hedged->GetBlockHash()) && !(hedged->nStatus & BLOCK_HAVE_DATA) &&
