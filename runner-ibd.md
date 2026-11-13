@@ -10,10 +10,10 @@ never removes benchmark data. It reports free space but does not enforce a
 space budget. Pruning is disabled; monitor available space during the run.
 
 The local source snapshot is `/home/will/.cache/pr-201-ibd/pr-201.bundle`, containing commit
-`31212f380cf32fe7dbe2f8ff92ab24a949f928bd`. Copy it alongside the script on the runner. Regenerating the same snapshot:
+`b69da387dbf86e5ef8564b1cdc5055dbc3c05874`. Copy it alongside the script on the runner. Regenerating the same snapshot:
 
 ```bash
-git update-ref refs/benchmarks/pr-201-peer-run 31212f380cf32fe7dbe2f8ff92ab24a949f928bd
+git update-ref refs/benchmarks/pr-201-peer-run b69da387dbf86e5ef8564b1cdc5055dbc3c05874
 git bundle create /home/will/.cache/pr-201-ibd/pr-201.bundle refs/benchmarks/pr-201-peer-run
 ```
 
@@ -89,7 +89,7 @@ a new `reindex-chainstate-<UTC timestamp>-<suffix>` directory under the workspac
 contains `run-info.txt`, `debug.log`, `console.log`, `time.txt`, and `results.txt`.
 The launch log prints that directory. The height check uses this new debug log.
 
-The peering comparison uses local branch snapshot `31212f380cf`, including its
+The peering comparison uses local branch snapshot `b69da387dbf`, including its
 4 GiB block-cache default and IBD peer changes. The baseline IBD outputs are
 archived remotely in `ibd-eb76028a6dd-20261113T094027Z/` under the workspace;
 the baseline offline reindex keeps its existing separate results directory.
