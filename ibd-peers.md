@@ -129,6 +129,10 @@ during IBD instead of disconnecting.
 - `getpeerinfo` shows connection type `ibd` for IBD peers.
 - `-debug=net` logs each block delivery. Every peer dropped from block
   download is logged with the reason, without needing `-debug`.
+- Whenever the lowest block in flight was requested more than 2s ago, an info
+  line names it, how far above the tip it is, the peer holding it, how many
+  blocks that peer has in flight, its rate and the median rate. It is logged
+  once per block.
 - The shutdown log reports block cache hits and misses
   (`Block cache: N blocks connected from it, M not in it`) and the number of
   blocks prefetched.

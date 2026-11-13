@@ -164,6 +164,8 @@ static const unsigned int IBD_BLOCK_DOWNLOAD_WINDOW = 4096;
 static constexpr auto BLOCK_DOWNLOAD_PEER_CHECK_INTERVAL{250ms};
 /** How often the state of block download is logged during initial block download. */
 static constexpr auto BLOCK_DOWNLOAD_SUMMARY_INTERVAL{60s};
+/** During initial block download, the lowest block in flight is logged once it has been requested this long ago. */
+static constexpr auto LOGGED_BLOCK_WAIT{2s};
 /** Period over which the rate of block bytes received from all peers together is measured. */
 static constexpr auto LINK_RATE_PERIOD{10s};
 /** Our own link is taken as saturated while the rate of block bytes received is at least this fraction of the
@@ -1091,6 +1093,7 @@ private:
     double m_avg_block_bytes GUARDED_BY(cs_main){0};
     NodeClock::time_point m_next_block_download_peer_check GUARDED_BY(cs_main){};
     NodeClock::time_point m_next_block_download_summary GUARDED_BY(cs_main){};
+    const CBlockIndex* m_logged_block_wait GUARDED_BY(cs_main){nullptr};
 
     /** Request blocks for the background chainstate, if one is in use. */
     void TryDownloadingHistoricalBlocks(const Peer& peer, unsigned int count, std::vector<const CBlockIndex*>& vBlocks, const CBlockIndex* from_tip, const CBlockIndex* target_block) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
@@ -1826,10 +1829,6 @@ void PeerManagerImpl::CheckBlockDownloadPeers(NodeClock::time_point now)
     }
     if (!ibd) return;
 
-    const auto median{MedianBlockRate()};
-    if (!median) return;
-    const double median_rate{*median};
-
     // The lowest block still being sent is the one validation will wait for first.
     const QueuedBlock* lowest{nullptr};
     NodeId holder{-1};
@@ -1844,6 +1843,17 @@ void PeerManagerImpl::CheckBlockDownloadPeers(NodeClock::time_point now)
     if (!lowest) return;
 
     CNodeState& state{*Assert(State(holder))};
+    const auto median{MedianBlockRate()};
+    if (now - lowest->requested >= LOGGED_BLOCK_WAIT && lowest->pindex != m_logged_block_wait) {
+        m_logged_block_wait = lowest->pindex;
+        LogInfo("Block download waits for block %d (tip+%d) from peer=%d: requested %.1fs ago, %u blocks in flight from it, peer rate %.0f kB/s, median %s",
+                lowest->pindex->nHeight, lowest->pindex->nHeight - m_chainman.ActiveHeight(), holder,
+                Ticks<SecondsDouble>(now - lowest->requested), state.vBlocksInFlight.size(),
+                state.m_block_deliveries.bytes_per_second / 1000, median ? strprintf("%.0f kB/s", *median / 1000) : "-");
+    }
+
+    if (!median) return;
+    const double median_rate{*median};
     const double waited{Ticks<SecondsDouble>(now - std::max(lowest->requested, state.m_block_deliveries.last))};
     const double late{std::max(MIN_LATE_BLOCK_SECONDS, LATE_BLOCK_FACTOR * m_avg_block_bytes / median_rate)};
     if (waited < late || state.m_block_deliveries.bytes_per_second >= SLOW_PEER_BLOCK_RATE_FRACTION * median_rate) return;
