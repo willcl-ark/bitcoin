@@ -18,3 +18,16 @@ P2P and network changes
   instead of disconnecting them. Peers are judged against each other, not
   against fixed limits, and not at all while the node's own connection is
   saturated, so nodes on slow connections are not affected.
+
+Updated settings
+----------------
+
+- `-blockcache` now defaults to 4096 MiB (512 MiB on 32-bit platforms).
+  During initial block download blocks are only requested as far ahead of
+  the tip as the cache can hold, so that they are connected from memory
+  rather than read back from disk. Once initial block download ends the
+  cache is cut to at most 128 MiB.
+
+- During initial block download, blocks that are stored but not in the
+  block cache (for example after a restart, or during a reindex) are read
+  into it ahead of validation by a prefetcher thread.
