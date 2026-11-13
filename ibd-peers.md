@@ -158,6 +158,11 @@ rate is not below a third of the median:
   line names it, how far above the tip it is, the peer holding it, how many
   blocks that peer has in flight, its rate and the median rate. It is logged
   once per block.
+- When an IBD connection goes away, an info line gives how long it lasted,
+  why (`holding up block download`, `stalling block download`, a block
+  download timeout, `initial block download finished`, or `not by block
+  download`: closed by the peer, timed out, or another reason), how many
+  blocks and MB it delivered, and its rate.
 - The shutdown log reports block cache hits and misses
   (`Block cache: N blocks connected from it, M not in it`) and the number of
   blocks prefetched.

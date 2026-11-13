@@ -265,6 +265,7 @@ struct BlockDeliveries {
      *  blocks in bursts after long pauses is not taken to be as fast as its bursts. */
     double bytes{0};
     double seconds{0};
+    uint64_t total_bytes{0};
     NodeClock::time_point last{};
     double BytesPerSecond() const { return seconds > 0 ? bytes / seconds : 0; }
 };
@@ -512,6 +513,8 @@ struct CNodeState {
     //! The peer was too slow to serve blocks: it is not asked for blocks again until initial block download ends.
     bool m_slow_in_ibd{false};
     bool m_ibd_conn{false};
+    //! Why block download disconnected this IBD connection, if it did.
+    std::string m_ibd_disconnect_reason;
     //! The peer holds the block initial block download waits for and is slow (see CheckBlockDownloadPeers()).
     bool m_holding_up_download{false};
     //! A block held up at another peer, to be asked for from this one as well (see CheckBlockDownloadPeers()).
@@ -1758,6 +1761,7 @@ void PeerManagerImpl::RecordBlockDelivery(NodeId peer_id, const DataStream& recv
     const double weight{deliveries.blocks == 0 ? 1 : BLOCK_RATE_WEIGHT};
     deliveries.bytes = (1 - weight) * deliveries.bytes + weight * bytes;
     deliveries.seconds = (1 - weight) * deliveries.seconds + weight * seconds;
+    deliveries.total_bytes += recv.size();
     ++deliveries.blocks;
     deliveries.last = received;
     m_avg_block_bytes = m_avg_block_bytes == 0 ? bytes : (1 - BLOCK_SIZE_WEIGHT) * m_avg_block_bytes + BLOCK_SIZE_WEIGHT * bytes;
@@ -1907,6 +1911,7 @@ void PeerManagerImpl::StopBlockDownloadFrom(CNode& node, CNodeState& state, std:
 {
     if (node.IsIBDConn()) {
         LogInfo("IBD peer is %s, %s", reason, node.DisconnectMsg());
+        state.m_ibd_disconnect_reason = reason;
         m_connman.AddSlowIBDPeer(node.addr);
         node.fDisconnect = true;
         return;
@@ -2147,6 +2152,16 @@ void PeerManagerImpl::FinalizeNode(const CNode& node)
     }
     CNodeState *state = State(nodeid);
     assert(state != nullptr);
+
+    if (state->m_ibd_conn) {
+        // An IBD connection that block download did not disconnect was closed by the peer, timed out, or was
+        // disconnected for another reason, such as misbehaviour.
+        const BlockDeliveries& deliveries{state->m_block_deliveries};
+        LogInfo("IBD peer=%d gone after %ds (%s): %u blocks, %.1f MB delivered, rate %.0f kB/s",
+                nodeid, count_seconds(std::chrono::duration_cast<std::chrono::seconds>(NodeClock::now() - node.m_connected)),
+                state->m_ibd_disconnect_reason.empty() ? "not by block download" : state->m_ibd_disconnect_reason,
+                deliveries.blocks, deliveries.total_bytes / 1e6, deliveries.BytesPerSecond() / 1000);
+    }
 
     if (state->fSyncStarted)
         nSyncStarted--;
@@ -6608,6 +6623,7 @@ bool PeerManagerImpl::SendMessages(CNode& node)
 
     if (node.IsIBDConn() && !m_chainman.IsInitialBlockDownload()) {
         LogDebug(BCLog::NET, "initial block download finished, %s", node.DisconnectMsg());
+        WITH_LOCK(cs_main, State(node.GetId())->m_ibd_disconnect_reason = "initial block download finished");
         node.fDisconnect = true;
         return true;
     }
