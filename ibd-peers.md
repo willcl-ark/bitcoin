@@ -118,8 +118,9 @@ rate is not below a third of the median:
 
 - It is also requested from the peer expected to deliver it soonest: the
   lowest `(blocks on the wire + 1) × average block size / rate` among peers
-  that have the block, have delivered blocks, aren't barred or paused, and
-  have room for another request.
+  that have the block, have delivered blocks, and aren't barred or paused.
+  The request may take a peer one block over its in-flight limit, since peers
+  fill up to their limits and none would otherwise have room.
 - The first copy to arrive is used, and both requests are cleared once it's
   stored. A block is requested from at most two peers this way, and a peer
   has at most one such request waiting to be sent.

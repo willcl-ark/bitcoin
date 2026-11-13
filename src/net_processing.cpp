@@ -1915,7 +1915,8 @@ void PeerManagerImpl::CheckBlockDownloadPeers(NodeClock::time_point now)
         if (current_time < candidate.m_block_download_paused_until) continue;
         if (!candidate.pindexBestKnownBlock || candidate.pindexBestKnownBlock->GetAncestor(lowest->pindex->nHeight) != lowest->pindex) continue;
         const auto on_the_wire{std::ranges::count_if(candidate.vBlocksInFlight, [](const QueuedBlock& block) { return !block.with_pool; })};
-        if (on_the_wire >= BlocksInTransitLimit(candidate)) continue;
+        // One block over its limit: peers fill up to theirs, which would leave none to ask.
+        if (on_the_wire > BlocksInTransitLimit(candidate)) continue;
         const double delivery{(on_the_wire + 1) * m_avg_block_bytes / candidate.m_block_deliveries.BytesPerSecond()};
         if (delivery < soonest) {
             soonest = delivery;
