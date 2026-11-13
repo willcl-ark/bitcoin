@@ -1634,6 +1634,7 @@ public:
     void StartPrefetcher() EXCLUSIVE_LOCKS_REQUIRED(!m_prefetch_mutex);
     //! Stop the prefetcher thread and wait for it. Called at shutdown and, idempotently, by the destructor.
     void StopPrefetcher() EXCLUSIVE_LOCKS_REQUIRED(!m_prefetch_mutex);
+    uint64_t BlocksPrefetched() const { return m_blocks_prefetched.load(); }
 
     /**
      * Process incoming block headers.

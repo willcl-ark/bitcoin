@@ -162,6 +162,8 @@ static const unsigned int BLOCK_DOWNLOAD_WINDOW = 1024;
 static const unsigned int IBD_BLOCK_DOWNLOAD_WINDOW = 4096;
 /** How often the peers we download blocks from are checked for one holding up initial block download. */
 static constexpr auto BLOCK_DOWNLOAD_PEER_CHECK_INTERVAL{250ms};
+/** How often the state of block download is logged during initial block download. */
+static constexpr auto BLOCK_DOWNLOAD_SUMMARY_INTERVAL{60s};
 /** Period over which the rate of block bytes received from all peers together is measured. */
 static constexpr auto LINK_RATE_PERIOD{10s};
 /** Our own link is taken as saturated while the rate of block bytes received is at least this fraction of the
@@ -503,6 +505,7 @@ struct CNodeState {
     std::chrono::microseconds m_block_download_paused_until{0us};
     //! The peer was too slow to serve blocks: it is not asked for blocks again until initial block download ends.
     bool m_slow_in_ibd{false};
+    bool m_ibd_conn{false};
     //! The peer holds the block initial block download waits for and is slow (see CheckBlockDownloadPeers()).
     bool m_holding_up_download{false};
     BlockDeliveries m_block_deliveries;
@@ -1060,6 +1063,10 @@ private:
     void RecordBlockDelivery(NodeId peer, const DataStream& recv, NodeClock::time_point received);
     void UpdateLinkRate(NodeClock::time_point now) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
     bool LinkSaturated(NodeClock::time_point now) const EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    /** The median block rate of the peers that have delivered blocks and are still asked for them; none while
+     *  fewer than MIN_PEERS_FOR_MEDIAN_BLOCK_RATE have. */
+    std::optional<double> MedianBlockRate() const EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    void LogBlockDownloadSummary(bool saturated) const EXCLUSIVE_LOCKS_REQUIRED(cs_main);
     /**
      * During initial block download, find the peer holding up block download: the one with the lowest block
      * still being sent, when that block is late and the peer serves blocks slowly compared to the others. Both
@@ -1084,6 +1091,7 @@ private:
     /** Moving average of the size of the blocks delivered. */
     double m_avg_block_bytes GUARDED_BY(cs_main){0};
     NodeClock::time_point m_next_block_download_peer_check GUARDED_BY(cs_main){};
+    NodeClock::time_point m_next_block_download_summary GUARDED_BY(cs_main){};
 
     /** Request blocks for the background chainstate, if one is in use. */
     void TryDownloadingHistoricalBlocks(const Peer& peer, unsigned int count, std::vector<const CBlockIndex*>& vBlocks, const CBlockIndex* from_tip, const CBlockIndex* target_block) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
@@ -1769,6 +1777,40 @@ bool PeerManagerImpl::LinkSaturated(NodeClock::time_point now) const
            now - m_link_rate.peak_rose >= LINK_RATE_PLATEAU;
 }
 
+std::optional<double> PeerManagerImpl::MedianBlockRate() const
+{
+    std::vector<double> rates;
+    for (const auto& [_, state] : m_node_states) {
+        if (state.m_block_deliveries.blocks > 0 && !state.m_slow_in_ibd) rates.push_back(state.m_block_deliveries.bytes_per_second);
+    }
+    if (rates.size() < MIN_PEERS_FOR_MEDIAN_BLOCK_RATE) return std::nullopt;
+    const auto median{rates.begin() + rates.size() / 2};
+    std::ranges::nth_element(rates, median);
+    return *median;
+}
+
+void PeerManagerImpl::LogBlockDownloadSummary(bool saturated) const
+{
+    int ibd_peers{0};
+    int barred{0};
+    for (const auto& [_, state] : m_node_states) {
+        ibd_peers += state.m_ibd_conn;
+        barred += state.m_slow_in_ibd;
+    }
+    const auto median{MedianBlockRate()};
+    const auto horizon{BlockCacheHorizon()};
+    const int tip{m_chainman.ActiveHeight()};
+    const node::BlockCache& cache{m_chainman.m_block_cache};
+    LogInfo("Block download: tip %d, ibd peers %d/%d (%u dropped), peers barred %d, in flight %u, "
+            "link %.1f MB/s (peak %.1f%s), median peer %s, cache %u/%u MiB %u blocks, horizon %s, prefetched %u",
+            tip, ibd_peers, m_connman.MaxIBDPeers(), m_connman.SlowIBDPeerCount(), barred, mapBlocksInFlight.size(),
+            m_link_rate.bytes_per_second / 1e6, m_link_rate.peak / 1e6, saturated ? ", saturated" : "",
+            median ? strprintf("%.0f kB/s", *median / 1000) : "-",
+            cache.Bytes() / 1_MiB, cache.Budget() / 1_MiB, cache.Count(),
+            horizon ? strprintf("tip+%d", *horizon - tip) : "-",
+            m_chainman.BlocksPrefetched());
+}
+
 void PeerManagerImpl::CheckBlockDownloadPeers(NodeClock::time_point now)
 {
     if (now < m_next_block_download_peer_check) return;
@@ -1779,15 +1821,14 @@ void PeerManagerImpl::CheckBlockDownloadPeers(NodeClock::time_point now)
     const bool saturated{LinkSaturated(now)};
     // Blocks have started to arrive and our link could take more of them.
     m_connman.SetOpenIBDPeers(ibd && m_link_rate.peak > 0 && !saturated);
+    if (ibd && now >= m_next_block_download_summary) {
+        m_next_block_download_summary = now + BLOCK_DOWNLOAD_SUMMARY_INTERVAL;
+        LogBlockDownloadSummary(saturated);
+    }
     if (!ibd || saturated) return;
 
-    std::vector<double> rates;
-    for (const auto& [_, state] : m_node_states) {
-        if (state.m_block_deliveries.blocks > 0 && !state.m_slow_in_ibd) rates.push_back(state.m_block_deliveries.bytes_per_second);
-    }
-    if (rates.size() < MIN_PEERS_FOR_MEDIAN_BLOCK_RATE) return;
-    const auto median{rates.begin() + rates.size() / 2};
-    std::ranges::nth_element(rates, median);
+    const auto median{MedianBlockRate()};
+    if (!median) return;
     const double median_rate{*median};
 
     // The lowest block still being sent is the one validation will wait for first.
@@ -1973,7 +2014,7 @@ void PeerManagerImpl::InitializeNode(const CNode& node, ServiceFlags our_service
     NodeId nodeid = node.GetId();
     {
         LOCK(cs_main); // For m_node_states
-        m_node_states.try_emplace(m_node_states.end(), nodeid);
+        m_node_states.try_emplace(m_node_states.end(), nodeid)->second.m_ibd_conn = node.IsIBDConn();
     }
     WITH_LOCK(m_tx_download_mutex, m_txdownloadman.CheckIsEmpty(nodeid));
 

@@ -1362,6 +1362,7 @@ public:
     int MaxIBDPeers() const { return m_max_ibd_peers; }
     /** Do not open an IBD connection to `addr` again: it was too slow to serve blocks. */
     void AddSlowIBDPeer(const CNetAddr& addr) EXCLUSIVE_LOCKS_REQUIRED(!m_slow_ibd_peers_mutex);
+    size_t SlowIBDPeerCount() const EXCLUSIVE_LOCKS_REQUIRED(!m_slow_ibd_peers_mutex) { return WITH_LOCK(m_slow_ibd_peers_mutex, return m_slow_ibd_peers.size()); }
 
     // Count the number of full-relay peer we have.
     int GetFullOutboundConnCount() const EXCLUSIVE_LOCKS_REQUIRED(!m_nodes_mutex);
@@ -1824,7 +1825,7 @@ private:
     std::atomic_bool m_start_extra_block_relay_peers{false};
 
     std::atomic_bool m_open_ibd_peers{false};
-    Mutex m_slow_ibd_peers_mutex;
+    mutable Mutex m_slow_ibd_peers_mutex;
     std::set<CNetAddr> m_slow_ibd_peers GUARDED_BY(m_slow_ibd_peers_mutex);
 
     /**
