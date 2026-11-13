@@ -156,8 +156,28 @@ static_assert(MAX_BLOCKTXN_DEPTH <= MIN_BLOCKS_TO_KEEP, "MAX_BLOCKTXN_DEPTH too 
  *  degree of disordering of blocks on disk (which make reindexing and pruning harder). We'll probably
  *  want to make this a per-peer adaptive value at some point. */
 static const unsigned int BLOCK_DOWNLOAD_WINDOW = 1024;
+/** How often the peers we download blocks from are checked for one holding up initial block download. */
+static constexpr auto BLOCK_DOWNLOAD_PEER_CHECK_INTERVAL{250ms};
+/** Period over which the rate of block bytes received from all peers together is measured. */
+static constexpr auto LINK_RATE_PERIOD{10s};
+/** Our own link is taken as saturated while the rate of block bytes received is at least this fraction of the
+ *  highest rate seen, and that highest rate has not grown by LINK_RATE_GROWTH for LINK_RATE_PLATEAU. Then
+ *  more peers would only share the same bandwidth, and slow deliveries are our own link's doing. */
+static constexpr double LINK_SATURATED_FRACTION{0.85};
+static constexpr double LINK_RATE_GROWTH{1.05};
+static constexpr auto LINK_RATE_PLATEAU{60s};
 /** Weight of a block's delivery in a peer's block rate. */
 static constexpr double BLOCK_RATE_WEIGHT{0.2};
+/** Weight of a block's size in the average size of a block. */
+static constexpr double BLOCK_SIZE_WEIGHT{0.1};
+/** Peers that must have delivered blocks for their median rate to judge one of them by. */
+static constexpr size_t MIN_PEERS_FOR_MEDIAN_BLOCK_RATE{3};
+/** A peer serves blocks slowly when its rate is below this fraction of the median peer's. */
+static constexpr double SLOW_PEER_BLOCK_RATE_FRACTION{1.0 / 3};
+/** A block is late once it takes this many times what the median peer takes for a block of average size... */
+static constexpr double LATE_BLOCK_FACTOR{3};
+/** ...and at least this long. */
+static constexpr double MIN_LATE_BLOCK_SECONDS{1};
 /** Block download timeout base, expressed in multiples of the block interval (i.e. 10 min) */
 static constexpr double BLOCK_DOWNLOAD_TIMEOUT_BASE = 1;
 /** Additional block download timeout per parallel downloading peer (i.e. 5 min) */
@@ -477,6 +497,10 @@ struct CNodeState {
     std::chrono::microseconds m_downloading_since{0us};
     //! Time before which block requests should not be sent to this peer.
     std::chrono::microseconds m_block_download_paused_until{0us};
+    //! The peer was too slow to serve blocks: it is not asked for blocks again until initial block download ends.
+    bool m_slow_in_ibd{false};
+    //! The peer holds the block initial block download waits for and is slow (see CheckBlockDownloadPeers()).
+    bool m_holding_up_download{false};
     BlockDeliveries m_block_deliveries;
     //! Whether we consider this a preferred download peer.
     bool fPreferredDownload{false};
@@ -1026,6 +1050,32 @@ private:
 
     /** Record the delivery of a block a peer was asked for, from the bytes of its `block` message. */
     void RecordBlockDelivery(NodeId peer, const DataStream& recv, NodeClock::time_point received);
+    void UpdateLinkRate(NodeClock::time_point now) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    bool LinkSaturated(NodeClock::time_point now) const EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    /**
+     * During initial block download, find the peer holding up block download: the one with the lowest block
+     * still being sent, when that block is late and the peer serves blocks slowly compared to the others. Both
+     * are measured against the median peer, and nothing is judged while our own link is saturated, so that a
+     * node on a slow connection does not blame its peers for it. Also asks for IBD connections while the
+     * link has room for more.
+     */
+    void CheckBlockDownloadPeers(NodeClock::time_point now) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    /** During initial block download, stop downloading blocks from a peer that is too slow: an IBD connection is
+     *  replaced, any other peer is not asked for blocks again until initial block download ends. */
+    void StopBlockDownloadFrom(CNode& node, CNodeState& state, std::chrono::microseconds current_time, std::string_view reason) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+
+    /** The rate of block bytes received from all peers together. */
+    struct LinkRate {
+        NodeClock::time_point period_start{};
+        uint64_t period_bytes{0};
+        double bytes_per_second{0};
+        double peak{0};
+        NodeClock::time_point peak_rose{};
+    };
+    LinkRate m_link_rate GUARDED_BY(cs_main);
+    /** Moving average of the size of the blocks delivered. */
+    double m_avg_block_bytes GUARDED_BY(cs_main){0};
+    NodeClock::time_point m_next_block_download_peer_check GUARDED_BY(cs_main){};
 
     /** Request blocks for the background chainstate, if one is in use. */
     void TryDownloadingHistoricalBlocks(const Peer& peer, unsigned int count, std::vector<const CBlockIndex*>& vBlocks, const CBlockIndex* from_tip, const CBlockIndex* target_block) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
@@ -1672,10 +1722,99 @@ void PeerManagerImpl::RecordBlockDelivery(NodeId peer_id, const DataStream& recv
                                                          : (1 - BLOCK_RATE_WEIGHT) * deliveries.bytes_per_second + BLOCK_RATE_WEIGHT * bytes / seconds;
     ++deliveries.blocks;
     deliveries.last = received;
+    m_avg_block_bytes = m_avg_block_bytes == 0 ? bytes : (1 - BLOCK_SIZE_WEIGHT) * m_avg_block_bytes + BLOCK_SIZE_WEIGHT * bytes;
+    m_link_rate.period_bytes += recv.size();
 
     LogDebug(BCLog::NET, "block %s (%d, %u bytes) from peer=%d arrived %.3fs after its request, in %.3fs; peer rate %.0f kB/s\n",
              hash.ToString(), queued->pindex->nHeight, recv.size(), peer_id,
              Ticks<SecondsDouble>(received - queued->requested), seconds, deliveries.bytes_per_second / 1000);
+}
+
+void PeerManagerImpl::UpdateLinkRate(NodeClock::time_point now)
+{
+    const auto elapsed{now - m_link_rate.period_start};
+    if (elapsed < LINK_RATE_PERIOD) return;
+    m_link_rate.bytes_per_second = m_link_rate.period_bytes / Ticks<SecondsDouble>(elapsed);
+    if (m_link_rate.bytes_per_second > m_link_rate.peak * LINK_RATE_GROWTH) {
+        m_link_rate.peak_rose = now;
+    }
+    m_link_rate.peak = std::max(m_link_rate.peak, m_link_rate.bytes_per_second);
+    m_link_rate.period_start = now;
+    m_link_rate.period_bytes = 0;
+}
+
+bool PeerManagerImpl::LinkSaturated(NodeClock::time_point now) const
+{
+    return m_link_rate.bytes_per_second >= LINK_SATURATED_FRACTION * m_link_rate.peak &&
+           now - m_link_rate.peak_rose >= LINK_RATE_PLATEAU;
+}
+
+void PeerManagerImpl::CheckBlockDownloadPeers(NodeClock::time_point now)
+{
+    if (now < m_next_block_download_peer_check) return;
+    m_next_block_download_peer_check = now + BLOCK_DOWNLOAD_PEER_CHECK_INTERVAL;
+
+    UpdateLinkRate(now);
+    const bool ibd{m_chainman.IsInitialBlockDownload()};
+    const bool saturated{LinkSaturated(now)};
+    // Blocks have started to arrive and our link could take more of them.
+    m_connman.SetOpenIBDPeers(ibd && m_link_rate.peak > 0 && !saturated);
+    if (!ibd || saturated) return;
+
+    std::vector<double> rates;
+    for (const auto& [_, state] : m_node_states) {
+        if (state.m_block_deliveries.blocks > 0 && !state.m_slow_in_ibd) rates.push_back(state.m_block_deliveries.bytes_per_second);
+    }
+    if (rates.size() < MIN_PEERS_FOR_MEDIAN_BLOCK_RATE) return;
+    const auto median{rates.begin() + rates.size() / 2};
+    std::ranges::nth_element(rates, median);
+    const double median_rate{*median};
+
+    // The lowest block still being sent is the one validation will wait for first.
+    const QueuedBlock* lowest{nullptr};
+    NodeId holder{-1};
+    for (const auto& [_, in_flight] : mapBlocksInFlight) {
+        const auto& [id, queued]{in_flight};
+        if (queued->with_pool) continue;
+        if (!lowest || queued->pindex->nHeight < lowest->pindex->nHeight) {
+            lowest = &*queued;
+            holder = id;
+        }
+    }
+    if (!lowest) return;
+
+    CNodeState& state{*Assert(State(holder))};
+    const double waited{Ticks<SecondsDouble>(now - std::max(lowest->requested, state.m_block_deliveries.last))};
+    const double late{std::max(MIN_LATE_BLOCK_SECONDS, LATE_BLOCK_FACTOR * m_avg_block_bytes / median_rate)};
+    if (waited < late || state.m_block_deliveries.bytes_per_second >= SLOW_PEER_BLOCK_RATE_FRACTION * median_rate) return;
+
+    LogDebug(BCLog::NET, "peer=%d holds up block download: block %d waited for %.3fs (late after %.3fs), peer rate %.0f kB/s, median %.0f kB/s\n",
+             holder, lowest->pindex->nHeight, waited, late, state.m_block_deliveries.bytes_per_second / 1000, median_rate / 1000);
+    state.m_holding_up_download = true;
+}
+
+void PeerManagerImpl::StopBlockDownloadFrom(CNode& node, CNodeState& state, std::chrono::microseconds current_time, std::string_view reason)
+{
+    if (node.IsIBDConn()) {
+        LogInfo("IBD peer is %s, %s", reason, node.DisconnectMsg());
+        m_connman.AddSlowIBDPeer(node.addr);
+        node.fDisconnect = true;
+        return;
+    }
+    if (m_connman.MaxIBDPeers() > 0) {
+        LogInfo("Peer is %s, not asking it for blocks again during initial block download, peer=%d", reason, node.GetId());
+        state.m_slow_in_ibd = true;
+    } else {
+        // Without IBD connections to download from instead, barring every slow peer for good could leave none.
+        LogInfo("Peer is %s, pausing block downloads from it for %d seconds, peer=%d", reason, count_seconds(MANUAL_PEER_BLOCK_DOWNLOAD_COOLDOWN), node.GetId());
+        state.m_block_download_paused_until = current_time + MANUAL_PEER_BLOCK_DOWNLOAD_COOLDOWN;
+    }
+    // The blocks it is still to send are asked for from other peers. Those with the connect pool are being stored.
+    for (auto it{state.vBlocksInFlight.begin()}; it != state.vBlocksInFlight.end();) {
+        const QueuedBlock& queued{*it++};
+        if (!queued.with_pool) RemoveBlockRequest(queued.pindex->GetBlockHash(), node.GetId());
+    }
+    state.m_stalling_since = 0us;
 }
 
 void PeerManagerImpl::FindNextBlocks(std::vector<const CBlockIndex*>& vBlocks, const Peer& peer, CNodeState *state, const CBlockIndex *pindexWalk, unsigned int count, int nWindowEnd, const CChain* activeChain, NodeId* nodeStaller)
@@ -6357,6 +6496,12 @@ bool PeerManagerImpl::SendMessages(CNode& node)
         return true;
     }
 
+    if (node.IsIBDConn() && !m_chainman.IsInitialBlockDownload()) {
+        LogDebug(BCLog::NET, "initial block download finished, %s", node.DisconnectMsg());
+        node.fDisconnect = true;
+        return true;
+    }
+
     MaybeSendPing(node, peer, now);
 
     MaybeSendAddr(node, peer, current_time);
@@ -6690,13 +6835,21 @@ bool PeerManagerImpl::SendMessages(CNode& node)
         if (!vInv.empty())
             MakeAndPushMessage(node, NetMsgType::INV, vInv);
 
+        CheckBlockDownloadPeers(now);
+        if (std::exchange(state.m_holding_up_download, false) && m_chainman.IsInitialBlockDownload()) {
+            StopBlockDownloadFrom(node, state, current_time, "holding up block download");
+            if (node.fDisconnect) return true;
+        }
+
         // Detect whether we're stalling
         auto stalling_timeout = m_block_stalling_timeout.load();
         if (state.m_stalling_since.count() && state.m_stalling_since < current_time - stalling_timeout) {
             // Stalling only triggers when the block download window cannot move. During normal steady state,
             // the download window should be much larger than the to-be-downloaded set of blocks, so disconnection
             // should only happen during initial block download.
-            if (node.IsManualConn()) {
+            if (m_chainman.IsInitialBlockDownload()) {
+                StopBlockDownloadFrom(node, state, current_time, "stalling block download");
+            } else if (node.IsManualConn()) {
                 LogInfo("Pausing block downloads from stalling manual peer=%d for %d seconds\n", node.GetId(), count_seconds(MANUAL_PEER_BLOCK_DOWNLOAD_COOLDOWN));
                 state.m_block_download_paused_until = current_time + MANUAL_PEER_BLOCK_DOWNLOAD_COOLDOWN;
                 while (!state.vBlocksInFlight.empty()) {
@@ -6723,6 +6876,10 @@ bool PeerManagerImpl::SendMessages(CNode& node)
             QueuedBlock &queuedBlock = state.vBlocksInFlight.front();
             int nOtherPeersWithValidatedDownloads = m_peers_downloading_from - 1;
             if (current_time > state.m_downloading_since + std::chrono::seconds{consensusParams.nPowTargetSpacing} * (BLOCK_DOWNLOAD_TIMEOUT_BASE + BLOCK_DOWNLOAD_TIMEOUT_PER_PEER * nOtherPeersWithValidatedDownloads)) {
+                if (m_chainman.IsInitialBlockDownload()) {
+                    StopBlockDownloadFrom(node, state, current_time, strprintf("timing out downloading block %s", queuedBlock.pindex->GetBlockHash().ToString()));
+                    return true;
+                }
                 LogInfo("Timeout downloading block %s, %s", queuedBlock.pindex->GetBlockHash().ToString(), node.DisconnectMsg());
                 node.fDisconnect = true;
                 return true;
@@ -6784,7 +6941,8 @@ bool PeerManagerImpl::SendMessages(CNode& node)
         // Message: getdata (blocks)
         //
         std::vector<CInv> vGetData;
-        const bool can_request_blocks_from_peer{current_time >= state.m_block_download_paused_until};
+        const bool can_request_blocks_from_peer{current_time >= state.m_block_download_paused_until &&
+                                                !(state.m_slow_in_ibd && m_chainman.IsInitialBlockDownload())};
         // Blocks the peer still has to send: a block that arrived and is with the connect pool keeps its
         // request until it is stored, and is not one of them.
         auto get_inflight_budget = [&state]() {
