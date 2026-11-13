@@ -31,7 +31,7 @@ slow peers rather than validating. These changes do three things:
 
 - A new `ConnectionType::IBD` (`ibd` in `getpeerinfo`, `-netinfo` and the GUI).
 - While in IBD and the link isn't saturated, `ThreadOpenConnections` opens
-  them as fast as they can be opened, up to `-maxibdpeers` (default 50). Each
+  them as fast as they can be opened, up to `-maxibdpeers` (default 10). Each
   peer has at most 16 blocks in flight, so throughput grows with the number
   of peers until the link is full; dropped and departed peers are replaced
   straight away. IBD connections don't wait for the regular outbound slots to

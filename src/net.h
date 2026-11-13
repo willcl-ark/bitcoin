@@ -82,7 +82,7 @@ inline constexpr int MAX_FEELER_CONNECTIONS = 1;
 /** Maximum number of private broadcast connections */
 inline constexpr size_t MAX_PRIVATE_BROADCAST_CONNECTIONS{64};
 /** Default for -maxibdpeers, the maximum number of IBD connections */
-inline constexpr int DEFAULT_MAX_IBD_PEERS{50};
+inline constexpr int DEFAULT_MAX_IBD_PEERS{10};
 /** IBD connection attempts in progress at once, each on a thread of its own. */
 inline constexpr int IBD_CONNECTION_ATTEMPTS{10};
 /** -listen default */
