@@ -259,10 +259,13 @@ struct QueuedBlock {
 /** How fast a peer delivers the blocks it is asked for. */
 struct BlockDeliveries {
     uint64_t blocks{0};
-    /** Block bytes per second, a moving average over the blocks delivered. A block's time is from its request, or
-     *  from the previous block's delivery when it was asked for before that, until it arrives. */
-    double bytes_per_second{0};
+    /** Moving averages of a block's bytes and of its time: from its request, or from the previous block's
+     *  delivery when it was asked for before that, until it arrives. Averaged apart, so that a peer delivering
+     *  blocks in bursts after long pauses is not taken to be as fast as its bursts. */
+    double bytes{0};
+    double seconds{0};
     NodeClock::time_point last{};
+    double BytesPerSecond() const { return seconds > 0 ? bytes / seconds : 0; }
 };
 
 /**
@@ -1748,8 +1751,9 @@ void PeerManagerImpl::RecordBlockDelivery(NodeId peer_id, const DataStream& recv
     BlockDeliveries& deliveries{state.m_block_deliveries};
     const double bytes{static_cast<double>(recv.size())};
     const double seconds{std::max(Ticks<SecondsDouble>(received - std::max(queued->requested, deliveries.last)), 0.001)};
-    deliveries.bytes_per_second = deliveries.blocks == 0 ? bytes / seconds
-                                                         : (1 - BLOCK_RATE_WEIGHT) * deliveries.bytes_per_second + BLOCK_RATE_WEIGHT * bytes / seconds;
+    const double weight{deliveries.blocks == 0 ? 1 : BLOCK_RATE_WEIGHT};
+    deliveries.bytes = (1 - weight) * deliveries.bytes + weight * bytes;
+    deliveries.seconds = (1 - weight) * deliveries.seconds + weight * seconds;
     ++deliveries.blocks;
     deliveries.last = received;
     m_avg_block_bytes = m_avg_block_bytes == 0 ? bytes : (1 - BLOCK_SIZE_WEIGHT) * m_avg_block_bytes + BLOCK_SIZE_WEIGHT * bytes;
@@ -1757,7 +1761,7 @@ void PeerManagerImpl::RecordBlockDelivery(NodeId peer_id, const DataStream& recv
 
     LogDebug(BCLog::NET, "block %s (%d, %u bytes) from peer=%d arrived %.3fs after its request, in %.3fs; peer rate %.0f kB/s\n",
              hash.ToString(), queued->pindex->nHeight, recv.size(), peer_id,
-             Ticks<SecondsDouble>(received - queued->requested), seconds, deliveries.bytes_per_second / 1000);
+             Ticks<SecondsDouble>(received - queued->requested), seconds, deliveries.BytesPerSecond() / 1000);
 }
 
 void PeerManagerImpl::UpdateLinkRate(NodeClock::time_point now)
@@ -1783,7 +1787,7 @@ std::optional<double> PeerManagerImpl::MedianBlockRate() const
 {
     std::vector<double> rates;
     for (const auto& [_, state] : m_node_states) {
-        if (state.m_block_deliveries.blocks > 0 && !state.m_slow_in_ibd) rates.push_back(state.m_block_deliveries.bytes_per_second);
+        if (state.m_block_deliveries.blocks > 0 && !state.m_slow_in_ibd) rates.push_back(state.m_block_deliveries.BytesPerSecond());
     }
     if (rates.size() < MIN_PEERS_FOR_MEDIAN_BLOCK_RATE) return std::nullopt;
     const auto median{rates.begin() + rates.size() / 2};
@@ -1850,17 +1854,17 @@ void PeerManagerImpl::CheckBlockDownloadPeers(NodeClock::time_point now)
         LogInfo("Block download waits for block %d (tip+%d) from peer=%d: requested %.1fs ago, %u blocks in flight from it, peer rate %.0f kB/s, median %s",
                 lowest->pindex->nHeight, lowest->pindex->nHeight - m_chainman.ActiveHeight(), holder,
                 Ticks<SecondsDouble>(now - lowest->requested), state.vBlocksInFlight.size(),
-                state.m_block_deliveries.bytes_per_second / 1000, median ? strprintf("%.0f kB/s", *median / 1000) : "-");
+                state.m_block_deliveries.BytesPerSecond() / 1000, median ? strprintf("%.0f kB/s", *median / 1000) : "-");
     }
 
     if (!median) return;
     const double median_rate{*median};
     const double waited{Ticks<SecondsDouble>(now - std::max(lowest->requested, state.m_block_deliveries.last))};
     const double late{std::max(MIN_LATE_BLOCK_SECONDS, LATE_BLOCK_FACTOR * m_avg_block_bytes / median_rate)};
-    if (waited < late || state.m_block_deliveries.bytes_per_second >= SLOW_PEER_BLOCK_RATE_FRACTION * median_rate) return;
+    if (waited < late || state.m_block_deliveries.BytesPerSecond() >= SLOW_PEER_BLOCK_RATE_FRACTION * median_rate) return;
 
     LogDebug(BCLog::NET, "peer=%d holds up block download: block %d waited for %.3fs (late after %.3fs), peer rate %.0f kB/s, median %.0f kB/s\n",
-             holder, lowest->pindex->nHeight, waited, late, state.m_block_deliveries.bytes_per_second / 1000, median_rate / 1000);
+             holder, lowest->pindex->nHeight, waited, late, state.m_block_deliveries.BytesPerSecond() / 1000, median_rate / 1000);
     state.m_holding_up_download = true;
 }
 
