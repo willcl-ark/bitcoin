@@ -156,6 +156,8 @@ static_assert(MAX_BLOCKTXN_DEPTH <= MIN_BLOCKS_TO_KEEP, "MAX_BLOCKTXN_DEPTH too 
  *  degree of disordering of blocks on disk (which make reindexing and pruning harder). We'll probably
  *  want to make this a per-peer adaptive value at some point. */
 static const unsigned int BLOCK_DOWNLOAD_WINDOW = 1024;
+/** Weight of a block's delivery in a peer's block rate. */
+static constexpr double BLOCK_RATE_WEIGHT{0.2};
 /** Block download timeout base, expressed in multiples of the block interval (i.e. 10 min) */
 static constexpr double BLOCK_DOWNLOAD_TIMEOUT_BASE = 1;
 /** Additional block download timeout per parallel downloading peer (i.e. 5 min) */
@@ -222,6 +224,17 @@ struct QueuedBlock {
     /** The block has arrived and is with the connect pool (see PeerManagerImpl::HandOffBlock). Its peer is no
      *  longer sending it, so it takes none of the places for blocks requested from that peer at a time. */
     bool with_pool{false};
+    /** When the block was asked for. */
+    NodeClock::time_point requested{NodeClock::now()};
+};
+
+/** How fast a peer delivers the blocks it is asked for. */
+struct BlockDeliveries {
+    uint64_t blocks{0};
+    /** Block bytes per second, a moving average over the blocks delivered. A block's time is from its request, or
+     *  from the previous block's delivery when it was asked for before that, until it arrives. */
+    double bytes_per_second{0};
+    NodeClock::time_point last{};
 };
 
 /**
@@ -464,6 +477,7 @@ struct CNodeState {
     std::chrono::microseconds m_downloading_since{0us};
     //! Time before which block requests should not be sent to this peer.
     std::chrono::microseconds m_block_download_paused_until{0us};
+    BlockDeliveries m_block_deliveries;
     //! Whether we consider this a preferred download peer.
     bool fPreferredDownload{false};
     /** Whether this peer wants invs or cmpctblocks (when possible) for block announcements. */
@@ -1009,6 +1023,9 @@ private:
      *  at most count entries.
      */
     void FindNextBlocksToDownload(const Peer& peer, unsigned int count, std::vector<const CBlockIndex*>& vBlocks, NodeId& nodeStaller) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+
+    /** Record the delivery of a block a peer was asked for, from the bytes of its `block` message. */
+    void RecordBlockDelivery(NodeId peer, const DataStream& recv, NodeClock::time_point received);
 
     /** Request blocks for the background chainstate, if one is in use. */
     void TryDownloadingHistoricalBlocks(const Peer& peer, unsigned int count, std::vector<const CBlockIndex*>& vBlocks, const CBlockIndex* from_tip, const CBlockIndex* target_block) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
@@ -1631,6 +1648,34 @@ void PeerManagerImpl::TryDownloadingHistoricalBlocks(const Peer& peer, unsigned 
     }
 
     FindNextBlocks(vBlocks, peer, state, from_tip, count, std::min<int>(from_tip->nHeight + BLOCK_DOWNLOAD_WINDOW, target_block->nHeight));
+}
+
+void PeerManagerImpl::RecordBlockDelivery(NodeId peer_id, const DataStream& recv, NodeClock::time_point received)
+{
+    static constexpr size_t HEADER_BYTES{80};
+    if (recv.size() < HEADER_BYTES) return;
+    CBlockHeader header;
+    SpanReader{std::span<const std::byte>{recv.data(), HEADER_BYTES}} >> header;
+    const uint256 hash{header.GetHash()};
+
+    LOCK(cs_main);
+    CNodeState& state{*Assert(State(peer_id))};
+    const auto queued{std::ranges::find_if(state.vBlocksInFlight, [&](const QueuedBlock& block) {
+        return !block.with_pool && block.pindex->GetBlockHash() == hash;
+    })};
+    if (queued == state.vBlocksInFlight.end()) return;
+
+    BlockDeliveries& deliveries{state.m_block_deliveries};
+    const double bytes{static_cast<double>(recv.size())};
+    const double seconds{std::max(Ticks<SecondsDouble>(received - std::max(queued->requested, deliveries.last)), 0.001)};
+    deliveries.bytes_per_second = deliveries.blocks == 0 ? bytes / seconds
+                                                         : (1 - BLOCK_RATE_WEIGHT) * deliveries.bytes_per_second + BLOCK_RATE_WEIGHT * bytes / seconds;
+    ++deliveries.blocks;
+    deliveries.last = received;
+
+    LogDebug(BCLog::NET, "block %s (%d, %u bytes) from peer=%d arrived %.3fs after its request, in %.3fs; peer rate %.0f kB/s\n",
+             hash.ToString(), queued->pindex->nHeight, recv.size(), peer_id,
+             Ticks<SecondsDouble>(received - queued->requested), seconds, deliveries.bytes_per_second / 1000);
 }
 
 void PeerManagerImpl::FindNextBlocks(std::vector<const CBlockIndex*>& vBlocks, const Peer& peer, CNodeState *state, const CBlockIndex *pindexWalk, unsigned int count, int nWindowEnd, const CChain* activeChain, NodeId* nodeStaller)
@@ -5348,6 +5393,7 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
             return;
         }
 
+        RecordBlockDelivery(peer.m_id, vRecv, time_received);
         // In initial block download a block the peer was asked for goes to the connect pool.
         if (HandOffBlock(peer, vRecv)) return;
         ProcessBlockMessage(peer, &pfrom, std::span<const std::byte>{vRecv.data(), vRecv.size()});
