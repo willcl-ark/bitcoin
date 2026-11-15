@@ -42,6 +42,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -504,10 +505,17 @@ struct DeploymentFlags {
 
 /**
  * Everything a block validation function needs from the node besides the
- * block itself, the block index entries and the coins view. The node builds
- * one of these under cs_main from configuration and the header chain; the
- * validation functions read it and touch no other node state, so they can be
- * called and tested without a ChainstateManager.
+ * block itself and the coins view. The node builds one of these under cs_main
+ * from configuration and the header chain; the validation functions read it
+ * and touch no other node state, so they can be called and tested without a
+ * ChainstateManager. ConnectBlock() and DisconnectBlock() take no block index
+ * entry beside it; the contextual header and block checks still take the
+ * previous entry for the difficulty calculation.
+ *
+ * Every member is a copy, with two exceptions: params refers to the chain's
+ * constant parameters, and median_time_past_at is a function, because which
+ * ancestors a block's relative lock times refer to is known only once its
+ * inputs are looked up.
  */
 struct BlockValidationContext {
     const Consensus::Params& params;
@@ -518,11 +526,33 @@ struct BlockValidationContext {
     script_verify_flags script_flags;
     //! Whether to verify input scripts at all. False only under -assumevalid.
     bool check_scripts{true};
+    //! The block's hash.
+    uint256 block_hash;
+    //! Hash of the previous block index entry; null for the genesis block. The
+    //! coins view must be at this block.
+    uint256 prev_block_hash;
+    //! The block's height.
+    int height{0};
+    //! Median time past of the previous block; 0 for the genesis block.
+    int64_t prev_median_time_past{0};
+    //! Whether the block is checked for BIP30, see EnforceBIP30().
+    bool enforce_bip30{true};
+    /**
+     * Median time past of the block's ancestor at a height below the block's
+     * own (BIP68 measures a time lock from the block before the spent coin's).
+     * The node's implementation walks the header chain from the previous
+     * block and reads only an entry's height, time and links to its
+     * ancestors. Those are written in the hold of cs_main that creates or
+     * loads the entry and never after, so the lookup may be called without
+     * cs_main once that hold is over, for as long as the block index lives.
+     */
+    std::function<int64_t(int)> median_time_past_at;
 };
 
-/** Outputs of the pure ConnectBlock() besides the mutated coins view. */
+/** Outputs of the pure ConnectBlock() besides the mutated coins view.
+ *  ConnectBlock() resets the object it is given before it fills it. */
 struct ConnectBlockResult {
-    //! Undo data for the connected block; empty when connection failed.
+    //! Undo data for the connected block; partially filled when connection failed.
     CBlockUndo undo;
     int num_inputs{0};
     int64_t sigops_cost{0};
@@ -538,16 +568,25 @@ struct ConnectBlockResult {
 
 /**
  * Apply `block` to `view`, checking every consensus rule that needs the UTXO
- * set. Pure apart from the view: it reads no node state, writes nothing to
- * disk and does no logging. Script checks run on `check_queue` when it is
+ * set. Pure apart from the view and from what it is handed to use: it reads
+ * node state only through the context's callbacks (median_time_past_at),
+ * reads and updates the script execution cache, erases the entries of the
+ * signature cache that its script checks hit (as on master: a block's
+ * signatures are not looked up twice), reads the steady clock for its
+ * timings, writes nothing to disk and does no logging. Script checks run
+ * on `check_queue` when it is
  * non-null and has worker threads, otherwise inline; they are skipped
  * entirely when `ctx.check_scripts` is false. With `just_check` the block's
- * PoW and merkle root are not rechecked, script cache entries are written,
- * and the view's best block is left untouched.
+ * PoW and merkle root are not rechecked, the script execution cache takes the
+ * results of the checks that run inline, and the view's best block is left
+ * untouched.
  *
  * On failure `state` holds the reason and the view may be partially updated.
+ *
+ * The caller needs exclusive use of `block` for the call: CheckBlock() records
+ * its results in the block's mutable fields. The node's callers hold cs_main.
  */
-bool ConnectBlock(const CBlock& block, const BlockValidationContext& ctx, const CBlockIndex* pindex,
+bool ConnectBlock(const CBlock& block, const BlockValidationContext& ctx,
                   CCoinsViewCache& view, CCheckQueue<CScriptCheck>* check_queue,
                   ValidationCache& validation_cache, bool just_check,
                   BlockValidationState& state, ConnectBlockResult& result);
@@ -1542,6 +1581,7 @@ bool DeploymentEnabled(const ChainstateManager& chainman, DEP dep)
 
 /** Identifies blocks that overwrote an existing coinbase output in the UTXO set (see BIP30) */
 bool IsBIP30Repeat(const CBlockIndex& block_index);
+bool IsBIP30Repeat(const uint256& block_hash, int block_height);
 
 /** Identifies blocks which coinbase output was subsequently overwritten in the UTXO set (see BIP30) */
 bool IsBIP30Unspendable(const uint256& block_hash, int block_height);
@@ -1568,9 +1608,10 @@ DeploymentFlags EvaluateDeploymentFlags(const CBlockIndex* prev, const Chainstat
  * the view it mutates: no disk access, no node state. The undo data is
  * consumed. On DISCONNECT_UNCLEAN the view has been rolled back but was
  * inconsistent with the block; on DISCONNECT_FAILED the undo data did not
- * match the block and the view may be partially modified.
+ * match the block or the view, and the view may be partially modified.
+ * `block_hash` and `height` are the block's own.
  */
-DisconnectResult DisconnectBlock(const CBlock& block, CBlockUndo&& block_undo, const CBlockIndex* pindex, CCoinsViewCache& view);
+DisconnectResult DisconnectBlock(const CBlock& block, CBlockUndo&& block_undo, const uint256& block_hash, int height, CCoinsViewCache& view);
 
 /**
  * Returns the script flags which should be checked for a given block

@@ -229,7 +229,7 @@ std::optional<LockPoints> CalculateLockPointsAtTip(
 
     CBlockIndex next_tip;
     next_tip.pprev = tip;
-    // When SequenceLocks() is called within ConnectBlock(), the height
+    // When sequence locks are evaluated within ConnectBlock(), the height
     // of the block *being* evaluated is what is used.
     // Thus if we want to know if a transaction can be part of the
     // *next* block, we need to use one more than active_chainstate.m_chain.Height()
@@ -270,7 +270,7 @@ bool CheckSequenceLocksAtTip(CBlockIndex* tip,
     CBlockIndex index;
     index.pprev = tip;
     // CheckSequenceLocksAtTip() uses active_chainstate.m_chain.Height()+1 to evaluate
-    // height based locks because when SequenceLocks() is called within
+    // height based locks because when sequence locks are evaluated within
     // ConnectBlock(), the height of the block *being*
     // evaluated is what is used.
     // Thus if we want to know if a transaction can be part of the
@@ -2195,10 +2195,10 @@ DisconnectResult Chainstate::DisconnectBlock(const CBlock& block, const CBlockIn
         return DISCONNECT_FAILED;
     }
 
-    return ::DisconnectBlock(block, std::move(blockUndo), pindex, view);
+    return ::DisconnectBlock(block, std::move(blockUndo), pindex->GetBlockHash(), pindex->nHeight, view);
 }
 
-DisconnectResult DisconnectBlock(const CBlock& block, CBlockUndo&& blockUndo, const CBlockIndex* pindex, CCoinsViewCache& view)
+DisconnectResult DisconnectBlock(const CBlock& block, CBlockUndo&& blockUndo, const uint256& block_hash, int height, CCoinsViewCache& view)
 {
     bool fClean = true;
 
@@ -2213,8 +2213,8 @@ DisconnectResult DisconnectBlock(const CBlock& block, CBlockUndo&& blockUndo, co
     // Note: the blocks specified here are different than the ones used in ConnectBlock because DisconnectBlock
     // unwinds the blocks in reverse. As a result, the inconsistency is not discovered until the earlier
     // blocks with the duplicate coinbase transactions are disconnected.
-    bool fEnforceBIP30 = !((pindex->nHeight==91722 && pindex->GetBlockHash() == uint256{"00000000000271a2dc26e7667f8419f2e15416dc6955e5a6c6cdf3f2574dd08e"}) ||
-                           (pindex->nHeight==91812 && pindex->GetBlockHash() == uint256{"00000000000af0aed4792b1acee3d966af36cf5def14935db8de83d6f9306f2f"}));
+    bool fEnforceBIP30 = !((height==91722 && block_hash == uint256{"00000000000271a2dc26e7667f8419f2e15416dc6955e5a6c6cdf3f2574dd08e"}) ||
+                           (height==91812 && block_hash == uint256{"00000000000af0aed4792b1acee3d966af36cf5def14935db8de83d6f9306f2f"}));
 
     // undo transactions in reverse order
     for (int i = block.vtx.size() - 1; i >= 0; i--) {
@@ -2230,7 +2230,7 @@ DisconnectResult DisconnectBlock(const CBlock& block, CBlockUndo&& blockUndo, co
                 COutPoint out(hash, o);
                 Coin coin;
                 bool is_spent = view.SpendCoin(out, &coin);
-                if (!is_spent || tx.vout[o] != coin.out || pindex->nHeight != coin.nHeight || is_coinbase != coin.IsCoinBase()) {
+                if (!is_spent || tx.vout[o] != coin.out || height != coin.nHeight || is_coinbase != coin.IsCoinBase()) {
                     if (!is_bip30_exception) {
                         fClean = false; // transaction output mismatch
                     }
@@ -2257,7 +2257,7 @@ DisconnectResult DisconnectBlock(const CBlock& block, CBlockUndo&& blockUndo, co
     }
 
     // move best block pointer to prevout block
-    view.SetBestBlock(pindex->pprev->GetBlockHash());
+    view.SetBestBlock(block.hashPrevBlock);
 
     return fClean ? DISCONNECT_OK : DISCONNECT_UNCLEAN;
 }
@@ -2401,69 +2401,15 @@ script_verify_flags GetBlockScriptFlags(const CBlockIndex& block_index, const Ch
     return flags;
 }
 
-BlockValidationContext ChainstateManager::MakeBlockValidationContext(const uint256& block_hash, const CBlockIndex* prev) const
+/**
+ * Whether a block with hash `block_hash` at `height` on top of `prev` is
+ * checked for BIP30. Decided from the header chain alone, so that the
+ * connection itself needs no block index.
+ */
+static bool EnforceBIP30(const uint256& block_hash, int height, const CBlockIndex* prev, const Consensus::Params& params)
 {
-    AssertLockHeld(::cs_main);
-    const DeploymentFlags deployments{EvaluateDeploymentFlags(prev, *this)};
-    const script_verify_flags script_flags{GetBlockScriptFlags(block_hash, deployments, GetConsensus())};
-    Assume((m_all_consensus_script_flags & script_flags) == script_flags);
-    return BlockValidationContext{
-        .params = GetConsensus(),
-        .now = NodeClock::now(),
-        .deployments = deployments,
-        .script_flags = script_flags,
-        .check_scripts = true,
-    };
-}
-
-
-/** Apply the effects of this block (with given index) on the UTXO set represented by coins.
- *  Validity checks that depend on the UTXO set are also done; ConnectBlock()
- *  can fail if those validity checks fail (among other reasons). */
-bool ConnectBlock(const CBlock& block, const BlockValidationContext& ctx, const CBlockIndex* pindex,
-                  CCoinsViewCache& view, CCheckQueue<CScriptCheck>* check_queue,
-                  ValidationCache& validation_cache, bool just_check,
-                  BlockValidationState& state, ConnectBlockResult& result)
-{
-    assert(pindex);
-
-    const uint256 block_hash{block.GetHash()};
-    assert(*pindex->phashBlock == block_hash);
-
-    result.time_start = SteadyClock::now();
-
-    // Check it again in case a previous version let a bad block in
-    // NOTE: We don't currently (re-)invoke ContextualCheckBlock() or
-    // ContextualCheckBlockHeader() here. This means that if we add a new
-    // consensus rule that is enforced in one of those two functions, then we
-    // may have let in a block that violates the rule prior to updating the
-    // software, and we would NOT be enforcing the rule here. Fully solving
-    // upgrade from one software version to the next after a consensus rule
-    // change is potentially tricky and issue-specific (see NeedsRedownload()
-    // for one approach that was used for BIP 141 deployment).
-    // Also, currently the rule against blocks more than 2 hours in the future
-    // is enforced in ContextualCheckBlockHeader(); we wouldn't want to
-    // re-enforce that rule here (at least until we make it impossible for
-    // the clock to go backward).
-    if (!CheckBlock(block, state, ctx.params, !just_check, !just_check)) {
-        result.failed_in_check_block = true;
-        return false;
-    }
-
-    // verify that the view's current state corresponds to the previous block
-    const uint256 hashPrevBlock{pindex->pprev == nullptr ? uint256() : pindex->pprev->GetBlockHash()};
-    assert(hashPrevBlock == view.GetBestBlock());
-
-    // Special case for the genesis block, skipping connection of its transactions
-    // (its coinbase is unspendable)
-    if (block_hash == ctx.params.hashGenesisBlock) {
-        if (!just_check)
-            view.SetBestBlock(pindex->GetBlockHash());
-        result.time_checked = result.time_forks = result.time_connected = result.time_verified = SteadyClock::now();
-        return true;
-    }
-
-    result.time_checked = SteadyClock::now();
+    // The genesis block's transactions are not connected.
+    if (!prev) return false;
 
     // Do not allow blocks that contain transactions which 'overwrite' older transactions,
     // unless those are already completely spent.
@@ -2475,7 +2421,7 @@ bool ConnectBlock(const CBlock& block, const BlockValidationContext& ctx, const 
     // Now that the whole chain is irreversibly beyond that time it is applied to all blocks except the
     // two in the chain that violate it. This prevents exploiting the issue against nodes during their
     // initial block download.
-    bool fEnforceBIP30 = !IsBIP30Repeat(*pindex);
+    bool fEnforceBIP30 = !IsBIP30Repeat(block_hash, height);
 
     // Once BIP34 activated it was not possible to create new duplicate coinbases and thus other than starting
     // with the 2 existing duplicate coinbase pairs, not possible to create overwriting txs.  But by the
@@ -2532,15 +2478,90 @@ bool ConnectBlock(const CBlock& block, const BlockValidationContext& ctx, const 
     // testnet3 has no blocks before the BIP34 height with indicated heights
     // post BIP34 before approximately height 486,000,000. After block
     // 1,983,702 testnet3 starts doing unnecessary BIP30 checking again.
-    assert(pindex->pprev);
-    const CBlockIndex* pindexBIP34height = pindex->pprev->GetAncestor(ctx.params.BIP34Height);
+    const CBlockIndex* pindexBIP34height = prev->GetAncestor(params.BIP34Height);
     //Only continue to enforce if we're below BIP34 activation height or the block hash at that height doesn't correspond.
-    fEnforceBIP30 = fEnforceBIP30 && (!pindexBIP34height || !(pindexBIP34height->GetBlockHash() == ctx.params.BIP34Hash));
+    fEnforceBIP30 = fEnforceBIP30 && (!pindexBIP34height || !(pindexBIP34height->GetBlockHash() == params.BIP34Hash));
 
     // TODO: Remove BIP30 checking from block height 1,983,702 on, once we have a
     // consensus change that ensures coinbases at those heights cannot
     // duplicate earlier coinbases.
-    if (fEnforceBIP30 || pindex->nHeight >= BIP34_IMPLIES_BIP30_LIMIT) {
+    return fEnforceBIP30 || height >= BIP34_IMPLIES_BIP30_LIMIT;
+}
+
+BlockValidationContext ChainstateManager::MakeBlockValidationContext(const uint256& block_hash, const CBlockIndex* prev) const
+{
+    AssertLockHeld(::cs_main);
+    const DeploymentFlags deployments{EvaluateDeploymentFlags(prev, *this)};
+    const script_verify_flags script_flags{GetBlockScriptFlags(block_hash, deployments, GetConsensus())};
+    Assume((m_all_consensus_script_flags & script_flags) == script_flags);
+    return BlockValidationContext{
+        .params = GetConsensus(),
+        .now = NodeClock::now(),
+        .deployments = deployments,
+        .script_flags = script_flags,
+        .check_scripts = true,
+        .block_hash = block_hash,
+        .prev_block_hash = prev ? prev->GetBlockHash() : uint256{},
+        .height = prev ? prev->nHeight + 1 : 0,
+        .prev_median_time_past = prev ? prev->GetMedianTimePast() : 0,
+        .enforce_bip30 = EnforceBIP30(block_hash, prev ? prev->nHeight + 1 : 0, prev, GetConsensus()),
+        // Reads only what the hold of cs_main that created or loaded an entry wrote, and
+        // nothing writes afterwards.
+        .median_time_past_at = [prev](int height) { return Assert(Assert(prev)->GetAncestor(height))->GetMedianTimePast(); },
+    };
+}
+
+
+/** Apply the effects of this block on the UTXO set represented by coins.
+ *  Validity checks that depend on the UTXO set are also done; ConnectBlock()
+ *  can fail if those validity checks fail (among other reasons). */
+bool ConnectBlock(const CBlock& block, const BlockValidationContext& ctx,
+                  CCoinsViewCache& view, CCheckQueue<CScriptCheck>* check_queue,
+                  ValidationCache& validation_cache, bool just_check,
+                  BlockValidationState& state, ConnectBlockResult& result)
+{
+    const uint256 block_hash{block.GetHash()};
+    assert(ctx.block_hash == block_hash);
+
+    // The counts and the undo data below are added to: start from nothing, whatever was passed in.
+    result = {};
+    result.time_start = SteadyClock::now();
+
+    // Check it again in case a previous version let a bad block in
+    // NOTE: We don't currently (re-)invoke ContextualCheckBlock() or
+    // ContextualCheckBlockHeader() here. This means that if we add a new
+    // consensus rule that is enforced in one of those two functions, then we
+    // may have let in a block that violates the rule prior to updating the
+    // software, and we would NOT be enforcing the rule here. Fully solving
+    // upgrade from one software version to the next after a consensus rule
+    // change is potentially tricky and issue-specific (see NeedsRedownload()
+    // for one approach that was used for BIP 141 deployment).
+    // Also, currently the rule against blocks more than 2 hours in the future
+    // is enforced in ContextualCheckBlockHeader(); we wouldn't want to
+    // re-enforce that rule here (at least until we make it impossible for
+    // the clock to go backward).
+    if (!CheckBlock(block, state, ctx.params, !just_check, !just_check)) {
+        result.failed_in_check_block = true;
+        return false;
+    }
+
+    // verify that the view's current state corresponds to the previous block
+    assert(ctx.prev_block_hash == view.GetBestBlock());
+
+    // Special case for the genesis block, skipping connection of its transactions
+    // (its coinbase is unspendable)
+    if (block_hash == ctx.params.hashGenesisBlock) {
+        if (!just_check)
+            view.SetBestBlock(block_hash);
+        result.time_checked = result.time_forks = result.time_connected = result.time_verified = SteadyClock::now();
+        return true;
+    }
+
+    result.time_checked = SteadyClock::now();
+
+    // BIP30: no transaction may overwrite one that is not completely spent. Whether the rule
+    // applies to this block was decided when the context was built, see EnforceBIP30().
+    if (ctx.enforce_bip30) {
         for (const auto& tx : block.vtx) {
             for (size_t o = 0; o < tx->vout.size(); o++) {
                 if (view.HaveCoin(COutPoint(tx->GetHash(), o))) {
@@ -2591,7 +2612,7 @@ bool ConnectBlock(const CBlock& block, const BlockValidationContext& ctx, const 
         {
             CAmount txfee = 0;
             TxValidationState tx_state;
-            if (!Consensus::CheckTxInputs(tx, tx_state, view, pindex->nHeight, txfee)) {
+            if (!Consensus::CheckTxInputs(tx, tx_state, view, ctx.height, txfee)) {
                 // Any transaction validation failure in ConnectBlock is a block consensus failure
                 state.Invalid(BlockValidationResult::BLOCK_CONSENSUS,
                               tx_state.GetRejectReason(),
@@ -2613,7 +2634,7 @@ bool ConnectBlock(const CBlock& block, const BlockValidationContext& ctx, const 
                 prevheights[j] = view.AccessCoin(tx.vin[j].prevout).nHeight;
             }
 
-            if (!SequenceLocks(tx, nLockTimeFlags, prevheights, *pindex)) {
+            if (!EvaluateSequenceLocks(ctx.height, ctx.prev_median_time_past, CalculateSequenceLocks(tx, nLockTimeFlags, prevheights, ctx.median_time_past_at))) {
                 state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-txns-nonfinal",
                               "contains a non-BIP68-final transaction " + tx.GetHash().ToString());
                 break;
@@ -2656,11 +2677,11 @@ bool ConnectBlock(const CBlock& block, const BlockValidationContext& ctx, const 
         if (i > 0) {
             blockundo.vtxundo.emplace_back();
         }
-        UpdateCoins(tx, view, i == 0 ? undoDummy : blockundo.vtxundo.back(), pindex->nHeight);
+        UpdateCoins(tx, view, i == 0 ? undoDummy : blockundo.vtxundo.back(), ctx.height);
     }
     result.time_connected = SteadyClock::now();
 
-    CAmount blockReward = nFees + GetBlockSubsidy(pindex->nHeight, ctx.params);
+    CAmount blockReward = nFees + GetBlockSubsidy(ctx.height, ctx.params);
     if (block.vtx[0]->GetValueOut() > blockReward && state.IsValid()) {
         state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-cb-amount",
                       strprintf("coinbase pays too much (actual=%d vs limit=%d)", block.vtx[0]->GetValueOut(), blockReward));
@@ -2678,7 +2699,7 @@ bool ConnectBlock(const CBlock& block, const BlockValidationContext& ctx, const 
 
     // add this block to the view's block chain
     if (!just_check) {
-        view.SetBestBlock(pindex->GetBlockHash());
+        view.SetBestBlock(block_hash);
     }
 
     return true;
@@ -2691,7 +2712,10 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
     assert(pindex);
 
     const uint256 block_hash{block.GetHash()};
+    assert(*pindex->phashBlock == block_hash);
     const CChainParams& params{m_chainman.GetParams()};
+    // Only the genesis block has no previous entry.
+    assert(pindex->pprev || block_hash == params.GetConsensus().hashGenesisBlock);
 
     // Node policy: decide whether this block's scripts are verified at all.
     // Everything below is a property of the node (its -assumevalid setting,
@@ -2745,7 +2769,7 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
     ctx.check_scripts = !!script_check_reason;
 
     ConnectBlockResult result;
-    const bool ok{::ConnectBlock(block, ctx, pindex, view, &m_chainman.GetCheckQueue(), m_chainman.m_validation_cache, fJustCheck, state, result)};
+    const bool ok{::ConnectBlock(block, ctx, view, &m_chainman.GetCheckQueue(), m_chainman.m_validation_cache, fJustCheck, state, result)};
 
     if (result.failed_in_check_block) {
         if (state.GetResult() == BlockValidationResult::BLOCK_MUTATED) {
@@ -6433,8 +6457,13 @@ Chainstate& ChainstateManager::AddChainstate(std::unique_ptr<Chainstate> chainst
 
 bool IsBIP30Repeat(const CBlockIndex& block_index)
 {
-    return (block_index.nHeight==91842 && block_index.GetBlockHash() == uint256{"00000000000a4d0a398161ffc163c503763b1f4360639393e0e4c8e300e0caec"}) ||
-           (block_index.nHeight==91880 && block_index.GetBlockHash() == uint256{"00000000000743f190a18c5577a3c2d2a1f610ae9601ac046a38084ccb7cd721"});
+    return IsBIP30Repeat(block_index.GetBlockHash(), block_index.nHeight);
+}
+
+bool IsBIP30Repeat(const uint256& block_hash, int block_height)
+{
+    return (block_height==91842 && block_hash == uint256{"00000000000a4d0a398161ffc163c503763b1f4360639393e0e4c8e300e0caec"}) ||
+           (block_height==91880 && block_hash == uint256{"00000000000743f190a18c5577a3c2d2a1f610ae9601ac046a38084ccb7cd721"});
 }
 
 bool IsBIP30Unspendable(const uint256& block_hash, int block_height)
