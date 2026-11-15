@@ -27,6 +27,7 @@ add_executable(test_bitcoin
   blockindex_machine_tests.cpp
   blockmanager_tests.cpp
   blockpolicyestimator_tests.cpp
+  blockstore_machine_tests.cpp
   bloom_tests.cpp
   bswap_tests.cpp
   btcsignals_tests.cpp
