@@ -101,11 +101,15 @@ public:
         //! Whether all P2P messages are captured to disk
         bool capture_messages{false};
         //! Whether or not the internal RNG behaves deterministically (this is
-        //! a test-only option). It also keeps block processing on the message
-        //! handler, in the order the tests send: a receive task in initial
-        //! block download runs on the handler, and a block at the tip is
-        //! connected by the handler, not the connector thread.
+        //! a test-only option).
         bool deterministic_rng{false};
+        //! Whether a peer's block is processed to its end on the message
+        //! handler, before the next message (this is a test-only option): no
+        //! receive task is started for it on the connect pool
+        //! (HandOffBlock() declines), and the handler activates the chain
+        //! itself, not the connector thread. The one switch for it: nothing
+        //! else selects these paths, and the paths ask nothing else.
+        bool blocks_on_message_handler{false};
         //! Number of headers sent in one getheaders message result (this is
         //! a test-only option).
         uint32_t max_headers_result{MAX_HEADERS_RESULTS};

@@ -3831,9 +3831,9 @@ void PeerManagerImpl::ProcessBlock(CNode& node, const std::shared_ptr<const CBlo
     // message meanwhile: in initial block download the next block's deserialisation and checks overlap the
     // connection of this one. A transaction that follows waits for the block to be connected before it is
     // judged (ChainstateManager::WaitForPendingBlocks()), as when this thread connected it, and a peer's ping
-    // is answered once its blocks are connected (Peer::m_pending_pong). (Not under the deterministic
-    // configuration the fuzz tests use.)
-    const bool activate_async{!m_opts.deterministic_rng};
+    // is answered once its blocks are connected (Peer::m_pending_pong). (Not where the tests keep blocks on
+    // the message handler, Options::blocks_on_message_handler.)
+    const bool activate_async{!m_opts.blocks_on_message_handler};
     if (ProcessBlock(block, force_processing, min_pow_checked, activate_async)) {
         node.m_last_block_time = GetTime<std::chrono::seconds>();
     }
@@ -3911,11 +3911,12 @@ void PeerManagerImpl::ProcessBlockMessage(Peer& peer, CNode* node, std::span<con
             min_pow_checked = true;
         }
     }
-    // A task's block is activated by the connector; under the deterministic configuration the task runs on the
-    // handler (HandOffBlock()), and so does the activation.
+    // Without a connection this is a receive task on the connect pool, and its block is activated by the
+    // connector: where blocks stay on the message handler (Options::blocks_on_message_handler) HandOffBlock()
+    // declines, and no task exists.
     if (node) {
         ProcessBlock(*node, pblock, forceProcessing, min_pow_checked);
-    } else if (ProcessBlock(pblock, forceProcessing, min_pow_checked, /*activate_async=*/!m_opts.deterministic_rng)) {
+    } else if (ProcessBlock(pblock, forceProcessing, min_pow_checked, /*activate_async=*/true)) {
         m_connman.ForNode(peer.m_id, [now = GetTime<std::chrono::seconds>()](CNode* connection) {
             connection->m_last_block_time = now;
             return true;
@@ -3929,10 +3930,12 @@ bool PeerManagerImpl::HandOffBlock(Peer& peer, DataStream& recv)
 {
     static constexpr size_t HEADER_BYTES{80};
     if (!m_chainman.IsInitialBlockDownload()) return false;
-    // Under the deterministic configuration (the unit and fuzz tests) the task runs here, before the next
-    // message, so that the hand-off's bookkeeping is exercised in a reproducible order.
-    const bool run_here{m_opts.deterministic_rng};
-    const int limit{run_here ? 1 : static_cast<int>(m_chainman.m_connect_pool->WorkersCount()) - 1};
+    // Where blocks stay on the message handler (the unit and fuzz tests) nothing is handed off.
+    if (m_opts.blocks_on_message_handler) return false;
+    // One worker is never given a receive task. A receive task waits for cs_main, and the connector thread
+    // waits under cs_main for the window's workers (Chainstate::DrainWindow()): with every worker in a
+    // receive task the block validations queued behind them would never run, and neither wait would end.
+    const int limit{static_cast<int>(m_chainman.m_connect_pool->WorkersCount()) - 1};
     if (limit < 1 || recv.size() < HEADER_BYTES) return false;
     CBlockHeader header;
     SpanReader{std::span<const std::byte>{recv.data(), HEADER_BYTES}} >> header;
@@ -3974,7 +3977,7 @@ bool PeerManagerImpl::HandOffBlock(Peer& peer, DataStream& recv)
     recv.clear();
     auto task{[this, id = peer.m_id, hash, bytes] { RunBlockTask(id, hash, *bytes); }};
     // A pool that stopped meanwhile: here, as the task would.
-    if (run_here || !m_chainman.m_connect_pool->Submit(task)) task();
+    if (!m_chainman.m_connect_pool->Submit(task)) task();
     return true;
 }
 
