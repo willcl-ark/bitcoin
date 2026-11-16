@@ -709,6 +709,9 @@ bool FinishDeferredTransactions(const CBlock& block, const BlockValidationContex
 struct ConnectStep;
 struct StagedConnect;
 struct WindowSync;
+namespace connect_phase {
+struct Validated;
+} // namespace connect_phase
 
 /**
  * Placed in a scope right after cs_main is locked, when the scope may move a
@@ -1212,8 +1215,13 @@ protected:
      * PublishConnectTip() returns true unless a system error occurred, the
      * block was invalid (state says which), or a window block is to be
      * connected again alone (state valid); staging cannot fail.
+     *
+     * What exists of the block at each part is a type of its own
+     * (connect_phase, in validation.cpp): staging makes a Staged, the
+     * validation a Validated, or a Deferred that the continuation turns into
+     * one, and only a Validated is published.
      */
-    void StageConnectTip(CBlockIndex* pindexNew, StagedConnect& staged) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    void StageConnectTip(CBlockIndex* pindexNew, StagedConnect& staged, const FlatFilePos& pos, std::shared_ptr<const CBlock> block, size_t block_bytes) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
     void RunStagedConnect(StagedConnect& staged) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
     void RunConnectTask(StagedConnect& staged) noexcept;
     //! A windowed block's worker has applied it: mark it so and run the continuations this makes possible.
@@ -1223,6 +1231,7 @@ protected:
     bool PublishConnectTip(
         BlockValidationState& state,
         StagedConnect& staged,
+        connect_phase::Validated& validated,
         const kernel::ChainstateRole& role,
         DisconnectedBlockTransactions& disconnectpool,
         bool reorg) EXCLUSIVE_LOCKS_REQUIRED(cs_main, m_mempool->cs);
