@@ -38,6 +38,7 @@
 #include <util/check.h>
 #include <util/fs.h>
 #include <util/hasher.h>
+#include <util/byte_ledger.h>
 #include <util/lifecycle.h>
 #include <util/result.h>
 #include <util/time.h>
@@ -554,9 +555,9 @@ struct DeploymentFlags {
  *      signal takes the counter's value under the cs_main hold that changed
  *      the chain. The order of the signals does not follow from that alone:
  *      BlockDisconnected is queued directly, BlockConnected behind the
- *      block's undo write. Not asserted: the callers of DisconnectTip()
- *      settle the waiting BlockConnected signals before the first
- *      disconnect (PlanConnectStep(), InvalidateBlock()).
+ *      block's undo write. DisconnectTip() asserts that no BlockConnected
+ *      still waits; its callers settle them before the first disconnect
+ *      (PlanConnectStep(), InvalidateBlock()).
  *  O8  A flush never sees a half-applied block: the coins' best block is
  *      a block of the chain, or the one block on top of it that is being
  *      connected, or was when a write-out failed: the write is made
@@ -1418,6 +1419,10 @@ private:
 public:
     //! Whether another thread is writing the block to disk right now (it is indexed once the write is done).
     bool IsBlockBeingStored(const CBlockIndex& index) const EXCLUSIVE_LOCKS_REQUIRED(::cs_main) { return m_blocks_being_stored.contains(&index); }
+    //! The memory blocks hold from their arrival until nothing of them is left to do, by holder
+    //! (util/byte_ledger.h): the one list of what one block at a time used to bound. Declared before its
+    //! holders.
+    util::ByteLedger m_bytes_in_flight;
     //! Accepted blocks kept for the connect loop, so that one that arrived before its parent is connected from
     //! the object received and checked rather than read from disk and deserialized again. Filled by
     //! ProcessNewBlock() and the external block file loader, emptied by ActivateBestChain().

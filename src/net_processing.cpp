@@ -3970,6 +3970,8 @@ bool PeerManagerImpl::HandOffBlock(Peer& peer, DataStream& recv)
         // started behind FinishBlockTasks() would run in an object nobody waits for any more.
         Assert(m_block_tasks_life.Running());
         m_block_tasks.emplace(peer.m_id, hash);
+        // No limit in bytes: the tasks are bounded by their number, above.
+        m_chainman.m_bytes_in_flight[util::ByteAccountId::ReceiveTasks].Add(recv.size());
         ++m_blocks_handed_off;
     }
     LogDebug(BCLog::NET, "block %s of peer=%d goes to the connect pool", hash.ToString(), peer.m_id);
@@ -4019,6 +4021,7 @@ void PeerManagerImpl::RunBlockTask(NodeId id, const uint256& hash, const DataStr
     }
     {
         LOCK(m_block_tasks_mutex);
+        m_chainman.m_bytes_in_flight[util::ByteAccountId::ReceiveTasks].Sub(recv.size());
         m_block_tasks.erase({id, hash});
         // Under the lock: the destructor goes on once the last task is gone.
         m_block_tasks_cv.notify_all();

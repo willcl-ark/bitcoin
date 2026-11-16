@@ -6,6 +6,7 @@
 #define BITCOIN_KERNEL_EFFECTS_H
 
 #include <sync.h>
+#include <util/byte_ledger.h>
 #include <util/lifecycle.h>
 
 #include <condition_variable>
@@ -46,7 +47,9 @@ public:
     //! The completion half, run by ApplyCompletions() with the result of the I/O.
     using Completion = std::function<void(bool ok)>;
 
-    explicit EffectsExecutor(std::function<void()> on_completion = {});
+    //! `backlog` is the account the weight of the queued effects is kept in (util/byte_ledger.h); an executor
+    //! made without one keeps its own.
+    explicit EffectsExecutor(std::function<void()> on_completion = {}, util::ByteAccount* backlog = nullptr);
     ~EffectsExecutor() EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
 
     EffectsExecutor(const EffectsExecutor&) = delete;
@@ -85,7 +88,9 @@ private:
     std::condition_variable m_cv_done;
     std::deque<Item> m_queue GUARDED_BY(m_mutex);
     std::deque<std::pair<Completion, bool>> m_done GUARDED_BY(m_mutex);
-    size_t m_pending_bytes GUARDED_BY(m_mutex){0};
+    //! The weight of the effects whose I/O has not run: changed under m_mutex, read by anyone.
+    util::ByteAccount m_own_backlog;
+    util::ByteAccount& m_backlog;
     bool m_io_running GUARDED_BY(m_mutex){false};
     util::Lifecycle m_life GUARDED_BY(m_mutex);
     std::thread m_thread;

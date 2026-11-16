@@ -193,6 +193,9 @@ public:
     unsigned int GetCacheSize() const override;
     size_t GetDirtyCount() const noexcept override;
     size_t DynamicMemoryUsage() const override;
+    //! The regions the nodes of every store are carved from, which are never given back: beyond the live
+    //! nodes, which DynamicMemoryUsage() counts, they hold the free ones, which nothing else counts.
+    static size_t NodeRegionBytes() { return s_node_region_bytes.load(std::memory_order_relaxed); }
     void SanityCheck() const override;
     //! Not meaningful for the tier.
     void Reset() noexcept override;
@@ -491,6 +494,7 @@ private:
     //! TLB for the bucket and again for the node. Only a hint; without it the memory is as any other. Freed
     //! with FreeRegion().
     static void* HintedRegion(size_t bytes);
+    static inline std::atomic<size_t> s_node_region_bytes{0};
     static void FreeRegion(void* region) noexcept { ::operator delete(region, std::align_val_t{HUGE_PAGE_BYTES}); }
     //! A shard's entries are inserted and erased by whichever thread holds its mutex, so a node is often freed
     //! by another thread than the one that allocated it, which the general allocator pays for with a lock. A
@@ -555,6 +559,7 @@ private:
                         // The remainder, less than a list, is left behind.
                         fresh = static_cast<std::byte*>(HintedRegion(REGION_BYTES));
                         fresh_bytes = REGION_BYTES;
+                        s_node_region_bytes.fetch_add(REGION_BYTES, std::memory_order_relaxed);
                     }
                     nodes = fresh;
                     fresh += LIST_BYTES;

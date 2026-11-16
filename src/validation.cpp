@@ -3288,6 +3288,8 @@ CoinsCacheSizeState Chainstate::GetCoinsCacheSizeState(
     AssertLockHeld(::cs_main);
     const int64_t nMempoolUsage = m_mempool ? m_mempool->DynamicMemoryUsage() : 0;
     int64_t cacheSize = CoinsTip().DynamicMemoryUsage();
+    // Named in the ledger, and not part of the decision below.
+    m_chainman.m_bytes_in_flight[util::ByteAccountId::NodeRegions].Set(CoinsStore::NodeRegionBytes());
     int64_t nTotalSpace =
         max_coins_cache_size_bytes + std::max<int64_t>(int64_t(max_mempool_size_bytes) - nMempoolUsage, 0);
 
@@ -3804,6 +3806,10 @@ bool Chainstate::DisconnectTip(BlockValidationState& state, DisconnectedBlockTra
     if (m_chainman.m_options.signals) {
         // Precondition O7: queued under cs_main, in the hold in which the block left the chain.
         Assume(!m_chain.Contains(*pindexDelete));
+        // And no BlockConnected still waits on the effects queue behind an undo write, which this signal
+        // would overtake: the callers settle them before the first disconnect (PlanConnectStep(),
+        // InvalidateBlock()). A waiting signal holds its block in the ledger's account.
+        Assume(m_chainman.m_bytes_in_flight[util::ByteAccountId::PinnedBlocks].Bytes() == 0);
         m_chainman.m_options.signals->BlockDisconnected(std::move(pblock), pindexDelete, m_chainman.TipSequence());
     }
     return true;
@@ -4453,10 +4459,16 @@ bool Chainstate::PublishConnectTip(
         // The number is taken here, where the signal joins the effects queue: the queue hands its
         // completions on in order, so the signals reach the validation interface in this order too.
         const uint64_t tip_sequence{m_chainman.TipSequence()};
+        // The signal keeps the block until the undo writes ahead of it have run: counted, from the block's
+        // counts, for as long.
+        util::ByteAccount& pinned{m_chainman.m_bytes_in_flight[util::ByteAccountId::PinnedBlocks]};
+        const size_t pinned_bytes{WindowBlockBytes(*block_to_connect, validated.result.num_inputs, /*block_bytes=*/0)};
+        pinned.Add(pinned_bytes);
         m_blockman.m_effects.Enqueue(
             /*effect=*/nullptr,
-            [signals = m_chainman.m_options.signals, role, block = std::move(block_to_connect), pindexNew, tip_sequence, &blockman = m_blockman](bool) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) {
+            [signals = m_chainman.m_options.signals, role, block = std::move(block_to_connect), pindexNew, tip_sequence, &blockman = m_blockman, &pinned, pinned_bytes](bool) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) {
                 AssertLockHeld(::cs_main);
+                pinned.Sub(pinned_bytes);
                 // Not for a block whose undo data was not written: the node is stopping on that error, and
                 // a listener would look for undo data that is not there.
                 if (blockman.m_undo_write_failed) return;
@@ -4599,7 +4611,8 @@ struct ConnectStep {
     }
 };
 
-//! The share of the coins cache budget the window's blocks may hold in memory beyond it.
+//! The share of the coins cache budget the window's blocks may hold in memory beyond it: the limit of the
+//! ledger's window account.
 static constexpr size_t WINDOW_BYTES_SHARE{8};
 //! The least that share is taken to be: below it a small cache narrows the window to a single block.
 static constexpr size_t MIN_WINDOW_BYTES{32_MiB};
@@ -4642,6 +4655,7 @@ void Chainstate::DrainWindow(ConnectStep& step)
         if (staged.view && staged.view->HasBlock()) staged.view->Unwind();
     }
     step.in_flight.clear();
+    if (step.use_window) m_chainman.m_bytes_in_flight[util::ByteAccountId::Window].Set(0);
 }
 
 bool Chainstate::PlanConnectStep(BlockValidationState& state, ConnectStep& step)
@@ -5078,7 +5092,9 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
             // the step's target. The tip still moves one block at a time, with
             // its notification per block; what overlaps is the validation.
             const size_t window{step->use_window ? static_cast<size_t>(m_chainman.ConnectWindow()) : 1};
-            const size_t window_bytes_cap{std::max(WITH_LOCK(::cs_main, return m_coinstip_cache_size_bytes) / WINDOW_BYTES_SHARE, MIN_WINDOW_BYTES)};
+            util::ByteAccount& window_account{m_chainman.m_bytes_in_flight[util::ByteAccountId::Window]};
+            // The account is the node's, not the chainstate's: only a step that uses the window writes it.
+            if (step->use_window) window_account.SetLimit(std::max(WITH_LOCK(::cs_main, return m_coinstip_cache_size_bytes) / WINDOW_BYTES_SHARE, MIN_WINDOW_BYTES));
             bool step_over{false};
             SteadyClock::duration pending_stage{};
             SteadyClock::duration pending_periodic{};
@@ -5091,8 +5107,13 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                 while (step->in_flight.size() < window) {
                     // The window is bounded by bytes as well as by blocks: the blocks in flight, their undo
                     // data and the store's records are not in the coins cache budget, so they get a share of
-                    // their own. One block is always in flight, whatever it weighs.
-                    if (step->use_window && !step->in_flight.empty() && WindowBytes(*step) >= window_bytes_cap) break;
+                    // their own, the ledger's window account. A block is admitted while the account is below
+                    // its limit, and deferred to a later fill otherwise. One block is always in flight,
+                    // whatever it weighs.
+                    if (step->use_window && !step->in_flight.empty()) {
+                        window_account.Set(WindowBytes(*step));
+                        if (!window_account.Admits(/*more=*/1)) break;
+                    }
                     if (step->next_in_batch == step->batch.size()) {
                         if (!step->use_window) break; // the pass loop plans the next batch
                         LOCK(cs_main);
@@ -5161,7 +5182,10 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                     step->in_flight.push_back(std::move(staged));
                 }
                 pending_stage += SteadyClock::now() - stage_start;
-                if (step->in_flight.empty()) break;
+                if (step->in_flight.empty()) {
+                    if (step->use_window) window_account.Set(0);
+                    break;
+                }
 
                 // The lowest block in flight: wait for its worker to apply it and for its continuation, if it
                 // deferred transactions, then publish it. (Not for the worker's future: that resolves after
@@ -5178,8 +5202,9 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                     staged->sync->slots.pop_front();
                     step->last_block_bytes = staged->bytes;
                 }
-                // Do not run ahead of the undo writes by more than the backlog limit.
-                m_blockman.m_effects.WaitForBacklogBelow(node::BlockManager::MAX_UNDO_BACKLOG_BYTES);
+                // Do not run ahead of the undo writes by more than the backlog limit. A limit of zero is the
+                // ledger's word for none.
+                if (const auto limit{m_chainman.m_bytes_in_flight[util::ByteAccountId::UndoBacklog].Limit()}; limit != 0) m_blockman.m_effects.WaitForBacklogBelow(limit);
                 const auto waited{SteadyClock::now() - wait_start};
                 SteadyClock::time_point periodic_start;
                 bool run_pending{false};
@@ -8384,10 +8409,10 @@ static ChainstateManager::Options&& Flatten(ChainstateManager::Options&& opts)
 
 ChainstateManager::ChainstateManager(const util::SignalInterrupt& interrupt, Options options, node::BlockManager::Options blockman_options)
     : m_script_check_queue{/*batch_size=*/128, std::clamp(options.worker_threads_num, 0, MAX_SCRIPTCHECK_THREADS)},
-      m_block_cache{options.block_cache_bytes},
+      m_block_cache{options.block_cache_bytes, &m_bytes_in_flight[util::ByteAccountId::BlockCache]},
       m_interrupt{interrupt},
       m_options{Flatten(std::move(options))},
-      m_blockman{interrupt, std::move(blockman_options)},
+      m_blockman{interrupt, std::move(blockman_options), &m_bytes_in_flight},
       m_all_consensus_script_flags{GetAllConsensusScriptFlags(m_options.chainparams.GetConsensus())},
       m_validation_cache{m_options.script_execution_cache_bytes, m_options.signature_cache_bytes},
       m_connect_pool{std::make_shared<ThreadPool>("connect")},
@@ -8436,6 +8461,14 @@ ChainstateManager::~ChainstateManager()
         const auto [hits, misses]{m_block_cache.HitsAndMisses()};
         LogInfo("Block cache: %u blocks connected from it, %u not in it", hits, misses);
     }
+    std::string held;
+    for (const util::ByteAccountId id : util::BYTE_ACCOUNTS) {
+        const util::ByteAccount& account{m_bytes_in_flight[id]};
+        if (account.Peak() == 0) continue;
+        held += strprintf("%s%s %.1f MiB", held.empty() ? "" : ", ", util::ByteAccountName(id), account.Peak() / double{1 << 20});
+        if (account.Limit() > 0) held += strprintf(" (limit %.1f MiB)", account.Limit() / double{1 << 20});
+    }
+    if (!held.empty()) LogInfo("Memory in flight, the most each holder held: %s", held);
     if (m_blocks_accepted > 0) {
         LogInfo("Connect pipeline: %u blocks accepted for the connector thread in %.1fs (%.2fms/blk)",
                 m_blocks_accepted.load(), m_accept_time_us / 1e6, m_accept_time_us / 1e3 / m_blocks_accepted);

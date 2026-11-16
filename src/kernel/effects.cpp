@@ -10,8 +10,8 @@
 
 namespace kernel {
 
-EffectsExecutor::EffectsExecutor(std::function<void()> on_completion)
-    : m_on_completion{std::move(on_completion)} {}
+EffectsExecutor::EffectsExecutor(std::function<void()> on_completion, util::ByteAccount* backlog)
+    : m_backlog{backlog ? *backlog : m_own_backlog}, m_on_completion{std::move(on_completion)} {}
 
 EffectsExecutor::~EffectsExecutor()
 {
@@ -43,7 +43,7 @@ void EffectsExecutor::Enqueue(Effect effect, Completion completion, size_t bytes
         // An effect queued before the start or behind the stop would wait forever.
         Assert(m_life.Running());
         m_queue.push_back(Item{std::move(effect), std::move(completion), bytes});
-        m_pending_bytes += bytes;
+        m_backlog.Add(bytes);
     }
     m_cv_work.notify_one();
 }
@@ -57,7 +57,7 @@ void EffectsExecutor::WaitForIO()
 void EffectsExecutor::WaitForBacklogBelow(size_t limit_bytes)
 {
     WAIT_LOCK(m_mutex, lock);
-    m_cv_done.wait(lock, [&]() EXCLUSIVE_LOCKS_REQUIRED(m_mutex) { return m_pending_bytes <= limit_bytes; });
+    m_cv_done.wait(lock, [&]() EXCLUSIVE_LOCKS_REQUIRED(m_mutex) { return m_backlog.Bytes() <= limit_bytes; });
 }
 
 void EffectsExecutor::ApplyCompletions()
@@ -76,8 +76,7 @@ void EffectsExecutor::ApplyCompletions()
 
 size_t EffectsExecutor::PendingBytes() const
 {
-    LOCK(m_mutex);
-    return m_pending_bytes;
+    return m_backlog.Bytes();
 }
 
 bool EffectsExecutor::HasPendingCompletions() const
@@ -117,7 +116,7 @@ void EffectsExecutor::Loop()
         {
             LOCK(m_mutex);
             m_done.emplace_back(std::move(item.completion), ok);
-            m_pending_bytes -= item.bytes;
+            m_backlog.Sub(item.bytes);
             m_io_running = false;
         }
         m_cv_done.notify_all();

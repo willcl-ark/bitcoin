@@ -347,7 +347,9 @@ public:
     using Options = kernel::BlockManagerOpts;
     using ReadRawBlockResult = util::Expected<std::vector<std::byte>, ReadRawError>;
 
-    explicit BlockManager(const util::SignalInterrupt& interrupt, Options opts);
+    //! `ledger` is the node's ledger of memory in flight (util/byte_ledger.h), the chainstate manager's; a
+    //! block manager made without one keeps its own.
+    explicit BlockManager(const util::SignalInterrupt& interrupt, Options opts, util::ByteLedger* ledger = nullptr);
     ~BlockManager();
 
     const util::SignalInterrupt& m_interrupt;
@@ -510,6 +512,10 @@ public:
     Mutex m_index_commit_mutex;
     uint64_t m_index_batch_committed GUARDED_BY(m_index_commit_mutex){0};
 
+    util::ByteLedger m_own_ledger;
+    //! The memory blocks hold in flight; the undo backlog is the executor's account in it.
+    util::ByteLedger& m_ledger;
+
     /**
      * The executor that runs this manager's deferred I/O (undo writes) and
      * carries the notifications that must follow it. Its completions are
@@ -522,7 +528,7 @@ public:
         // holding cs_main may be waiting for this worker's I/O.
         TRY_LOCK(::cs_main, locked);
         if (locked) m_effects.ApplyCompletions();
-    }};
+    }, &m_ledger[util::ByteAccountId::UndoBacklog]};
     //! Set on the executor when a block's undo data could not be written (a fatal error is raised with
     //! it). The block is connected in memory by then; no chainstate write is made once this is set, so
     //! that the database never holds a block's coins without the undo data to take them back.
@@ -540,7 +546,8 @@ public:
     void SettleUndoWriteOf(const CBlockIndex& block) LOCKS_EXCLUDED(::cs_main);
     //! Apply completed effects without waiting for the rest.
     void ApplyEffectCompletions() EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
-    //! Bytes of undo data queued but not yet written; the connect loop waits below MAX_UNDO_BACKLOG_BYTES.
+    //! The limit of the ledger's undo backlog account: bytes of undo data queued but not yet written. The
+    //! connect loop waits until the account is within it.
     static constexpr size_t MAX_UNDO_BACKLOG_BYTES{64 * 1024 * 1024};
 
     /** Store block on disk and update block file statistics.

@@ -1541,14 +1541,16 @@ BlockManager::~BlockManager()
     m_effects.Stop();
 }
 
-BlockManager::BlockManager(const util::SignalInterrupt& interrupt, Options opts)
+BlockManager::BlockManager(const util::SignalInterrupt& interrupt, Options opts, util::ByteLedger* ledger)
     : m_prune_mode{opts.prune_target > 0},
       m_obfuscation{InitBlocksdirXorKey(opts)},
       m_opts{std::move(opts)},
       m_block_file_seq{FlatFileSeq{m_opts.blocks_dir, "blk", m_opts.fast_prune ? 0x4000 /* 16kB */ : BLOCKFILE_CHUNK_SIZE}},
       m_undo_file_seq{FlatFileSeq{m_opts.blocks_dir, "rev", UNDOFILE_CHUNK_SIZE}},
-      m_interrupt{interrupt}
+      m_interrupt{interrupt},
+      m_ledger{ledger ? *ledger : m_own_ledger}
 {
+    m_ledger[util::ByteAccountId::UndoBacklog].SetLimit(MAX_UNDO_BACKLOG_BYTES);
     m_effects.Start();
     m_block_tree_db = std::make_unique<BlockTreeDB>(m_opts.block_tree_db_params);
 

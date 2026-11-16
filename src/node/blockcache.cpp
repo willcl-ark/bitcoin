@@ -26,7 +26,7 @@ void BlockCache::Insert(int height, const std::shared_ptr<const CBlock>& block, 
     // With the budget used up by blocks the tip has not passed, a block above all of them would be the first to
     // go: it is neither measured nor kept (a reindex's files, read far ahead of the tip, pass here). Used up
     // means the block's known size does not fit, or, not measured yet, the last insertion had to drop blocks.
-    if (WITH_LOCK(m_mutex, return !m_blocks.empty() && (bytes > 0 ? m_bytes + bytes > m_budget : m_full) &&
+    if (WITH_LOCK(m_mutex, return !m_blocks.empty() && (bytes > 0 ? !m_account.Admits(bytes) : m_full) &&
                                   m_blocks.begin()->first.first > tip_height && height > std::prev(m_blocks.end())->first.first)) {
         return;
     }
@@ -35,17 +35,17 @@ void BlockCache::Insert(int height, const std::shared_ptr<const CBlock>& block, 
     LOCK(m_mutex);
     // Blocks the tip has passed will never be taken.
     while (!m_blocks.empty() && m_blocks.begin()->first.first <= tip_height) {
-        m_bytes -= m_blocks.begin()->second.bytes;
+        m_account.Sub(m_blocks.begin()->second.bytes);
         m_blocks.erase(m_blocks.begin());
         m_full = false;
     }
     const auto [it, inserted]{m_blocks.try_emplace({height, block->GetHash()}, Entry{block, bytes})};
     if (!inserted) return;
-    m_bytes += bytes;
+    m_account.Add(bytes);
     // Over budget: the highest blocks go first, the lowest connect next.
-    while (m_bytes > m_budget) {
+    while (!m_account.Admits()) {
         const auto last{std::prev(m_blocks.end())};
-        m_bytes -= last->second.bytes;
+        m_account.Sub(last->second.bytes);
         m_blocks.erase(last);
         m_full = true;
     }
@@ -57,7 +57,7 @@ void BlockCache::Drop(int height, const uint256& hash)
     LOCK(m_mutex);
     const auto it{m_blocks.find({height, hash})};
     if (it == m_blocks.end()) return;
-    m_bytes -= it->second.bytes;
+    m_account.Sub(it->second.bytes);
     m_blocks.erase(it);
     m_full = false;
 }
@@ -74,7 +74,7 @@ std::shared_ptr<const CBlock> BlockCache::Take(int height, const uint256& hash, 
     ++m_hits;
     std::shared_ptr<const CBlock> block{std::move(it->second.block)};
     if (bytes) *bytes = it->second.bytes;
-    m_bytes -= it->second.bytes;
+    m_account.Sub(it->second.bytes);
     m_blocks.erase(it);
     m_full = false;
     return block;

@@ -8,6 +8,7 @@
 #include <primitives/block.h>
 #include <sync.h>
 #include <uint256.h>
+#include <util/byte_ledger.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -31,13 +32,15 @@ class BlockCache
 {
     mutable Mutex m_mutex;
     const size_t m_budget;
+    //! What the kept blocks count, changed under m_mutex, with the budget as its limit.
+    util::ByteAccount m_own_account;
+    util::ByteAccount& m_account;
     struct Entry {
         std::shared_ptr<const CBlock> block;
         size_t bytes;
     };
     //! Ordered by height, then hash.
     std::map<std::pair<int, uint256>, Entry> m_blocks GUARDED_BY(m_mutex);
-    size_t m_bytes GUARDED_BY(m_mutex){0};
     //! The last insertion dropped blocks to stay within the budget, and nothing has left since: the budget is
     //! used up, and a block above every one kept would be the first to go.
     bool m_full GUARDED_BY(m_mutex){false};
@@ -45,7 +48,13 @@ class BlockCache
     uint64_t m_misses GUARDED_BY(m_mutex){0};
 
 public:
-    explicit BlockCache(size_t budget) : m_budget{budget} {}
+    //! `account` is where the kept blocks are counted (util/byte_ledger.h); a cache made without one keeps
+    //! its own.
+    explicit BlockCache(size_t budget, util::ByteAccount* account = nullptr)
+        : m_budget{budget}, m_account{account ? *account : m_own_account}
+    {
+        m_account.SetLimit(budget);
+    }
 
     //! What a block counts against the budget.
     static size_t Bytes(const CBlock& block);
@@ -60,7 +69,7 @@ public:
     void Drop(int height, const uint256& hash) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
 
     size_t Budget() const { return m_budget; }
-    size_t Bytes() const EXCLUSIVE_LOCKS_REQUIRED(!m_mutex) { return WITH_LOCK(m_mutex, return m_bytes); }
+    size_t Bytes() const { return m_account.Bytes(); }
     size_t Count() const EXCLUSIVE_LOCKS_REQUIRED(!m_mutex) { return WITH_LOCK(m_mutex, return m_blocks.size()); }
     //! Takes that found the block, and takes that did not.
     std::pair<uint64_t, uint64_t> HitsAndMisses() const EXCLUSIVE_LOCKS_REQUIRED(!m_mutex)
