@@ -18,6 +18,7 @@
 #include <condition_variable>
 #include <exception>
 #include <functional>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <stdexcept>
@@ -1867,6 +1868,50 @@ std::unique_ptr<CoinsStore::WriteOutRun> CoinsStore::PrepareWriteOut(int bound_h
     Assume(final || run->settled_height >= bound_height);
     m_inflight_settled_height = run->settled_height;
     return run;
+}
+
+void CoinsStore::WritePrepared(WriteOutRun& run, const std::function<uint256(int)>& block_at, uint64_t batch_bytes)
+{
+    const uint64_t limit{std::max<uint64_t>(batch_bytes, 1)};
+    std::vector<CoinWrite>& writes{run.writes};
+    std::vector<CoinWrite> chunk;
+    WriteSorter sorter;
+    // The changes were collected shard by shard from the lowest, the records' last (PrepareWriteOut()): taken
+    // from the back a chunk at a time and each chunk sorted, they reach the database from the highest key
+    // down, as a streamed run's do, and the marker in the first batch sorts above every coin's.
+    while (!writes.empty()) {
+        size_t begin{writes.size()};
+        uint64_t size{0};
+        while (begin > 0 && size < limit) size += BatchBytes(writes[--begin]);
+        chunk.assign(std::make_move_iterator(writes.begin() + begin), std::make_move_iterator(writes.end()));
+        writes.erase(writes.begin() + begin, writes.end());
+        SortWrites(chunk, 0, sorter);
+        base->WriteRun(chunk, run.new_head, run.old_head, /*final=*/false);
+    }
+    writes.shrink_to_fit();
+    if (run.final) {
+        base->WriteRun({}, run.new_head, run.old_head, /*final=*/true);
+    } else {
+        // As at the end of StreamWriteOut(): the pair the next run starts from, on disk before the tier counts
+        // the run as written.
+        run.settled_head = block_at(run.settled_height);
+        base->WriteRun({}, run.new_head, run.settled_head, /*final=*/false);
+    }
+    // The written entries become clean here, as a streamed run's chunks do, rather than in CommitWriteOut()
+    // under the owner's lock. They were collected shard by shard, so a shard's are adjacent; its lock is
+    // let go now and then, for the appliers.
+    static constexpr size_t SETTLE_BATCH{1024};
+    for (size_t i{0}; i < run.nodes.size();) {
+        Shard& shard{ShardFor(run.nodes[i]->first)};
+        LOCK(shard.mutex);
+        // A settled node may be erased: the next one's shard is looked up before it is settled.
+        for (size_t n{0}; n < SETTLE_BATCH && i < run.nodes.size() && &ShardFor(run.nodes[i]->first) == &shard; ++n, ++i) {
+            SettleNode(shard, *run.nodes[i]);
+        }
+        ++shard.settles;
+    }
+    run.nodes.clear();
+    run.nodes.shrink_to_fit();
 }
 
 void CoinsStore::CommitWriteOut(const WriteOutRun& run)

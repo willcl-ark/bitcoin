@@ -375,6 +375,16 @@ public:
     //! BeginWriteOut() with the whole run collected at once into `writes`, for a caller that writes it
     //! itself; nullptr also if nothing collected and the run is not final.
     std::unique_ptr<WriteOutRun> PrepareWriteOut(int bound_height, int head_height, const uint256& new_head, bool final);
+    /**
+     * Write a run from PrepareWriteOut() through the base, a chunk of about `batch_bytes` at a time, close
+     * its marker as StreamWriteOut() does, filling in the settled head, and settle the written entries under
+     * their shards' locks (an entry changed since stays dirty), leaving CommitWriteOut() none to settle. It
+     * may run on another thread than the owner's while the owner confirms, unwinds and disconnects blocks:
+     * what the run writes was collected at once, in one state of the tier, and settling an entry is what a
+     * streamed run does beside the appliers. The run's changes are freed once written.
+     * Throws what the base's WriteRun() throws; the run is then abandoned (AbandonWriteOut()).
+     */
+    void WritePrepared(WriteOutRun& run, const std::function<uint256(int)>& block_at, uint64_t batch_bytes = DEFAULT_DB_CACHE_BATCH);
     //! Coins a disconnect restored that the database may never have held (see DisconnectTip()): the next
     //! run writes them first, before its marker, and a forced flush before anything (TakeRestored()). The
     //! database may hold them from now on, so none of them stays fresh: a later spend is written as an
