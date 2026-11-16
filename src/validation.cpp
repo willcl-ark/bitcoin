@@ -4159,6 +4159,11 @@ void Chainstate::RunConnectTask(StagedConnect& staged) noexcept
         {
             const auto timer{staged.Time(StagedConnect::READ)};
             read = m_blockman.ReadBlock(*block, in.ctx.block_pos, in.ctx.block_hash, &block_bytes);
+            // A window block's file is read once by a sync that runs for hours beside a coins store of many
+            // gigabytes: the pages the system keeps of the files it has read are memory the store's huge
+            // pages are then not granted from (the fault falls back to small pages, and reclaims and
+            // compacts on this thread first). The files well behind this block's are let go.
+            if (read && staged.sync) m_blockman.ReleaseBlockFilesBelow(in.ctx.block_pos.nFile - node::BlockManager::BLOCK_FILE_RELEASE_LAG);
         }
         if (!read) {
             staged.time_read = staged.time_connected = SteadyClock::now();
