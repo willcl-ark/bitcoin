@@ -87,7 +87,7 @@ inline constexpr ModeChoiceRow MODE_CHOICES[]{
      "every peer may be asked, up to the fixed number in transit",
      "none: a choice of what to ask for"},
     {ModeChoice::HandlerWaits,
-     "ProcessMessage(), for the message",
+     "ProcessMessage(), for the message (node/message_tip_rule.h)",
      "the handler waits neither for the receive tasks nor for the connector",
      "it waits for both before a message that is judged against the tip",
      "O1: no transaction is accepted, and blocks are stored beside each other on purpose"},

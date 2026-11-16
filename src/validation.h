@@ -291,6 +291,17 @@ MempoolAcceptResult AcceptToMemoryPool(Chainstate& active_chainstate, const CTra
     EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
 /**
+ * AcceptToMemoryPool() for a transaction that comes from outside validation: a peer's, an RPC's or the
+ * wallet's (ChainstateManager::ProcessTransaction()), or one of the mempool file (LoadMempool()). The one
+ * way such a transaction reaches the mempool: unless it is only tested, the signals of the blocks connected
+ * so far are handed over first (precondition O7), so that it is announced after the blocks it builds on.
+ * Validation's own re-adds of a reorganisation call AcceptToMemoryPool(), before the new blocks' signals.
+ */
+MempoolAcceptResult SubmitToMemoryPool(Chainstate& active_chainstate, const CTransactionRef& tx,
+                                       int64_t accept_time, bool bypass_limits, bool test_accept)
+    EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+
+/**
 * Validate (and maybe submit) a package to the mempool. See doc/policy/packages.md for full details
 * on package validation rules.
 * @param[in]    test_accept         When true, run validation checks but don't submit to mempool.
@@ -525,29 +536,70 @@ struct DeploymentFlags {
  * can be tested it is asserted (Assume, so that a debug build stops and a
  * release build goes on as before).
  *
+ * Blocks are received, connected and written beside each other, so some of
+ * these no longer hold by construction. "In flight:" says for each what
+ * holds it now: the condition as it was ("holds"), a named call that waits
+ * until it holds again, or a deferral, work put off until it does. A call
+ * site that relies on a condition calls the wait; none reads the state it
+ * waits for by itself.
+ *
  *  O1  The only half-processed state a block can be seen in is "stored, not
  *      yet activated", and calling ActivateBestChain() closes it.
  *      ProcessNewBlock() opens it; ProcessGetBlockData() and the GETBLOCKS
  *      handler in net_processing close it before they answer.
+ *      In flight: a block handed to the connector is in that state until
+ *      the connector has activated it. Wait: WaitForPendingBlocks(), and
+ *      before it the wait for the receive tasks left from initial block
+ *      download (PeerManagerImpl::WaitForPendingBlocks()), made in one
+ *      place before the handler of a message that is judged against the
+ *      tip (PeerManagerImpl::ProcessMessage()), and before an orphan is
+ *      considered again. Which messages those are, and why each of the
+ *      others is not one, is the table of node/message_tip_rule.h, with a
+ *      row for every message type. The wait is not made in initial
+ *      block download, where no transaction is accepted and blocks are
+ *      stored beside each other on purpose. Outside it the two handlers
+ *      activate as before; in it the connector does and they answer from
+ *      what is connected.
  *  O2  When AcceptBlock() returns for a new block, its data, its position
  *      and BLOCK_VALID_TRANSACTIONS are recorded together. Asserted there,
  *      as the postcondition of ReceivedBlockTransactions().
+ *      In flight: holds. The block is written with cs_main released and
+ *      recorded in one hold of it afterwards (FinishAcceptBlock()); until
+ *      then it is being stored (ChainstateManager::IsBlockBeingStored()),
+ *      which no reader of its data takes for stored. A second copy of
+ *      the block does (PrepareAcceptBlockHeader()): it is dropped as a
+ *      block already had, before the first is recorded, and submitblock
+ *      answers "duplicate" where master's caller waited for the write.
  *  O3  BlockChecked is delivered under cs_main before the tip moves: the
  *      order of the statements in PublishConnectTip(), with O9's assertion
  *      above.
+ *      In flight: holds. A block of the window is checked ahead of the tip;
+ *      its verdict is delivered in PublishConnectTip(), under cs_main,
+ *      before the tip moves to it.
  *  O4  NewPoWValidBlock is delivered under cs_main before the block is
  *      written, and only for a block on top of the tip. Not asserted: both
  *      conditions are the control flow of AcceptBlock().
+ *      In flight: holds, as "before the block is recorded as stored".
+ *      Deferral: a peer's request for the announced block is asked again
+ *      until the block is stored (ProcessGetBlockData()).
  *  O5  Message processing requests only blocks that are not stored, and
  *      a block is "received, not stored" only inside the handling of the
  *      one message that delivers it: BLOCK, or the BLOCKTXN or CMPCTBLOCK
  *      that completes a compact block (O13). Not asserted: the
  *      getblockfrompeer RPC checks and requests in two holds of cs_main
  *      and may request a stored block.
+ *      In flight: a block whose task runs on the connect pool is received
+ *      and not stored for longer than one message. Deferral: its request
+ *      stays in flight until the block is stored, so it is not asked for
+ *      again, and a second copy from the same peer is dropped while the
+ *      first one's task runs (HandOffBlock()).
  *  O6  The tip is the fully connected frontier: its coins are in the tip
  *      view and its transaction counts are known. Asserted in PublishTip(),
  *      where the tip view's best block is the tip or, after a write-out
  *      that failed inside DisconnectTip(), a block of the chain below it.
+ *      In flight: holds. Blocks of the window are connected ahead of the
+ *      tip, each on a view of its own, and none is the tip before it is
+ *      published.
  *  O7  Signals are queued under cs_main in the order of connection, and
  *      what they name is stored and connected. Asserted in part. That the
  *      block is stored and is the tip, or has left the chain, is checked
@@ -559,28 +611,53 @@ struct DeploymentFlags {
  *      block's undo write. DisconnectTip() asserts that no BlockConnected
  *      still waits; its callers settle them before the first disconnect
  *      (PlanConnectStep(), InvalidateBlock()).
+ *      In flight: a signal is queued under cs_main, with its number, behind
+ *      the block's undo write, and leaves when that has run. Wait:
+ *      BlockManager::SettleBlockSignals(), outside initial block download
+ *      before cs_main is released by the step that connected the block, and
+ *      in it before a transaction is submitted to the mempool
+ *      (SubmitToMemoryPool(), ProcessNewPackage()).
  *  O8  A flush never sees a half-applied block: the coins' best block is
  *      a block of the chain, or the one block on top of it that is being
  *      connected, or was when a write-out failed: the write is made
  *      before the block becomes the tip (PublishConnectTip()), and nothing
  *      can fail once it is. Asserted in FlushStateToDisk().
+ *      In flight: a write-out run writes the coins beside the connector.
+ *      Wait: Chainstate::SettleWriteOut() before another run starts, a
+ *      flush goes on or the block index is written.
  *  O9  Connection is strictly sequential: a block is connected on top of
  *      the tip, one ActivateBestChain() at a time. PublishConnectTip()
  *      asserts the first; the second is m_chainstate_mutex.
+ *      In flight: holds for what is published: a block is published on top
+ *      of the tip and nowhere else (asserted in PublishConnectTip()).
+ *      Blocks of the window are connected ahead of that, each on the view
+ *      its parent staged.
  *  O10 nSequenceId is assigned in arrival order, in
  *      ReceivedBlockTransactions() under cs_main.
+ *      In flight: holds, as the order in which blocks are recorded as
+ *      stored; blocks written beside each other may be recorded in another
+ *      order than they arrived in.
  *  O11 A file position copied under cs_main stays readable afterwards, or
  *      the reader handles the failed read (node::BlockFacts).
+ *      In flight: a connected block's undo position is null until its
+ *      queued write has run. Wait: BlockManager::SettleUndoWriteOf() for a
+ *      reader of one block's undo data, BlockManager::SettleUndoWrites()
+ *      before blocks are disconnected or verified.
  *  O12 The block index invariants hold whenever cs_main is free.
  *      CheckBlockIndex() checks them.
+ *      In flight: holds.
  *  O13 Messages are processed on one thread, so a block request may be
  *      removed before the block is stored and no message asks for the
  *      block again in between. Asserted at the BLOCK message and in
  *      ProcessCompactBlockTxns().
+ *      In flight: holds on the message handler, and is asserted only there.
+ *      For a block on the connect pool see O5.
  *  O14 InvalidateBlock() tolerates blocks arriving between its lock drops,
  *      by going over the block index again at its end.
+ *      In flight: holds.
  *  O15 The tip does not move while a block template or proposal is
  *      checked: TestBlockValidity() runs under cs_main.
+ *      In flight: holds. The tip is published under cs_main only.
  */
 
 /**
@@ -1053,7 +1130,11 @@ public:
     //! fires when it lands.
     bool StartWriteOutRun(BlockValidationState& state, int bound_height, bool final, std::optional<size_t> evict_to = {},
                           FlushStateMode mode = FlushStateMode::NONE, bool for_prune = false) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
-    //! Wait for a write-out run in flight (and every effect queued before it) and apply its completion.
+    //! Wait for a write-out run in flight and every effect queued before now (the undo writes, and the
+    //! sync of an undo file that the last of them completed) and apply their completions. Nothing is
+    //! queued meanwhile: effects are queued under cs_main, which the caller holds. Precondition O8 with
+    //! blocks in flight: no run is half way when the caller goes on, and what a write of the block
+    //! index is about to record is on disk before it.
     void SettleWriteOut() EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     //! Resize the CoinsViews caches dynamically and flush state to disk.

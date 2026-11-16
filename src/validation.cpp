@@ -1837,12 +1837,19 @@ MempoolAcceptResult AcceptToMemoryPool(Chainstate& active_chainstate, const CTra
  * the blocks it builds on, as outside it: the queue is settled first. Not in the mempool's own re-adds of a
  * reorganisation, which come before the new blocks' signals (FinishConnectStep()).
  */
-static void SettleBlockSignals(Chainstate& chainstate) EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
+static void SettleBlockSignalsBeforeTx(Chainstate& chainstate) EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
 {
     AssertLockHeld(::cs_main);
     if (!chainstate.m_chainman.IsInitialBlockDownload()) return;
-    chainstate.m_blockman.m_effects.WaitForIO();
-    chainstate.m_blockman.ApplyEffectCompletions();
+    chainstate.m_blockman.SettleBlockSignals();
+}
+
+MempoolAcceptResult SubmitToMemoryPool(Chainstate& active_chainstate, const CTransactionRef& tx,
+                                       int64_t accept_time, bool bypass_limits, bool test_accept)
+{
+    AssertLockHeld(::cs_main);
+    if (!test_accept) SettleBlockSignalsBeforeTx(active_chainstate);
+    return AcceptToMemoryPool(active_chainstate, tx, accept_time, bypass_limits, test_accept);
 }
 
 PackageMempoolAcceptResult ProcessNewPackage(Chainstate& active_chainstate, CTxMemPool& pool,
@@ -1851,7 +1858,7 @@ PackageMempoolAcceptResult ProcessNewPackage(Chainstate& active_chainstate, CTxM
     AssertLockHeld(cs_main);
     assert(!package.empty());
     assert(std::all_of(package.cbegin(), package.cend(), [](const auto& tx){return tx != nullptr;}));
-    if (!test_accept) SettleBlockSignals(active_chainstate);
+    if (!test_accept) SettleBlockSignalsBeforeTx(active_chainstate);
 
     std::vector<COutPoint> coins_to_uncache;
     auto result = [&]() EXCLUSIVE_LOCKS_REQUIRED(cs_main) {
@@ -3448,10 +3455,6 @@ bool Chainstate::FlushStateToDisk(
                     // be written records them, and the coins DB must never be ahead of the undo data needed to
                     // roll it back.
                     SettleWriteOut();
-                    Assume(m_blockman.m_effects.PendingBytes() == 0);
-                    // The last sync of a completed undo file, queued behind its last write
-                    // (BlockManager::FindNextBlockPos()), lands as well before the block index is written.
-                    m_blockman.m_effects.WaitForIO();
                     // See ConnectBlock(): the fatal error is raised already.
                     if (m_blockman.m_undo_write_failed) return state.Error("Failed to write undo data");
                     // See StartWriteOutRun(): a failed run's fatal error is raised already.
@@ -3570,7 +3573,6 @@ bool Chainstate::FlushStateToDisk(
                         // and the block and undo data it refers to is made durable before it, as in every
                         // other write of it.
                         SettleWriteOut();
-                        m_blockman.m_effects.WaitForIO();
                         if (m_blockman.m_undo_write_failed) return state.Error("Failed to write undo data");
                         if (m_blockman.m_index_batch_lost) return state.Error("Failed to write the block index");
                         step(node::FlushStep::SyncFiles);
@@ -4416,10 +4418,7 @@ bool Chainstate::PublishConnectTip(
         // At the block that ends initial block download, the BlockConnected of earlier blocks may still wait
         // on the effects queue: they leave first, so that this block's mempool removals follow them. Not in a
         // step that disconnected blocks, whose signals leave after the re-added transactions (FinishConnectStep()).
-        if (was_in_ibd && !reorg) {
-            m_blockman.m_effects.WaitForIO();
-            m_blockman.ApplyEffectCompletions();
-        }
+        if (was_in_ibd && !reorg) m_blockman.SettleBlockSignals();
         m_chainman.m_options.signals->MempoolTransactionsRemovedForBlock(block_to_connect, std::move(txs_removed_for_block), pindexNew->nHeight);
     }
     UpdateTip(pindexNew);
@@ -4476,10 +4475,7 @@ bool Chainstate::PublishConnectTip(
         // released is announced after the block it builds on, and the next block's mempool removals after
         // this block. In a step that disconnected blocks they leave once the disconnected transactions
         // are back in the mempool (FinishConnectStep()), under the same hold, as they always did.
-        if (!m_chainman.IsInitialBlockDownload() && !reorg) {
-            m_blockman.m_effects.WaitForIO();
-            m_blockman.ApplyEffectCompletions();
-        }
+        if (!m_chainman.IsInitialBlockDownload() && !reorg) m_blockman.SettleBlockSignals();
     }
     return true;
 }
@@ -4728,10 +4724,7 @@ bool Chainstate::FinishConnectStep(BlockValidationState& state, ConnectStep& ste
         MaybeUpdateMempoolForReorg(step.disconnectpool, true);
         m_readding_disconnected = false;
         // The connected blocks' signals, held back by PublishConnectTip(), after the re-added transactions'.
-        if (m_chainman.m_options.signals && !m_chainman.IsInitialBlockDownload()) {
-            m_blockman.m_effects.WaitForIO();
-            m_blockman.ApplyEffectCompletions();
-        }
+        if (m_chainman.m_options.signals && !m_chainman.IsInitialBlockDownload()) m_blockman.SettleBlockSignals();
         // The write-out check the step's publications left out, now that its signals are out.
         if (!FlushStateToDisk(state, FlushStateMode::IF_NEEDED)) return false;
     }
@@ -4840,8 +4833,7 @@ bool Chainstate::NotifyTipAdvanced(CBlockIndex* pindexNewTip, const CBlockIndex*
             // wait for the pass's undo writes (what the synchronous write used to cost here) and hand the
             // completions on before the lock goes. Peers are announced new blocks one at a time this way,
             // not in a batch that net_processing would turn into inv announcements.
-            m_blockman.m_effects.WaitForIO();
-            m_blockman.ApplyEffectCompletions();
+            m_blockman.SettleBlockSignals();
         }
     }
     // Just stopping and returning success for now. This could be changed to bubble up the
@@ -6693,8 +6685,7 @@ MempoolAcceptResult ChainstateManager::ProcessTransaction(const CTransactionRef&
         state.Invalid(TxValidationResult::TX_NO_MEMPOOL, "no-mempool");
         return MempoolAcceptResult::Failure(state);
     }
-    if (!test_accept) SettleBlockSignals(active_chainstate);
-    auto result = AcceptToMemoryPool(active_chainstate, tx, GetTime(), /*bypass_limits=*/ false, test_accept);
+    auto result = SubmitToMemoryPool(active_chainstate, tx, GetTime(), /*bypass_limits=*/ false, test_accept);
     active_chainstate.GetMempool()->check(active_chainstate.CoinsTip(), active_chainstate.m_chain.Height() + 1);
     return result;
 }

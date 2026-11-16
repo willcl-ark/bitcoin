@@ -1312,6 +1312,13 @@ void BlockManager::ApplyEffectCompletions()
     m_effects.ApplyCompletions();
 }
 
+void BlockManager::SettleBlockSignals()
+{
+    AssertLockHeld(::cs_main);
+    m_effects.WaitForIO();
+    m_effects.ApplyCompletions();
+}
+
 bool BlockManager::ReadBlock(CBlock& block, const FlatFilePos& pos, const std::optional<uint256>& expected_hash, size_t* bytes_read) const
 {
     block.SetNull();

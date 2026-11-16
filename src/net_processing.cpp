@@ -32,6 +32,7 @@
 #include <netmessagemaker.h>
 #include <node/blockstorage.h>
 #include <node/connection_types.h>
+#include <node/message_tip_rule.h>
 #include <node/protocol_version.h>
 #include <node/timeoffsets.h>
 #include <node/txdownloadman.h>
@@ -1135,7 +1136,8 @@ private:
     /** Whether any peer's block is with the connect pool. */
     bool BlockTasksOutstanding() const EXCLUSIVE_LOCKS_REQUIRED(!m_block_tasks_mutex);
     /**
-     * The message handler's wait before a message that is judged against the tip (precondition O1):
+     * The message handler's wait before a message that is judged against the tip (precondition O1), made
+     * by ProcessMessage() for the messages node/message_tip_rule.h names and by ProcessOrphanTx():
      * ChainstateManager::WaitForPendingBlocks(), and before it, out of initial block download, the wait for
      * the receive tasks left from it. Their blocks were sent before the message and have not reached the
      * connector, which would not wait for them. In initial block download neither is made: `mode` is the
@@ -4717,6 +4719,14 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         }
     }
 
+    // Precondition O1: the one place a message waits for the blocks accepted before it. The table says which
+    // messages are judged against the tip, and why (node/message_tip_rule.h); no handler below waits by
+    // itself, and none of them is reached before this point. On master this thread connected each block
+    // before the next message. Outside initial block download only: by the message's copy of the mode,
+    // neither wait is made in it. The peer's bad-block mark is looked at in front of this point, before the
+    // message is taken (ProcessMessages()).
+    if (node::TipRuleOf(msg_type) == node::TipRule::PendingBlocksConnected) WaitForPendingBlocks(mode);
+
     if (msg_type == NetMsgType::ADDR || msg_type == NetMsgType::ADDRV2) {
         const auto ser_params{
             msg_type == NetMsgType::ADDRV2 ?
@@ -5034,8 +5044,7 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         }
 
         // The answer is read from the active chain: a block accepted before, which the peer may know from
-        // its announcement, is connected first (precondition O1).
-        WaitForPendingBlocks(mode);
+        // its announcement, was connected first (precondition O1, the wait of ProcessMessage()).
         LOCK(cs_main);
 
         // Don't serve headers from our active chain until our chainwork is at least
@@ -5126,8 +5135,8 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
                      txid.ToString(), pfrom.LogPeer());
         }
 
-        // A block accepted before this transaction is connected before it is judged (it may spend its outputs).
-        WaitForPendingBlocks(mode);
+        // A block accepted before this transaction was connected before it is judged (it may spend its
+        // outputs): the wait of ProcessMessage().
         LOCK2(cs_main, m_tx_download_mutex);
 
         const auto& [should_validate, package_to_validate] = m_txdownloadman.ReceivedTx(pfrom.GetId(), ptx);
@@ -5200,9 +5209,8 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         // A compact block is taken as one where it is at most two above the tip, and asked for in full
         // otherwise. Judged against a tip that lags the blocks this thread accepted, a block goes the slow
         // way and the one after it is stored first; on master this thread connected each block before the
-        // next message. So, as before a transaction, the blocks accepted before are connected first.
-        // (Outside initial block download: in it the wait returns at once.)
-        WaitForPendingBlocks(mode);
+        // next message. So, as before a transaction, the blocks accepted before were connected first
+        // (the wait of ProcessMessage(); outside initial block download).
 
         CBlockHeaderAndShortTxIDs cmpctblock;
         vRecv >> cmpctblock;
@@ -5461,10 +5469,8 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         BlockTransactions resp;
         vRecv >> resp;
 
-        // As for a block: the blocks accepted before are connected before this one is completed and
-        // processed, so that it finds its parent connected (precondition O1). Returns at once in initial
-        // block download.
-        WaitForPendingBlocks(mode);
+        // As for a block: the blocks accepted before were connected before this one is completed and
+        // processed, so that it finds its parent connected (precondition O1, the wait of ProcessMessage()).
         return ProcessCompactBlockTxns(pfrom, peer, resp);
     }
 
@@ -5533,9 +5539,8 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         if (HandOffBlock(peer, vRecv, mode)) return;
         // Outside initial block download a block is connected before the next one is processed, as it was
         // when the message handler connected it: a block that arrives behind its parent finds the parent
-        // connected, and is announced as a new proof-of-work-valid block where it would have been (O1).
-        // Returns at once in initial block download.
-        WaitForPendingBlocks(mode);
+        // connected, and is announced as a new proof-of-work-valid block where it would have been (O1, the
+        // wait of ProcessMessage()).
         ProcessBlockMessage(peer, &pfrom, std::span<const std::byte>{vRecv.data(), vRecv.size()});
         return;
     }

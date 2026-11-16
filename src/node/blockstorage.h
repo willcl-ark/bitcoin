@@ -539,6 +539,8 @@ public:
     //! leave those entries out.
     std::atomic<bool> m_index_batch_lost{false};
     //! Wait for every queued effect's I/O and apply the completions. May be called with or without cs_main.
+    //! Precondition O11 (validation.h) with blocks in flight: the undo data of every connected block is on
+    //! disk and its position recorded, for a caller that disconnects blocks or verifies them.
     void SettleUndoWrites();
     //! SettleUndoWrites() only if the block's undo write is queued, for a reader of that block's undo data:
     //! any other block's undo is on disk already or not to be written, and its reader does not wait behind
@@ -546,6 +548,10 @@ public:
     void SettleUndoWriteOf(const CBlockIndex& block) LOCKS_EXCLUDED(::cs_main);
     //! Apply completed effects without waiting for the rest.
     void ApplyEffectCompletions() EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    //! Precondition O7 (validation.h) with blocks in flight: a connected block's signal is queued behind the
+    //! block's undo write. This waits for the writes and hands the signals of the blocks connected so far to
+    //! the validation interface, in the order they were queued, before the caller goes on or releases cs_main.
+    void SettleBlockSignals() EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
     //! The limit of the ledger's undo backlog account: bytes of undo data queued but not yet written. The
     //! connect loop waits until the account is within it.
     static constexpr size_t MAX_UNDO_BACKLOG_BYTES{64 * 1024 * 1024};
