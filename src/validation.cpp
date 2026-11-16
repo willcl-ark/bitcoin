@@ -4912,12 +4912,15 @@ bool ChainstateManager::NotifyHeaderTip()
     return fNotify;
 }
 
+//! The callbacks the validation interface queue may hold before the connector waits for it.
+static constexpr size_t MAX_PENDING_VALIDATION_CALLBACKS{10};
+
 static void LimitValidationInterfaceQueue(ValidationSignals& signals) LOCKS_EXCLUDED(cs_main) {
     AssertLockNotHeld(cs_main);
     // Checked whether or not the queue is long enough to be waited for this time.
     AssertMayWait("the validation signal queue");
 
-    if (signals.CallbacksPending() > 10) {
+    if (signals.CallbacksPending() > MAX_PENDING_VALIDATION_CALLBACKS) {
         signals.SyncWithValidationInterfaceQueue();
     }
 }
@@ -5140,6 +5143,18 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
             SteadyClock::duration pending_queue{};
             while (!step_over) {
                 const auto stage_start{SteadyClock::now()};
+                // The blocks a fill stages in the window are staged in one hold of cs_main and the mempool
+                // lock, taken with the first of them and kept until the fill ends: after a hold that
+                // published several blocks there are as many to stage, and each hold given up is one this
+                // thread queues for behind every thread that waits for the lock. The holds made per block
+                // below are taken inside it. A block's worker is started under it (the task takes no
+                // cs_main); a block that has to be validated here, for want of a worker, ends it first.
+                std::optional<UniqueLock<RecursiveMutex>> stage_lock_main;
+                std::optional<UniqueLock<RecursiveMutex>> stage_lock_mempool;
+                const auto release_stage_hold{[&] {
+                    stage_lock_mempool.reset();
+                    stage_lock_main.reset();
+                }};
                 // Keep the window full.
                 while (step->in_flight.size() < window) {
                     // The window is bounded by bytes as well as by blocks: the blocks in flight, their undo
@@ -5201,6 +5216,10 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                         LogDebug(BCLog::BENCH, "  - Load block from disk: %.2fms\n",
                                  Ticks<MillisecondsDouble>(staged->time_read - staged->time_start));
                     }
+                    if (staged->windowed && !stage_lock_main) {
+                        stage_lock_main.emplace(::cs_main, "cs_main", __FILE__, __LINE__);
+                        if (m_mempool) stage_lock_mempool.emplace(m_mempool->cs, "m_mempool->cs", __FILE__, __LINE__);
+                    }
                     {
                         LOCK(cs_main);
                         LOCK(MempoolMutex());
@@ -5214,11 +5233,13 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                         if (future) {
                             staged->done = std::move(*future);
                         } else {
+                            release_stage_hold();
                             RunConnectTask(*staged); // a pool without workers: here, as the tip path would
                         }
                     }
                     step->in_flight.push_back(std::move(staged));
                 }
+                release_stage_hold();
                 pending_stage += SteadyClock::now() - stage_start;
                 if (step->in_flight.empty()) {
                     if (step->use_window) window_account.Set(0);
@@ -5246,6 +5267,21 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                 const auto waited{SteadyClock::now() - wait_start};
                 SteadyClock::time_point periodic_start;
                 bool run_pending{false};
+                // Whether the next block in flight is published in the hold that published this one: it is
+                // complete, and neither of the waits made between two holds would be made before it (the
+                // undo backlog, the validation interface queue). Asked without waiting, under the hold.
+                const auto next_block_ready{[&] {
+                    if (step->in_flight.empty()) return false;
+                    if (const auto limit{m_chainman.m_bytes_in_flight[util::ByteAccountId::UndoBacklog].Limit()}; limit != 0 && m_blockman.m_effects.PendingBytes() > limit) return false;
+                    if (m_chainman.m_options.signals && m_chainman.m_options.signals->CallbacksPending() > MAX_PENDING_VALIDATION_CALLBACKS) return false;
+                    const StagedConnect& next{*step->in_flight.front()};
+                    LOCK(next.sync->mutex);
+                    return node::IsComplete(next.window);
+                }};
+                // The blocks published in this hold before `staged`: they go once the hold is over, as a
+                // block published alone does.
+                std::vector<std::unique_ptr<StagedConnect>> published;
+                bool leave{false};
                 {
                     LOCK(cs_main);
                     const TipPublisher publish_at_end{m_chainman};
@@ -5270,110 +5306,134 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                              Ticks<SecondsDouble>(m_chainman.time_window_run),
                              Ticks<SecondsDouble>(m_chainman.time_run_landing),
                              Ticks<SecondsDouble>(m_chainman.time_window_queue));
-                    if (std::holds_alternative<connect_phase::ReadFailed>(staged->at)) {
-                        DrainWindow(*step);
-                        staged->view->Unwind();
-                        FatalError(m_chainman.GetNotifications(), state, _("Failed to read block."));
-                        MaybeUpdateMempoolForReorg(step->disconnectpool, false);
-                        return false;
-                    }
-                    if (const CBlockIndex* target{TargetBlock()}; target && staged->pindex->nHeight > target->nHeight) {
-                        // Planned or staged before a target was set (see PlanNextBatch()): neither this block nor
-                        // those above it are this chainstate's to connect. The step ends at the target. A window
-                        // block's changes are in the store and are taken back; a block at the tip has its in its
-                        // view only, which goes with it, as for a block that failed there.
-                        DrainWindow(*step);
-                        if (staged->windowed) staged->view->Unwind();
-                        step->improved = true;
-                        break;
-                    }
-                    // BlockConnected signals must be sent for the role the chainstate has before the block is
-                    // published: publishing it may complete snapshot validation, which changes the result of
-                    // GetRole() from BACKGROUND to NORMAL. Read per block, under this hold: a step that uses the
-                    // window releases cs_main between blocks, and a snapshot activated meanwhile changes the role.
-                    const kernel::ChainstateRole role{this->GetRole()};
-                    if (!PublishConnectTip(state, *staged, staged->In<connect_phase::Validated>(), role, step->disconnectpool, step->blocks_disconnected)) {
-                        // The blocks above it rested on it.
-                        DrainWindow(*step);
-                        if (m_window_retry_serial) {
-                            // Failed in the window, which decides nothing: the step ends here, and the next
-                            // one connects the block alone.
-                            staged->view->Unwind();
-                            step->improved = true;
-                            break;
-                        }
-                        if (state.IsInvalid()) {
-                            // The block violates a consensus rule, and so does every block towards the step's
-                            // target (the batch may have been consumed by the window already).
-                            if (state.GetResult() != BlockValidationResult::BLOCK_MUTATED) {
-                                InvalidChainFound(step->target);
-                            }
-                            state = BlockValidationState();
-                            step->invalid_found = true;
-                            break;
-                        }
-                        // A system error occurred (disk space, database error, ...).
-                        // Make the mempool consistent with the current tip, just in case
-                        // any observers try to use it before shutdown.
-                        MaybeUpdateMempoolForReorg(step->disconnectpool, false);
-                        return false;
-                    }
-                    PruneBlockIndexCandidates();
-                    periodic_start = SteadyClock::now();
-                    if (!step->use_window) {
-                        if (!step->old_tip || m_chain.Tip()->nChainWork > step->old_tip->nChainWork) {
-                            // We're in a better position than we were. The step ends; the locks are kept for
-                            // the hold that finishes it and notifies.
-                            step->improved = true;
-                            tip_lock_main.emplace(::cs_main, "cs_main", __FILE__, __LINE__);
-                            tip_publisher.emplace(m_chainman);
-                            if (m_mempool) tip_lock_mempool.emplace(m_mempool->cs, "m_mempool->cs", __FILE__, __LINE__);
-                            break;
-                        }
-                    } else {
-                        // The tip moved: its notification goes out now, per block as at the tip, and so does
-                        // the periodic write, which a pass does once per step at the tip. The window goes on
-                        // unless a listener asked to stop or the node is going down, in which case the step
-                        // ends here, closed as a finished step is.
-                        // A write-out run it starts is waited for below, once the lock is released: the
-                        // database write is not made under cs_main. Nothing is published meanwhile (this
-                        // thread publishes), so the run sees no new confirmed change; the workers already
-                        // in flight go on applying, and what they touch stays dirty for the next run.
-                        // The run is queued ahead of this block's UpdatedBlockTip (NotifyTipAdvanced() below):
-                        // the validation queue has its ChainStateFlushed first, where master notifies the tip
-                        // and writes afterwards. No subscriber in the tree relates the two signals.
-                        m_defer_write_out_wait = true;
-                        const bool flushed{FlushStateToDisk(state, FlushStateMode::PERIODIC)};
-                        m_defer_write_out_wait = false;
-                        pending_write += SteadyClock::now() - periodic_start;
-                        if (!flushed) {
-                            SettleWriteOut();
+                    // Publish the block, and then every block above it that is complete already: a block
+                    // whose worker finished while a lower one was waited for or published needs no hold of
+                    // its own, and with one the tip would move at the pace at which this thread gets the
+                    // lock back. Each block is published as it is alone: its role, its periodic write, its
+                    // notification and what its failure or a stop does are per block, and the first block
+                    // that ends the step, starts a write-out run or would be waited for ends the hold.
+                    while (true) {
+                        if (std::holds_alternative<connect_phase::ReadFailed>(staged->at)) {
                             DrainWindow(*step);
+                            staged->view->Unwind();
+                            FatalError(m_chainman.GetNotifications(), state, _("Failed to read block."));
                             MaybeUpdateMempoolForReorg(step->disconnectpool, false);
                             return false;
                         }
-                        run_pending = CoinsStoreTip().RunInFlight();
-                        CBlockIndex* tip{m_chain.Tip()};
-                        const bool stop{NotifyTipAdvanced(tip, tip->pprev, m_chainman.IsInitialBlockDownload())};
-                        notified_tip = tip;
-                        if (stop || m_chainman.m_interrupt) {
-                            // The pass ends where it stands, without ActiveTipChange and without what the
-                            // end of a pass does on master before its own interrupt check (the periodic
-                            // write, the report that a snapshot's target is reached). On the way to
-                            // shutdown only.
-                            // The window's blocks are unwound next: the run lands first.
-                            SettleWriteOut();
-                            run_pending = false;
+                        if (const CBlockIndex* target{TargetBlock()}; target && staged->pindex->nHeight > target->nHeight) {
+                            // Planned or staged before a target was set (see PlanNextBatch()): neither this block nor
+                            // those above it are this chainstate's to connect. The step ends at the target. A window
+                            // block's changes are in the store and are taken back; a block at the tip has its in its
+                            // view only, which goes with it, as for a block that failed there.
                             DrainWindow(*step);
-                            if (!FinishConnectStep(state, *step)) return false;
-                            step.reset();
-                            pindexNewTip = tip;
-                            interrupted = true;
-                            pass_done = true;
-                            step_over = true;
+                            if (staged->windowed) staged->view->Unwind();
+                            step->improved = true;
+                            leave = true;
+                            break;
                         }
+                        // BlockConnected signals must be sent for the role the chainstate has before the block is
+                        // published: publishing it may complete snapshot validation, which changes the result of
+                        // GetRole() from BACKGROUND to NORMAL. Read per block, under this hold: a step that uses the
+                        // window releases cs_main between blocks, and a snapshot activated meanwhile changes the role.
+                        const kernel::ChainstateRole role{this->GetRole()};
+                        if (!PublishConnectTip(state, *staged, staged->In<connect_phase::Validated>(), role, step->disconnectpool, step->blocks_disconnected)) {
+                            // The blocks above it rested on it.
+                            DrainWindow(*step);
+                            if (m_window_retry_serial) {
+                                // Failed in the window, which decides nothing: the step ends here, and the next
+                                // one connects the block alone.
+                                staged->view->Unwind();
+                                step->improved = true;
+                                leave = true;
+                                break;
+                            }
+                            if (state.IsInvalid()) {
+                                // The block violates a consensus rule, and so does every block towards the step's
+                                // target (the batch may have been consumed by the window already).
+                                if (state.GetResult() != BlockValidationResult::BLOCK_MUTATED) {
+                                    InvalidChainFound(step->target);
+                                }
+                                state = BlockValidationState();
+                                step->invalid_found = true;
+                                leave = true;
+                                break;
+                            }
+                            // A system error occurred (disk space, database error, ...).
+                            // Make the mempool consistent with the current tip, just in case
+                            // any observers try to use it before shutdown.
+                            MaybeUpdateMempoolForReorg(step->disconnectpool, false);
+                            return false;
+                        }
+                        PruneBlockIndexCandidates();
+                        periodic_start = SteadyClock::now();
+                        if (!step->use_window) {
+                            if (!step->old_tip || m_chain.Tip()->nChainWork > step->old_tip->nChainWork) {
+                                // We're in a better position than we were. The step ends; the locks are kept for
+                                // the hold that finishes it and notifies.
+                                step->improved = true;
+                                tip_lock_main.emplace(::cs_main, "cs_main", __FILE__, __LINE__);
+                                tip_publisher.emplace(m_chainman);
+                                if (m_mempool) tip_lock_mempool.emplace(m_mempool->cs, "m_mempool->cs", __FILE__, __LINE__);
+                                leave = true;
+                                break;
+                            }
+                        } else {
+                            // The tip moved: its notification goes out now, per block as at the tip, and so does
+                            // the periodic write, which a pass does once per step at the tip. The window goes on
+                            // unless a listener asked to stop or the node is going down, in which case the step
+                            // ends here, closed as a finished step is.
+                            // A write-out run it starts is waited for below, once the lock is released: the
+                            // database write is not made under cs_main. Nothing is published meanwhile (this
+                            // thread publishes), so the run sees no new confirmed change; the workers already
+                            // in flight go on applying, and what they touch stays dirty for the next run.
+                            // The run is queued ahead of this block's UpdatedBlockTip (NotifyTipAdvanced() below):
+                            // the validation queue has its ChainStateFlushed first, where master notifies the tip
+                            // and writes afterwards. No subscriber in the tree relates the two signals.
+                            m_defer_write_out_wait = true;
+                            const bool flushed{FlushStateToDisk(state, FlushStateMode::PERIODIC)};
+                            m_defer_write_out_wait = false;
+                            pending_write += SteadyClock::now() - periodic_start;
+                            if (!flushed) {
+                                SettleWriteOut();
+                                DrainWindow(*step);
+                                MaybeUpdateMempoolForReorg(step->disconnectpool, false);
+                                return false;
+                            }
+                            run_pending = CoinsStoreTip().RunInFlight();
+                            CBlockIndex* tip{m_chain.Tip()};
+                            const bool stop{NotifyTipAdvanced(tip, tip->pprev, m_chainman.IsInitialBlockDownload())};
+                            notified_tip = tip;
+                            if (stop || m_chainman.m_interrupt) {
+                                // The pass ends where it stands, without ActiveTipChange and without what the
+                                // end of a pass does on master before its own interrupt check (the periodic
+                                // write, the report that a snapshot's target is reached). On the way to
+                                // shutdown only.
+                                // The window's blocks are unwound next: the run lands first.
+                                SettleWriteOut();
+                                run_pending = false;
+                                DrainWindow(*step);
+                                if (!FinishConnectStep(state, *step)) return false;
+                                step.reset();
+                                pindexNewTip = tip;
+                                interrupted = true;
+                                pass_done = true;
+                                step_over = true;
+                            } else if (!run_pending && next_block_ready()) {
+                                pending_periodic += SteadyClock::now() - periodic_start;
+                                published.push_back(std::move(staged));
+                                staged = std::move(step->in_flight.front());
+                                step->in_flight.pop_front();
+                                LOCK(staged->sync->mutex);
+                                Assert(!staged->sync->slots.empty() && staged->sync->slots.front() == staged.get());
+                                staged->sync->slots.pop_front();
+                                step->last_block_bytes = staged->bytes;
+                                continue;
+                            }
+                        }
+                        break;
                     }
                 }
+                if (leave) break;
                 // The write-out run the periodic write started: waited for with no lock held, before another
                 // block is staged or published.
                 const auto run_start{SteadyClock::now()};
