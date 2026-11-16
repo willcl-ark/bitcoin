@@ -2739,6 +2739,34 @@ static bool OpenBlocksCheckBIP30(const CBlockIndex& pindex, const Consensus::Par
     return ConnectBlockChecksBIP30(*Assert(pindex.GetAncestor(lowest)), params, bip30_off);
 }
 
+//! Add a transaction's signature operations to the block's and check the block's limit. One copy of the rule,
+//! for a coinbase, a transaction checked in order and a deferred one.
+static bool AddBlockSigOps(const CTransaction& tx, const CCoinsViewCache& view, script_verify_flags flags,
+                           int64_t& sigops_cost, BlockValidationState& state)
+{
+    // GetTransactionSigOpCost counts 3 types of sigops:
+    // * legacy (always)
+    // * p2sh (when P2SH enabled in flags and excludes coinbase)
+    // * witness (when witness enabled in flags and excludes coinbase)
+    sigops_cost += GetTransactionSigOpCost(tx, view, flags);
+    if (sigops_cost > MAX_BLOCK_SIGOPS_COST) {
+        return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-blk-sigops", "too many sigops");
+    }
+    return true;
+}
+
+//! Check that the coinbase pays no more than the subsidy and the block's fees. One copy of the rule, for a
+//! block whose fees ConnectBlock() totalled and one whose total FinishDeferredTransactions() completed.
+static bool CheckCoinbaseAmount(const CBlock& block, const BlockValidationContext& ctx, CAmount fees, BlockValidationState& state)
+{
+    const CAmount block_reward{fees + GetBlockSubsidy(ctx.height, ctx.params)};
+    if (block.vtx[0]->GetValueOut() > block_reward) {
+        return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-cb-amount",
+                             strprintf("coinbase pays too much (actual=%d vs limit=%d)", block.vtx[0]->GetValueOut(), block_reward));
+    }
+    return true;
+}
+
 //! The consensus checks of one transaction that is not a coinbase against the coins in `view`, in their order:
 //! its inputs and fee, the block's accumulated fee, BIP68, the block's signature operations, and, if
 //! `check_scripts`, its scripts, run here or appended to `checks` for a check queue. The block's totals `fees`
@@ -2777,14 +2805,7 @@ static bool CheckBlockTransaction(const CTransaction& tx, const BlockValidationC
                              "contains a non-BIP68-final transaction " + tx.GetHash().ToString());
     }
 
-    // GetTransactionSigOpCost counts 3 types of sigops:
-    // * legacy (always)
-    // * p2sh (when P2SH enabled in flags and excludes coinbase)
-    // * witness (when witness enabled in flags and excludes coinbase)
-    sigops_cost += GetTransactionSigOpCost(tx, view, flags);
-    if (sigops_cost > MAX_BLOCK_SIGOPS_COST) {
-        return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-blk-sigops", "too many sigops");
-    }
+    if (!AddBlockSigOps(tx, view, flags, sigops_cost, state)) return false;
 
     if (check_scripts) {
         TxValidationState script_state;
@@ -2961,12 +2982,8 @@ bool ConnectBlock(const CBlock& block, const BlockValidationContext& ctx,
             }
             if (control && fScriptChecks) control->Add(std::move(vChecks));
         } else {
-            // A coinbase has legacy sigops only (see CheckBlockTransaction()).
-            nSigOpsCost += GetTransactionSigOpCost(tx, view, flags);
-            if (nSigOpsCost > MAX_BLOCK_SIGOPS_COST) {
-                state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-blk-sigops", "too many sigops");
-                break;
-            }
+            // A coinbase has legacy sigops only.
+            if (!AddBlockSigOps(tx, view, flags, nSigOpsCost, state)) break;
         }
 
         CTxUndo undoDummy;
@@ -2981,12 +2998,8 @@ bool ConnectBlock(const CBlock& block, const BlockValidationContext& ctx,
     if (!result.deferred_txs.empty()) {
         // The fee total is incomplete: the coinbase amount is checked by FinishDeferredTransactions().
         result.coinbase_check_deferred = true;
-    } else {
-        CAmount blockReward = nFees + GetBlockSubsidy(ctx.height, ctx.params);
-        if (block.vtx[0]->GetValueOut() > blockReward && state.IsValid()) {
-            state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-cb-amount",
-                          strprintf("coinbase pays too much (actual=%d vs limit=%d)", block.vtx[0]->GetValueOut(), blockReward));
-        }
+    } else if (state.IsValid()) {
+        CheckCoinbaseAmount(block, ctx, nFees, state);
     }
     if (control) {
         auto parallel_result = control->Complete();
@@ -3039,13 +3052,7 @@ bool FinishDeferredTransactions(const CBlock& block, const BlockValidationContex
             assert(is_spent);
         }
     }
-    if (state.IsValid()) {
-        const CAmount block_reward{result.fees + GetBlockSubsidy(ctx.height, ctx.params)};
-        if (block.vtx[0]->GetValueOut() > block_reward) {
-            state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-cb-amount",
-                          strprintf("coinbase pays too much (actual=%d vs limit=%d)", block.vtx[0]->GetValueOut(), block_reward));
-        }
-    }
+    if (state.IsValid()) CheckCoinbaseAmount(block, ctx, result.fees, state);
     if (!state.IsValid()) return false;
     result.deferred_txs.clear();
     result.coinbase_check_deferred = false;
