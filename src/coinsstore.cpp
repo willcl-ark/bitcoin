@@ -7,6 +7,7 @@
 #include <logging.h>
 #include <memusage.h>
 #include <util/check.h>
+#include <util/threadnames.h>
 #include <util/threadpool.h>
 
 #include <util/time.h>
@@ -14,6 +15,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <condition_variable>
 #include <exception>
 #include <functional>
 #include <limits>
@@ -43,6 +45,53 @@ void CoinsStore::ShardLock::lock()
     m_mutex.lock();
 }
 
+//! The region made ready ahead (NodeRegion()) and the thread that makes it. The thread is started with the
+//! first region asked for ahead and joined by the last store to be destroyed. Never destroyed itself, as
+//! the nodes' depots are not.
+struct CoinsStore::RegionAhead {
+    Mutex mutex;
+    std::condition_variable cv;
+    void* ready GUARDED_BY(mutex){nullptr};
+    bool wanted GUARDED_BY(mutex){false};
+    //! Set by the store that found itself the last, until it has joined the thread.
+    bool stop GUARDED_BY(mutex){false};
+    int stores GUARDED_BY(mutex){0};
+    std::thread thread GUARDED_BY(mutex);
+    //! The regions asked for ahead that were ready, and those that were not yet.
+    std::atomic<uint64_t> taken_ready{0};
+    std::atomic<uint64_t> taken_unready{0};
+
+    void Run() EXCLUSIVE_LOCKS_REQUIRED(!mutex)
+    {
+        util::ThreadRename("coinsahead");
+        while (true) {
+            {
+                WAIT_LOCK(mutex, lock);
+                cv.wait(lock, [&]() EXCLUSIVE_LOCKS_REQUIRED(mutex) { return stop || (wanted && !ready); });
+                if (stop) return;
+                wanted = false;
+            }
+            void* next{HintedRegion(NODE_REGION_BYTES)};
+            // Every small page, for where no huge page was to be had: the first touch of a huge page
+            // supplies all of it, and the touches after it cost nothing.
+            static constexpr size_t SMALL_PAGE_BYTES{4096};
+            for (size_t at{0}; at < NODE_REGION_BYTES; at += SMALL_PAGE_BYTES) static_cast<volatile std::byte*>(next)[at] = std::byte{0};
+            LOCK(mutex);
+            if (stop) {
+                FreeRegion(next);
+                return;
+            }
+            ready = next;
+        }
+    }
+};
+
+CoinsStore::RegionAhead& CoinsStore::RegionAheadState()
+{
+    static RegionAhead* const ahead{new RegionAhead};
+    return *ahead;
+}
+
 CoinsStore::CoinsStore(CCoinsView* base_view, size_t shards, bool deterministic)
     : CCoinsViewCache(base_view, deterministic), m_shards(std::max<size_t>(1, shards))
 {
@@ -50,9 +99,30 @@ CoinsStore::CoinsStore(CCoinsView* base_view, size_t shards, bool deterministic)
         LOCK(shard.mutex);
         Resized(shard); // whatever bucket array an empty map has
     }
+    RegionAhead& ahead{RegionAheadState()};
+    LOCK(ahead.mutex);
+    ++ahead.stores;
 }
 
-CoinsStore::~CoinsStore() = default;
+CoinsStore::~CoinsStore()
+{
+    RegionAhead& ahead{RegionAheadState()};
+    std::thread ending;
+    {
+        LOCK(ahead.mutex);
+        // Behind the last store nothing asks for a region ahead: its thread ends, and the region it had
+        // ready goes back. (A store destroyed while an earlier last one is still at this leaves it to that one.)
+        if (--ahead.stores != 0 || ahead.stop) return;
+        ahead.stop = true;
+        ending = std::move(ahead.thread);
+    }
+    ahead.cv.notify_all();
+    if (ending.joinable()) ending.join();
+    LOCK(ahead.mutex);
+    ahead.stop = false;
+    ahead.wanted = false;
+    if (void* unused{std::exchange(ahead.ready, nullptr)}) FreeRegion(unused);
+}
 
 // ---------------------------------------------------------------------------------------------------------
 // Entry bookkeeping
@@ -82,6 +152,24 @@ void* CoinsStore::HintedRegion(size_t bytes)
     (void)madvise(region, bytes, MADV_HUGEPAGE);
 #endif
     return region;
+}
+
+void* CoinsStore::NodeRegion()
+{
+    if (NodeRegionBytes() < NODE_REGION_AHEAD_FROM) return HintedRegion(NODE_REGION_BYTES);
+    RegionAhead& ahead{RegionAheadState()};
+    void* region;
+    {
+        LOCK(ahead.mutex);
+        // Nodes outside the life of any store wait for their memory themselves.
+        if (ahead.stores == 0 || ahead.stop) return HintedRegion(NODE_REGION_BYTES);
+        region = std::exchange(ahead.ready, nullptr);
+        ahead.wanted = true;
+        if (!ahead.thread.joinable()) ahead.thread = std::thread{[&ahead] { ahead.Run(); }};
+    }
+    ahead.cv.notify_one();
+    (region ? ahead.taken_ready : ahead.taken_unready).fetch_add(1, std::memory_order_relaxed);
+    return region ? region : HintedRegion(NODE_REGION_BYTES);
 }
 
 int64_t CoinsStore::NodeBytes()
@@ -2112,6 +2200,9 @@ void CoinsStore::Flush(bool /*reallocate_cache*/)
     LogDebug(BCLog::COINDB, "Flushed the coins tier in %.2fs: %u changes in %u runs, batches of up to %.2f MiB; %u workers, %.2fs between them of which %.2fs in the database's write, the longest %.2fs",
              Ticks<SecondsDouble>(SteadyClock::now() - start), changes, batches, wipe.limit / double(1 << 20), workers.size(),
              Ticks<SecondsDouble>(total_time), Ticks<SecondsDouble>(write_time), Ticks<SecondsDouble>(longest));
+    const RegionAhead& ahead{RegionAheadState()};
+    LogDebug(BCLog::COINDB, "Node regions: %u MiB; asked for ahead, %u were ready and %u were not yet",
+             NodeRegionBytes() >> 20, ahead.taken_ready.load(std::memory_order_relaxed), ahead.taken_unready.load(std::memory_order_relaxed));
 }
 
 void CoinsStore::Sync()

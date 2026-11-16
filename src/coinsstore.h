@@ -517,6 +517,20 @@ private:
     //! with FreeRegion().
     static void* HintedRegion(size_t bytes);
     static inline std::atomic<size_t> s_node_region_bytes{0};
+    //! The size of the regions the nodes' memory is asked for in.
+    static constexpr size_t NODE_REGION_BYTES{size_t{32} << 20};
+    //! From this much node memory on, the next region is made ready ahead of its use (NodeRegion()). Below
+    //! it a region ahead would be a large share of a small store, and one the cache's budget does not count.
+    static constexpr size_t NODE_REGION_AHEAD_FROM{size_t{1} << 30};
+    //! A region of NODE_REGION_BYTES for nodes, as HintedRegion() gives it. The system supplies memory at
+    //! its first touch, and where it has no huge page free it first reclaims and compacts memory on the
+    //! touching thread, which for a node is a thread connecting blocks under a shard's mutex. Once the
+    //! store is large, a thread of its own therefore asks for the next region as soon as one is taken and
+    //! touches all of it, so that the wait is that thread's. A region asked for before the next is ready
+    //! is supplied as before. The thread runs while there is a store: the last one to be destroyed joins it.
+    static void* NodeRegion();
+    struct RegionAhead;
+    static RegionAhead& RegionAheadState();
     static void FreeRegion(void* region) noexcept { ::operator delete(region, std::align_val_t{HUGE_PAGE_BYTES}); }
     //! A shard's entries are inserted and erased by whichever thread holds its mutex, so a node is often freed
     //! by another thread than the one that allocated it, which the general allocator pays for with a lock. A
@@ -534,7 +548,7 @@ private:
     struct NodeAllocator {
         using value_type = T;
         static constexpr size_t MAX_KEPT{1024};
-        static constexpr size_t REGION_BYTES{size_t{32} << 20};
+        static constexpr size_t REGION_BYTES{NODE_REGION_BYTES};
         //! The next full list after this one in the depot: the second word of a list's first node.
         static void*& NextList(void* list) { return static_cast<void**>(list)[1]; }
         //! Full lists, each MAX_KEPT nodes, for whichever thread next runs out, and the region new ones are
@@ -579,7 +593,7 @@ private:
                     if (lists) return std::exchange(lists, NextList(lists));
                     if (fresh_bytes < LIST_BYTES) {
                         // The remainder, less than a list, is left behind.
-                        fresh = static_cast<std::byte*>(HintedRegion(REGION_BYTES));
+                        fresh = static_cast<std::byte*>(NodeRegion());
                         fresh_bytes = REGION_BYTES;
                         s_node_region_bytes.fetch_add(REGION_BYTES, std::memory_order_relaxed);
                     }
