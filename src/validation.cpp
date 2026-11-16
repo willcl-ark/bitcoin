@@ -4068,6 +4068,9 @@ void Chainstate::StageConnectTip(CBlockIndex* pindexNew, StagedConnect& staged, 
     // outputs after that check is a conflict at the apply, for a coinbase too. Alone, a block has no
     // lower block open, and what its check read is what it applies to.
     view->SetCreatesMustBeNew(staged.windowed && pindexNew->pprev && ConnectBlockChecksBIP30(*pindexNew, m_chainman.GetConsensus(), m_chainman.GetParams().Bip30Off())); // the genesis block creates nothing
+    // A window block's reads of the database stay in the store for its apply. At the tip they do not: a
+    // block that fails there leaves the cache as it was, as on master.
+    view->SetKeepBaseReads(staged.windowed);
     if (!staged.windowed) staged.fetch = std::make_unique<StagedConnect::FetchGuard>(*view, *block);
     // Decided here, under the lock, and not again at publication: a header chain with more work that arrives
     // while the block is validated does not make the node check the scripts it skipped. The block is an

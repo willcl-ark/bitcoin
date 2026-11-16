@@ -234,9 +234,10 @@ public:
     //! marker costs the database nothing, and the map nothing once the block is confirmed (ConfirmBlock()).
     BlockId BeginBlock(int height, bool mark_fresh_spends = false);
     //! The coin as block `block` sees it: created by a confirmed or applied block (or long ago), and not spent
-    //! by a confirmed or applied block. Brings old coins in from the base.
+    //! by a confirmed or applied block. Brings old coins in from the base, clean, so that the block's spend
+    //! finds them in the tier (a window block's view, BlockApplyView::SetKeepBaseReads()).
     std::optional<Coin> LookupFor(BlockId block, const COutPoint& outpoint) const;
-    //! The same without bringing anything in (the prefetch workers).
+    //! The same without bringing anything in (a block at the tip and its prefetch workers).
     std::optional<Coin> PeekCoinFor(BlockId block, const COutPoint& outpoint) const;
     //! Block `block` creates `outpoint`. A live coin under it is a BIP30 overwrite, allowed only with
     //! `possible_overwrite`, as AddCoin().
@@ -1159,6 +1160,11 @@ public:
     //! The block's validation checks that none of its outputs has a coin already (BIP30); see
     //! CoinsStore::Change::must_be_new. Set before the changes are applied.
     void SetCreatesMustBeNew(bool must_be_new) { m_creates_must_be_new = must_be_new; }
+    //! Whether a coin the view reads from the database stays in the store, clean (CoinsStore::LookupFor()),
+    //! so that the apply of its spend does not read the database a second time. For a window block. A block
+    //! at the tip reads without it, as master does: one that fails leaves none of its inputs in the cache.
+    //! Set before the block's first lookup; the view's reset clears it.
+    void SetKeepBaseReads(bool keep) { m_keep_base_reads = keep; }
 
     //! Bring the block's inputs that the tier holds into the view, one hold of each shard's lock, so that
     //! the block's validation reads the store once per shard instead of once per input.
@@ -1181,6 +1187,7 @@ private:
     CoinsStore& m_store;
     CoinsStore::BlockId m_block{CoinsStore::NO_BLOCK};
     bool m_creates_must_be_new{false};
+    bool m_keep_base_reads{false};
 };
 
 #endif // BITCOIN_COINSSTORE_H

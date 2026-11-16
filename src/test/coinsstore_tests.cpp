@@ -1904,4 +1904,85 @@ BOOST_AUTO_TEST_CASE(taken_over_spend_keeps_the_marker_unwritten)
     BOOST_CHECK(!store.HaveCoin(coin));
 }
 
+//! A base that counts its reads.
+class ReadCountingBase final : public CCoinsViewBacked
+{
+public:
+    using CCoinsViewBacked::CCoinsViewBacked;
+    mutable int m_reads{0};
+    std::optional<Coin> GetCoin(const COutPoint& outpoint) const override
+    {
+        ++m_reads;
+        return CCoinsViewBacked::GetCoin(outpoint);
+    }
+    std::optional<Coin> PeekCoin(const COutPoint& outpoint) const override
+    {
+        ++m_reads;
+        return CCoinsViewBacked::PeekCoin(outpoint);
+    }
+};
+
+//! A window block's view reads a coin that only the database holds once: the read brings the coin into the
+//! tier, and the spend finds it there at the apply. Unwound, the block leaves the coin as the database has
+//! it. Without the switch (a block at the tip) the read leaves nothing behind and the apply reads again.
+BOOST_AUTO_TEST_CASE(block_apply_view_reads_a_database_coin_once)
+{
+    CCoinsViewDB db{MemoryDb("store"), {}};
+    ReadCountingBase base{&db};
+    CoinsStore store{&base, 4, true};
+    store.SetBestBlock(uint256::ONE, 1);
+    const COutPoint spent_coin{Txid::FromUint256(uint256{10}), 0};
+    const COutPoint kept_coin{Txid::FromUint256(uint256{11}), 0};
+    store.AddCoin(spent_coin, RandomCoin(m_rng, 1), false);
+    store.AddCoin(kept_coin, RandomCoin(m_rng, 1), false);
+    store.Sync();
+    store.EvictClean(0);
+    BOOST_REQUIRE_EQUAL(store.GetCacheSize(), 0U); // both coins are in the database only
+    util::NotNull pool{std::make_shared<ThreadPool>("test")}; // no workers: lookups are served inline
+    BlockApplyView view{store, pool, /*deterministic=*/true};
+
+    base.m_reads = 0;
+    view.BeginBlock(2);
+    view.SetKeepBaseReads(true);
+    BOOST_CHECK(view.SpendCoin(spent_coin));
+    BOOST_CHECK_EQUAL(base.m_reads, 1);
+    BOOST_CHECK(store.HaveCoinInCache(spent_coin)); // clean, as the database has it
+    view.SetBestBlock(uint256{2});
+    view.Confirm();
+    BOOST_CHECK_EQUAL(base.m_reads, 1); // the apply found the entry
+    BOOST_CHECK_EQUAL(view.Conflicts(), 0U);
+    BOOST_CHECK(!store.HaveCoin(spent_coin));
+    store.SanityCheck();
+    store.Sync();
+    BOOST_CHECK(!db.PeekCoin(spent_coin).has_value()); // the erase was owed and is written
+
+    base.m_reads = 0;
+    view.BeginBlock(3);
+    view.SetKeepBaseReads(true);
+    BOOST_CHECK(view.SpendCoin(kept_coin));
+    view.ApplyChanges();
+    BOOST_CHECK_EQUAL(base.m_reads, 1);
+    view.Unwind();
+    BOOST_CHECK_EQUAL(base.m_reads, 1);
+    BOOST_CHECK(store.HaveCoin(kept_coin));
+    BOOST_CHECK_EQUAL(store.OpenBlocks(), 0U);
+    store.SanityCheck();
+    store.Sync();
+    BOOST_CHECK(db.PeekCoin(kept_coin).has_value());
+
+    // The switch went with the block: the next one reads as at the tip.
+    store.EvictClean(0);
+    BOOST_REQUIRE(!store.HaveCoinInCache(kept_coin));
+    base.m_reads = 0;
+    view.BeginBlock(3);
+    BOOST_CHECK(view.SpendCoin(kept_coin));
+    BOOST_CHECK_EQUAL(base.m_reads, 1);
+    BOOST_CHECK(!store.HaveCoinInCache(kept_coin));
+    view.ApplyChanges();
+    BOOST_CHECK_EQUAL(base.m_reads, 2);
+    view.Unwind();
+    BOOST_CHECK(store.HaveCoin(kept_coin));
+    store.SanityCheck();
+}
+
 BOOST_AUTO_TEST_SUITE_END()

@@ -811,8 +811,9 @@ CoinsStore::SpendResult CoinsStore::SpendLocked(Shard& shard, int height, bool m
     AssertLockHeld(shard.mutex);
     auto it{shard.map.find(outpoint, hash)};
     if (it == shard.map.end()) {
-        // Not in the tier (the prefetch reads without inserting): the caller reads the base with the shard
-        // unlocked. The database's coin goes to the record, and the tier keeps the spend, for the erase.
+        // Not in the tier (the block's read left nothing behind, as at the tip, or what it brought in was
+        // evicted since): the caller reads the base with the shard unlocked. The database's coin goes to
+        // the record, and the tier keeps the spend, for the erase.
         if (!from_base) return SpendResult::MISS;
         if (known && !IsCoin(*from_base, *known)) return SpendResult::CONFLICT;
         it = shard.map.try_emplace(outpoint, hash).first;
@@ -1013,8 +1014,9 @@ void CoinsStore::ApplyBatch(BlockId block, std::vector<Change>&& changes)
         LOCK(mine.mutex);
         mine.conflicts += conflicts;
     }
-    // Spends of coins the tier does not hold: one by one, via the base. A block's lookups put nothing into
-    // the store, so these are the coins that were only in the database, and those evicted since.
+    // Spends of coins the tier does not hold: one by one, via the base. A window block's lookups bring the
+    // database's coins into the tier (BlockApplyView::SetKeepBaseReads()), so for one these are the few
+    // evicted since; for a block at the tip they are every coin that was only in the database.
     for (const Change* change : misses) ApplySpend(block, change->outpoint, nullptr, change->known_coin ? &change->coin : nullptr);
 }
 
@@ -2309,7 +2311,10 @@ void BlockApplyView::Flush(bool /*reallocate_cache*/)
 
 std::optional<Coin> BlockApplyView::ReadBase(const COutPoint& outpoint) const
 {
-    return m_store.PeekCoinFor(m_block, outpoint);
+    // In the window the read brings a coin that only the database holds into the tier, clean: the block's
+    // spend of it finds the entry at the apply, where a read that leaves nothing behind has the apply read
+    // the database again.
+    return m_keep_base_reads ? m_store.LookupFor(m_block, outpoint) : m_store.PeekCoinFor(m_block, outpoint);
 }
 
 void BlockApplyView::Reset() noexcept
@@ -2321,5 +2326,6 @@ void BlockApplyView::Reset() noexcept
         m_block = CoinsStore::NO_BLOCK;
     }
     m_creates_must_be_new = false;
+    m_keep_base_reads = false;
     CoinsViewOverlay::Reset();
 }
