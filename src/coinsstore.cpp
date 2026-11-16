@@ -1433,10 +1433,14 @@ std::optional<int> CoinsStore::OldestDirtyHeight() const
     return oldest;
 }
 
+static size_t RunClaimed(ThreadPool* pool, size_t count, const std::function<void(size_t)>& work) noexcept;
+
 int CoinsStore::BoundForBytes(size_t bytes, int tip_height) const
 {
     // Merge the shards' byte sums span by span and walk them from the oldest up; in the span the bound
-    // lies in, the entries' own heights find it.
+    // lies in, the entries' own heights find it. That span may hold millions of entries, and the caller
+    // holds the owner's lock: its shards are summed by height in ranges across the flush helpers, as a
+    // run is collected (PrepareWriteOut()).
     std::vector<int64_t> merged;
     for (const Shard& shard : m_shards) {
         LOCK(shard.mutex);
@@ -1449,17 +1453,22 @@ int CoinsStore::BoundForBytes(size_t bytes, int tip_height) const
             freed += merged[span];
             continue;
         }
-        std::map<int32_t, int64_t> by_height;
-        for (const Shard& shard : m_shards) {
-            LOCK(shard.mutex);
-            if (span >= shard.dirty_spans.size()) continue;
-            for (const Node* node{shard.dirty_spans[span].head}; node; node = node->second.next) {
-                by_height[node->second.height] += DirtyBytes(node->second);
+        const int span_start{static_cast<int>(span << DIRTY_SPAN_BITS)};
+        const size_t ranges{std::min(m_shards.size(), m_flush_helpers ? m_flush_helpers->WorkersCount() + 1 : size_t{1})};
+        std::vector<std::array<int64_t, size_t{1} << DIRTY_SPAN_BITS>> by_height(ranges);
+        RunClaimed(m_flush_helpers.get(), ranges, [&](size_t i) {
+            for (size_t index{m_shards.size() * i / ranges}; index < m_shards.size() * (i + 1) / ranges; ++index) {
+                const Shard& shard{m_shards[index]};
+                LOCK(shard.mutex);
+                if (span >= shard.dirty_spans.size()) continue;
+                for (const Node* node{shard.dirty_spans[span].head}; node; node = node->second.next) {
+                    by_height[i][std::max(node->second.height, 0) - span_start] += DirtyBytes(node->second);
+                }
             }
-        }
-        for (const auto& [h, b] : by_height) {
-            freed += b;
-            if (freed >= static_cast<int64_t>(bytes)) return std::min<int>(h, tip_height);
+        });
+        for (size_t offset{0}; offset < by_height[0].size(); ++offset) {
+            for (const auto& part : by_height) freed += part[offset];
+            if (freed >= static_cast<int64_t>(bytes)) return std::min<int>(span_start + static_cast<int>(offset), tip_height);
         }
         // The span lost entries between the two passes: the bound lies further up.
     }
