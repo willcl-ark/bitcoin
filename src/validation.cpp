@@ -2034,6 +2034,27 @@ void Chainstate::SettleWriteOut()
     m_blockman.m_coin_writes.ApplyCompletions();
 }
 
+/**
+ * Before a batch of a write-out run: wait while the coins database has more level-0 files than its compaction
+ * keeps up with. Nothing waits for the run, but the connect workers read the database for every coin the
+ * cache misses, and a read looks into every level-0 file, whose keys overlap. Written as fast as it is
+ * prepared, a 1 GiB run outran the compaction to LevelDB's own write stop (12 files), and the workers' reads
+ * during the compaction that followed stalled the tip for up to 0.65s. At most a few seconds per batch, so
+ * that a compaction that cannot keep up slows the run without stopping it.
+ */
+static void PaceCoinWrite(CCoinsViewDB& db)
+{
+    static constexpr int MAX_LEVEL0_FILES{6};
+    static constexpr auto MAX_WAIT{3s};
+    const auto give_up{SteadyClock::now() + MAX_WAIT};
+    while (SteadyClock::now() < give_up) {
+        const auto files{db.GetDBProperty("leveldb.num-files-at-level0")};
+        const auto count{files ? ToIntegral<int>(*files) : std::nullopt};
+        if (!count || *count <= MAX_LEVEL0_FILES) return;
+        std::this_thread::sleep_for(10ms);
+    }
+}
+
 bool Chainstate::StartWriteOutRun(BlockValidationState& state, int bound_height, bool final, std::optional<size_t> evict_to,
                                   FlushStateMode mode, bool for_prune)
 {
@@ -2158,11 +2179,12 @@ bool Chainstate::StartWriteOutRun(BlockValidationState& state, int bound_height,
                 return false;
             }
             blockman.m_coin_writes.Enqueue(
-                [run, &store, head, evict_to, batch_bytes]() -> bool {
+                [run, &store, &db, head, evict_to, batch_bytes]() -> bool {
                     const auto write_failure{util::RunWorkerTask(WRITE_OUT_TASK, [&] {
                         // Before the write, the clean copies of old coins the budget can no longer afford.
                         if (evict_to) store.EvictClean(*evict_to);
-                        store.WritePrepared(*run, [head](int height) { return Assert(head->GetAncestor(height))->GetBlockHash(); }, batch_bytes);
+                        store.WritePrepared(*run, [head](int height) { return Assert(head->GetAncestor(height))->GetBlockHash(); }, batch_bytes,
+                                            [&db] { PaceCoinWrite(db); });
                         // What the run wrote is clean now: a run started for memory frees it here, beside the
                         // connector, not at the next crossing nor under cs_main at the landing. The owner
                         // evicts only when no run is in flight (FlushStateToDisk()).

@@ -387,10 +387,12 @@ public:
      * their shards' locks (an entry changed since stays dirty), leaving CommitWriteOut() none to settle. It
      * may run on another thread than the owner's while the owner confirms, unwinds and disconnects blocks:
      * what the run writes was collected at once, in one state of the tier, and settling an entry is what a
-     * streamed run does beside the appliers. The run's changes are freed once written.
+     * streamed run does beside the appliers. The run's changes are freed once written. `pace`, if given, is
+     * called before each batch, and may wait.
      * Throws what the base's WriteRun() throws; the run is then abandoned (AbandonWriteOut()).
      */
-    void WritePrepared(WriteOutRun& run, const std::function<uint256(int)>& block_at, uint64_t batch_bytes = DEFAULT_DB_CACHE_BATCH);
+    void WritePrepared(WriteOutRun& run, const std::function<uint256(int)>& block_at, uint64_t batch_bytes = DEFAULT_DB_CACHE_BATCH,
+                       const std::function<void()>& pace = {});
     //! Coins a disconnect restored that the database may never have held (see DisconnectTip()): the next
     //! run writes them first, before its marker, and a forced flush before anything (TakeRestored()). The
     //! database may hold them from now on, so none of them stays fresh: a later spend is written as an

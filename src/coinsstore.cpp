@@ -1957,7 +1957,8 @@ std::unique_ptr<CoinsStore::WriteOutRun> CoinsStore::PrepareWriteOut(int bound_h
     return run;
 }
 
-void CoinsStore::WritePrepared(WriteOutRun& run, const std::function<uint256(int)>& block_at, uint64_t batch_bytes)
+void CoinsStore::WritePrepared(WriteOutRun& run, const std::function<uint256(int)>& block_at, uint64_t batch_bytes,
+                               const std::function<void()>& pace)
 {
     const uint64_t limit{std::max<uint64_t>(batch_bytes, 1)};
     std::vector<CoinWrite> chunk;
@@ -1974,6 +1975,7 @@ void CoinsStore::WritePrepared(WriteOutRun& run, const std::function<uint256(int
             chunk.assign(std::make_move_iterator(writes.begin() + begin), std::make_move_iterator(writes.end()));
             writes.erase(writes.begin() + begin, writes.end());
             SortWrites(chunk, 0, sorter);
+            if (pace) pace();
             base->WriteRun(chunk, run.new_head, run.old_head, /*final=*/false);
         }
         writes.shrink_to_fit();
