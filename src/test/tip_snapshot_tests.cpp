@@ -4,11 +4,16 @@
 
 #include <chain.h>
 #include <consensus/validation.h>
+#include <kernel/mempool_removal_reason.h>
 #include <node/block_facts.h>
+#include <node/mempool_persist.h>
 #include <node/tip_snapshot.h>
 #include <script/script.h>
+#include <sync.h>
 #include <test/util/setup_common.h>
 #include <test/util/validation.h>
+#include <txmempool.h>
+#include <util/fs.h>
 #include <validation.h>
 #include <validationinterface.h>
 
@@ -303,6 +308,48 @@ BOOST_AUTO_TEST_CASE(a_transaction_is_announced_after_the_block_in_ibd)
                                                                CScript{} << OP_0 << std::vector<uint8_t>(20, 1), CAmount{1 * COIN}, /*submit=*/false)};
     const MempoolAcceptResult result{WITH_LOCK(::cs_main, return chainman.ProcessTransaction(MakeTransactionRef(tx)))};
     BOOST_REQUIRE(result.m_result_type == MempoolAcceptResult::ResultType::VALID);
+    signals.SyncWithValidationInterfaceQueue();
+    signals.UnregisterValidationInterface(&order);
+
+    const std::vector<char> expected{'b', 't'};
+    BOOST_CHECK_EQUAL_COLLECTIONS(order.m_order.begin(), order.m_order.end(), expected.begin(), expected.end());
+}
+
+//! The same for a transaction the node loads from its mempool file: in initial block download
+//! LoadMempool() hands the signals of the blocks connected so far over before each transaction.
+BOOST_AUTO_TEST_CASE(a_loaded_transaction_is_announced_after_the_block_in_ibd)
+{
+    auto& chainman{static_cast<TestChainstateManager&>(*Assert(m_node.chainman))};
+    ValidationSignals& signals{*Assert(m_node.validation_signals)};
+    CTxMemPool& pool{*Assert(m_node.mempool)};
+
+    // A mempool file with one transaction, which the pool then no longer holds.
+    const CMutableTransaction tx{CreateValidMempoolTransaction(m_coinbase_txns[0], /*input_vout=*/0, /*input_height=*/1, coinbaseKey,
+                                                               CScript{} << OP_0 << std::vector<uint8_t>(20, 1), CAmount{1 * COIN}, /*submit=*/true)};
+    const fs::path path{m_args.GetDataDirNet() / "mempool_one_transaction.dat"};
+    BOOST_REQUIRE(node::DumpMempool(pool, path));
+    {
+        LOCK2(::cs_main, pool.cs);
+        pool.removeRecursive(CTransaction{tx}, MemPoolRemovalReason::REPLACED);
+        BOOST_REQUIRE_EQUAL(pool.size(), 0U);
+    }
+
+    // A block that is two days old when it arrives leaves the node in initial block download.
+    const CBlock block{CreateBlock({}, CScript{} << OP_TRUE)};
+    m_clock += std::chrono::hours{48};
+    chainman.ResetIbd();
+    signals.SyncWithValidationInterfaceQueue();
+
+    AnnouncementOrder order;
+    signals.RegisterValidationInterface(&order);
+
+    bool new_block{false};
+    BOOST_REQUIRE(chainman.ProcessNewBlock(std::make_shared<const CBlock>(block), /*force_processing=*/true, /*min_pow_checked=*/true, &new_block));
+    BOOST_REQUIRE(new_block);
+    BOOST_REQUIRE(chainman.IsInitialBlockDownload());
+
+    BOOST_REQUIRE(node::LoadMempool(pool, path, chainman.ActiveChainstate(), {}));
+    BOOST_REQUIRE_EQUAL(WITH_LOCK(pool.cs, return pool.size()), 1U);
     signals.SyncWithValidationInterfaceQueue();
     signals.UnregisterValidationInterface(&order);
 

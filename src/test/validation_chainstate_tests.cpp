@@ -532,6 +532,8 @@ struct WindowStepSetup : TestChain100Setup {
             chainman.RecalculateBestHeader();
         }
         m_node.validation_signals->SyncWithValidationInterfaceQueue();
+        // The blocks' signals held them in the pinned account, and their disconnection found it empty.
+        CheckAccountsEmpty();
         SetMockTime(std::chrono::seconds{tip_time} + 48h);
         static_cast<TestChainstateManager&>(chainman).ResetIbd();
         BOOST_REQUIRE_EQUAL(WITH_LOCK(::cs_main, return chainstate.m_chain.Height()), m_base_height);
@@ -547,18 +549,24 @@ struct WindowStepSetup : TestChain100Setup {
         return static_cast<size_t>(std::min(Top() - height, Assert(m_node.chainman)->ConnectWindow()));
     }
 
-    //! The step is over: its signals are delivered, every block's BlockConnected in order, and the accounts
-    //! of the bytes in flight are back at zero.
-    void CheckStepOver()
+    //! Every byte charged for a block in flight has been released.
+    void CheckAccountsEmpty() const
     {
-        m_node.validation_signals->SyncWithValidationInterfaceQueue();
-        m_node.validation_signals->UnregisterSharedValidationInterface(m_recorder);
         const ChainstateManager& chainman{*Assert(m_node.chainman)};
         for (const util::ByteAccountId id : {util::ByteAccountId::ReceiveTasks, util::ByteAccountId::BlockCache,
                                              util::ByteAccountId::Window, util::ByteAccountId::UndoBacklog,
                                              util::ByteAccountId::PinnedBlocks}) {
             BOOST_CHECK_EQUAL(chainman.m_bytes_in_flight[id].Bytes(), 0U);
         }
+    }
+
+    //! The step is over: its signals are delivered, every block's BlockConnected in order, and the accounts
+    //! of the bytes in flight are back at zero.
+    void CheckStepOver()
+    {
+        m_node.validation_signals->SyncWithValidationInterfaceQueue();
+        m_node.validation_signals->UnregisterSharedValidationInterface(m_recorder);
+        CheckAccountsEmpty();
         std::vector<int> expected;
         for (int height{m_base_height + 1}; height <= Top(); ++height) expected.push_back(height);
         const std::lock_guard lock{m_recorder->mutex};
@@ -591,6 +599,25 @@ BOOST_FIXTURE_TEST_CASE(window_step_block_by_block, WindowStepSetup)
     CheckStepOver();
     const std::lock_guard lock{m_recorder->mutex};
     for (const auto& [height, initial_download] : m_recorder->tips) BOOST_CHECK(initial_download);
+}
+
+//! The window's account is the node's, and only a step that uses the window writes it: a block connected
+//! outside the window leaves its limit and its count as they are.
+BOOST_FIXTURE_TEST_CASE(step_outside_the_window_leaves_its_account, TestChain100Setup)
+{
+    ChainstateManager& chainman{*Assert(m_node.chainman)};
+    util::ByteAccount& window{chainman.m_bytes_in_flight[util::ByteAccountId::Window]};
+    BOOST_REQUIRE(!chainman.IsInitialBlockDownload());
+    const size_t limit{size_t{1} << 40};
+    const size_t bytes{777};
+    window.SetLimit(limit);
+    window.Set(bytes);
+    const int height{WITH_LOCK(::cs_main, return chainman.ActiveChain().Height())};
+    CreateAndProcessBlock({}, CScript() << OP_TRUE);
+    BOOST_REQUIRE_EQUAL(WITH_LOCK(::cs_main, return chainman.ActiveChain().Height()), height + 1);
+    BOOST_CHECK_EQUAL(window.Limit(), limit);
+    BOOST_CHECK_EQUAL(window.Bytes(), bytes);
+    window.Set(0);
 }
 
 //! The download ends while blocks handed to the window in it are still to be connected: the step goes on in
