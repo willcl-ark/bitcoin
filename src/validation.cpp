@@ -132,6 +132,10 @@ static constexpr util::WorkerTaskType WRITE_OUT_TASK{"Coins write-out run failed
 */
 static constexpr auto DATABASE_WRITE_INTERVAL_MIN{50min};
 static constexpr auto DATABASE_WRITE_INTERVAL_MAX{70min};
+/** Most dirty bytes a write-out run takes. A run's changes are collected under cs_main, at about 40ns a
+ *  change across the flush helpers: a run of 1 GiB held up the tip for over 300ms. A cache that needs more
+ *  written has it written by several runs, one after the other. */
+static constexpr size_t MAX_WRITE_OUT_RUN_BYTES{256_MiB};
 /** While a write-out run is in flight the coins cache may run over its budget by this share of it (a quarter,
  *  the share a run for memory frees). What a run collected becomes evictable only when it lands, and blocks
  *  go on dirtying the cache meanwhile, at the first fill of a reindex about as fast as runs write it. */
@@ -3497,9 +3501,10 @@ bool Chainstate::FlushStateToDisk(
         bool fCacheLarge = mode == FlushStateMode::PERIODIC && cache_state >= CoinsCacheSizeState::LARGE;
         // The cache is over the limit, we have to write now.
         bool fCacheCritical = mode == FlushStateMode::IF_NEEDED && cache_state >= CoinsCacheSizeState::CRITICAL;
-        // It's been a while since we wrote the block index and chain state to disk. Do this frequently, so we don't need to redownload or reindex after a crash.
-        bool fPeriodicWrite = mode == FlushStateMode::PERIODIC && nNow >= m_next_write;
         CoinsStore& store{CoinsStoreTip()};
+        // It's been a while since we wrote the block index and chain state to disk. Do this frequently, so we don't need to redownload or reindex after a crash.
+        // A run in flight is part of the write, or comes before it: it is due again once the run lands.
+        bool fPeriodicWrite = mode == FlushStateMode::PERIODIC && nNow >= m_next_write && !store.RunInFlight();
         // A forced flush writes everything and waits, as it always did. Everything else is a write-out run
         // of the young tier's oldest changes on the executor: the flush became a lag.
         const bool synchronous{mode == FlushStateMode::FORCE_FLUSH || mode == FlushStateMode::FORCE_SYNC};
@@ -3508,6 +3513,8 @@ bool Chainstate::FlushStateToDisk(
         bool should_write = synchronous || lag_run;
         // Whether anything went to disk: a lag run that found nothing to write does not count.
         bool wrote{synchronous};
+        // Whether the periodic write wrote only part of what it is due to write, and stays due.
+        bool periodic_partial{false};
         // Whether a block index that records the files pruned by this call is on disk.
         bool prune_recorded{false};
         // Write blocks, block index and best chain related state to disk.
@@ -3617,18 +3624,25 @@ bool Chainstate::FlushStateToDisk(
                     std::optional<int> bound;
                     bool final{false};
                     if (fPeriodicWrite) {
-                        // The periodic write persists everything, as it always did.
-                        bound = tip_height;
-                        final = true;
+                        // The periodic write persists everything, as it always did, in runs of at most
+                        // MAX_WRITE_OUT_RUN_BYTES: each but the last writes the oldest changes and leaves the
+                        // write due, so that the next flush after it lands starts another.
+                        bound = store.BoundForBytes(MAX_WRITE_OUT_RUN_BYTES, tip_height);
+                        final = *bound >= tip_height;
+                        periodic_partial = !final;
                     } else if (pressure && usage > target) {
-                        bound = store.BoundForBytes(usage - target, tip_height);
+                        bound = store.BoundForBytes(std::min(usage - target, MAX_WRITE_OUT_RUN_BYTES), tip_height);
                     } else if (test_every_block) {
                         bound = tip_height - 2;
                     }
                     const uint64_t failed_runs{m_write_out_runs_failed};
                     if (bound) {
-                        // A run for memory evicts down to the target around its write.
-                        if (!StartWriteOutRun(state, *bound, final, pressure ? std::optional<size_t>{target} : std::nullopt, mode, fFlushForPrune)) return false;
+                        // A cache over the target is evicted down to it around the run, whatever started it: a
+                        // periodic write that catches up in several runs (MAX_WRITE_OUT_RUN_BYTES) otherwise
+                        // leaves the cache to grow over the budget meanwhile, and a critical flush waits for
+                        // the run in flight.
+                        const std::optional<size_t> evict_to{usage > target ? std::optional<size_t>{target} : std::nullopt};
+                        if (!StartWriteOutRun(state, *bound, final, evict_to, mode, fFlushForPrune)) return false;
                     }
                     if (store.RunInFlight()) {
                         wrote = true;
@@ -3683,7 +3697,7 @@ bool Chainstate::FlushStateToDisk(
 
         // Only a write moves the timer: an event that evicted clean entries and wrote nothing, or found a run
         // in flight, leaves the periodic write due when it was.
-        if (wrote || m_next_write == NodeClock::time_point::max()) {
+        if ((wrote && !periodic_partial) || m_next_write == NodeClock::time_point::max()) {
             constexpr auto range{DATABASE_WRITE_INTERVAL_MAX - DATABASE_WRITE_INTERVAL_MIN};
             m_next_write = FastRandomContext().rand_uniform_delay(NodeClock::now() + DATABASE_WRITE_INTERVAL_MIN, range);
         }
