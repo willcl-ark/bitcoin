@@ -328,7 +328,8 @@ public:
     std::optional<int> OldestDirtyHeight() const;
 
     //! Drop clean entries (an open block holds only dirty ones) until the tier's usage is at most `target_bytes`,
-    //! oldest first in each shard; an entry read since it was last passed over gets a second chance.
+    //! oldest first in each shard; an entry read since it was last passed over gets a second chance. Takes the
+    //! shards' locks one at a time, so it may run beside the owner and the appliers; one call at a time.
     size_t EvictClean(size_t target_bytes);
 
     /**
