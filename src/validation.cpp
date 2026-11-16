@@ -3216,7 +3216,9 @@ bool Chainstate::DisconnectTip(BlockValidationState& state, DisconnectedBlockTra
     // Let wallets know transactions went from 1-confirmed to
     // 0-confirmed or conflicted:
     if (m_chainman.m_options.signals) {
-        m_chainman.m_options.signals->BlockDisconnected(std::move(pblock), pindexDelete);
+        // Precondition O7: queued under cs_main, in the hold in which the block left the chain.
+        Assume(!m_chain.Contains(*pindexDelete));
+        m_chainman.m_options.signals->BlockDisconnected(std::move(pblock), pindexDelete, m_chainman.SignalTipSequence(m_chainman.TipSequence()));
     }
     return true;
 }
@@ -3224,6 +3226,9 @@ bool Chainstate::DisconnectTip(BlockValidationState& state, DisconnectedBlockTra
 struct ConnectedBlock {
     const CBlockIndex* pindex;
     std::shared_ptr<const CBlock> pblock;
+    //! The tip sequence number right after this block was connected. A published tip
+    //! carries it only if the hold moves no tip afterwards.
+    uint64_t tip_sequence;
 };
 
 /**
@@ -3345,7 +3350,11 @@ bool Chainstate::ConnectTip(
     Chainstate& current_cs{m_chainman.CurrentChainstate()};
     m_chainman.MaybeValidateSnapshot(*this, current_cs);
 
-    connected_blocks.emplace_back(pindexNew, std::move(block_to_connect));
+    // Precondition O7: the signal for this block names what is stored and connected, and
+    // carries the tip sequence number as it is now: that of the tip the block became, or one
+    // more if the snapshot was found invalid just above.
+    Assume((pindexNew->nStatus & BLOCK_HAVE_DATA) && m_chain.Tip() == pindexNew);
+    connected_blocks.emplace_back(pindexNew, std::move(block_to_connect), m_chainman.TipSequence());
     return true;
 }
 
@@ -3611,6 +3620,8 @@ bool ChainstateManager::NotifyHeaderTip()
 
 static void LimitValidationInterfaceQueue(ValidationSignals& signals) LOCKS_EXCLUDED(cs_main) {
     AssertLockNotHeld(cs_main);
+    // Checked whether or not the queue is long enough to be waited for this time.
+    AssertMayWait("the validation signal queue");
 
     if (signals.CallbacksPending() > 10) {
         signals.SyncWithValidationInterfaceQueue();
@@ -3695,9 +3706,9 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                 }
                 pindexNewTip = m_chain.Tip();
 
-                for (auto& [index, block] : std::move(connected_blocks)) {
+                for (auto& [index, block, tip_sequence] : std::move(connected_blocks)) {
                     if (m_chainman.m_options.signals) {
-                        m_chainman.m_options.signals->BlockConnected(chainstate_role, std::move(Assert(block)), Assert(index));
+                        m_chainman.m_options.signals->BlockConnected(chainstate_role, std::move(Assert(block)), Assert(index), m_chainman.SignalTipSequence(tip_sequence));
                     }
                 }
 
@@ -3721,7 +3732,7 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
             if (this == &m_chainman.ActiveChainstate() && pindexFork != pindexNewTip) {
                 // Notify ValidationInterface subscribers
                 if (m_chainman.m_options.signals) {
-                    m_chainman.m_options.signals->UpdatedBlockTip(pindexNewTip, pindexFork, still_in_ibd);
+                    m_chainman.m_options.signals->UpdatedBlockTip(pindexNewTip, pindexFork, still_in_ibd, m_chainman.SignalTipSequence(m_chainman.TipSequence()));
                 }
 
                 if (kernel::IsInterrupted(m_chainman.GetNotifications().blockTip(
@@ -6494,6 +6505,8 @@ ChainstateManager::ChainstateManager(const util::SignalInterrupt& interrupt, Opt
       m_all_consensus_script_flags{GetAllConsensusScriptFlags(m_options.chainparams.GetConsensus())},
       m_validation_cache{m_options.script_execution_cache_bytes, m_options.signature_cache_bytes}
 {
+    // Signal callbacks take cs_main, so nothing may wait for them while holding it.
+    NO_WAIT_LOCK(::cs_main);
 }
 
 ChainstateManager::~ChainstateManager()

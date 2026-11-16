@@ -6,7 +6,10 @@
 #include <consensus/validation.h>
 #include <primitives/block.h>
 #include <scheduler.h>
+#include <sync.h>
+#include <test/util/common.h>
 #include <test/util/setup_common.h>
+#include <txmempool.h>
 #include <util/check.h>
 #include <validationinterface.h>
 
@@ -98,5 +101,26 @@ BOOST_AUTO_TEST_CASE(unregister_all_during_call)
     shared.reset();
     BOOST_CHECK(destroyed);
 }
+
+#ifdef DEBUG_LOCKORDER
+// The wait rule is applied where the node waits for the queue: under the mempool's lock,
+// which the queued callbacks take, the wait is refused before anything is queued.
+BOOST_AUTO_TEST_CASE(wait_for_the_queue_refuses_the_mempool_lock)
+{
+    const bool prev{g_debug_lockorder_abort};
+    g_debug_lockorder_abort = false;
+
+    ValidationSignals& signals{*Assert(m_node.validation_signals)};
+    BOOST_CHECK_NO_THROW(signals.SyncWithValidationInterfaceQueue());
+    {
+        LOCK(Assert(m_node.mempool)->cs);
+        BOOST_CHECK_EXCEPTION(signals.SyncWithValidationInterfaceQueue(), std::logic_error,
+                              HasReason{"waiting for the validation signal queue while holding cs"});
+    }
+    BOOST_CHECK_NO_THROW(signals.SyncWithValidationInterfaceQueue());
+
+    g_debug_lockorder_abort = prev;
+}
+#endif // DEBUG_LOCKORDER
 
 BOOST_AUTO_TEST_SUITE_END()

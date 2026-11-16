@@ -536,7 +536,14 @@ struct DeploymentFlags {
  *      with O8's condition for the coins, which covers a write-out that
  *      failed inside ConnectTip() or DisconnectTip().
  *  O7  Signals are queued under cs_main in the order of connection, and
- *      what they name is stored and connected.
+ *      what they name is stored and connected. Asserted in part. That the
+ *      block is stored and is the tip, or has left the chain, is checked
+ *      in ConnectTip() and DisconnectTip(), where the signal's block and
+ *      number are fixed. ChainstateManager::SignalTipSequence() checks,
+ *      where a signal is queued, that its number is not below the last
+ *      one queued: that catches a BlockConnected queued behind a signal
+ *      of a later tip, the one signal queued after the step that produced
+ *      it. The order among signals of one number is not checked.
  *  O8  A flush never sees a half-applied block: the coins' best block is
  *      a block of the chain, or the one block on top of it that is being
  *      connected, or was when a write-out failed. Asserted in
@@ -1174,8 +1181,10 @@ private:
     node::PublishedTip m_published_tip;
     //! Counts the tip changes of every chainstate, and the publications that
     //! changed nothing but the initial block download state. The number a
-    //! published tip carries.
+    //! published tip and a chain signal carry.
     uint64_t m_tip_sequence GUARDED_BY(::cs_main){0};
+    //! The number the last queued chain signal carried.
+    uint64_t m_last_signalled_tip_sequence GUARDED_BY(::cs_main){0};
     //! A cs_main hold has moved the tip of a chainstate, or changed which
     //! chainstate is the current one, and has not published yet.
     std::atomic_bool m_tip_unpublished{false};
@@ -1346,8 +1355,20 @@ public:
     }
     bool TipUnpublished() const { return m_tip_unpublished.load(); }
 
-    //! The number of the tip as it is now.
+    //! The number of the tip as it is now, for a chain signal to carry.
     uint64_t TipSequence() const EXCLUSIVE_LOCKS_REQUIRED(::cs_main) { return m_tip_sequence; }
+
+    //! Precondition O7: called with the number a chain signal is about to be
+    //! queued with. The numbers never fall, because the signals are queued
+    //! under cs_main in the order the chain changed. Returns the number.
+    //! Only a number recorded earlier (BlockConnected's) can fail the check;
+    //! the counter itself, which the other two signals pass, cannot.
+    uint64_t SignalTipSequence(uint64_t tip_sequence) EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
+    {
+        Assume(tip_sequence >= m_last_signalled_tip_sequence && tip_sequence <= m_tip_sequence);
+        m_last_signalled_tip_sequence = tip_sequence;
+        return tip_sequence;
+    }
 
     /**
      * Every received block is assigned a unique and increasing identifier, so we
