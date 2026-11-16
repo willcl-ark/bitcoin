@@ -20,6 +20,7 @@ add_executable(test_bitcoin
   bip32_tests.cpp
   bip324_tests.cpp
   bip352_tests.cpp
+  blockcache_tests.cpp
   blockchain_tests.cpp
   blockencodings_tests.cpp
   blockfilter_index_tests.cpp
@@ -36,7 +37,9 @@ add_executable(test_bitcoin
   chainstate_write_tests.cpp
   checkqueue_tests.cpp
   cluster_linearize_tests.cpp
+  txhashing_tests.cpp
   coins_tests.cpp
+  coinsstore_tests.cpp
   coinscachepair_tests.cpp
   coinstatsindex_tests.cpp
   coinsviewoverlay_tests.cpp
@@ -47,6 +50,7 @@ add_executable(test_bitcoin
   dbwrapper_tests.cpp
   denialofservice_tests.cpp
   descriptor_tests.cpp
+  effects_tests.cpp
   disconnected_transactions.cpp
   durability_machine_tests.cpp
   fees_util_tests.cpp

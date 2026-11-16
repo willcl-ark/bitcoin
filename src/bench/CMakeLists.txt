@@ -21,6 +21,7 @@ add_executable(bench_bitcoin
   checkqueue.cpp
   cluster_linearize.cpp
   connectblock.cpp
+  connectblock_mainnet.cpp
   crypto_hash.cpp
   descriptors.cpp
   disconnected_transactions.cpp
@@ -51,6 +52,7 @@ add_executable(bench_bitcoin
   sign_transaction.cpp
   streams_findbyte.cpp
   strencodings.cpp
+  threadpool.cpp
   txgraph.cpp
   txorphanage.cpp
   uint256_blob.cpp
