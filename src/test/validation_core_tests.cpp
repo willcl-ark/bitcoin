@@ -773,4 +773,47 @@ BOOST_AUTO_TEST_CASE(deferred_transactions_among_others)
     }
 }
 
+//! A transaction whose inputs the view holds is checked at once in a block that may defer, without a
+//! second look for a missing input. What the check finds wrong with inputs that are there, it finds the
+//! same with deferral on and off, and a valid block gives the same result.
+BOOST_AUTO_TEST_CASE(present_inputs_check_the_same_with_deferral)
+{
+    Chain chain;
+    const CAmount fee{COIN / 10};
+    struct Case {
+        CAmount coin_value;
+        bool coin_is_coinbase;
+        CAmount spend_value;
+        std::string reject_reason; //!< empty for a valid block
+    };
+    const std::vector<Case> cases{
+        {COIN, false, COIN - fee, ""},
+        {COIN, true, COIN - fee, "bad-txns-premature-spend-of-coinbase"},
+        {COIN, false, COIN + 1, "bad-txns-in-belowout"},
+        {MAX_MONEY + 1, false, COIN - fee, "bad-txns-inputvalues-outofrange"},
+    };
+    for (const Case& c : cases) {
+        const CBlock block{chain.MakeBlock(Spend(c.spend_value), GetBlockSubsidy(HEIGHT, chain.Consensus()) + fee)};
+        const uint256 hash{block.GetHash()};
+        for (const bool defer : {false, true}) {
+            auto view{std::make_unique<CCoinsViewCache>(&CoinsViewEmpty::Get())};
+            view->SetBestBlock(chain.prev_hash);
+            view->AddCoin(SEEDED_OUT, Coin{CTxOut{c.coin_value, CScript() << OP_TRUE}, /*nHeightIn=*/1, c.coin_is_coinbase}, /*possible_overwrite=*/false);
+            BlockValidationContext ctx{chain.Context(hash)};
+            ctx.defer_missing_inputs = defer;
+            BlockValidationState state;
+            ConnectBlockResult result;
+            const bool connected{chain.Connect(block, ctx, *view, state, result)};
+            BOOST_CHECK_EQUAL(connected, c.reject_reason.empty());
+            BOOST_CHECK_EQUAL(state.GetRejectReason(), c.reject_reason);
+            BOOST_CHECK(result.deferred_txs.empty());
+            if (connected) {
+                BOOST_CHECK_EQUAL(result.fees, fee);
+                BOOST_CHECK(!view->HaveCoin(SEEDED_OUT));
+                BOOST_CHECK(view->HaveCoin(COutPoint{block.vtx[1]->GetHash(), 0}));
+            }
+        }
+    }
+}
+
 BOOST_AUTO_TEST_SUITE_END()

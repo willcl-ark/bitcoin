@@ -2794,16 +2794,20 @@ static bool CheckCoinbaseAmount(const CBlock& block, const BlockValidationContex
 //! `check_scripts`, its scripts, run here or appended to `checks` for a check queue. The block's totals `fees`
 //! and `sigops_cost` grow by the transaction's. False, with `state` set, on a failure, which is the block's.
 //! ConnectBlock() checks a transaction with it in order and FinishDeferredTransactions() a deferred one once
-//! its inputs are in: one set of checks for both, so that the two cannot come to differ.
+//! its inputs are in: one set of checks for both, so that the two cannot come to differ. `inputs_found` says
+//! that the caller's own view.HaveInputs(tx) was true and the view is as it was then: the walk over the
+//! inputs that looks for a missing one is not made a second time.
 static bool CheckBlockTransaction(const CTransaction& tx, const BlockValidationContext& ctx, const CCoinsViewCache& view,
                                   script_verify_flags flags, int lock_time_flags, bool check_scripts, bool cache_results,
                                   PrecomputedTransactionData& txdata, ValidationCache& validation_cache,
                                   std::vector<CScriptCheck>* checks, std::vector<int>& prevheights,
-                                  CAmount& fees, int64_t& sigops_cost, BlockValidationState& state)
+                                  CAmount& fees, int64_t& sigops_cost, BlockValidationState& state,
+                                  bool inputs_found = false)
 {
     CAmount txfee = 0;
     TxValidationState tx_state;
-    if (!Consensus::CheckTxInputs(tx, tx_state, view, ctx.height, txfee)) {
+    if (!(inputs_found ? Consensus::CheckAvailableTxInputs(tx, tx_state, view, ctx.height, txfee)
+                       : Consensus::CheckTxInputs(tx, tx_state, view, ctx.height, txfee))) {
         // Any transaction validation failure in ConnectBlock is a block consensus failure
         return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS,
                              tx_state.GetRejectReason(),
@@ -2998,8 +3002,10 @@ bool ConnectBlock(const CBlock& block, const BlockValidationContext& ctx,
         if (!tx.IsCoinBase()) {
             const bool fCacheResults = just_check; /* Don't cache results if we're actually connecting blocks (still consult the cache, though) */
             std::vector<CScriptCheck> vChecks;
+            // In a block that may defer, the test above found every input (or the transaction was deferred).
             if (!CheckBlockTransaction(tx, ctx, view, flags, nLockTimeFlags, fScriptChecks, fCacheResults, txsdata[i], validation_cache,
-                                       control ? &vChecks : nullptr, prevheights, nFees, nSigOpsCost, state)) {
+                                       control ? &vChecks : nullptr, prevheights, nFees, nSigOpsCost, state,
+                                       /*inputs_found=*/ctx.defer_missing_inputs)) {
                 break;
             }
             if (control && fScriptChecks) control->Add(std::move(vChecks));
