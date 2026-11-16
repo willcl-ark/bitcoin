@@ -2937,6 +2937,20 @@ bool ConnectBlock(const CBlock& block, const BlockValidationContext& ctx,
     int& nInputs{result.num_inputs};
     int64_t& nSigOpsCost{result.sigops_cost};
     blockundo.vtxundo.reserve(block.vtx.size() - 1);
+    // Whether the view has every input of a transaction, for a block that may defer. An input the view does
+    // not hold already (fetched before, or made by this block) and whose transaction a lower block that is
+    // not applied yet holds is missing for now, and is not looked up: the lookup would probe the store and
+    // then the database for a coin that is in neither, once per deferred transaction. The answer decides
+    // only whether the transaction is deferred; a deferred one is checked against the inputs themselves in
+    // FinishDeferredTransactions(), and one that is not deferred had every input found here.
+    const auto inputs_found{[&](const CTransaction& tx) {
+        if (!ctx.made_by_pending_block) return view.HaveInputs(tx);
+        for (const CTxIn& txin : tx.vin) {
+            if (view.HaveCoinInCache(txin.prevout)) continue;
+            if (ctx.made_by_pending_block(txin.prevout.hash) || !view.HaveCoin(txin.prevout)) return false;
+        }
+        return true;
+    }};
     for (unsigned int i = 0; i < block.vtx.size(); i++)
     {
         if (!state.IsValid()) break;
@@ -2965,7 +2979,7 @@ bool ConnectBlock(const CBlock& block, const BlockValidationContext& ctx,
             }
             if (!state.IsValid()) break;
         }
-        if (!tx.IsCoinBase() && ctx.defer_missing_inputs && !view.HaveInputs(tx)) {
+        if (!tx.IsCoinBase() && ctx.defer_missing_inputs && !inputs_found(tx)) {
             // A lower block that is still being applied may hold the missing input. Not so for an input
             // from one of this block's own transactions: it is missing because it is produced later in the
             // block (or is this transaction's own, or was spent earlier), which validating in order rejects
@@ -4093,6 +4107,11 @@ void Chainstate::StageConnectTip(CBlockIndex* pindexNew, StagedConnect& staged, 
     // runs once every lower block is applied. With the parent confirmed there is nothing to wait for: a
     // missing input is final.
     in.ctx.defer_missing_inputs = staged.windowed && pindexNew->pprev != m_chain.Tip();
+    // Such an input is not looked for where a lower block has said it holds the transaction and is not
+    // applied yet (RunConnectTask() announces a block's transactions before its validation).
+    if (in.ctx.defer_missing_inputs) {
+        in.ctx.made_by_pending_block = [view](const Txid& txid) { return view->CreatesPendingBelow(txid); };
+    }
 }
 
 //! An estimate of what a window block holds in memory between its validation and its publication, beyond
@@ -4156,6 +4175,8 @@ void Chainstate::RunConnectTask(StagedConnect& staged) noexcept
     const auto failure{util::RunWorkerTask(CONNECT_TASK, [&] {
         {
             const auto timer{staged.Time(StagedConnect::FETCH)};
+            // What the block will create, for the blocks above that would look for it before it is there.
+            if (staged.sync) staged.view->AnnounceCreates(*in.block);
             staged.view->Prefetch(*in.block);
         }
         {

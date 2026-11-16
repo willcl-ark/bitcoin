@@ -711,6 +711,14 @@ struct BlockValidationContext {
      * every lower block is in. With a complete window a missing input is "bad-txns-inputs-missingorspent".
      */
     bool defer_missing_inputs{false};
+    /**
+     * With `defer_missing_inputs`: whether a lower block that is not applied yet holds the transaction
+     * `txid` (CoinsStore::CreatesPendingBelow()), so that an input from it which the view does not hold
+     * already is taken as missing without a lookup, and its transaction deferred. A hint: a wrong yes
+     * defers a transaction whose inputs FinishDeferredTransactions() then finds, a wrong no costs the
+     * lookup. Not set: every input is looked up.
+     */
+    std::function<bool(const Txid&)> made_by_pending_block{};
     //! Where the block is on disk, as the index recorded it when the block was planned, for a worker that
     //! reads the block itself. Null where the block is not read from there.
     FlatFilePos block_pos{};
