@@ -22,6 +22,7 @@
 #include <node/blockcache.h>
 #include <node/blockstorage.h>
 #include <node/handoff_machine.h>
+#include <node/sync_mode.h>
 #include <node/tip_snapshot.h>
 #include <policy/feerate.h>
 #include <policy/packages.h>
@@ -633,6 +634,13 @@ struct BlockValidationContext {
      * every lower block is in. With a complete window a missing input is "bad-txns-inputs-missingorspent".
      */
     bool defer_missing_inputs{false};
+    //! Where the block is on disk, as the index recorded it when the block was planned, for a worker that
+    //! reads the block itself. Null where the block is not read from there.
+    FlatFilePos block_pos{};
+    //! The block's size where it is known without visiting the block: as the block cache measured it, in
+    //! memory. Zero where it is not known. A floor of what the block holds, for the count of the memory in
+    //! flight (util/byte_ledger.h).
+    size_t known_bytes{0};
 };
 
 /** Outputs of the pure ConnectBlock() besides the mutated coins view.
@@ -1764,6 +1772,9 @@ public:
     /** Check whether we are doing an initial block download (synchronizing from disk or network) */
     bool IsInitialBlockDownload() const noexcept;
 
+    /** The latch as the mode it selects, for an operation to read once where it starts (node/sync_mode.h). */
+    node::SyncMode SyncModeNow() const noexcept { return node::SyncModeOf(IsInitialBlockDownload()); }
+
     /** Guess verification progress (as a fraction between 0.0=genesis and 1.0=current tip).
     * This is also the case in the assumeutxo context, meaning that the progress reported for
     * the snapshot chainstate may suggest that all historical blocks have already been verified
@@ -1861,18 +1872,20 @@ public:
      * callers may hold a wallet's lock, which the scheduler needs to drain the validation queue the connector
      * waits for (LimitValidationInterfaceQueue()), and they have no order with a peer's block anyway. Holding
      * g_msgproc_mutex while waiting is safe: only the message handler thread takes it. Not in initial block
-     * download, where a pass runs on and no transaction follows a block in order.
+     * download, where a pass runs on and no transaction follows a block in order: `mode` is the caller's
+     * copy, read where its operation started, and the wait is made or not by it alone.
      */
-    void WaitForPendingBlocks() EXCLUSIVE_LOCKS_REQUIRED(!m_connector_mutex) LOCKS_EXCLUDED(::cs_main);
+    void WaitForPendingBlocks(node::SyncMode mode) EXCLUSIVE_LOCKS_REQUIRED(!m_connector_mutex) LOCKS_EXCLUDED(::cs_main);
     /**
      * Whether the historical chainstate's activation is to give way: the node is out of initial block
      * download and a block the active chainstate may connect was handed to the connector and is not taken
      * yet. Out of initial block download the message handler waits for that block (WaitForPendingBlocks()),
      * and the historical chainstate's backlog may be long. In initial block download nobody waits, and
-     * giving way to every block handed over would starve the historical chainstate. Once true it stays true
-     * until the connector takes: the end of initial block download is final, and only the connector takes.
+     * giving way to every block handed over would starve the historical chainstate. `mode` is the copy of
+     * the caller's step: a step planned in the download does not give way, the next one does. For one
+     * mode, once true it stays true until the connector takes: only the connector takes.
      */
-    bool YieldHistoricalActivation() const EXCLUSIVE_LOCKS_REQUIRED(!m_connector_mutex);
+    bool YieldHistoricalActivation(node::SyncMode mode) const EXCLUSIVE_LOCKS_REQUIRED(!m_connector_mutex);
     //! Whether a block handed to the connector is not Done yet (Queued, Taken or DoneActive). Blocks accepted
     //! but not yet connected move the active tip once it runs; callers that measure from the tip may wait for
     //! that.

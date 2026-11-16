@@ -470,13 +470,13 @@ BOOST_FIXTURE_TEST_CASE(connector_connects_what_it_is_handed, TestChain100Setup)
 
     const auto first{std::make_shared<const CBlock>(CreateBlock({}, script))};
     BOOST_REQUIRE(chainman.ProcessNewBlock(first, /*force_processing=*/true, /*min_pow_checked=*/true, nullptr, /*activate_async=*/true));
-    chainman.WaitForPendingBlocks();
+    chainman.WaitForPendingBlocks(chainman.SyncModeNow());
     BOOST_CHECK_EQUAL(tip(), first->GetHash());
 
     chainman.StopConnector();
     const auto second{std::make_shared<const CBlock>(CreateBlock({}, script))};
     BOOST_REQUIRE(chainman.ProcessNewBlock(second, /*force_processing=*/true, /*min_pow_checked=*/true, nullptr, /*activate_async=*/true));
-    chainman.WaitForPendingBlocks();
+    chainman.WaitForPendingBlocks(chainman.SyncModeNow());
     {
         LOCK(::cs_main);
         const CBlockIndex* index{chainman.m_blockman.LookupBlockIndex(second->GetHash())};

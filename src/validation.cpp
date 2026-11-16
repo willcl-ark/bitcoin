@@ -3905,15 +3905,10 @@ namespace connect_phase {
 struct Staged {
     //! The node's decisions on the block. A worker reads these, and of the block index only what was
     //! written once before the block was staged (the ancestors' times, for the median time past).
+    //! With the block's position on disk and its size, if known: a worker reads neither from the index.
     BlockValidationContext ctx;
-    //! Where the block is on disk, for a windowed block that its worker reads.
-    FlatFilePos pos;
-    //! Null for a windowed block still on disk.
+    //! Null for a windowed block still on disk (ctx.block_pos).
     std::shared_ptr<const CBlock> block;
-    //! The block's own size where it is known without visiting the block: as the block cache measured it (in
-    //! memory), or the length read from disk (serialized, smaller). Either serves as a floor of what the block
-    //! holds (WindowBlockBytes()). Zero for a block passed in.
-    size_t block_bytes{0};
 };
 
 //! The worker could not read the block from disk: a system error, fatal at publication.
@@ -4063,10 +4058,10 @@ void Chainstate::StageConnectTip(CBlockIndex* pindexNew, StagedConnect& staged, 
     staged.script_check_reason = ScriptCheckReason(*pindexNew);
     auto& in{staged.at.emplace<connect_phase::Staged>(connect_phase::Staged{
         .ctx = m_chainman.MakeBlockValidationContext(pindexNew->GetBlockHash(), pindexNew->pprev),
-        .pos = pos,
         .block = std::move(block),
-        .block_bytes = block_bytes,
     })};
+    in.ctx.block_pos = pos;
+    in.ctx.known_bytes = block_bytes;
     in.ctx.check_scripts = !!staged.script_check_reason;
     // An input a lower block in flight has not produced yet is deferred to the block's continuation, which
     // runs once every lower block is applied. With the parent confirmed there is nothing to wait for: a
@@ -4078,7 +4073,8 @@ void Chainstate::StageConnectTip(CBlockIndex* pindexNew, StagedConnect& staged, 
 //! what the young tier counts for the coins it created: the block, its undo data and the store's record of
 //! its changes. It is taken from the block's counts, at about half a kilobyte for a transaction with its
 //! outputs and as much for an input with its witness, the coin it spent and what is recorded of both, and
-//! is at least the block's own size where that is known (connect_phase::Staged::block_bytes): a block of few inputs
+//! is at least the block's own size where that is known (BlockValidationContext::known_bytes as the block cache
+//! measured it, in memory, or the length its worker read from disk, serialized and smaller): a block of few inputs
 //! with large witnesses holds those bytes, which the counts do not see. Measuring the block here would visit
 //! everything it holds, so the size comes from where it is known already.
 static constexpr size_t WINDOW_BYTES_PER_ITEM{512};
@@ -4111,12 +4107,13 @@ void Chainstate::RunConnectTask(StagedConnect& staged) noexcept
     // failed allocation, and the process terminates (noexcept): the pool would keep the exception in a
     // future nobody reads, and the connector would wait for the block forever.
     connect_phase::Staged& in{staged.In<connect_phase::Staged>()};
+    size_t block_bytes{in.ctx.known_bytes};
     if (!in.block) {
         auto block{m_chainman.NewBlock(/*on_pool=*/true)};
         bool read;
         {
             const auto timer{staged.Time(StagedConnect::READ)};
-            read = m_blockman.ReadBlock(*block, in.pos, in.ctx.block_hash, &in.block_bytes);
+            read = m_blockman.ReadBlock(*block, in.ctx.block_pos, in.ctx.block_hash, &block_bytes);
         }
         if (!read) {
             staged.time_read = staged.time_connected = SteadyClock::now();
@@ -4153,7 +4150,7 @@ void Chainstate::RunConnectTask(StagedConnect& staged) noexcept
         FatalError(m_chainman.GetNotifications(), state, Untranslated(failure->what));
     }
     staged.time_connected = SteadyClock::now();
-    if (staged.sync) staged.bytes = WindowBlockBytes(*in.block, result.num_inputs, in.block_bytes) + staged.view->DynamicMemoryUsage();
+    if (staged.sync) staged.bytes = WindowBlockBytes(*in.block, result.num_inputs, block_bytes) + staged.view->DynamicMemoryUsage();
     if (ok && !result.deferred_txs.empty()) {
         connect_phase::Deferred deferred{std::move(in), std::move(state), std::move(result)};
         staged.at.emplace<connect_phase::Deferred>(std::move(deferred));
@@ -4576,9 +4573,11 @@ struct ConnectStep {
     bool blocks_disconnected{false};
     //! Height up to which blocks towards the target have been placed in a batch.
     int planned_height{-1};
-    //! The batch being connected, in ascending height order, with each block's position on disk, captured
-    //! under the lock so the block can be read without it.
-    std::vector<std::pair<CBlockIndex*, FlatFilePos>> batch;
+    //! The batch being connected, in ascending height order, with what the index records about each block
+    //! (node::BlockFacts), copied under the lock: the position on disk, so that the block can be read
+    //! without it, and the transaction count, which sizes a block the window stages before anything else
+    //! is known of it.
+    std::vector<std::pair<CBlockIndex*, node::BlockFacts>> batch;
     //! The tip gained work over old_tip: the step ends after the current block.
     bool improved{false};
     //! A block of the batch was invalid: the step ends and the target is recomputed.
@@ -4709,7 +4708,7 @@ bool Chainstate::PlanNextBatch(ConnectStep& step)
     const int target_height{std::min(step.planned_height + 32, end_height)};
     step.batch.reserve(target_height - step.planned_height);
     for (CBlockIndex* pindexIter{step.target->GetAncestor(target_height)}; pindexIter && pindexIter->nHeight != step.planned_height; pindexIter = pindexIter->pprev) {
-        step.batch.emplace_back(pindexIter, pindexIter->GetBlockPos());
+        step.batch.emplace_back(pindexIter, node::BlockFactsOf(*pindexIter));
     }
     std::ranges::reverse(step.batch);
     step.planned_height = target_height;
@@ -4929,12 +4928,13 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
         // enqueued; they are released between those holds, except that the
         // publication of the block that improves the tip at the tip and the
         // notifications are one hold.
-        bool was_in_ibd{false};
+        // The mode of the pass and of its steps (node/sync_mode.h): read once, here.
+        node::SyncMode mode{node::SyncMode::Download};
         bool historical{false};
         CBlockIndex* starting_tip{nullptr};
         {
             LOCK(cs_main);
-            was_in_ibd = m_chainman.IsInitialBlockDownload();
+            mode = m_chainman.SyncModeNow();
             historical = this == m_chainman.HistoricalChainstate();
             starting_tip = m_chain.Tip();
         }
@@ -5047,7 +5047,7 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                         // A block that failed in the window is connected alone, in a step of its own
                         // (PublishConnectTip()).
                         const bool retry{std::exchange(m_window_retry_serial, false)};
-                        step->use_window = !retry && was_in_ibd && !reorg_lock_main && m_chainman.ConnectWindow() > 1;
+                        step->use_window = !retry && mode == node::SyncMode::Download && !reorg_lock_main && m_chainman.ConnectWindow() > 1;
                         if (step->use_window) step->sync = std::make_shared<WindowSync>();
                     }
 
@@ -5057,7 +5057,7 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                                                                    : starting_tip ? m_chain.FindFork(*starting_tip) : nullptr};
                         bool still_in_ibd = m_chainman.IsInitialBlockDownload();
 
-                        if (was_in_ibd && !still_in_ibd) {
+                        if (mode == node::SyncMode::Download && !still_in_ibd) {
                             // Active chainstate has exited IBD.
                             exited_ibd = true;
                         }
@@ -5121,7 +5121,8 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                         step->next_in_batch = 0;
                         continue;
                     }
-                    const auto& [pindexConnect, block_pos]{step->batch[step->next_in_batch++]};
+                    const auto& [pindexConnect, facts]{step->batch[step->next_in_batch++]};
+                    const FlatFilePos& block_pos{facts.data_pos};
                     auto staged{std::make_unique<StagedConnect>()};
                     staged->windowed = step->use_window;
                     staged->time_start = SteadyClock::now();
@@ -5134,7 +5135,7 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                     // The cache is asked only for a block not passed in, so that its count of blocks connected
                     // from it is what it says.
                     std::shared_ptr<const CBlock> from_cache{passed_in ? nullptr : m_chainman.m_block_cache.Take(pindexConnect->nHeight, pindexConnect->GetBlockHash(), &block_bytes)};
-                    staged->staged_bytes = static_cast<size_t>(pindexConnect->nTx) * WINDOW_BYTES_PER_ITEM;
+                    staged->staged_bytes = static_cast<size_t>(facts.tx_count) * WINDOW_BYTES_PER_ITEM;
                     if (passed_in) {
                         block = pblock;
                         // A copy the cache kept of it (every block handed to the connector goes there) is
@@ -5393,7 +5394,7 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
         // download the message handler waits for that block (ChainstateManager::WaitForPendingBlocks()), and
         // this chainstate's backlog may be long. The connector comes back to it after that block; any other
         // caller's activation ends here as well, and the connector's pass for that block takes it up.
-        if (historical && m_chainman.YieldHistoricalActivation()) break;
+        if (historical && m_chainman.YieldHistoricalActivation(mode)) break;
     } while (pindexNewTip != pindexMostWork);
 
     if (!m_chainman.IsInitialBlockDownload()) m_chainman.m_block_bins->Empty();
@@ -6601,11 +6602,11 @@ bool ChainstateManager::HandOffsDone(const node::HandOffTicket& ticket) const
     return m_connector_handoffs.Attempted(ticket);
 }
 
-void ChainstateManager::WaitForPendingBlocks()
+void ChainstateManager::WaitForPendingBlocks(node::SyncMode mode)
 {
     AssertLockNotHeld(::cs_main);
     AssertMayWait("the connector");
-    if (IsInitialBlockDownload()) return;
+    if (mode == node::SyncMode::Download) return;
     WAIT_LOCK(m_connector_mutex, lock);
     const node::HandOffTicket ticket{m_connector_handoffs.Latest()};
     m_connector_cv.wait(lock, [&]() EXCLUSIVE_LOCKS_REQUIRED(m_connector_mutex) {
@@ -6619,9 +6620,9 @@ bool ChainstateManager::AnyHandOffPending() const
     return m_connector_handoffs.AnyUnattempted();
 }
 
-bool ChainstateManager::YieldHistoricalActivation() const
+bool ChainstateManager::YieldHistoricalActivation(node::SyncMode mode) const
 {
-    if (IsInitialBlockDownload()) return false;
+    if (mode == node::SyncMode::Download) return false;
     LOCK(m_connector_mutex);
     return !m_connector_handoffs.Stopped() && m_connector_handoffs.AnyActiveQueued();
 }
@@ -6663,7 +6664,7 @@ void ChainstateManager::ConnectorLoop()
         // Where the historical activation gave way to a block handed over meanwhile, the blocks of this pass
         // stay DoneActive: that block brings the next pass at once, which comes back to the historical
         // chainstate, and they are Done with it.
-        if (!(bg_chain && YieldHistoricalActivation())) WITH_LOCK(m_connector_mutex, m_connector_handoffs.AllAttempted());
+        if (!(bg_chain && YieldHistoricalActivation(SyncModeNow()))) WITH_LOCK(m_connector_mutex, m_connector_handoffs.AllAttempted());
         m_connector_cv.notify_all();
     }
 }
