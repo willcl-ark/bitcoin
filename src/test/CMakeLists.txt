@@ -61,6 +61,7 @@ add_executable(test_bitcoin
   flatfile_tests.cpp
   fs_tests.cpp
   getarg_tests.cpp
+  handoff_machine_tests.cpp
   hash_tests.cpp
   headers_sync_chainwork_tests.cpp
   httpserver_tests.cpp

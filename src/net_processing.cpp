@@ -289,14 +289,14 @@ struct Peer {
     /** Set to true once initial VERSION message was sent (only relevant for outbound peers). */
     bool m_outbound_version_message_sent GUARDED_BY(NetEventsInterface::g_msgproc_mutex){false};
 
-    /** A ping not answered yet. It is answered once the peer's blocks handed to the connect pool before it are
-     *  processed and the connector has attempted the activations signalled by then; until then no further
-     *  message of the peer is taken, so that the answers keep their order (ProcessMessages()). */
+    /** A ping not answered yet. It is answered once none of the peer's blocks is WithReceiveTask and every
+     *  block handed to the connector by then is Done (node::HandOffState); until then no further message of
+     *  the peer is taken, so that the answers keep their order (ProcessMessages()). */
     struct PendingPong {
         uint64_t nonce;
-        //! The connector's activation count to wait for. Unset while the peer's handed-off blocks are still
-        //! being processed: each signals the connector only when its task ends, so the count is read after.
-        std::optional<uint64_t> signals;
+        //! The hand-off to wait for. Unset while a block of the peer is WithReceiveTask: each is handed to
+        //! the connector only when its task stores it, so the ticket is read after.
+        std::optional<node::HandOffTicket> wait_for_done;
     };
     std::optional<PendingPong> m_pending_pong GUARDED_BY(NetEventsInterface::g_msgproc_mutex);
 
@@ -1130,7 +1130,7 @@ private:
      *  lost in the pool's unread future, so this terminates on it. */
     void RunBlockTask(NodeId id, const uint256& hash, const DataStream& recv) noexcept
         EXCLUSIVE_LOCKS_REQUIRED(!m_block_tasks_mutex, !m_peer_mutex);
-    /** Whether a block of the peer is with the connect pool. */
+    /** Whether a block of the peer is with the connect pool (node::HandOffState::WithReceiveTask). */
     bool BlockTasksOutstanding(NodeId id) const EXCLUSIVE_LOCKS_REQUIRED(!m_block_tasks_mutex);
     /** Whether any peer's block is with the connect pool. */
     bool BlockTasksOutstanding() const EXCLUSIVE_LOCKS_REQUIRED(!m_block_tasks_mutex);
@@ -1144,7 +1144,9 @@ private:
 
     mutable Mutex m_block_tasks_mutex;
     std::condition_variable m_block_tasks_cv;
-    /** Blocks handed to the connect pool whose tasks have not finished, by peer and block hash. */
+    /** Blocks handed to the connect pool whose tasks have not finished, by peer and block hash: those in
+     *  node::HandOffState::WithReceiveTask. A task leaves the set having stored its block (which hands it to
+     *  the connector), refused it or dropped it (RunBlockTask()). */
     std::set<std::pair<NodeId, uint256>> m_block_tasks GUARDED_BY(m_block_tasks_mutex);
     /** Blocks handed to the connect pool so far. */
     uint64_t m_blocks_handed_off GUARDED_BY(m_block_tasks_mutex){0};
@@ -5610,9 +5612,9 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
             // time, so the pong may go out before that block is connected. In initial block download that is
             // another peer's task, out of it submitblock, generateblock or the mining interface.
             if (BlockTasksOutstanding(pfrom.GetId())) {
-                peer.m_pending_pong = Peer::PendingPong{.nonce = nonce, .signals = std::nullopt};
-            } else if (const uint64_t signals{m_chainman.ConnectorSignals()}; !m_chainman.ConnectorReached(signals)) {
-                peer.m_pending_pong = Peer::PendingPong{.nonce = nonce, .signals = signals};
+                peer.m_pending_pong = Peer::PendingPong{.nonce = nonce, .wait_for_done = std::nullopt};
+            } else if (const node::HandOffTicket latest{m_chainman.LatestHandOff()}; !m_chainman.HandOffsDone(latest)) {
+                peer.m_pending_pong = Peer::PendingPong{.nonce = nonce, .wait_for_done = latest};
             } else {
                 MakeAndPushMessage(pfrom, NetMsgType::PONG, nonce);
             }
@@ -5853,9 +5855,9 @@ bool PeerManagerImpl::ProcessMessages(CNode& node, std::atomic<bool>& interruptM
     if (peer.m_pending_pong) {
         Peer::PendingPong& pending{*peer.m_pending_pong};
         if (BlockTasksOutstanding(node.GetId())) return false;
-        // The peer's blocks have all signalled the connector by now.
-        if (!pending.signals) pending.signals = m_chainman.ConnectorSignals();
-        if (!m_chainman.ConnectorReached(*pending.signals)) return false;
+        // The peer's blocks that were stored have all been handed to the connector by now.
+        if (!pending.wait_for_done) pending.wait_for_done = m_chainman.LatestHandOff();
+        if (!m_chainman.HandOffsDone(*pending.wait_for_done)) return false;
         MakeAndPushMessage(node, NetMsgType::PONG, pending.nonce);
         peer.m_pending_pong.reset();
     }
@@ -6969,7 +6971,7 @@ bool PeerManagerImpl::SendMessages(CNode& node)
                 // verdict waits until the connector has nothing left to attempt, when the window is what it
                 // would be had the blocks been connected on this thread. Blocks still with the connect pool
                 // have not reached the connector yet, so it waits for those as well.
-                if (BlockTasksOutstanding() || m_chainman.ConnectorBusy()) {
+                if (BlockTasksOutstanding() || m_chainman.AnyHandOffPending()) {
                     // Decided on a later pass.
                 } else if (State(staller)->m_stalling_since == 0us) {
                     State(staller)->m_stalling_since = current_time;
