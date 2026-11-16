@@ -55,8 +55,8 @@ public:
     //! record a block whose data could be lost. An application that goes on
     //! after this notification can still read. It has to stop processing
     //! blocks and restart to write: a write-out that fails while a block is
-    //! being connected leaves the coins one block ahead of the tip, and
-    //! connecting a block again from there aborts.
+    //! being disconnected leaves the coins one block behind the tip, and
+    //! connecting a block from there aborts.
     virtual void flushError(const bilingual_str& message) {}
 
     //! The fatal error notification is sent to notify the user when an error

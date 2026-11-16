@@ -204,8 +204,8 @@ BOOST_AUTO_TEST_CASE(chain_signals_carry_the_tip_sequence)
     BOOST_CHECK_EQUAL(recorder.m_disconnected[0], before + 3);
     BOOST_CHECK_EQUAL(signals.TipSequenceInDelivery(), chainman.PublishedTip().sequence);
 
-    // A step that connects several blocks queues their BlockConnected signals after the
-    // last of them is connected. Each still carries the number its own block was connected
+    // The BlockConnected signals of a step that disconnects and connects several blocks reach
+    // the queue after the last of them is connected. Each still carries the number its own block was connected
     // under, not the number of the tip at the time the signals are queued.
     // Chain: base, a1, a2, a3 with a1 invalidated, then base, c1. Reconsidering a1
     // disconnects c1 and connects a1 and a2 in one step, as a1 alone does not beat c1.

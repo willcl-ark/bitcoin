@@ -263,6 +263,7 @@ UniValue blockToJSON(BlockManager& blockman, const CBlock& block, const CBlockIn
         case TxVerbosity::SHOW_DETAILS:
         case TxVerbosity::SHOW_DETAILS_AND_PREVOUT:
             CBlockUndo blockUndo;
+            blockman.SettleUndoWriteOf(blockindex); // a just-connected block's undo may be in flight
             const bool is_not_pruned{WITH_LOCK(::cs_main, return !blockman.IsBlockPruned(blockindex))};
             bool have_undo{is_not_pruned && WITH_LOCK(::cs_main, return blockindex.nStatus & BLOCK_HAVE_UNDO)};
             if (have_undo && !blockman.ReadBlockUndo(blockUndo, blockindex)) {
@@ -757,6 +758,7 @@ static CBlockUndo GetUndoChecked(BlockManager& blockman, const CBlockIndex& bloc
     // The Genesis block does not have undo data
     if (blockindex.nHeight == 0) return blockUndo;
 
+    blockman.SettleUndoWriteOf(blockindex); // a just-connected block's undo may be in flight
     {
         LOCK(cs_main);
         CheckBlockDataAvailability(blockman, blockindex, /*check_for_undo=*/true);
@@ -927,8 +929,9 @@ std::optional<int> GetPruneHeight(const BlockManager& blockman, const CChain& ch
     // If there are no blocks after the genesis block, or no blocks at all, nothing is pruned.
     if (!first_block || !chain_tip) return std::nullopt;
 
-    // If the chain tip is pruned, everything is pruned.
-    if ((chain_tip->nStatus & BLOCK_HAVE_MASK) != BLOCK_HAVE_MASK) return chain_tip->nHeight;
+    // If the chain tip is pruned, everything is pruned. A just-connected block's undo in flight counts as there
+    // (BlockManager::HasStatus()).
+    if (!blockman.HasStatus(*chain_tip, BLOCK_HAVE_MASK)) return chain_tip->nHeight;
 
     const auto& first_unpruned{blockman.GetFirstBlock(*chain_tip, /*status_mask=*/BLOCK_HAVE_MASK, first_block)};
     if (&first_unpruned == first_block) {
@@ -3589,7 +3592,7 @@ const std::vector<RPCResult> RPCHelpForChainstate{
     {RPCResult::Type::NUM, "difficulty", "difficulty of the tip"},
     {RPCResult::Type::NUM, "verificationprogress", "progress towards the network tip"},
     {RPCResult::Type::STR_HEX, "snapshot_blockhash", /*optional=*/true, "the base block of the snapshot this chainstate is based on, if any"},
-    {RPCResult::Type::NUM, "coins_db_cache_bytes", "size of the coinsdb cache"},
+    {RPCResult::Type::NUM, "coins_db_cache_bytes", "share of the coinsdb cache assigned to this chainstate; the database keeps the cache size it was opened with"},
     {RPCResult::Type::NUM, "coins_tip_cache_bytes", "size of the coinstip cache"},
     {RPCResult::Type::BOOL, "validated", "whether the chainstate is fully validated. True if all blocks in the chainstate were validated, false if the chain is based on a snapshot and the snapshot has not yet been validated."},
 };

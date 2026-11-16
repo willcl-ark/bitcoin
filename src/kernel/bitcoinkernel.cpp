@@ -1377,6 +1377,9 @@ int btck_chainstate_manager_import_blocks(btck_ChainstateManager* chainman, cons
         }
         auto& chainman_ref{*btck_ChainstateManager::get(chainman).m_chainman};
         node::ImportBlocks(chainman_ref, import_files);
+        // As after btck_chainstate_manager_process_block: the undo data of the blocks connected is
+        // written, and their signals have left the queue, when the call returns.
+        chainman_ref.m_blockman.SettleUndoWrites();
         {
             LOCK(::cs_main);
             chainman_ref.UpdateIBDStatus();
@@ -1606,7 +1609,11 @@ int btck_chainstate_manager_process_block(
     int* _new_block)
 {
     bool new_block;
-    auto result = btck_ChainstateManager::get(chainman).m_chainman->ProcessNewBlock(btck_Block::get(block), /*force_processing=*/true, /*min_pow_checked=*/true, /*new_block=*/&new_block);
+    auto& manager{*btck_ChainstateManager::get(chainman).m_chainman};
+    auto result = manager.ProcessNewBlock(btck_Block::get(block), /*force_processing=*/true, /*min_pow_checked=*/true, /*new_block=*/&new_block);
+    // The notifications of what the call connected leave with the effects executor's completions (undo data is
+    // written there): settled here, so that the callbacks have run when the call returns, as they always had.
+    manager.m_blockman.SettleUndoWrites();
     if (_new_block) {
         *_new_block = new_block ? 1 : 0;
     }

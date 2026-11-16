@@ -245,7 +245,8 @@ std::shared_ptr<const CBlock> ChildBlock(const CBlockHeader& prev, int height, C
 
 // The case the cursor file's sync does not cover: undo data written into the undo file of
 // a block file the cursor has left. Only SyncWrittenFiles() makes it durable before the
-// index records it; without that call the write-out's check in WriteBlockIndexDB fails.
+// index records it; without that call the batch still owes the sync when it is committed,
+// which the machine has no transition for (CommitBlockIndexBatch()).
 BOOST_FIXTURE_TEST_CASE(undo_in_a_left_file_is_synced, FastPruneChain100Setup)
 {
     auto& chainman{*Assert(m_node.chainman)};

@@ -52,9 +52,15 @@ struct NewMempoolTransactionInfo;
  * the events were queued, with no lock of the sender held. That holds for
  * a queue with a thread of its own, as in the node. With a task runner
  * that runs each task where it is queued (the kernel library's default,
- * some tests), these callbacks run on the thread that processes the block,
- * inside the sender's cs_main and, for a block connected or disconnected
- * and the tip update that follows it, the mempool's lock. The three
+ * some tests), these callbacks run inside the sender's cs_main, on the
+ * thread that queues them. For a block disconnected that is the thread
+ * that processes the block, with the mempool's lock held too, and so it is
+ * for the tip update outside initial block download. In initial block
+ * download the tip update is queued where BlockConnected is, behind it.
+ * BlockConnected is queued behind the block's undo write, by the
+ * thread that applies that write's completion: the one that processes the
+ * block, the one that runs the deferred I/O, or one that waits for the
+ * queue or reads undo data, whatever else that thread is doing. The three
  * synchronous callbacks (ActiveTipChange, BlockChecked, NewPoWValidBlock)
  * run on the thread that processes the block; BlockChecked and
  * NewPoWValidBlock inside the sender's cs_main, ActiveTipChange inside it
@@ -65,7 +71,7 @@ struct NewMempoolTransactionInfo;
  * counts its tip changes (node::TipSnapshot::sequence) and passes the
  * number of the tip the event produced. One sender queues its signals in
  * the order the chain changed, so its numbers never fall along the queue
- * (precondition O7 in validation.h, asserted by the sender). Several
+ * (precondition O7 in validation.h). Several
  * signals can carry one number, and the numbers of two senders on one
  * queue are unrelated. While such a callback runs,
  * ValidationSignals::TipSequenceInDelivery() returns its number.
@@ -182,8 +188,9 @@ protected:
      * If the provided BlockValidationState IsValid, the provided block
      * is about to become the tip of its chainstate: the callback is generated
      * after the block was checked and before the tip moves to it. The tip
-     * does not move if the write-out that follows fails, and the chainstate
-     * is not the current one while it validates a snapshot in the background.
+     * moves before the write-out that follows and stays moved if that fails.
+     * The chainstate is not the current one while it validates a snapshot in
+     * the background.
      *
      * Called on the thread that processes the block, with cs_main held,
      * before the tip moves to the block.
@@ -257,6 +264,16 @@ public:
      *     promise.get_future().wait();
      */
     void SyncWithValidationInterfaceQueue() LOCKS_EXCLUDED(cs_main);
+
+    /**
+     * Add a function that SyncWithValidationInterfaceQueue() runs first, beside
+     * those added before. Validation uses it to settle its effects executor,
+     * whose completion queue carries BlockConnected, so that a sync also waits
+     * for those. A hook returns false once its owner is gone and is dropped
+     * then: an owner may go before the signals or after them, and does not call
+     * into them as it goes.
+     */
+    void AddPreSyncHook(std::function<bool()> hook);
 
     /**
      * The tip sequence number, in its sender's numbering, of the queued

@@ -205,7 +205,7 @@ public:
      * Check whether this block and all previous blocks back to the genesis block or an assumeutxo snapshot block have
      * reached VALID_TRANSACTIONS and had transactions downloaded (and stored to disk) at some point.
      *
-     * Does not imply the transactions are consensus-valid (ConnectTip might fail)
+     * Does not imply the transactions are consensus-valid (connecting the block might fail)
      * Does not imply the transactions are still stored on disk. (IsBlockPruned might return true)
      *
      * Note that this will be true for the snapshot base block, if one is loaded, since its m_chain_tx_count value will have
