@@ -6,6 +6,7 @@
 #define BITCOIN_KERNEL_EFFECTS_H
 
 #include <sync.h>
+#include <util/lifecycle.h>
 
 #include <condition_variable>
 #include <cstddef>
@@ -30,6 +31,12 @@ namespace kernel {
  *
  * Enqueue order is preserved end to end: effects run in order and their
  * completions are applied in that same order.
+ *
+ * Whether it takes effects is one machine (util/lifecycle.h): Stopped until
+ * Start(), Running until Stop(), Draining while Stop() waits for the I/O of
+ * what was queued, then Stopped again. An effect queued while it is not
+ * Running would never run, or run behind the stop that was to be the last
+ * word: Enqueue() asserts.
  */
 class EffectsExecutor
 {
@@ -45,12 +52,12 @@ public:
     EffectsExecutor(const EffectsExecutor&) = delete;
     EffectsExecutor& operator=(const EffectsExecutor&) = delete;
 
-    //! Start the worker. Effects enqueued before this wait for it.
+    //! Start the worker. Nothing is queued before it (Enqueue()).
     void Start() EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
     //! Run every enqueued effect's I/O, then stop the worker. Completions stay queued for ApplyCompletions().
     void Stop() EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
 
-    //! Queue an effect; `bytes` is its weight for the backlog limit.
+    //! Queue an effect; `bytes` is its weight for the backlog limit. The executor is Running.
     void Enqueue(Effect effect, Completion completion, size_t bytes = 0) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
 
     //! Wait until the I/O of every enqueued effect has run. Safe with the requester's lock held.
@@ -80,7 +87,7 @@ private:
     std::deque<std::pair<Completion, bool>> m_done GUARDED_BY(m_mutex);
     size_t m_pending_bytes GUARDED_BY(m_mutex){0};
     bool m_io_running GUARDED_BY(m_mutex){false};
-    bool m_stop GUARDED_BY(m_mutex){false};
+    util::Lifecycle m_life GUARDED_BY(m_mutex);
     std::thread m_thread;
     const std::function<void()> m_on_completion;
 };

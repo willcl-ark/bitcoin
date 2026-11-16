@@ -1150,6 +1150,9 @@ private:
     std::set<std::pair<NodeId, uint256>> m_block_tasks GUARDED_BY(m_block_tasks_mutex);
     /** Blocks handed to the connect pool so far. */
     uint64_t m_blocks_handed_off GUARDED_BY(m_block_tasks_mutex){0};
+    //! Whether blocks are handed to tasks (util/lifecycle.h): Running from construction, Draining while
+    //! FinishBlockTasks() waits for the set to empty, Stopped for good after.
+    util::Lifecycle m_block_tasks_life GUARDED_BY(m_block_tasks_mutex){util::LifeState::Running};
 
     /** Process compact block txns  */
     void ProcessCompactBlockTxns(CNode& pfrom, Peer& peer, const BlockTransactions& block_transactions)
@@ -3960,6 +3963,9 @@ bool PeerManagerImpl::HandOffBlock(Peer& peer, DataStream& recv)
         }
         AssertMayWait("a receive task to end");
         m_block_tasks_cv.wait(lock, [&]() EXCLUSIVE_LOCKS_REQUIRED(m_block_tasks_mutex) { return static_cast<int>(m_block_tasks.size()) < limit; });
+        // The message handler, the one caller, stops before the tasks are finished (Shutdown()): a task
+        // started behind FinishBlockTasks() would run in an object nobody waits for any more.
+        Assert(m_block_tasks_life.Running());
         m_block_tasks.emplace(peer.m_id, hash);
         ++m_blocks_handed_off;
     }
@@ -4059,8 +4065,11 @@ void PeerManagerImpl::WaitForPendingBlocks()
 void PeerManagerImpl::FinishBlockTasks()
 {
     WAIT_LOCK(m_block_tasks_mutex, lock);
+    // Idempotent: called at shutdown and again by the destructor.
+    if (!m_block_tasks_life.DrainIfRunning()) return;
     AssertMayWait("the receive tasks");
     m_block_tasks_cv.wait(lock, [&]() EXCLUSIVE_LOCKS_REQUIRED(m_block_tasks_mutex) { return m_block_tasks.empty(); });
+    m_block_tasks_life.Finish();
 }
 
 void PeerManagerImpl::ProcessCompactBlockTxns(CNode& pfrom, Peer& peer, const BlockTransactions& block_transactions)

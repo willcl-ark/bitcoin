@@ -38,6 +38,7 @@
 #include <util/check.h>
 #include <util/fs.h>
 #include <util/hasher.h>
+#include <util/lifecycle.h>
 #include <util/result.h>
 #include <util/time.h>
 #include <util/translation.h>
@@ -1444,6 +1445,10 @@ private:
     mutable Mutex m_connector_mutex;
     std::condition_variable m_connector_cv;
     node::ConnectorHandOffs m_connector_handoffs GUARDED_BY(m_connector_mutex);
+    //! Whether the connector takes blocks (util/lifecycle.h): Running from construction, with its thread
+    //! started by the first block; Draining while StopConnector() waits for the pass that is running;
+    //! Stopped for good after.
+    util::Lifecycle m_connector_life GUARDED_BY(m_connector_mutex){util::LifeState::Running};
     //! The block most recently accepted for the connector, for its next activation (SignalConnector()).
     std::shared_ptr<const CBlock> m_connector_block GUARDED_BY(m_connector_mutex);
     void ConnectorLoop() EXCLUSIVE_LOCKS_REQUIRED(!m_connector_mutex);
@@ -1539,11 +1544,7 @@ public:
     node::BlockManager m_blockman;
     //! What the validation interface's pre-sync hook reaches (AddPreSyncHook()): this manager's block
     //! manager, disarmed when the manager goes, which may be before the signals or after them.
-    struct PreSyncTarget {
-        Mutex mutex;
-        node::BlockManager* blockman GUARDED_BY(mutex){nullptr};
-    };
-    std::shared_ptr<PreSyncTarget> m_pre_sync_target;
+    std::shared_ptr<util::HookTarget<node::BlockManager>> m_pre_sync_target;
 
     /** Determine the potential consensus script flags for blocks in a chain */
     static script_verify_flags GetAllConsensusScriptFlags(const Consensus::Params& params);
@@ -1873,7 +1874,8 @@ public:
     bool AnyHandOffPending() const EXCLUSIVE_LOCKS_REQUIRED(!m_connector_mutex);
     //! Stop the connector thread and wait for it: its current pass ends at the next publication once the
     //! node is interrupted, the window drained. Called at shutdown before the chainstate is flushed and
-    //! its views are reset, and again, idempotently, by the destructor.
+    //! its views are reset, and again, idempotently, by the destructor. The connector does not start
+    //! again: a block handed over from here on is stored and not activated (SignalConnector()).
     void StopConnector() EXCLUSIVE_LOCKS_REQUIRED(!m_connector_mutex);
 
     /**

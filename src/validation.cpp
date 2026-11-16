@@ -6542,6 +6542,10 @@ void ChainstateManager::SignalConnector(std::shared_ptr<const CBlock> block, boo
 {
     {
         LOCK(m_connector_mutex);
+        // A connector that is stopping or stopped takes nothing, and its thread is not started again. The
+        // block is stored and is connected by the next start of the node. Not an assert: a caller outside
+        // the node's own shutdown order (an interface client) may still hand over a block.
+        if (!m_connector_life.Running()) return;
         // The thread first: if it cannot be started nothing was handed over, and nobody waits for a block
         // no connector will take.
         if (!m_connector_thread.joinable()) {
@@ -6636,6 +6640,7 @@ void ChainstateManager::StopConnector()
 {
     {
         LOCK(m_connector_mutex);
+        if (!m_connector_life.DrainIfRunning()) return;
         m_connector_handoffs.Stop();
     }
     m_connector_cv.notify_all();
@@ -6643,6 +6648,7 @@ void ChainstateManager::StopConnector()
         AssertMayWait("the connector");
         m_connector_thread.join();
     }
+    WITH_LOCK(m_connector_mutex, m_connector_life.Finish());
 }
 
 MempoolAcceptResult ChainstateManager::ProcessTransaction(const CTransactionRef& tx, bool test_accept)
@@ -8385,22 +8391,20 @@ ChainstateManager::ChainstateManager(const util::SignalInterrupt& interrupt, Opt
         LogInfo("Block connection uses %d additional threads (window of %d blocks in initial block download)", connect_threads, ConnectWindow());
     }
     if (m_options.signals) {
-        m_pre_sync_target = std::make_shared<PreSyncTarget>();
-        WITH_LOCK(m_pre_sync_target->mutex, m_pre_sync_target->blockman = &m_blockman);
+        m_pre_sync_target = std::make_shared<util::HookTarget<node::BlockManager>>(m_blockman);
         m_options.signals->AddPreSyncHook([target = m_pre_sync_target] {
-            // The manager may be destroyed under cs_main, and its destructor takes the target's mutex: the
-            // mutex is never held here while cs_main is taken. The wait needs no cs_main, and the effects
-            // it waits for take none, so a destructor that holds cs_main gets the mutex.
-            {
-                LOCK(target->mutex);
-                if (!target->blockman) return false;
-                target->blockman->m_effects.WaitForIO();
-            }
+            // The manager may be destroyed under cs_main, and its destructor disarms the target, which
+            // waits for a call running here: the target is never entered here while cs_main is being
+            // taken. The wait needs no cs_main, and the effects it waits for take none, so a destructor
+            // that holds cs_main is not kept waiting for a lock it holds.
+            if (!target->Run([](node::BlockManager& blockman) { blockman.m_effects.WaitForIO(); })) return false;
+            // cs_main is taken before the target is entered, the order of a destructor that runs under it.
+            // The call below takes it again, recursively, where the completions that need it are applied.
             LOCK(::cs_main);
-            LOCK(target->mutex);
-            if (!target->blockman) return false;
-            target->blockman->ApplyEffectCompletions();
-            return true;
+            return target->Run([](node::BlockManager& blockman) {
+                LOCK(::cs_main);
+                blockman.ApplyEffectCompletions();
+            });
         });
     }
     // Signal callbacks take cs_main, so nothing may wait for them while holding it.
@@ -8420,7 +8424,7 @@ ChainstateManager::~ChainstateManager()
     StopConnector();
     // The signals may be gone already (a test replaces them before it resets the manager): the hook is
     // disarmed, not taken from them, and waited for if it is running.
-    if (m_pre_sync_target) WITH_LOCK(m_pre_sync_target->mutex, m_pre_sync_target->blockman = nullptr);
+    if (m_pre_sync_target) m_pre_sync_target->Disarm();
     if (m_block_cache.Budget() > 0) {
         const auto [hits, misses]{m_block_cache.HitsAndMisses()};
         LogInfo("Block cache: %u blocks connected from it, %u not in it", hits, misses);
