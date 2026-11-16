@@ -94,6 +94,11 @@ inline void AssertNoWaitLockHeld(const char* waiting_for, const char* file, int 
  * other work (the signal queue runs on the scheduler's thread in the node)
  * also waits for that work, and a lock such work takes has to be listed to
  * be covered.
+ *
+ * Not every wait carries the check. The connector waits for connect pool
+ * workers while it holds cs_main, which is on the list (DrainWindow() in
+ * validation.cpp): what keeps those waits from a deadlock is that net
+ * processing leaves one worker free of the tasks that take cs_main.
  */
 #define NO_WAIT_LOCK(cs) RegisterNoWaitLock(#cs, &cs)
 #define AssertMayWait(waiting_for) AssertNoWaitLockHeld(waiting_for, __FILE__, __LINE__)

@@ -4484,6 +4484,10 @@ void Chainstate::DrainWindow(ConnectStep& step)
     // The blocks above the one that failed or ended the step rest on it: wait for their workers, then take
     // each one's changes back by status, highest first so that a spend of a lower block's create is
     // forgotten before the create is erased.
+    //
+    // The wait is made under cs_main. A block's validation takes no cs_main, but it needs a worker, and
+    // the pool's receive tasks do wait for cs_main: net processing leaves one worker free of them
+    // (PeerManagerImpl::HandOffBlock()), which is what lets this wait end.
     for (auto it{step.in_flight.rbegin()}; it != step.in_flight.rend(); ++it) {
         StagedConnect& staged{**it};
         if (staged.done.valid()) staged.done.wait();

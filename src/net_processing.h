@@ -101,7 +101,10 @@ public:
         //! Whether all P2P messages are captured to disk
         bool capture_messages{false};
         //! Whether or not the internal RNG behaves deterministically (this is
-        //! a test-only option).
+        //! a test-only option). It also keeps block processing on the message
+        //! handler, in the order the tests send: a receive task in initial
+        //! block download runs on the handler, and a block at the tip is
+        //! connected by the handler, not the connector thread.
         bool deterministic_rng{false};
         //! Number of headers sent in one getheaders message result (this is
         //! a test-only option).
@@ -169,6 +172,10 @@ public:
 
     /** Send ping message to all peers */
     virtual void SendPings() = 0;
+
+    /** Wait for the blocks of peers that are being processed off the message handler thread. For shutdown,
+     *  once the message handler has stopped and before anything the processing of a block relies on goes. */
+    virtual void FinishBlockTasks() = 0;
 
     /** Set the height of the best block and its time (seconds since epoch). */
     virtual void SetBestBlock(int height, std::chrono::seconds time) = 0;
