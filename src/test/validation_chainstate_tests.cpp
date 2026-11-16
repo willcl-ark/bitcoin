@@ -22,7 +22,10 @@
 #include <test/util/validation.h>
 #include <tinyformat.h>
 #include <uint256.h>
+#include <util/byte_ledger.h>
 #include <util/check.h>
+#include <util/threadpool.h>
+#include <util/time.h>
 #include <coinsstore.h>
 #include <validation.h>
 #include <validationinterface.h>
@@ -31,10 +34,17 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <functional>
+#include <future>
+#include <latch>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <semaphore>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 class CTxMemPool;
@@ -414,6 +424,211 @@ BOOST_FIXTURE_TEST_CASE(failed_write_out_leaves_the_tip, WriteOutEveryBlockSetup
     BOOST_CHECK(WITH_LOCK(::cs_main, return chainstate.m_chain.Tip()) == old_tip);
     BOOST_CHECK_EQUAL(recorder->connected.load(), 0);
     BOOST_CHECK_EQUAL(recorder->tips.load(), 0);
+}
+
+//! Drives a step of the connect window one block at a time, with nothing added to the node: the connect
+//! pool's workers are held by tasks that wait (as threadpool_tests' BlockWorkers() does), ActivateBestChain()
+//! runs on a thread of its own, and the test thread runs the tasks the step queues, one per call
+//! (ThreadPool::ProcessTask()). Between two calls the connector waits for a block no worker will apply, so
+//! what the test does there happens between two blocks of the window, every time.
+//!
+//! What this reaches: blocks that complete in the order they were staged, which is the order of the queue.
+//! A block that completes ahead of a lower one, and with it deferred transactions and their continuations,
+//! is out of its reach. A block connected outside the window stalls under it: its input fetch waits for
+//! tasks of the same pool.
+//!
+//! In a step of the window the queue holds the blocks' tasks only: a block read by its task is not freed
+//! through the pool, and a write-out of a chain this small has one range, which its own thread writes.
+class WindowStepper
+{
+    ChainstateManager& m_chainman;
+    ThreadPool& m_pool;
+    std::counting_semaphore<> m_release{0};
+    std::vector<std::future<void>> m_held;
+    std::thread m_connector;
+
+public:
+    explicit WindowStepper(ChainstateManager& chainman) : m_chainman{chainman}, m_pool{*chainman.m_connect_pool}
+    {
+        const size_t workers{m_pool.WorkersCount()};
+        BOOST_REQUIRE_GT(workers, 0U);
+        std::latch held{static_cast<std::ptrdiff_t>(workers)};
+        for (size_t i{0}; i < workers; ++i) {
+            m_held.push_back(*Assert(m_pool.Submit([&] {
+                held.count_down();
+                m_release.acquire();
+            })));
+        }
+        held.wait();
+    }
+    //! Lets the workers go, which finish a step that a failed check left unfinished, and waits for it.
+    ~WindowStepper()
+    {
+        m_release.release(static_cast<std::ptrdiff_t>(m_held.size()));
+        for (auto& held : m_held) held.wait();
+        if (m_connector.joinable()) m_connector.join();
+    }
+
+    //! Run `activate` (a call of ActivateBestChain()) beside the test.
+    void Start(std::function<void()> activate) { m_connector = std::thread{std::move(activate)}; }
+    //! Wait for it: every block of the step has been run.
+    void Finish() { m_connector.join(); }
+
+    int TipHeight() const { return WITH_LOCK(::cs_main, return m_chainman.ActiveChain().Height()); }
+
+    //! Wait until the connector is at rest with `height` as the tip and `queued` blocks handed to the pool.
+    void WaitForStep(int height, size_t queued)
+    {
+        const auto deadline{SteadyClock::now() + 60s};
+        while (TipHeight() != height || m_pool.WorkQueueSize() != queued) {
+            BOOST_REQUIRE_MESSAGE(SteadyClock::now() < deadline,
+                                  strprintf("the step did not reach height %d with %u blocks queued: height %d, %u queued",
+                                            height, queued, TipHeight(), m_pool.WorkQueueSize()));
+            UninterruptibleSleep(1ms);
+        }
+    }
+
+    //! Run the task of the lowest block in flight, here.
+    void RunLowestBlock() { BOOST_REQUIRE(m_pool.ProcessTask()); }
+};
+
+//! The signals of a window step, as a subscriber gets them.
+struct WindowStepRecorder final : CValidationInterface {
+    std::mutex mutex;
+    std::vector<int> connected;
+    std::vector<std::pair<int, bool>> tips;
+    void BlockConnected(const kernel::ChainstateRole&, const std::shared_ptr<const CBlock>&, const CBlockIndex* index) override
+    {
+        const std::lock_guard lock{mutex};
+        connected.push_back(index->nHeight);
+    }
+    void UpdatedBlockTip(const CBlockIndex* index, const CBlockIndex*, bool initial_download) override
+    {
+        const std::lock_guard lock{mutex};
+        tips.emplace_back(index->nHeight, initial_download);
+    }
+};
+
+//! A chain of BLOCKS blocks above the fixture's, stored and not connected, with the node in initial block
+//! download and its tip too old to leave it: what the next ActivateBestChain() connects in the window.
+struct WindowStepSetup : TestChain100Setup {
+    static constexpr int BLOCKS{6};
+    int m_base_height{0};
+    std::shared_ptr<WindowStepRecorder> m_recorder{std::make_shared<WindowStepRecorder>()};
+
+    WindowStepSetup()
+    {
+        ChainstateManager& chainman{*Assert(m_node.chainman)};
+        Chainstate& chainstate{chainman.ActiveChainstate()};
+        m_base_height = WITH_LOCK(::cs_main, return chainstate.m_chain.Height());
+        for (int i{0}; i < BLOCKS; ++i) CreateAndProcessBlock({}, CScript() << OP_TRUE);
+        CBlockIndex* const first{WITH_LOCK(::cs_main, return chainstate.m_chain[m_base_height + 1])};
+        const int64_t tip_time{WITH_LOCK(::cs_main, return chainstate.m_chain.Tip()->GetBlockTime())};
+        BlockValidationState state;
+        BOOST_REQUIRE(chainstate.InvalidateBlock(state, first));
+        {
+            LOCK(::cs_main);
+            chainstate.ResetBlockFailureFlags(first);
+            chainman.RecalculateBestHeader();
+        }
+        m_node.validation_signals->SyncWithValidationInterfaceQueue();
+        SetMockTime(std::chrono::seconds{tip_time} + 48h);
+        static_cast<TestChainstateManager&>(chainman).ResetIbd();
+        BOOST_REQUIRE_EQUAL(WITH_LOCK(::cs_main, return chainstate.m_chain.Height()), m_base_height);
+        BOOST_REQUIRE_GT(chainman.ConnectWindow(), 1);
+        m_node.validation_signals->RegisterSharedValidationInterface(m_recorder);
+    }
+
+    int Top() const { return m_base_height + BLOCKS; }
+
+    //! The blocks in flight once the tip is at `height`.
+    size_t InFlightAt(int height) const
+    {
+        return static_cast<size_t>(std::min(Top() - height, Assert(m_node.chainman)->ConnectWindow()));
+    }
+
+    //! The step is over: its signals are delivered, every block's BlockConnected in order, and the accounts
+    //! of the bytes in flight are back at zero.
+    void CheckStepOver()
+    {
+        m_node.validation_signals->SyncWithValidationInterfaceQueue();
+        m_node.validation_signals->UnregisterSharedValidationInterface(m_recorder);
+        const ChainstateManager& chainman{*Assert(m_node.chainman)};
+        for (const util::ByteAccountId id : {util::ByteAccountId::ReceiveTasks, util::ByteAccountId::BlockCache,
+                                             util::ByteAccountId::Window, util::ByteAccountId::UndoBacklog,
+                                             util::ByteAccountId::PinnedBlocks}) {
+            BOOST_CHECK_EQUAL(chainman.m_bytes_in_flight[id].Bytes(), 0U);
+        }
+        std::vector<int> expected;
+        for (int height{m_base_height + 1}; height <= Top(); ++height) expected.push_back(height);
+        const std::lock_guard lock{m_recorder->mutex};
+        BOOST_CHECK_EQUAL_COLLECTIONS(m_recorder->connected.begin(), m_recorder->connected.end(), expected.begin(), expected.end());
+    }
+};
+
+//! The window's blocks are published one by one as their tasks are run, the window is refilled behind each,
+//! and the accounts of the bytes in flight are back at zero when the step is over.
+BOOST_FIXTURE_TEST_CASE(window_step_block_by_block, WindowStepSetup)
+{
+    ChainstateManager& chainman{*Assert(m_node.chainman)};
+    Chainstate& chainstate{chainman.ActiveChainstate()};
+    BlockValidationState state;
+    bool activated{false};
+    {
+        WindowStepper stepper{chainman};
+        stepper.Start([&] { activated = chainstate.ActivateBestChain(state); });
+        stepper.WaitForStep(m_base_height, InFlightAt(m_base_height));
+        BOOST_CHECK_GT(chainman.m_bytes_in_flight[util::ByteAccountId::Window].Bytes(), 0U);
+        for (int height{m_base_height + 1}; height <= Top(); ++height) {
+            stepper.RunLowestBlock();
+            stepper.WaitForStep(height, InFlightAt(height));
+            BOOST_CHECK(chainman.IsInitialBlockDownload());
+        }
+        stepper.Finish();
+    }
+    BOOST_CHECK(activated);
+    BOOST_CHECK(state.IsValid());
+    CheckStepOver();
+    const std::lock_guard lock{m_recorder->mutex};
+    for (const auto& [height, initial_download] : m_recorder->tips) BOOST_CHECK(initial_download);
+}
+
+//! The download ends while blocks handed to the window in it are still to be connected: the step goes on in
+//! the window, the mode it was planned in, and the blocks it connects from there are announced as blocks
+//! at the tip.
+BOOST_FIXTURE_TEST_CASE(window_step_outlives_the_download, WindowStepSetup)
+{
+    ChainstateManager& chainman{*Assert(m_node.chainman)};
+    Chainstate& chainstate{chainman.ActiveChainstate()};
+    BlockValidationState state;
+    bool activated{false};
+    const int last_in_download{m_base_height + 1};
+    {
+        WindowStepper stepper{chainman};
+        stepper.Start([&] { activated = chainstate.ActivateBestChain(state); });
+        stepper.WaitForStep(m_base_height, InFlightAt(m_base_height));
+        stepper.RunLowestBlock();
+        stepper.WaitForStep(last_in_download, InFlightAt(last_in_download));
+        BOOST_REQUIRE(chainman.IsInitialBlockDownload());
+        // The blocks above are in flight, handed over in the download. It ends here.
+        BOOST_REQUIRE_GT(InFlightAt(last_in_download), 1U);
+        static_cast<TestChainstateManager&>(chainman).JumpOutOfIbd();
+        for (int height{last_in_download + 1}; height <= Top(); ++height) {
+            stepper.RunLowestBlock();
+            // The window is refilled as before: the step keeps the mode it was planned in.
+            stepper.WaitForStep(height, InFlightAt(height));
+        }
+        stepper.Finish();
+    }
+    BOOST_CHECK(activated);
+    BOOST_CHECK(state.IsValid());
+    BOOST_CHECK(!chainman.IsInitialBlockDownload());
+    CheckStepOver();
+    const std::lock_guard lock{m_recorder->mutex};
+    BOOST_REQUIRE(!m_recorder->tips.empty());
+    for (const auto& [height, initial_download] : m_recorder->tips) {
+        BOOST_CHECK_EQUAL(initial_download, height <= last_in_download);
+    }
 }
 
 BOOST_FIXTURE_TEST_CASE(reorg_announcement_order_survives_a_run_in_the_step, WriteOutEveryBlockSetup)
