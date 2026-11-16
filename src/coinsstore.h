@@ -6,11 +6,13 @@
 #define BITCOIN_COINSSTORE_H
 
 #include <coins.h>
+#include <coins_entry_machine.h>
 #include <crypto/common.h>
 #include <kernel/caches.h>
 #include <primitives/transaction.h>
 #include <sync.h>
 #include <uint256.h>
+#include <util/check.h>
 #include <util/hasher.h>
 
 #include <array>
@@ -445,14 +447,20 @@ private:
      * block identity, and mean something only while the
      * confirmed height is below the height they refer to: the entry is then pending, an open block's,
      * which the write-out passes over. A clean entry has none of them.
+     *
+     * The flags other than `referenced`, with whether the coin is spent, are the entry's state
+     * (coins_entry_machine.h): which states there are and what leads from one to another is said there,
+     * with what each change does to the height the entry is filed under. The flags and the height are
+     * written by Transit() and Enter() alone.
      */
     struct Entry {
         Coin coin;
-        //! The height of the last change, the write-out's age.
+        //! The height the entry is filed under, the write-out's age: the last change's as a rule, and an
+        //! earlier one's where that change is owed still (coins_entry::Height).
         int32_t height{0};
         bool dirty : 1 {false};
         bool fresh : 1 {false};
-        //! A run collected the entry's value and has not settled it; any change clears the bit (Touch),
+        //! A run collected the entry's value and has not settled it; any change clears the bit,
         //! and the entry then stays dirty when the run's chunk settles.
         bool collected : 1 {false};
         //! A lookup found the entry since eviction last passed over it.
@@ -468,7 +476,8 @@ private:
         bool owed : 1 {false};
         //! With block_spend: the spend was of a coin the database never held, and left the entry for other
         //! open blocks alone (BeginBlock()). There is no erase to write: ConfirmBlock() frees the entry with
-        //! the block. Any change clears the bit (Touch), and so does a run that writes the coin.
+        //! the block if the block was opened with such markers, and a run or a flush drops it otherwise.
+        //! Any change clears the bit, and so does a run that writes the coin.
         bool unwritten : 1 {false};
         uint8_t list : 2 {LIST_NONE};
         Node* prev{nullptr};
@@ -914,13 +923,53 @@ private:
     void Attach(Shard& shard, Node& node) const EXCLUSIVE_LOCKS_REQUIRED(shard.mutex);
     //! A lookup found the entry.
     static void Reference(Entry& entry) { if (!entry.referenced) entry.referenced = true; }
-    //! The entry changed: a run that collected it must not settle it, and what a spend said of the
-    //! database (Entry::unwritten) is said of another value.
-    static void Touch(Entry& entry) { entry.collected = false; entry.unwritten = false; }
-    //! The height a change tags an entry with. An entry that owes an earlier change (Entry::owed: an erase as
-    //! a rule) keeps that change's height where it is lower: it is still to be written as of it, and a run
-    //! bounded below the new tag would settle the database past a coin it still holds.
-    static int Retag(const Entry& entry, int height) { return entry.owed ? std::min(entry.height, height) : height; }
+    using State = coins_entry::State;
+    using Event = coins_entry::Event;
+    //! The entry's state: its flags, and whether its coin is spent.
+    static State StateOf(const Entry& entry)
+    {
+        using namespace coins_entry;
+        return static_cast<State>((entry.dirty ? DIRTY : 0) | (entry.fresh ? FRESH : 0) | (entry.collected ? COLLECTED : 0) |
+                                  (entry.block_create ? BLOCK_CREATE : 0) | (entry.block_spend ? BLOCK_SPEND : 0) |
+                                  (entry.owed ? OWED : 0) | (entry.unwritten ? UNWRITTEN : 0) | (entry.coin.IsSpent() ? SPENT : 0));
+    }
+    //! Put the entry in the state `to`, which the machine answered and which the entry's coin agrees
+    //! with, and file it under `height`, which the machine answered as well. An event the machine refuses
+    //! is a defect of the store's logic, and stops the node here. The dirty lists are by height: an entry
+    //! changes its height off its list (Detach()).
+    static void Enter(Entry& entry, State to, std::optional<int> height)
+    {
+        using namespace coins_entry;
+        Assert(to != REFUSED);
+        Assert(static_cast<bool>(to & SPENT) == entry.coin.IsSpent());
+        Assert(height.has_value());
+        Assert(*height == entry.height || entry.list == LIST_NONE);
+        entry.height = *height;
+        entry.dirty = to & DIRTY;
+        entry.fresh = to & FRESH;
+        entry.collected = to & COLLECTED;
+        entry.block_create = to & BLOCK_CREATE;
+        entry.block_spend = to & BLOCK_SPEND;
+        entry.owed = to & OWED;
+        entry.unwritten = to & UNWRITTEN;
+    }
+    //! `event` happened to the entry at `height` (the change's, the block's, the coin's or a record's, as
+    //! the event has it). The entry was in `from` before and has its coin as the event leaves it. With the
+    //! entry off its list where the event changes which list it belongs on (Detach()).
+    static void Transit(Entry& entry, State from, Event event, int height)
+    {
+        using namespace coins_entry;
+        Enter(entry, Next(from, event), NextHeight(HeightRule(from, event), from, entry.height, height));
+    }
+    //! The same for an event that has no height and leaves the entry where it is filed.
+    static void Transit(Entry& entry, State from, Event event)
+    {
+        Assert(coins_entry::HeightRule(from, event) == coins_entry::Height::Keep);
+        Enter(entry, coins_entry::Next(from, event), entry.height);
+    }
+    //! The same for events that leave the coin spent or unspent as it was.
+    static void Transit(Entry& entry, Event event, int height) { Transit(entry, StateOf(entry), event, height); }
+    static void Transit(Entry& entry, Event event) { Transit(entry, StateOf(entry), event); }
     //! Collect the shard's dirty entries at or below the run's bound into `writes` and `nodes` until
     //! `size`, about what the collected changes come to in a database batch, reaches `limit`; note the
     //! oldest change height left behind. An open block's entries are passed over, except for the change

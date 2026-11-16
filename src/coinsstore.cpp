@@ -240,15 +240,21 @@ bool CoinsStore::Pending(const Entry& entry) const
 
 CoinsStore::Sight CoinsStore::See(const Entry& entry, int viewer_height) const
 {
-    if (entry.coin.IsSpent()) {
-        // A plain spend, the viewer's own, or a lower block's: spent.
-        if (!entry.block_spend || entry.height <= viewer_height) return Sight::NOTHING;
+    // The entry's state says what there is to see, the heights say whether this viewer sees it.
+    switch (coins_entry::ReadingOf(StateOf(entry))) {
+    case coins_entry::Reading::NOTHING: return Sight::NOTHING;
+    case coins_entry::Reading::COIN: return Sight::COIN;
+    case coins_entry::Reading::BLOCK_RECORD:
+        // The viewer's own spend, or a lower block's: spent.
+        if (entry.height <= viewer_height) return Sight::NOTHING;
         return entry.height > m_confirmed_height.load(std::memory_order_relaxed) ? Sight::RECORD : Sight::NOTHING;
+    case coins_entry::Reading::BLOCK_COIN: {
+        const int created{static_cast<int>(entry.coin.nHeight)};
+        if (created <= viewer_height) return Sight::COIN;
+        return created > m_confirmed_height.load(std::memory_order_relaxed) ? Sight::NOTHING : Sight::COIN;
     }
-    if (!entry.block_create) return Sight::COIN;
-    const int created{static_cast<int>(entry.coin.nHeight)};
-    if (created <= viewer_height) return Sight::COIN;
-    return created > m_confirmed_height.load(std::memory_order_relaxed) ? Sight::NOTHING : Sight::COIN;
+    } // no default case, so the compiler can warn about missing cases
+    assert(false);
 }
 
 CoinsStore::BlockId CoinsStore::SlotAt(int height) const
@@ -384,7 +390,7 @@ std::optional<Coin> CoinsStore::LookupFor(BlockId viewer, const COutPoint& outpo
         it = shard.map.try_emplace(outpoint).first;
         Resized(shard);
         it->second.coin = *coin;
-        it->second.height = coin->nHeight;
+        Transit(it->second, coins_entry::ABSENT, Event::BaseCopy, static_cast<int>(coin->nHeight));
         AddUsage(shard, it->second.coin.DynamicMemoryUsage());
         Attach(shard, *it);
         return coin;
@@ -474,7 +480,7 @@ void CoinsStore::KeepWritten(std::vector<CoinWrite> restored)
     for (const CoinWrite& write : restored) {
         Shard& shard{ShardFor(write.outpoint)};
         LOCK(shard.mutex);
-        if (auto it{shard.map.find(write.outpoint)}; it != shard.map.end()) it->second.fresh = false;
+        if (auto it{shard.map.find(write.outpoint)}; it != shard.map.end()) Transit(it->second, Event::KeptWritten);
     }
     m_restored.insert(m_restored.end(), std::make_move_iterator(restored.begin()), std::make_move_iterator(restored.end()));
 }
@@ -482,7 +488,7 @@ void CoinsStore::KeepWritten(std::vector<CoinWrite> restored)
 // Confirmed changes without a block identity
 //
 // None is made while a block is open: such a change clears the block flags of an entry an open block
-// created or spent, and the block's unwind would then skip the entry. The callers
+// created or spent (coins_entry_machine.h), and the block's unwind would then skip the entry. The callers
 // keep to that (a block is disconnected, and a view written through, before any block is staged); each
 // entry point checks it.
 
@@ -496,6 +502,7 @@ void CoinsStore::AddCoin(const COutPoint& outpoint, Coin&& coin, bool possible_o
     auto [it, inserted]{shard.map.try_emplace(outpoint)};
     if (inserted) Resized(shard);
     Entry& entry{it->second};
+    const State from{StateOf(entry)};
     bool fresh{false};
     if (!possible_overwrite) {
         if (!entry.coin.IsSpent()) {
@@ -511,14 +518,8 @@ void CoinsStore::AddCoin(const COutPoint& outpoint, Coin&& coin, bool possible_o
         SubUsage(shard, entry.coin.DynamicMemoryUsage());
     }
     entry.coin = std::move(coin);
-    entry.height = Retag(entry, TagFor(entry.coin));
-    entry.fresh = fresh;
-    entry.block_create = false;
-    entry.block_spend = false;
-    entry.owed = false;
-    Touch(entry);
+    Transit(entry, from, fresh ? Event::ConfirmedNew : Event::ConfirmedWrite, TagFor(entry.coin));
     AddUsage(shard, entry.coin.DynamicMemoryUsage());
-    entry.dirty = true;
     Attach(shard, *it);
 }
 
@@ -533,12 +534,8 @@ void CoinsStore::EmplaceCoinInternalDANGER(const COutPoint& outpoint, Coin&& coi
     if (!inserted) return;
     Entry& entry{it->second};
     entry.coin = std::move(coin);
-    entry.height = m_change_height;
-    entry.fresh = false;
-    entry.owed = false;
-    Touch(entry);
+    Transit(entry, coins_entry::ABSENT, entry.coin.IsSpent() ? Event::ConfirmedSpend : Event::ConfirmedWrite, m_change_height);
     AddUsage(shard, usage);
-    entry.dirty = true;
     Attach(shard, *it);
 }
 
@@ -548,6 +545,7 @@ bool CoinsStore::SpendEntry(Shard& shard, Map::iterator it, Coin* moveto)
     // As CCoinsViewCache::SpendCoin: an entry that is present is "spent" whether or not it still holds a
     // coin, so that a caller spending an already spent entry gets the same answer from both.
     Entry& entry{it->second};
+    const State from{StateOf(entry)};
     Detach(shard, *it);
     SubUsage(shard, entry.coin.DynamicMemoryUsage());
     if (moveto) *moveto = std::move(entry.coin);
@@ -557,12 +555,8 @@ bool CoinsStore::SpendEntry(Shard& shard, Map::iterator it, Coin* moveto)
         return true;
     }
     entry.coin.Clear();
-    entry.height = Retag(entry, m_change_height);
-    entry.block_create = false;
-    entry.block_spend = false;
-    entry.owed = false;
-    Touch(entry);
-    entry.dirty = true;
+    // Under the change height, or where an earlier change is owed still (coins_entry::Height::Lower).
+    Transit(entry, from, Event::ConfirmedSpend, m_change_height);
     Attach(shard, *it);
     return true;
 }
@@ -604,6 +598,8 @@ void CoinsStore::BatchWrite(CoinsViewCacheCursor& cursor, const uint256& block_h
         auto [ours, inserted]{shard.map.try_emplace(outpoint)};
         if (inserted) Resized(shard);
         Entry& entry{ours->second};
+        const State from{StateOf(entry)};
+        Event event;
         if (inserted) {
             if (it->second.IsFresh() && it->second.coin.IsSpent()) {
                 // Created and spent inside the child: nothing to record.
@@ -611,7 +607,7 @@ void CoinsStore::BatchWrite(CoinsViewCacheCursor& cursor, const uint256& block_h
                 continue;
             }
             entry.coin = cursor.WillErase(*it) ? std::move(it->second.coin) : it->second.coin;
-            entry.fresh = it->second.IsFresh();
+            event = entry.coin.IsSpent() ? Event::ConfirmedSpend : it->second.IsFresh() ? Event::ConfirmedNew : Event::ConfirmedWrite;
         } else {
             if (it->second.IsFresh() && !entry.coin.IsSpent()) {
                 throw std::logic_error("FRESH flag misapplied to coin that exists in parent cache");
@@ -624,15 +620,11 @@ void CoinsStore::BatchWrite(CoinsViewCacheCursor& cursor, const uint256& block_h
             Detach(shard, *ours);
             SubUsage(shard, entry.coin.DynamicMemoryUsage());
             entry.coin = cursor.WillErase(*it) ? std::move(it->second.coin) : it->second.coin;
-            // Not fresh: the entry may be in the database already (see CCoinsViewCache::BatchWrite).
+            // Not made fresh: the entry may be in the database already (see CCoinsViewCache::BatchWrite).
+            event = entry.coin.IsSpent() ? Event::ConfirmedSpend : Event::BatchOverwrite;
         }
-        entry.height = Retag(entry, entry.coin.IsSpent() ? m_change_height : TagFor(entry.coin));
-        entry.block_create = false;
-        entry.block_spend = false;
-        entry.owed = false;
-        Touch(entry);
+        Transit(entry, from, event, entry.coin.IsSpent() ? m_change_height : TagFor(entry.coin));
         AddUsage(shard, entry.coin.DynamicMemoryUsage());
-        entry.dirty = true;
         Attach(shard, *ours);
     }
     SetBestBlock(block_hash);
@@ -703,13 +695,13 @@ bool CoinsStore::CreateLocked(Shard& shard, int height, const COutPoint& outpoin
     if (must_be_new && base_unseen && shard.map.find(outpoint, hash) == shard.map.end()) return false;
     auto [it, inserted]{shard.map.try_emplace(outpoint, hash)};
     Entry& entry{it->second};
-    // Whether the entry takes the block's height as its change height.
-    bool retag{true};
     // What the block's unwind puts back: nothing, or the confirmed coin this create overwrites.
     Undo item{.coin = {}, .outpoint = outpoint};
+    const State from{StateOf(entry)};
+    Event event;
     if (inserted) {
         Resized(shard);
-        entry.fresh = !possible_overwrite;
+        event = possible_overwrite ? Event::BlockCreateBlind : Event::BlockCreateFresh;
         ++delta;
     } else {
         const bool pending{Pending(entry)};
@@ -727,6 +719,7 @@ bool CoinsStore::CreateLocked(Shard& shard, int height, const COutPoint& outpoin
         if (pending) {
             const int other{static_cast<int>(entry.coin.nHeight)};
             if (other < height) return false;
+            event = Event::BlockCreateTakeover;
             if (other > height) {
                 // A higher block created this outpoint first: a duplicate it could not see, since this
                 // block had not produced the original yet. The higher block gets the conflict: it is not
@@ -749,10 +742,9 @@ bool CoinsStore::CreateLocked(Shard& shard, int height, const COutPoint& outpoin
                     charged.dirty_delta.fetch_sub(moved, std::memory_order_relaxed);
                 }
                 delta += moved;
-                entry.fresh = entry.fresh && !possible_overwrite;
+                if (possible_overwrite) event = Event::BlockCreateTakeoverBlind;
             }
-            // Under an erase still owed the entry keeps that change's height, as below.
-            retag = !entry.owed;
+            // Under an erase still owed the entry keeps that change's height, as below (the rule's Lower).
         } else {
             // A confirmed entry. Dirty, it records a spentness the database does not have yet: the erase is
             // owed. The create is written over it once the block is confirmed; until then, and if the
@@ -768,23 +760,18 @@ bool CoinsStore::CreateLocked(Shard& shard, int height, const COutPoint& outpoin
                 item.height = entry.height;
                 item.dirty = entry.dirty;
             }
-            entry.fresh = false;
-            entry.owed = entry.dirty;
-            retag = !entry.owed;
-            if (!entry.owed) ++delta;
+            event = Event::BlockCreateOnConfirmed;
+            // What a dirty entry records is owed under the create, and the entry stays where that is filed.
+            if (!entry.dirty) ++delta;
         }
         Detach(shard, *it);
         SubUsage(shard, entry.coin.DynamicMemoryUsage());
     }
     entry.coin = std::move(coin);
-    if (retag) entry.height = height;
     AddUsage(shard, entry.coin.DynamicMemoryUsage());
-    entry.block_create = true;
-    entry.block_spend = false;
     // Dirty from now on, where the write-out will find it once the block is confirmed; it passes over the
     // entry until then (Pending()).
-    entry.dirty = true;
-    Touch(entry);
+    Transit(entry, from, event, height);
     Attach(shard, *it);
     undo.push_back(std::move(item));
     return true;
@@ -831,9 +818,7 @@ CoinsStore::SpendResult CoinsStore::SpendLocked(Shard& shard, int height, bool m
         it = shard.map.try_emplace(outpoint, hash).first;
         Resized(shard);
         Entry& marker{it->second};
-        marker.height = height;
-        marker.dirty = true;
-        marker.block_spend = true;
+        Transit(marker, coins_entry::ABSENT, Event::BlockSpendMarker, height);
         Attach(shard, *it);
         ++delta;
         if (copy) *copy = *from_base;
@@ -869,11 +854,8 @@ CoinsStore::SpendResult CoinsStore::SpendLocked(Shard& shard, int height, bool m
             item->dead = true;
         }
         Detach(shard, *it);
-        entry.height = height;
         // The same spend of the same coin, taken over: what it says of the database stays true.
-        const bool unwritten{entry.unwritten};
-        Touch(entry);
-        entry.unwritten = unwritten;
+        Transit(entry, Event::BlockSpendTakeover, height);
         Attach(shard, *it);
         return SpendResult::DONE;
     }
@@ -885,6 +867,7 @@ CoinsStore::SpendResult CoinsStore::SpendLocked(Shard& shard, int height, bool m
     if (known && !IsCoin(entry.coin, *known)) return SpendResult::CONFLICT;
     Undo item{.coin = {}, .outpoint = outpoint, .height = entry.height, .spend = true, .dirty = entry.dirty, .fresh = entry.fresh, .created = entry.block_create, .owed = entry.owed};
     if (copy) *copy = entry.coin;
+    const State from{StateOf(entry)};
     Detach(shard, *it);
     SubUsage(shard, entry.coin.DynamicMemoryUsage());
     item.coin = std::move(entry.coin);
@@ -896,17 +879,9 @@ CoinsStore::SpendResult CoinsStore::SpendLocked(Shard& shard, int height, bool m
     } else {
         // The marker of a never-written coin (BeginBlock()) is as any other to the open blocks: the record
         // has the flags to put back. To a run it is nothing to write (Entry::unwritten).
-        const bool unwritten{entry.fresh};
-        entry.fresh = false;
         entry.coin.Clear();
         if (!entry.dirty) ++delta;
-        entry.height = height;
-        entry.dirty = true;
-        entry.block_spend = true;
-        entry.block_create = false;
-        entry.owed = false;
-        Touch(entry);
-        entry.unwritten = unwritten;
+        Transit(entry, from, Event::BlockSpend, height);
         Attach(shard, *it);
     }
     undo.push_back(std::move(item));
@@ -1109,9 +1084,10 @@ void CoinsStore::ConfirmBlock(BlockId block)
     if (owed_spends) {
         // A spend that took an entry with an erase still owed left the entry under the block's height, which
         // names the block while it is open. The erase is owed since the earlier change: the entry goes back
-        // under that height, as a confirmed spend keeps it there (Retag()), so that a run bounded between the
-        // two heights writes the erase. A higher block may have made the outpoint again meanwhile, over the
-        // same erase. A run that collected the entry under the block's height writes the erase itself.
+        // under that height, as a confirmed spend keeps it there (coins_entry::Height::Lower), so that a run
+        // bounded between the two heights writes the erase. A higher block may have made the outpoint again
+        // meanwhile, over the same erase. A run that collected the entry under the block's height writes
+        // the erase itself.
         for (const Undo& item : record) {
             if (!item.spend || !item.owed || item.dead || item.height >= height) continue;
             Shard& shard{ShardFor(item.outpoint)};
@@ -1121,7 +1097,7 @@ void CoinsStore::ConfirmBlock(BlockId block)
             Entry& entry{it->second};
             if (entry.height != height || entry.collected || !(entry.owed || entry.coin.IsSpent())) continue;
             Detach(shard, *it);
-            entry.height = item.height;
+            Transit(entry, Event::BlockSpendConfirmed, item.height);
             Attach(shard, *it);
         }
     }
@@ -1147,12 +1123,7 @@ void CoinsStore::UnwindItem(Shard& shard, int height, Undo&& item)
             SubUsage(shard, entry.coin.DynamicMemoryUsage());
             entry.coin = std::move(item.coin);
             AddUsage(shard, entry.coin.DynamicMemoryUsage());
-            entry.height = item.height;
-            entry.dirty = true;
-            entry.fresh = false;
-            entry.block_create = false;
-            entry.owed = false;
-            Touch(entry);
+            Transit(entry, Event::UnwindCreateToCoin, item.height);
             Attach(shard, *it);
             return;
         }
@@ -1161,13 +1132,11 @@ void CoinsStore::UnwindItem(Shard& shard, int height, Undo&& item)
             return;
         }
         // The erase the create went over is owed still: a spent entry again, at the height it kept.
+        const State from{StateOf(entry)};
         Detach(shard, *it);
         SubUsage(shard, entry.coin.DynamicMemoryUsage());
         entry.coin.Clear();
-        entry.fresh = false;
-        entry.block_create = false;
-        entry.owed = false;
-        Touch(entry);
+        Transit(entry, from, Event::UnwindCreateToErase);
         Attach(shard, *it);
         return;
     }
@@ -1179,15 +1148,13 @@ void CoinsStore::UnwindItem(Shard& shard, int height, Undo&& item)
         gone = creator == NO_BLOCK || m_window[creator].status.load(std::memory_order_acquire) != BlockStatus::APPLIED;
     }
     const auto restore{[&](Entry& entry) EXCLUSIVE_LOCKS_REQUIRED(shard.mutex) {
+        const State from{StateOf(entry)};
         entry.coin = std::move(item.coin);
         AddUsage(shard, entry.coin.DynamicMemoryUsage());
-        entry.height = item.height;
-        entry.dirty = item.dirty;
-        entry.fresh = item.fresh;
-        // Clean, the coin has been written since (CollectRecords()) and is anyone's.
-        entry.block_create = item.created && item.dirty;
-        entry.owed = item.owed;
-        entry.block_spend = false;
+        // As the record has it. Clean, the coin has been written since (CollectRecords()) and is anyone's.
+        using namespace coins_entry;
+        const State recorded{static_cast<State>((item.dirty ? DIRTY : 0) | (item.fresh ? FRESH : 0) | (item.created && item.dirty ? BLOCK_CREATE : 0) | (item.owed ? OWED : 0))};
+        Enter(entry, NextUnwindSpendRestore(from, recorded), NextHeight(UNWIND_SPEND_RESTORE_HEIGHT, from, entry.height, item.height));
     }};
     if (it == shard.map.end()) {
         // The spend erased the entry: a coin the database never held.
@@ -1208,12 +1175,10 @@ void CoinsStore::UnwindItem(Shard& shard, int height, Undo&& item)
     Detach(shard, *it);
     if (gone) {
         // The erase the create went over is owed still.
-        entry.height = item.height;
-        entry.block_spend = false;
+        Transit(entry, Event::UnwindSpendToErase, item.height);
     } else {
         restore(entry);
     }
-    Touch(entry);
     Attach(shard, *it);
 }
 
@@ -1317,7 +1282,7 @@ std::optional<int> CoinsStore::OldestDirtyHeight() const
             for (const Node* node{shard.dirty_spans[span].head}; node; node = node->second.next) {
                 const Entry& entry{node->second};
                 // An open block's change is no confirmed one; the erase its create went over is. An entry with an
-                // erase still owed keeps that erase's height (Retag()), also once a create over it is confirmed.
+                // erase still owed keeps that erase's height (Height::Lower), also once a create over it is confirmed.
                 if (Pending(entry) && !entry.owed) continue;
                 if (!lowest || entry.height < *lowest) lowest = entry.height;
             }
@@ -1524,8 +1489,7 @@ void CoinsStore::CollectChunk(Shard& shard, WriteOutRun& run, uint64_t limit, ui
                 size += BatchBytes(writes.back());
                 ++run.count;
                 Detach(shard, *node);
-                entry.owed = false;
-                entry.height = created;
+                Transit(entry, Event::RunWritesOwed, created);
                 Attach(shard, *node);
                 if (pending) {
                     // One confirmed change fewer; the entry is the open block's alone now.
@@ -1549,9 +1513,9 @@ void CoinsStore::CollectChunk(Shard& shard, WriteOutRun& run, uint64_t limit, ui
             size += BatchBytes(writes.back());
             ++run.count;
             run.bytes += static_cast<size_t>(DirtyBytes(entry));
-            entry.collected = true;
-            // Once the run lands the coin is in the database, so a spend meanwhile must produce an erase.
-            entry.fresh = false;
+            // Once the run lands the coin is in the database, so a spend meanwhile must produce an erase:
+            // the entry is not fresh from here on.
+            Transit(entry, Event::RunCollects);
         }
         if (oldest_left != std::numeric_limits<int>::max()) {
             // The oldest change left behind in this shard, the lists further up holding later spans: the
@@ -1567,14 +1531,9 @@ void CoinsStore::SettleNode(Shard& shard, Node& node) const
     AssertLockHeld(shard.mutex);
     Entry& entry{node.second};
     if (!entry.collected) return; // Changed since: stays dirty with its new change.
-    entry.collected = false;
-    Assume(entry.dirty && !entry.fresh);
     Detach(shard, node);
-    entry.dirty = false;
-    // What the database holds is anyone's.
-    entry.block_create = false;
-    entry.block_spend = false;
-    entry.owed = false;
+    // Clean, and what the database holds is anyone's.
+    Transit(entry, Event::RunLands);
     if (entry.coin.IsSpent()) {
         // The erase is in the database; the entry has nothing left to say.
         EraseEntry(shard, node);
@@ -1672,14 +1631,12 @@ int CoinsStore::CollectRecords(int bound_height, bool final, std::vector<CoinWri
                 it = shard.map.try_emplace(outpoint).first;
                 Resized(shard);
                 Entry& entry{it->second};
-                entry.height = slot.height.load(std::memory_order_relaxed);
-                entry.dirty = true;
-                entry.block_spend = true;
+                Transit(entry, coins_entry::ABSENT, Event::BlockSpendMarker, slot.height.load(std::memory_order_relaxed));
                 Attach(shard, *it);
                 ++added;
             } else {
                 // The database has the coin now, whatever the marker said.
-                it->second.unwritten = false;
+                Transit(it->second, Event::RunWritesRecord);
             }
             // The confirmed change is gone from the count, and the marker is the block's.
             slot.dirty_delta.fetch_add(added, std::memory_order_relaxed);
@@ -1876,15 +1833,14 @@ uint64_t CoinsStore::WipeShard(Shard& shard, WipeWorker& worker)
         entry.list = LIST_NONE;
         entry.prev = nullptr;
         entry.next = nullptr;
-        entry.collected = false;
+        Transit(entry, Event::Flush);
         if (Pending(entry)) {
             // An open block's change: not the database's until the block is confirmed, and dirty until
             // then. The erase its create went over, or the coin it kept, is the database's now (as in
             // CollectChunk()).
             if (entry.owed) {
                 add({it->first, OwedValue(static_cast<int>(entry.coin.nHeight), it->first)});
-                entry.owed = false;
-                entry.height = static_cast<int>(entry.coin.nHeight);
+                Transit(entry, Event::RunWritesOwed, static_cast<int>(entry.coin.nHeight));
                 ChargeDelta(entry.height, 1);
             }
             Attach(shard, *it);
@@ -2139,6 +2095,8 @@ void CoinsStore::SanityCheck() const
     size_t total_dirty{0};
     // The confirmed changes the database does not have yet: what GetDirtyCount() answers.
     size_t confirmed_dirty{0};
+    // The spent markers of open blocks, with the height each is filed under.
+    std::map<COutPoint, int> pending_markers;
     for (const Shard& shard : m_shards) {
         LOCK(shard.mutex);
         size_t usage{0};
@@ -2153,20 +2111,16 @@ void CoinsStore::SanityCheck() const
                 ++count;
                 bytes += DirtyBytes(entry);
             }
-            // A spent entry is only ever kept to record a pending erase.
-            assert(!entry.coin.IsSpent() || entry.dirty);
-            // A fresh entry is dirty: it exists only because something changed it since the database last
-            // knew it, and the database does not hold it.
-            assert(!entry.fresh || entry.dirty);
-            // What a block left on an entry goes when the entry is written: a clean entry is anyone's.
-            assert(entry.dirty || (!entry.block_create && !entry.block_spend && !entry.owed));
-            // Only a block's spent marker says the database never held its coin.
-            assert(!entry.unwritten || (entry.dirty && entry.block_spend && entry.coin.IsSpent() && !entry.collected));
-            // An erase is owed under a block's create only.
-            assert(!entry.owed || (entry.block_create && !entry.coin.IsSpent()));
+            // The entry is in a state an entry may rest in (coins_entry::IsStored() says which and why).
+            assert(coins_entry::IsStored(StateOf(entry)));
+            // What the machine's height rules keep, as far as an entry shows it. A block's create is filed
+            // under its coin's height, or below it under the earlier change it owes.
+            if (entry.block_create) assert(entry.owed ? entry.height < static_cast<int>(entry.coin.nHeight) : entry.height == static_cast<int>(entry.coin.nHeight));
+            // An open block's spent marker is filed under its block's height, and the block's record has the
+            // height the entry goes back under (checked with the records, below).
+            if (entry.coin.IsSpent() && Pending(entry)) pending_markers.emplace(outpoint, entry.height);
             if (entry.dirty && (entry.owed || !Pending(entry))) ++confirmed_dirty;
-            // Only a dirty entry awaits a run, and each entry is on the list its state calls for.
-            assert(!entry.collected || entry.dirty);
+            // Each entry is on the list its state calls for.
             const List list{entry.dirty ? LIST_DIRTY : LIST_CLEAN};
             assert(entry.list == list);
             if (list == LIST_CLEAN) ++clean_listed;
@@ -2218,10 +2172,17 @@ void CoinsStore::SanityCheck() const
         LOCK(slot.mutex);
         for (const Undo& item : slot.record) {
             if (!item.spend || item.dead) continue;
+            // The height the record keeps for the entry is at or below the block's, where the marker is.
+            assert(item.height <= slot.height.load(std::memory_order_relaxed));
+            if (const auto marker{pending_markers.find(item.outpoint)}; marker != pending_markers.end() && marker->second == slot.height.load(std::memory_order_relaxed)) {
+                pending_markers.erase(marker);
+            }
             const bool pending_create{item.created && static_cast<int>(item.coin.nHeight) > confirmed};
             if (pending_create ? item.owed : item.dirty) ++confirmed_dirty;
         }
     }
+    // Every open block's marker has the record that says where it goes back.
+    assert(pending_markers.empty());
     assert(GetDirtyCount() == confirmed_dirty);
 }
 

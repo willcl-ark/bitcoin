@@ -100,7 +100,8 @@ std::vector<COutPoint> Universe(uint32_t txids)
 } // namespace
 
 //! The store, driven as a cache would be (adds, spends, child flushes, full flushes), shows the same coins
-//! as a CCoinsViewCache over an identical database at every step.
+//! as a CCoinsViewCache over an identical database at every step. After a bounded run its database holds
+//! every outpoint as it is, unless the outpoint changed above the height the run settled at.
 BOOST_AUTO_TEST_CASE(same_as_cache_under_random_operations)
 {
     constexpr uint32_t TXIDS{24};
@@ -112,6 +113,8 @@ BOOST_AUTO_TEST_CASE(same_as_cache_under_random_operations)
     const uint256 genesis{m_rng.rand256()};
     cache.SetBestBlock(genesis);
     store.SetBestBlock(genesis, 0);
+    // The step each outpoint was last added or spent at.
+    std::map<COutPoint, int> last_change;
 
     for (int step{1}; step < 400; ++step) {
         const uint256 block_hash{m_rng.rand256()};
@@ -120,6 +123,7 @@ BOOST_AUTO_TEST_CASE(same_as_cache_under_random_operations)
         if (m_rng.randbool()) {
             for (int i{0}; i < 6; ++i) {
                 const COutPoint op{RandomOutpoint(m_rng, TXIDS)};
+                last_change[op] = step;
                 if (m_rng.randrange(3) == 0) {
                     // SpendCoin() answers true for any entry it holds, spent or not, in both; the store keeps
                     // spent entries of blocks above a run's bound where the cache dropped them at its full
@@ -145,6 +149,7 @@ BOOST_AUTO_TEST_CASE(same_as_cache_under_random_operations)
             CCoinsViewCache child_store{&store};
             for (int i{0}; i < 6; ++i) {
                 const COutPoint op{RandomOutpoint(m_rng, TXIDS)};
+                last_change[op] = step;
                 if (m_rng.randrange(3) == 0) {
                     const bool had{child_cache.HaveCoin(op)};
                     BOOST_CHECK_EQUAL(had, child_store.HaveCoin(op));
@@ -200,6 +205,15 @@ BOOST_AUTO_TEST_CASE(same_as_cache_under_random_operations)
                     // Nothing changed at or below the bound is still dirty, unless it changed again since.
                     const auto oldest{store.OldestDirtyHeight()};
                     BOOST_CHECK(!oldest || *oldest > bound || late_spent);
+                    // The database holds the state at the settled height: every outpoint not changed above
+                    // it is there as the views have it. (An outpoint changed above it is the replay's, which
+                    // applies that change again; the outpoint spent with the run in flight is one such.)
+                    for (const COutPoint& op : universe) {
+                        if (op == late) continue;
+                        if (const auto changed{last_change.find(op)}; changed != last_change.end() && changed->second > run->settled_height) continue;
+                        BOOST_CHECK_MESSAGE(Same(db_store.PeekCoin(op), store.PeekCoin(op)),
+                                            "after a run settled at " << run->settled_height << " the database differs at " << op.ToString());
+                    }
                     cache.Sync();
                 }
             }
