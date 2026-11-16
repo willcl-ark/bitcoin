@@ -2023,8 +2023,11 @@ void Chainstate::ResetCoinsViews()
 void Chainstate::SettleWriteOut()
 {
     AssertLockHeld(::cs_main);
+    // A run's effect on m_effects queues its coin write on m_coin_writes (StartWriteOutRun()).
     m_blockman.m_effects.WaitForIO();
+    m_blockman.m_coin_writes.WaitForIO();
     m_blockman.m_effects.ApplyCompletions();
+    m_blockman.m_coin_writes.ApplyCompletions();
 }
 
 bool Chainstate::StartWriteOutRun(BlockValidationState& state, int bound_height, bool final, std::optional<size_t> evict_to,
@@ -8585,7 +8588,9 @@ ChainstateManager::~ChainstateManager()
     // would finish them in its own destructor, outlives the chainstates. The node and the kernel library
     // have reset the coins views before, which settles too; a test need not have.
     m_blockman.m_effects.WaitForIO();
+    m_blockman.m_coin_writes.WaitForIO();
     m_blockman.m_effects.ApplyCompletions();
+    m_blockman.m_coin_writes.ApplyCompletions();
 
     m_versionbitscache.Clear();
 }
