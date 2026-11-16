@@ -2902,6 +2902,14 @@ bool Chainstate::FlushStateToDisk(
 {
     LOCK(cs_main);
     assert(this->CanFlushToDisk());
+    // Precondition O8: a flush never sees a half-applied block. The coins' best block is a block
+    // of this chain (the tip, except inside DisconnectTip() or with a view that was reset), or
+    // the one block on top of it: inside ConnectTip() while that block is connected, and in
+    // every later flush (at shutdown, from an RPC) if a write-out failed there.
+    if (const uint256 best{CoinsTip().GetBestBlock()}; !best.IsNull() && m_chain.Tip()) {
+        const CBlockIndex* best_index{m_blockman.LookupBlockIndex(best)};
+        Assume(best_index && (m_chain.Contains(*best_index) || best_index->pprev == m_chain.Tip()));
+    }
     std::set<int> setFilesToPrune;
     bool full_flush_completed = false;
 
@@ -3234,6 +3242,7 @@ bool Chainstate::ConnectTip(
     AssertLockHeld(cs_main);
     if (m_mempool) AssertLockHeld(m_mempool->cs);
 
+    // Precondition O9: a block is connected on top of the tip and nowhere else.
     assert(pindexNew->pprev == m_chain.Tip());
     // Read block from disk.
     const auto time_1{SteadyClock::now()};
@@ -3257,6 +3266,7 @@ bool Chainstate::ConnectTip(
         CoinsViewOverlay& view{*m_coins_views->m_connect_block_view};
         const auto reset_guard{view.StartFetching(*block_to_connect)};
         bool rv = ConnectBlock(*block_to_connect, state, pindexNew, view);
+        // Precondition O3: the verdict is delivered under cs_main, before the tip moves below.
         if (m_chainman.m_options.signals) {
             m_chainman.m_options.signals->BlockChecked(block_to_connect, state);
         }
@@ -3548,7 +3558,7 @@ void ChainstateManager::PublishTip()
     AssertLockHeld(::cs_main);
     Chainstate& chainstate{CurrentChainstate()};
     if (const CBlockIndex* tip{chainstate.m_chain.Tip()}) {
-        // What is published is fully connected. The coins' best block is the
+        // Precondition O6: what is published is fully connected. The coins' best block is the
         // tip; after a write-out that failed inside ConnectTip() it is the block that was
         // being connected on top of it, and the node is stopping.
         // After one that failed inside DisconnectTip() it is the tip's parent, which the tip
@@ -3954,6 +3964,7 @@ bool Chainstate::InvalidateBlock(BlockValidationState& state, CBlockIndex* const
             setBlockIndexCandidates.erase(pindex);
         }
 
+        // Precondition O14 (validation.h):
         // If any new blocks somehow arrived while we were disconnecting
         // (above), then the pre-calculation of what should go into
         // setBlockIndexCandidates may have missed entries. This would
@@ -4122,6 +4133,7 @@ void ChainstateManager::ReceivedBlockTransactions(const CBlock& block, CBlockInd
                    pindex->nHeight, pindex->m_chain_tx_count, prev_tx_sum(*pindex), CLIENT_NAME, FormatFullVersion(), CLIENT_BUGREPORT);
             }
             pindex->m_chain_tx_count = prev_tx_sum(*pindex);
+            // Precondition O10: arrival order, assigned under cs_main.
             pindex->nSequenceId = nBlockSequenceId++;
             for (const auto& c : m_chainstates) {
                 c->TryAddBlockIndexCandidate(pindex);
@@ -4673,6 +4685,8 @@ bool ChainstateManager::AcceptBlock(const std::shared_ptr<const CBlock>& pblock,
 
     // Header is valid/has work, merkle tree and segwit merkle tree are good...RELAY NOW
     // (but if it does not build on our best tip, let the SendMessages loop relay it)
+    // Precondition O4: the announcement goes out under cs_main, for a block on top of the tip
+    // (the condition below), before it is written (a stored block returned above).
     if (!IsInitialBlockDownload() && ActiveTip() == pindex->pprev && m_options.signals) {
         m_options.signals->NewPoWValidBlock(pindex, pblock);
     }
@@ -4692,6 +4706,9 @@ bool ChainstateManager::AcceptBlock(const std::shared_ptr<const CBlock>& pblock,
             }
         }
         ReceivedBlockTransactions(block, pindex, blockPos);
+        // Precondition O2: stored means all of this, recorded in one hold of cs_main. This is
+        // what ReceivedBlockTransactions() just did; checked so that a split of that step keeps it.
+        Assume((pindex->nStatus & BLOCK_HAVE_DATA) && pindex->IsValid(BLOCK_VALID_TRANSACTIONS) && !pindex->GetBlockPos().IsNull());
     } catch (const std::runtime_error& e) {
         return FatalError(GetNotifications(), state, strprintf(_("System error while saving block to disk: %s"), e.what()));
     }
@@ -4790,6 +4807,7 @@ BlockValidationState TestBlockValidity(
 {
     // Lock must be held throughout this function for two reasons:
     // 1. We don't want the tip to change during several of the validation steps
+    //    (precondition O15 in validation.h)
     // 2. To prevent a CheckBlock() race condition for fChecked, see ProcessNewBlock()
     AssertLockHeld(chainstate.m_chainman.GetMutex());
 
@@ -5465,6 +5483,7 @@ void ChainstateManager::CheckBlockIndex() const
         return;
     }
 
+    // Precondition O12 (validation.h): what is checked below holds whenever cs_main is free.
     LOCK(cs_main);
 
     // During a reindex, we read the genesis block and call CheckBlockIndex before ActivateBestChain,
