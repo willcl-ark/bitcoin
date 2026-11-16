@@ -108,6 +108,10 @@ public:
         //! The changes of a run collected at once (PrepareWriteOut()), in no particular order; a streamed
         //! run (StreamWriteOut()) writes its changes a chunk at a time and leaves this empty.
         std::vector<CoinWrite> writes;
+        //! The changes of a run collected across the flush helpers, a part for each range of shards, in the
+        //! shards' order; `writes` then holds those taken from records alone. Kept apart, not joined into
+        //! `writes` under the owner's lock: WritePrepared() writes them where they are.
+        std::vector<std::vector<CoinWrite>> parts;
         //! The entries of `writes`, settled at commit unless changed since collection.
         std::vector<Node*> nodes;
         //! The number of changes collected.
@@ -186,8 +190,8 @@ public:
         m_batch_bytes = batch_bytes;
         m_base_concurrent = concurrent;
     }
-    //! The pool a flush's further workers run on, as tasks (the node's connect pool). Without one, the
-    //! calling thread writes every range, one after the other.
+    //! The pool a flush's further workers, and a prepared run's collection (PrepareWriteOut()), run on, as
+    //! tasks (the node's connect pool). Without one, the calling thread takes every range, one after the other.
     void SetFlushHelpers(std::shared_ptr<ThreadPool> pool) { m_flush_helpers = std::move(pool); }
     void Uncache(const COutPoint& outpoint) override;
     unsigned int GetCacheSize() const override;
@@ -373,7 +377,8 @@ public:
      */
     void StreamWriteOut(WriteOutRun& run, const std::function<uint256(int)>& block_at, uint64_t batch_bytes = DEFAULT_DB_CACHE_BATCH);
     //! BeginWriteOut() with the whole run collected at once into `writes`, for a caller that writes it
-    //! itself; nullptr also if nothing collected and the run is not final.
+    //! itself; nullptr also if nothing collected and the run is not final. The shards are collected in
+    //! ranges, on the calling thread and the flush helpers' pool (SetFlushHelpers()).
     std::unique_ptr<WriteOutRun> PrepareWriteOut(int bound_height, int head_height, const uint256& new_head, bool final);
     /**
      * Write a run from PrepareWriteOut() through the base, a chunk of about `batch_bytes` at a time, close

@@ -1848,18 +1848,96 @@ void CoinsStore::StreamWriteOut(WriteOutRun& run, const std::function<uint256(in
     base->WriteRun({}, run.new_head, run.settled_head, /*final=*/false);
 }
 
+/**
+ * Run `work(i)` for every i below `count`, on the calling thread and on tasks of `pool` if there is one, each
+ * i by whoever claims it first, as Flush() hands out its ranges. The caller may hold a lock that the pool's
+ * busy tasks wait for, so it never waits for a task that has not started: it takes every i no task has
+ * claimed, and waits only for those a task is running. A task that comes up once its i is taken returns at
+ * once, without touching `work`. Returns how many the pool's tasks ran.
+ */
+static size_t RunClaimed(ThreadPool* pool, size_t count, const std::function<void(size_t)>& work) noexcept
+{
+    struct Claims {
+        Mutex mutex;
+        std::condition_variable cv;
+        std::vector<bool> claimed GUARDED_BY(mutex);
+        size_t running GUARDED_BY(mutex){0};
+        size_t by_tasks GUARDED_BY(mutex){0};
+    };
+    const auto claims{std::make_shared<Claims>()};
+    WITH_LOCK(claims->mutex, claims->claimed.assign(count, false));
+    if (pool) {
+        for (size_t i{1}; i < count; ++i) {
+            auto task{[claims, i, &work]() noexcept {
+                {
+                    LOCK(claims->mutex);
+                    if (claims->claimed[i]) return;
+                    claims->claimed[i] = true;
+                    ++claims->running;
+                    ++claims->by_tasks;
+                }
+                work(i);
+                LOCK(claims->mutex);
+                --claims->running;
+                claims->cv.notify_all();
+            }};
+            // A pool that takes no task leaves the rest to this thread.
+            if (!pool->Submit(std::move(task), /*front=*/true)) break;
+        }
+    }
+    for (size_t i{0}; i < count; ++i) {
+        {
+            LOCK(claims->mutex);
+            if (claims->claimed[i]) continue;
+            claims->claimed[i] = true;
+        }
+        work(i);
+    }
+    WAIT_LOCK(claims->mutex, lock);
+    claims->cv.wait(lock, [&]() EXCLUSIVE_LOCKS_REQUIRED(claims->mutex) { return claims->running == 0; });
+    return claims->by_tasks;
+}
+
 std::unique_ptr<CoinsStore::WriteOutRun> CoinsStore::PrepareWriteOut(int bound_height, int head_height, const uint256& new_head, bool final)
 {
     auto run{BeginWriteOut(bound_height, head_height, new_head, final)};
     if (!run) return nullptr;
-    uint64_t size{0};
-    for (Shard& shard : m_shards) {
-        LOCK(shard.mutex);
-        CollectChunk(shard, *run, std::numeric_limits<uint64_t>::max(), size, run->writes, run->nodes);
+    // The caller holds the owner's lock for the whole collection, so the shards are collected in ranges, a range
+    // for this thread and each of the flush helpers' workers (RunClaimed()), each into a part of its own. The
+    // parts are kept in the order of the shards, which WritePrepared() relies on.
+    const size_t ranges{std::min(m_shards.size(), m_flush_helpers ? m_flush_helpers->WorkersCount() + 1 : size_t{1})};
+    std::vector<WriteOutRun> parts(ranges);
+    const auto collect_start{SteadyClock::now()};
+    const size_t by_helpers{RunClaimed(m_flush_helpers.get(), ranges, [&](size_t i) {
+        WriteOutRun& part{parts[i]};
+        part.bound_height = run->bound_height;
+        part.final = run->final;
+        uint64_t size{0};
+        for (size_t index{m_shards.size() * i / ranges}; index < m_shards.size() * (i + 1) / ranges; ++index) {
+            Shard& shard{m_shards[index]};
+            LOCK(shard.mutex);
+            CollectChunk(shard, part, std::numeric_limits<uint64_t>::max(), size, part.writes, part.nodes);
+        }
+    })};
+    const auto join_start{SteadyClock::now()};
+    for (WriteOutRun& part : parts) {
+        if (ranges == 1) {
+            run->writes = std::move(part.writes);
+            run->nodes = std::move(part.nodes);
+        } else {
+            run->parts.push_back(std::move(part.writes));
+            run->nodes.insert(run->nodes.end(), part.nodes.begin(), part.nodes.end());
+        }
+        run->count += part.count;
+        run->bytes += part.bytes;
+        run->oldest_left = std::min(run->oldest_left, part.oldest_left);
     }
+    LogDebug(BCLog::COINDB, "Collected a coins write-out run: %u changes in %.2fms over %u ranges (%u by helpers), joined in %.2fms",
+             (unsigned int)run->count, Ticks<MillisecondsDouble>(join_start - collect_start), (unsigned int)ranges,
+             (unsigned int)by_helpers, Ticks<MillisecondsDouble>(SteadyClock::now() - join_start));
     final = run->final;
     run->oldest_left = std::min<int>(run->oldest_left, CollectRecords(run->bound_height, final, run->writes, run->count));
-    if (run->writes.empty() && !final) {
+    if (run->count == 0 && !final) {
         m_restored = std::move(run->restored); // for the next run
         m_run_in_flight = false;
         return nullptr;
@@ -1873,22 +1951,27 @@ std::unique_ptr<CoinsStore::WriteOutRun> CoinsStore::PrepareWriteOut(int bound_h
 void CoinsStore::WritePrepared(WriteOutRun& run, const std::function<uint256(int)>& block_at, uint64_t batch_bytes)
 {
     const uint64_t limit{std::max<uint64_t>(batch_bytes, 1)};
-    std::vector<CoinWrite>& writes{run.writes};
     std::vector<CoinWrite> chunk;
     WriteSorter sorter;
-    // The changes were collected shard by shard from the lowest, the records' last (PrepareWriteOut()): taken
-    // from the back a chunk at a time and each chunk sorted, they reach the database from the highest key
-    // down, as a streamed run's do, and the marker in the first batch sorts above every coin's.
-    while (!writes.empty()) {
-        size_t begin{writes.size()};
-        uint64_t size{0};
-        while (begin > 0 && size < limit) size += BatchBytes(writes[--begin]);
-        chunk.assign(std::make_move_iterator(writes.begin() + begin), std::make_move_iterator(writes.end()));
-        writes.erase(writes.begin() + begin, writes.end());
-        SortWrites(chunk, 0, sorter);
-        base->WriteRun(chunk, run.new_head, run.old_head, /*final=*/false);
-    }
-    writes.shrink_to_fit();
+    // The changes were collected shard by shard from the lowest, the parts' in their order and the records'
+    // last (PrepareWriteOut()): taken from the back a chunk at a time and each chunk sorted, they reach the
+    // database from the highest key down, as a streamed run's do, and the marker in the first batch sorts
+    // above every coin's.
+    const auto write_from_back{[&](std::vector<CoinWrite>& writes) {
+        while (!writes.empty()) {
+            size_t begin{writes.size()};
+            uint64_t size{0};
+            while (begin > 0 && size < limit) size += BatchBytes(writes[--begin]);
+            chunk.assign(std::make_move_iterator(writes.begin() + begin), std::make_move_iterator(writes.end()));
+            writes.erase(writes.begin() + begin, writes.end());
+            SortWrites(chunk, 0, sorter);
+            base->WriteRun(chunk, run.new_head, run.old_head, /*final=*/false);
+        }
+        writes.shrink_to_fit();
+    }};
+    write_from_back(run.writes);
+    for (auto part{run.parts.rbegin()}; part != run.parts.rend(); ++part) write_from_back(*part);
+    run.parts.clear();
     if (run.final) {
         base->WriteRun({}, run.new_head, run.old_head, /*final=*/true);
     } else {
