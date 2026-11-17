@@ -16,11 +16,13 @@
 #include <util/log.h>
 #include <util/task_runner.h>
 
+#include <algorithm>
 #include <atomic>
 #include <future>
 #include <memory>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 using kernel::ChainstateRole;
 
@@ -47,6 +49,10 @@ private:
     std::atomic<uint64_t> m_tip_sequence_in_delivery{0};
 
 public:
+    Mutex m_pre_sync_mutex;
+    //! The pre-sync hooks (AddPreSyncHook()).
+    std::vector<std::shared_ptr<const std::function<bool()>>> m_pre_sync_hooks GUARDED_BY(m_pre_sync_mutex);
+
     std::unique_ptr<util::TaskRunnerInterface> m_task_runner;
 
     explicit ValidationSignalsImpl(std::unique_ptr<util::TaskRunnerInterface> task_runner)
@@ -157,11 +163,31 @@ void ValidationSignals::CallFunctionInValidationInterfaceQueue(std::function<voi
 
 uint64_t ValidationSignals::TipSequenceInDelivery() const { return m_internals->TipSequenceInDelivery(); }
 
+void ValidationSignals::AddPreSyncHook(std::function<bool()> hook)
+{
+    LOCK(m_internals->m_pre_sync_mutex);
+    m_internals->m_pre_sync_hooks.push_back(std::make_shared<const std::function<bool()>>(std::move(hook)));
+}
+
 void ValidationSignals::SyncWithValidationInterfaceQueue()
 {
     AssertLockNotHeld(cs_main);
     // The callbacks waited for take cs_main, the mempool's and the wallets' locks.
     AssertMayWait("the validation signal queue");
+    {
+        // The hooks run on a copy of the list, without its mutex: a hook takes cs_main, and a hook is
+        // added under cs_main. An owner that goes meanwhile disarms its hook itself (see
+        // AddPreSyncHook()); a hook whose owner is gone is dropped.
+        const auto hooks{WITH_LOCK(m_internals->m_pre_sync_mutex, return m_internals->m_pre_sync_hooks)};
+        std::vector<const std::function<bool()>*> gone;
+        for (const auto& hook : hooks) {
+            if (!(*hook)()) gone.push_back(hook.get());
+        }
+        if (!gone.empty()) {
+            LOCK(m_internals->m_pre_sync_mutex);
+            std::erase_if(m_internals->m_pre_sync_hooks, [&](const auto& hook) { return std::ranges::find(gone, hook.get()) != gone.end(); });
+        }
+    }
     // Block until the validation queue drains
     std::promise<void> promise;
     CallFunctionInValidationInterfaceQueue([&promise] {

@@ -30,13 +30,20 @@ namespace node {
  * whose own bytes were synced reads as Unsynced again when a later block is
  * written into the same file. That errs on the safe side.
  *
- * A failed sync leaves the block Unsynced for the rest of the run; the flush
- * that wanted to record it, and every later one, reports the failure and
- * does not reach the index write.
+ * A failed sync leaves the block Unsynced until a later flush of the same
+ * file succeeds, and is remembered for the rest of the run whether one does
+ * or not: the flush that wanted to record the block, and every later one,
+ * reports the failure and does not reach the index write. After such a later
+ * flush the block reads Synced although the failed sync may have lost pages:
+ * what keeps the index from it then is that memory, not the state.
  *
  * The guarantee is per run. Synced means synced since startup or recorded by
  * an earlier run under the same rule; a block index written by a version
  * without the rule is taken as it is.
+ *
+ * The node asks the table at one site, for Record, before the index batch is
+ * committed (BlockManager::CommitBlockIndexBatch()). Write, Sync and Prune are
+ * held to it by durability_machine_tests.
  */
 enum class DurabilityState {
     Absent,   //!< No bytes the index could refer to (never written, or pruned).
@@ -67,13 +74,19 @@ inline constexpr auto DURABILITY_TABLE{util::MakeTransitionTable<DurabilityState
  * else:
  *
  *   Start --SyncFiles--> FilesSynced --WriteIndex--> IndexWritten --WriteCoins--> CoinsWritten
- *                                                      |                              ^
- *                                                      +--Unlink--> FilesUnlinked ----+
- *                                                                      WriteCoins
+ *                                                      |                              |
+ *                                                      +--Unlink--> FilesUnlinked <---+
+ *                                                                                  Unlink
  *
  * - the block index is written only after the files it refers to are synced;
- * - pruned files are unlinked only after the index stopped referring to them;
- * - the coins are written only after the index holds the block they are at.
+ * - the coins are written only after the index holds the block they are at;
+ * - pruned files are unlinked last, only after the index stopped referring to them.
+ *
+ * A write-out run on the executor (Chainstate::StartWriteOutRun()) makes the first three
+ * steps in this order off the validation thread, behind one write that is not a step here: the
+ * coins that disconnects restored go to the database first. The caller that waited for the run
+ * records the three steps once it has ended; a run nobody waits for records none, and this
+ * table is not consulted while a run is under way.
  *
  * A step that fails ends the write-out where it stands; there is no edge out
  * of a failure, and the next write-out starts again from Start.
@@ -96,9 +109,9 @@ enum class FlushStep {
 inline constexpr auto FLUSH_TABLE{util::MakeTransitionTable<FlushPhase, FlushStep>({
     {FlushPhase::Start, FlushStep::SyncFiles, FlushPhase::FilesSynced},
     {FlushPhase::FilesSynced, FlushStep::WriteIndex, FlushPhase::IndexWritten},
-    {FlushPhase::IndexWritten, FlushStep::Unlink, FlushPhase::FilesUnlinked},
     {FlushPhase::IndexWritten, FlushStep::WriteCoins, FlushPhase::CoinsWritten},
-    {FlushPhase::FilesUnlinked, FlushStep::WriteCoins, FlushPhase::CoinsWritten},
+    {FlushPhase::IndexWritten, FlushStep::Unlink, FlushPhase::FilesUnlinked},
+    {FlushPhase::CoinsWritten, FlushStep::Unlink, FlushPhase::FilesUnlinked},
 })};
 } // namespace node
 

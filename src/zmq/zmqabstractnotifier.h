@@ -43,7 +43,7 @@ public:
     virtual bool Initialize(void *pcontext) = 0;
     virtual void Shutdown() = 0;
 
-    // Notifies of ConnectTip result, i.e., new active tip only
+    // Notifies of a new active tip only
     virtual bool NotifyBlock(const CBlockIndex *pindex);
     // Notifies of every block connection
     virtual bool NotifyBlockConnect(const CBlockIndex *pindex);

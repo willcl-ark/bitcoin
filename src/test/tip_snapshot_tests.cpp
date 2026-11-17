@@ -4,11 +4,16 @@
 
 #include <chain.h>
 #include <consensus/validation.h>
+#include <kernel/mempool_removal_reason.h>
 #include <node/block_facts.h>
+#include <node/mempool_persist.h>
 #include <node/tip_snapshot.h>
 #include <script/script.h>
+#include <sync.h>
 #include <test/util/setup_common.h>
 #include <test/util/validation.h>
+#include <txmempool.h>
+#include <util/fs.h>
 #include <validation.h>
 #include <validationinterface.h>
 
@@ -204,8 +209,8 @@ BOOST_AUTO_TEST_CASE(chain_signals_carry_the_tip_sequence)
     BOOST_CHECK_EQUAL(recorder.m_disconnected[0], before + 3);
     BOOST_CHECK_EQUAL(signals.TipSequenceInDelivery(), chainman.PublishedTip().sequence);
 
-    // A step that connects several blocks queues their BlockConnected signals after the
-    // last of them is connected. Each still carries the number its own block was connected
+    // The BlockConnected signals of a step that disconnects and connects several blocks reach
+    // the queue after the last of them is connected. Each still carries the number its own block was connected
     // under, not the number of the tip at the time the signals are queued.
     // Chain: base, a1, a2, a3 with a1 invalidated, then base, c1. Reconsidering a1
     // disconnects c1 and connects a1 and a2 in one step, as a1 alone does not beat c1.
@@ -262,6 +267,94 @@ BOOST_AUTO_TEST_CASE(block_facts_are_one_copy)
     BOOST_CHECK(facts->HaveUndo());
     BOOST_CHECK(facts->data_pos == tip->GetBlockPos());
     BOOST_CHECK(facts->undo_pos == tip->GetUndoPos());
+}
+
+//! Records the order of a block's and a transaction's announcement.
+struct AnnouncementOrder final : public CValidationInterface {
+    std::vector<char> m_order;
+    void BlockConnected(const kernel::ChainstateRole&, const std::shared_ptr<const CBlock>&, const CBlockIndex*) override
+    {
+        m_order.push_back('b');
+    }
+    void TransactionAddedToMempool(const NewMempoolTransactionInfo&, uint64_t) override
+    {
+        m_order.push_back('t');
+    }
+};
+
+//! In initial block download a block's BlockConnected waits for the block's undo write. A transaction
+//! accepted after the block is still announced after it.
+BOOST_AUTO_TEST_CASE(a_transaction_is_announced_after_the_block_in_ibd)
+{
+    auto& chainman{static_cast<TestChainstateManager&>(*Assert(m_node.chainman))};
+    ValidationSignals& signals{*Assert(m_node.validation_signals)};
+
+    // A block that is two days old when it arrives leaves the node in initial block download.
+    const CBlock block{CreateBlock({}, CScript{} << OP_TRUE)};
+    m_clock += std::chrono::hours{48};
+    chainman.ResetIbd();
+    signals.SyncWithValidationInterfaceQueue();
+
+    AnnouncementOrder order;
+    signals.RegisterValidationInterface(&order);
+
+    bool new_block{false};
+    BOOST_REQUIRE(chainman.ProcessNewBlock(std::make_shared<const CBlock>(block), /*force_processing=*/true, /*min_pow_checked=*/true, &new_block));
+    BOOST_REQUIRE(new_block);
+    BOOST_REQUIRE(chainman.IsInitialBlockDownload());
+    BOOST_REQUIRE(WITH_LOCK(::cs_main, return chainman.ActiveTip()->GetBlockHash()) == block.GetHash());
+
+    const CMutableTransaction tx{CreateValidMempoolTransaction(m_coinbase_txns[0], /*input_vout=*/0, /*input_height=*/1, coinbaseKey,
+                                                               CScript{} << OP_0 << std::vector<uint8_t>(20, 1), CAmount{1 * COIN}, /*submit=*/false)};
+    const MempoolAcceptResult result{WITH_LOCK(::cs_main, return chainman.ProcessTransaction(MakeTransactionRef(tx)))};
+    BOOST_REQUIRE(result.m_result_type == MempoolAcceptResult::ResultType::VALID);
+    signals.SyncWithValidationInterfaceQueue();
+    signals.UnregisterValidationInterface(&order);
+
+    const std::vector<char> expected{'b', 't'};
+    BOOST_CHECK_EQUAL_COLLECTIONS(order.m_order.begin(), order.m_order.end(), expected.begin(), expected.end());
+}
+
+//! The same for a transaction the node loads from its mempool file: in initial block download
+//! LoadMempool() hands the signals of the blocks connected so far over before each transaction.
+BOOST_AUTO_TEST_CASE(a_loaded_transaction_is_announced_after_the_block_in_ibd)
+{
+    auto& chainman{static_cast<TestChainstateManager&>(*Assert(m_node.chainman))};
+    ValidationSignals& signals{*Assert(m_node.validation_signals)};
+    CTxMemPool& pool{*Assert(m_node.mempool)};
+
+    // A mempool file with one transaction, which the pool then no longer holds.
+    const CMutableTransaction tx{CreateValidMempoolTransaction(m_coinbase_txns[0], /*input_vout=*/0, /*input_height=*/1, coinbaseKey,
+                                                               CScript{} << OP_0 << std::vector<uint8_t>(20, 1), CAmount{1 * COIN}, /*submit=*/true)};
+    const fs::path path{m_args.GetDataDirNet() / "mempool_one_transaction.dat"};
+    BOOST_REQUIRE(node::DumpMempool(pool, path));
+    {
+        LOCK2(::cs_main, pool.cs);
+        pool.removeRecursive(CTransaction{tx}, MemPoolRemovalReason::REPLACED);
+        BOOST_REQUIRE_EQUAL(pool.size(), 0U);
+    }
+
+    // A block that is two days old when it arrives leaves the node in initial block download.
+    const CBlock block{CreateBlock({}, CScript{} << OP_TRUE)};
+    m_clock += std::chrono::hours{48};
+    chainman.ResetIbd();
+    signals.SyncWithValidationInterfaceQueue();
+
+    AnnouncementOrder order;
+    signals.RegisterValidationInterface(&order);
+
+    bool new_block{false};
+    BOOST_REQUIRE(chainman.ProcessNewBlock(std::make_shared<const CBlock>(block), /*force_processing=*/true, /*min_pow_checked=*/true, &new_block));
+    BOOST_REQUIRE(new_block);
+    BOOST_REQUIRE(chainman.IsInitialBlockDownload());
+
+    BOOST_REQUIRE(node::LoadMempool(pool, path, chainman.ActiveChainstate(), {}));
+    BOOST_REQUIRE_EQUAL(WITH_LOCK(pool.cs, return pool.size()), 1U);
+    signals.SyncWithValidationInterfaceQueue();
+    signals.UnregisterValidationInterface(&order);
+
+    const std::vector<char> expected{'b', 't'};
+    BOOST_CHECK_EQUAL_COLLECTIONS(order.m_order.begin(), order.m_order.end(), expected.begin(), expected.end());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

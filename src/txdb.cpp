@@ -70,21 +70,6 @@ CCoinsViewDB::~CCoinsViewDB()
     }
 }
 
-void CCoinsViewDB::ResizeCache(size_t new_cache_size)
-{
-    // We can't do this operation with an in-memory DB since we'll lose all the coins upon
-    // reset.
-    if (!m_db_params.memory_only) {
-        LOCK(m_db_mutex);
-        // Have to do a reset first to get the original `m_db` state to release its
-        // filesystem lock.
-        m_db.reset();
-        m_db_params.cache_bytes = new_cache_size;
-        m_db_params.wipe_data = false;
-        m_db = std::make_unique<CDBWrapper>(m_db_params);
-    }
-}
-
 std::optional<Coin> CCoinsViewDB::GetCoin(const COutPoint& outpoint) const
 {
     Coin coin;
@@ -303,15 +288,16 @@ std::shared_future<void> CCoinsViewDB::CompactFullAsync()
 {
     AssertLockHeld(::cs_main);
     if (m_compaction.valid() && m_compaction.wait_for(std::chrono::seconds{0}) != std::future_status::ready) return m_compaction;
-    m_compaction = std::async(std::launch::async, [this] {
+    // noexcept: a failed compaction is a database error (std::runtime_error), logged; anything else, a failed
+    // allocation, terminates instead of resting in a future nobody reads.
+    m_compaction = std::async(std::launch::async, [this]() noexcept {
         try {
             util::ThreadRename("utxocompact");
-            LOCK(m_db_mutex);
 
             LogDebug(BCLog::COINDB, "Starting chainstate compaction of %s", fs::PathToString(m_db_params.path));
             m_db->CompactFull();
             LogDebug(BCLog::COINDB, "Finished chainstate compaction of %s", fs::PathToString(m_db_params.path));
-        } catch (const std::exception& e) {
+        } catch (const std::runtime_error& e) {
             LogWarning("Failed chainstate compaction (%s)", e.what());
         }
     }).share();

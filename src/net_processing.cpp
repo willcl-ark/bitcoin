@@ -1106,7 +1106,7 @@ private:
      */
     bool BlockRequestAllowed(const CBlockIndex& block_index) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
     bool AlreadyHaveBlock(const uint256& block_hash) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
-    void ProcessGetBlockData(CNode& pfrom, Peer& peer, const CInv& inv)
+    bool ProcessGetBlockData(CNode& pfrom, Peer& peer, const CInv& inv)
         EXCLUSIVE_LOCKS_REQUIRED(g_msgproc_mutex, !m_most_recent_block_mutex);
 
     /**
@@ -2564,14 +2564,14 @@ void PeerManagerImpl::RelayAddress(NodeId originator,
     }
 }
 
-void PeerManagerImpl::ProcessGetBlockData(CNode& pfrom, Peer& peer, const CInv& inv)
+bool PeerManagerImpl::ProcessGetBlockData(CNode& pfrom, Peer& peer, const CInv& inv)
 {
     // First perform the stateless checks:
     // A filtered-block can only ever be requested if we offer NODE_BLOOM
     if (inv.IsMsgFilteredBlk() && !(peer.m_our_services & NODE_BLOOM)) {
         LogDebug(BCLog::NET, "filtered block request received when NODE_BLOOM service disabled, %s", pfrom.DisconnectMsg());
         pfrom.fDisconnect = true;
-        return;
+        return true;
     }
 
     std::shared_ptr<const CBlock> a_recent_block;
@@ -2581,12 +2581,24 @@ void PeerManagerImpl::ProcessGetBlockData(CNode& pfrom, Peer& peer, const CInv& 
         a_recent_block = m_most_recent_block;
         a_recent_compact_block = m_most_recent_compact_block;
     }
+    // The block this node announced last (NewPoWValidBlock): it is announced before it is written, which
+    // happens with cs_main released, so a request may come while it is being stored. The request is then asked
+    // again on a later call, the peer's further messages waiting behind it, as they would were the request
+    // to wait for cs_main until the block is stored: once stored, it is activated below and served only as any
+    // other block is, never unvalidated in full to a peer that would punish this node if it failed.
+    const bool announced{a_recent_block && a_recent_block->GetHash() == inv.hash};
 
     bool need_activate_chain = false;
     {
         LOCK(cs_main);
         const CBlockIndex* pindex = m_chainman.m_blockman.LookupBlockIndex(inv.hash);
         if (pindex) {
+            // A request that waits for a state: the announced block is no longer being stored
+            // (ChainstateManager::IsBlockBeingStored()). Read in the critical section that decides the activation:
+            // the block is marked before it is announced and stored when the mark goes, so from here on it
+            // is stored and activated below, or was not stored at all. Read after the activation was
+            // decided, a block stored in between would be found stored and not activated, and refused.
+            if (announced && m_chainman.IsBlockBeingStored(*pindex)) return false;
             if (pindex->HaveNumChainTxs() && !pindex->IsValid(BLOCK_VALID_SCRIPTS) &&
                     pindex->IsValid(BLOCK_VALID_TREE)) {
                 // Precondition O1 (validation.h):
@@ -2614,11 +2626,11 @@ void PeerManagerImpl::ProcessGetBlockData(CNode& pfrom, Peer& peer, const CInv& 
         LOCK(cs_main);
         pindex = m_chainman.m_blockman.LookupBlockIndex(inv.hash);
         if (!pindex) {
-            return;
+            return true;
         }
         if (!BlockRequestAllowed(*pindex)) {
             LogDebug(BCLog::NET, "%s: ignoring request from peer=%i for old block that isn't in the main chain\n", __func__, pfrom.GetId());
-            return;
+            return true;
         }
         // disconnect node in case we have reached the outbound limit for serving historical blocks
         if (m_connman.OutboundTargetReached(true) &&
@@ -2627,7 +2639,7 @@ void PeerManagerImpl::ProcessGetBlockData(CNode& pfrom, Peer& peer, const CInv& 
         ) {
             LogDebug(BCLog::NET, "historical block serving limit reached, %s", pfrom.DisconnectMsg());
             pfrom.fDisconnect = true;
-            return;
+            return true;
         }
         tip = m_chainman.ActiveChain().Tip();
         // Avoid leaking prune-height by never sending blocks below the NODE_NETWORK_LIMITED threshold
@@ -2637,19 +2649,19 @@ void PeerManagerImpl::ProcessGetBlockData(CNode& pfrom, Peer& peer, const CInv& 
             LogDebug(BCLog::NET, "Ignore block request below NODE_NETWORK_LIMITED threshold, %s", pfrom.DisconnectMsg());
             //disconnect node and prevent it from stalling (would otherwise wait for the missing block)
             pfrom.fDisconnect = true;
-            return;
+            return true;
         }
         // Pruned nodes may have deleted the block, so check whether
         // it's available before trying to send.
         if (!(pindex->nStatus & BLOCK_HAVE_DATA)) {
-            return;
+            return true;
         }
         can_direct_fetch = CanDirectFetch();
         block_pos = pindex->GetBlockPos();
     }
 
     std::shared_ptr<const CBlock> pblock;
-    if (a_recent_block && a_recent_block->GetHash() == inv.hash) {
+    if (announced) {
         pblock = a_recent_block;
     } else if (inv.IsMsgWitnessBlk()) {
         // Fast-path: in this case it is possible to serve the block directly from disk,
@@ -2663,7 +2675,7 @@ void PeerManagerImpl::ProcessGetBlockData(CNode& pfrom, Peer& peer, const CInv& 
                 LogError("Cannot load block from disk, %s", pfrom.DisconnectMsg());
             }
             pfrom.fDisconnect = true;
-            return;
+            return true;
         }
         // Don't set pblock as we've sent the block
     } else {
@@ -2676,7 +2688,7 @@ void PeerManagerImpl::ProcessGetBlockData(CNode& pfrom, Peer& peer, const CInv& 
                 LogError("Cannot load block from disk, %s", pfrom.DisconnectMsg());
             }
             pfrom.fDisconnect = true;
-            return;
+            return true;
         }
         pblock = pblockRead;
     }
@@ -2739,6 +2751,7 @@ void PeerManagerImpl::ProcessGetBlockData(CNode& pfrom, Peer& peer, const CInv& 
             peer.m_continuation_block.SetNull();
         }
     }
+    return true;
 }
 
 CTransactionRef PeerManagerImpl::FindTxForGetData(const Peer::TxRelay& tx_relay, const GenTxid& gtxid)
@@ -2804,10 +2817,9 @@ void PeerManagerImpl::ProcessGetData(CNode& pfrom, Peer& peer, const std::atomic
     // Only process one BLOCK item per call, since they're uncommon and can be
     // expensive to process.
     if (it != peer.m_getdata_requests.end() && !pfrom.fPauseSend) {
-        const CInv &inv = *it++;
-        if (inv.IsGenBlkMsg()) {
-            ProcessGetBlockData(pfrom, peer, inv);
-        }
+        const CInv &inv = *it;
+        // A block being stored stays at the front, asked for again on the next call (ProcessGetBlockData()).
+        if (!inv.IsGenBlkMsg() || ProcessGetBlockData(pfrom, peer, inv)) ++it;
         // else: If the first item on the queue is an unknown type, we erase it
         // and continue processing the queue on the next call.
         // NOTE: previously we wouldn't do so and the peer sending us a malformed GETDATA could
