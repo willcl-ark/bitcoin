@@ -611,17 +611,41 @@ struct BlockValidationContext {
      * cs_main once that hold is over, for as long as the block index lives.
      */
     std::function<int64_t(int)> median_time_past_at;
+    /**
+     * Whether a transaction whose inputs are not all in the view is deferred rather than a consensus
+     * failure. True only while blocks below this one are still being applied (the window is incomplete):
+     * the transaction's outputs are created, its other checks wait for FinishDeferredTransactions() once
+     * every lower block is in. With a complete window a missing input is "bad-txns-inputs-missingorspent".
+     */
+    bool defer_missing_inputs{false};
+    /**
+     * With `defer_missing_inputs`: whether a lower block that is not applied yet holds the transaction
+     * `txid` (CoinsStore::CreatesPendingBelow()), so that an input from it which the view does not hold
+     * already is taken as missing without a lookup, and its transaction deferred. A hint: a wrong yes
+     * defers a transaction whose inputs FinishDeferredTransactions() then finds, a wrong no costs the
+     * lookup. Not set: every input is looked up.
+     */
+    std::function<bool(const Txid&)> made_by_pending_block{};
+
 };
 
 /** Outputs of the pure ConnectBlock() besides the mutated coins view.
  *  ConnectBlock() resets the object it is given before it fills it. */
 struct ConnectBlockResult {
-    //! Undo data for the connected block; partially filled when connection failed.
+    //! Undo data for the connected block; of no meaning when connection failed.
     CBlockUndo undo;
     int num_inputs{0};
     int64_t sigops_cost{0};
     //! True when the block failed CheckBlock() before any UTXO work was done.
     bool failed_in_check_block{false};
+    //! Indices into block.vtx of the transactions deferred because an input was not in the view yet
+    //! (BlockValidationContext::defer_missing_inputs); their undo slots are empty until
+    //! FinishDeferredTransactions() fills them. The block is not valid until that has run.
+    std::vector<uint32_t> deferred_txs;
+    //! The fees of the transactions checked so far; completed by FinishDeferredTransactions().
+    CAmount fees{0};
+    //! True when deferred transactions kept the coinbase amount check from running.
+    bool coinbase_check_deferred{false};
     //! Phase boundaries, for the caller's bench logging.
     SteadyClock::time_point time_start{};
     SteadyClock::time_point time_checked{};
@@ -647,13 +671,34 @@ struct ConnectBlockResult {
  *
  * On failure `state` holds the reason and the view may be partially updated.
  *
- * The caller needs exclusive use of `block` for the call: CheckBlock() records
- * its results in the block's mutable fields. The node's callers hold cs_main.
+ * With `ctx.defer_missing_inputs` a transaction whose inputs the view does not
+ * have is no failure: true is returned with the checks of those transactions
+ * and the block's totals outstanding, and the block is valid only once
+ * FinishDeferredTransactions() has returned true as well.
+ *
+ * `block` may be shared with readers on other threads: CheckBlock() records
+ * its results in the block's mutable fields, which are atomic
+ * (BlockCheckedFlag, primitives/block.h). A block that was received has
+ * passed that check before, so nothing is written here; a block read from
+ * disk for its connection is checked here, by the thread that read it and
+ * alone holds it.
  */
 bool ConnectBlock(const CBlock& block, const BlockValidationContext& ctx,
                   CCoinsViewCache& view, CCheckQueue<CScriptCheck>* check_queue,
                   ValidationCache& validation_cache, bool just_check,
                   BlockValidationState& state, ConnectBlockResult& result);
+
+/**
+ * The second half of ConnectBlock() for a block that deferred transactions: run once every lower block's first
+ * pass is applied (a lower block's own continuation may still be pending; what it changes meanwhile is a
+ * store conflict, settled by connecting the block again alone), it checks each deferred transaction in full (inputs present and unspent, amounts, maturity,
+ * BIP68, sigops, scripts), spends its inputs into its undo slot, completes the fee total and the sigop
+ * count and runs the coinbase amount check. Pure in the same sense as ConnectBlock(). On failure `state`
+ * holds the reason; the view may be partially updated.
+ */
+bool FinishDeferredTransactions(const CBlock& block, const BlockValidationContext& ctx,
+                                CCoinsViewCache& view, ValidationCache& validation_cache,
+                                BlockValidationState& state, ConnectBlockResult& result);
 
 struct ConnectedBlock;
 
