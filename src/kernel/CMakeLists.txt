@@ -17,6 +17,7 @@ add_library(bitcoinkernel
   context.cpp
   cs_main.cpp
   disconnected_transactions.cpp
+  effects.cpp
   mempool_removal_reason.cpp
   ../arith_uint256.cpp
   ../chain.cpp
@@ -30,6 +31,7 @@ add_library(bitcoinkernel
   ../deploymentstatus.cpp
   ../flatfile.cpp
   ../hash.cpp
+  ../node/blockcache.cpp
   ../node/blockstorage.cpp
   ../node/chainstate.cpp
   ../node/utxo_snapshot.cpp
