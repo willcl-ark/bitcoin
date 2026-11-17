@@ -16,6 +16,7 @@
 #include <util/log.h>
 #include <util/task_runner.h>
 
+#include <atomic>
 #include <future>
 #include <memory>
 #include <unordered_map>
@@ -42,6 +43,8 @@ private:
     struct ListEntry { std::shared_ptr<CValidationInterface> callbacks; int count = 1; };
     std::list<ListEntry> m_list GUARDED_BY(m_mutex);
     std::unordered_map<CValidationInterface*, std::list<ListEntry>::iterator> m_map GUARDED_BY(m_mutex);
+
+    std::atomic<uint64_t> m_tip_sequence_in_delivery{0};
 
 public:
     std::unique_ptr<util::TaskRunnerInterface> m_task_runner;
@@ -79,6 +82,15 @@ public:
         }
         m_map.clear();
     }
+
+    //! Run a queued chain signal's callbacks, with its number visible to them.
+    template<typename F> void DeliverChainSignal(uint64_t tip_sequence, F&& f) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex)
+    {
+        m_tip_sequence_in_delivery.store(tip_sequence);
+        Iterate(std::forward<F>(f));
+    }
+
+    uint64_t TipSequenceInDelivery() const { return m_tip_sequence_in_delivery.load(); }
 
     template<typename F> void Iterate(F&& f) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex)
     {
@@ -143,9 +155,13 @@ void ValidationSignals::CallFunctionInValidationInterfaceQueue(std::function<voi
     m_internals->m_task_runner->insert(std::move(func));
 }
 
+uint64_t ValidationSignals::TipSequenceInDelivery() const { return m_internals->TipSequenceInDelivery(); }
+
 void ValidationSignals::SyncWithValidationInterfaceQueue()
 {
     AssertLockNotHeld(cs_main);
+    // The callbacks waited for take cs_main, the mempool's and the wallets' locks.
+    AssertMayWait("the validation signal queue");
     // Block until the validation queue drains
     std::promise<void> promise;
     CallFunctionInValidationInterfaceQueue([&promise] {
@@ -176,17 +192,18 @@ void ValidationSignals::SyncWithValidationInterfaceQueue()
 #define LOG_EVENT(fmt, ...) \
     LogDebug(BCLog::VALIDATION, fmt, __VA_ARGS__)
 
-void ValidationSignals::UpdatedBlockTip(const CBlockIndex *pindexNew, const CBlockIndex *pindexFork, bool fInitialDownload) {
+void ValidationSignals::UpdatedBlockTip(const CBlockIndex *pindexNew, const CBlockIndex *pindexFork, bool fInitialDownload, uint64_t tip_sequence) {
     // Dependencies exist that require UpdatedBlockTip events to be delivered in the order in which
-    // the chain actually updates. One way to ensure this is for the caller to invoke this signal
-    // in the same critical section where the chain is updated
+    // the chain actually updates. The caller invokes this signal in the same critical section
+    // where the chain is updated.
+    AssertLockHeld(cs_main);
 
     auto log_msg = LOG_MSG("%s: new block hash=%s fork block hash=%s (in IBD=%s)", __func__,
                           pindexNew->GetBlockHash().ToString(),
                           pindexFork ? pindexFork->GetBlockHash().ToString() : "null",
                           fInitialDownload);
-    auto event = [pindexNew, pindexFork, fInitialDownload, this] {
-        m_internals->Iterate([&](CValidationInterface& callbacks) { callbacks.UpdatedBlockTip(pindexNew, pindexFork, fInitialDownload); });
+    auto event = [pindexNew, pindexFork, fInitialDownload, tip_sequence, this] {
+        m_internals->DeliverChainSignal(tip_sequence, [&](CValidationInterface& callbacks) { callbacks.UpdatedBlockTip(pindexNew, pindexFork, fInitialDownload); });
     };
     ENQUEUE_AND_LOG_EVENT(std::move(event), std::move(log_msg));
 }
@@ -219,13 +236,14 @@ void ValidationSignals::TransactionRemovedFromMempool(const CTransactionRef& tx,
     ENQUEUE_AND_LOG_EVENT(std::move(event), std::move(log_msg));
 }
 
-void ValidationSignals::BlockConnected(const ChainstateRole& role, std::shared_ptr<const CBlock> pblock, const CBlockIndex* pindex)
+void ValidationSignals::BlockConnected(const ChainstateRole& role, std::shared_ptr<const CBlock> pblock, const CBlockIndex* pindex, uint64_t tip_sequence)
 {
+    AssertLockHeld(cs_main);
     auto log_msg = LOG_MSG("%s: block hash=%s block height=%d", __func__,
                           pblock->GetHash().ToString(),
                           pindex->nHeight);
-    auto event = [role, pblock = std::move(pblock), pindex, this] {
-        m_internals->Iterate([&](CValidationInterface& callbacks) { callbacks.BlockConnected(role, pblock, pindex); });
+    auto event = [role, pblock = std::move(pblock), pindex, tip_sequence, this] {
+        m_internals->DeliverChainSignal(tip_sequence, [&](CValidationInterface& callbacks) { callbacks.BlockConnected(role, pblock, pindex); });
     };
     ENQUEUE_AND_LOG_EVENT(std::move(event), std::move(log_msg));
 }
@@ -244,13 +262,14 @@ void ValidationSignals::MempoolTransactionsRemovedForBlock(std::shared_ptr<const
     ENQUEUE_AND_LOG_EVENT(std::move(event), std::move(log_msg));
 }
 
-void ValidationSignals::BlockDisconnected(std::shared_ptr<const CBlock> pblock, const CBlockIndex* pindex)
+void ValidationSignals::BlockDisconnected(std::shared_ptr<const CBlock> pblock, const CBlockIndex* pindex, uint64_t tip_sequence)
 {
+    AssertLockHeld(cs_main);
     auto log_msg = LOG_MSG("%s: block hash=%s block height=%d", __func__,
                           pblock->GetHash().ToString(),
                           pindex->nHeight);
-    auto event = [pblock = std::move(pblock), pindex, this] {
-        m_internals->Iterate([&](CValidationInterface& callbacks) { callbacks.BlockDisconnected(pblock, pindex); });
+    auto event = [pblock = std::move(pblock), pindex, tip_sequence, this] {
+        m_internals->DeliverChainSignal(tip_sequence, [&](CValidationInterface& callbacks) { callbacks.BlockDisconnected(pblock, pindex); });
     };
     ENQUEUE_AND_LOG_EVENT(std::move(event), std::move(log_msg));
 }

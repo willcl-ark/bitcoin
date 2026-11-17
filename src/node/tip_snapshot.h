@@ -46,7 +46,8 @@ struct TipSnapshot {
     //! ChainstateManager::IsInitialBlockDownload() at that moment.
     bool initial_block_download{true};
     //! Counts the tip changes of every chainstate, so it rises with each
-    //! publication, by one or more; 0 only before the first.
+    //! publication, by one or more; 0 only before the first. The queued
+    //! chain signals carry the same numbers.
     uint64_t sequence{0};
 
     bool HasTip() const { return height >= 0; }

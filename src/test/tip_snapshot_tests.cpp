@@ -10,8 +10,11 @@
 #include <test/util/setup_common.h>
 #include <test/util/validation.h>
 #include <validation.h>
+#include <validationinterface.h>
 
 #include <boost/test/unit_test.hpp>
+
+#include <vector>
 
 BOOST_FIXTURE_TEST_SUITE(tip_snapshot_tests, TestChain100Setup)
 
@@ -146,6 +149,95 @@ BOOST_AUTO_TEST_CASE(tip_is_published_at_the_end_of_the_hold)
     BOOST_CHECK_EQUAL(chainman.PublishedTip().sequence, before.sequence + 2);
 
     signals.UnregisterValidationInterface(&inside);
+}
+
+//! Records the tip sequence number each chain callback belongs to.
+struct SequenceRecorder final : public CValidationInterface {
+    ValidationSignals& m_signals;
+    std::vector<uint64_t> m_connected;
+    std::vector<uint64_t> m_disconnected;
+    std::vector<uint64_t> m_tip_updates;
+    explicit SequenceRecorder(ValidationSignals& signals) : m_signals{signals} {}
+    void BlockConnected(const kernel::ChainstateRole&, const std::shared_ptr<const CBlock>&, const CBlockIndex*) override
+    {
+        m_connected.push_back(m_signals.TipSequenceInDelivery());
+    }
+    void BlockDisconnected(const std::shared_ptr<const CBlock>&, const CBlockIndex*) override
+    {
+        m_disconnected.push_back(m_signals.TipSequenceInDelivery());
+    }
+    void UpdatedBlockTip(const CBlockIndex*, const CBlockIndex*, bool) override
+    {
+        m_tip_updates.push_back(m_signals.TipSequenceInDelivery());
+    }
+};
+
+BOOST_AUTO_TEST_CASE(chain_signals_carry_the_tip_sequence)
+{
+    ChainstateManager& chainman{*Assert(m_node.chainman)};
+    ValidationSignals& signals{*Assert(m_node.validation_signals)};
+    const CScript script{CScript{} << OP_TRUE};
+
+    SequenceRecorder recorder{signals};
+    signals.RegisterValidationInterface(&recorder);
+
+    const uint64_t before{chainman.PublishedTip().sequence};
+    CreateAndProcessBlock({}, script);
+    CreateAndProcessBlock({}, script);
+    signals.SyncWithValidationInterfaceQueue();
+
+    // One number per block, and each block's callback ran under its block's number.
+    BOOST_REQUIRE_EQUAL(recorder.m_connected.size(), 2U);
+    BOOST_CHECK_EQUAL(recorder.m_connected[0], before + 1);
+    BOOST_CHECK_EQUAL(recorder.m_connected[1], before + 2);
+    BOOST_REQUIRE_EQUAL(recorder.m_tip_updates.size(), 2U);
+    BOOST_CHECK_EQUAL(recorder.m_tip_updates[1], before + 2);
+    // The last signal delivered belongs to the published tip.
+    BOOST_CHECK_EQUAL(signals.TipSequenceInDelivery(), chainman.PublishedTip().sequence);
+
+    // A disconnect carries the number of the tip it left behind.
+    BlockValidationState state;
+    CBlockIndex* tip{WITH_LOCK(::cs_main, return chainman.ActiveTip())};
+    BOOST_REQUIRE(chainman.ActiveChainstate().InvalidateBlock(state, tip));
+    signals.SyncWithValidationInterfaceQueue();
+    BOOST_REQUIRE_EQUAL(recorder.m_disconnected.size(), 1U);
+    BOOST_CHECK_EQUAL(recorder.m_disconnected[0], before + 3);
+    BOOST_CHECK_EQUAL(signals.TipSequenceInDelivery(), chainman.PublishedTip().sequence);
+
+    // A step that connects several blocks queues their BlockConnected signals after the
+    // last of them is connected. Each still carries the number its own block was connected
+    // under, not the number of the tip at the time the signals are queued.
+    // Chain: base, a1, a2, a3 with a1 invalidated, then base, c1. Reconsidering a1
+    // disconnects c1 and connects a1 and a2 in one step, as a1 alone does not beat c1.
+    // a1 is the block left as the tip above.
+    // A script of their own, so that a2 is not the block invalidated above.
+    const CScript script_a{CScript{} << OP_3};
+    CreateAndProcessBlock({}, script_a);
+    CreateAndProcessBlock({}, script_a);
+    BOOST_REQUIRE(WITH_LOCK(::cs_main, return chainman.ActiveTip()->pprev->pprev == tip->pprev));
+    CBlockIndex* a1{tip->pprev};
+    BOOST_REQUIRE(chainman.ActiveChainstate().InvalidateBlock(state, a1));
+    CreateAndProcessBlock({}, CScript{} << OP_2);
+    BOOST_REQUIRE(WITH_LOCK(::cs_main, return chainman.ActiveTip()->pprev == a1->pprev));
+    signals.SyncWithValidationInterfaceQueue();
+    recorder.m_connected.clear();
+    recorder.m_disconnected.clear();
+    {
+        LOCK(::cs_main);
+        chainman.ActiveChainstate().ResetBlockFailureFlags(a1);
+        chainman.RecalculateBestHeader();
+    }
+    BOOST_REQUIRE(chainman.ActiveChainstate().ActivateBestChain(state));
+    signals.SyncWithValidationInterfaceQueue();
+    BOOST_REQUIRE_EQUAL(recorder.m_disconnected.size(), 1U);
+    const uint64_t left_c1{recorder.m_disconnected[0]};
+    BOOST_REQUIRE_EQUAL(recorder.m_connected.size(), 3U);
+    BOOST_CHECK_EQUAL(recorder.m_connected[0], left_c1 + 1);
+    BOOST_CHECK_EQUAL(recorder.m_connected[1], left_c1 + 2);
+    BOOST_CHECK_EQUAL(recorder.m_connected[2], left_c1 + 3);
+    BOOST_CHECK_EQUAL(signals.TipSequenceInDelivery(), chainman.PublishedTip().sequence);
+
+    signals.UnregisterValidationInterface(&recorder);
 }
 
 BOOST_AUTO_TEST_CASE(block_facts_are_one_copy)
