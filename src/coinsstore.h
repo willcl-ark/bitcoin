@@ -108,6 +108,10 @@ public:
         //! The changes of a run collected at once (PrepareWriteOut()), in no particular order; a streamed
         //! run (StreamWriteOut()) writes its changes a chunk at a time and leaves this empty.
         std::vector<CoinWrite> writes;
+        //! The changes of a run collected across the flush helpers, a part for each range of shards, in the
+        //! shards' order; `writes` then holds those taken from records alone. Kept apart, not joined into
+        //! `writes` under the owner's lock: WritePrepared() writes them where they are.
+        std::vector<std::vector<CoinWrite>> parts;
         //! The entries of `writes`, settled at commit unless changed since collection.
         std::vector<Node*> nodes;
         //! The number of changes collected.
@@ -186,8 +190,8 @@ public:
         m_batch_bytes = batch_bytes;
         m_base_concurrent = concurrent;
     }
-    //! The pool a flush's further workers run on, as tasks (the node's connect pool). Without one, the
-    //! calling thread writes every range, one after the other.
+    //! The pool a flush's further workers, and a prepared run's collection (PrepareWriteOut()), run on, as
+    //! tasks (the node's connect pool). Without one, the calling thread takes every range, one after the other.
     void SetFlushHelpers(std::shared_ptr<ThreadPool> pool) { m_flush_helpers = std::move(pool); }
     void Uncache(const COutPoint& outpoint) override;
     unsigned int GetCacheSize() const override;
@@ -324,7 +328,8 @@ public:
     std::optional<int> OldestDirtyHeight() const;
 
     //! Drop clean entries (an open block holds only dirty ones) until the tier's usage is at most `target_bytes`,
-    //! oldest first in each shard; an entry read since it was last passed over gets a second chance.
+    //! oldest first in each shard; an entry read since it was last passed over gets a second chance. Takes the
+    //! shards' locks one at a time, so it may run beside the owner and the appliers; one call at a time.
     size_t EvictClean(size_t target_bytes);
 
     /**
@@ -373,8 +378,21 @@ public:
      */
     void StreamWriteOut(WriteOutRun& run, const std::function<uint256(int)>& block_at, uint64_t batch_bytes = DEFAULT_DB_CACHE_BATCH);
     //! BeginWriteOut() with the whole run collected at once into `writes`, for a caller that writes it
-    //! itself; nullptr also if nothing collected and the run is not final.
+    //! itself; nullptr also if nothing collected and the run is not final. The shards are collected in
+    //! ranges, on the calling thread and the flush helpers' pool (SetFlushHelpers()).
     std::unique_ptr<WriteOutRun> PrepareWriteOut(int bound_height, int head_height, const uint256& new_head, bool final);
+    /**
+     * Write a run from PrepareWriteOut() through the base, a chunk of about `batch_bytes` at a time, close
+     * its marker as StreamWriteOut() does, filling in the settled head, and settle the written entries under
+     * their shards' locks (an entry changed since stays dirty), leaving CommitWriteOut() none to settle. It
+     * may run on another thread than the owner's while the owner confirms, unwinds and disconnects blocks:
+     * what the run writes was collected at once, in one state of the tier, and settling an entry is what a
+     * streamed run does beside the appliers. The run's changes are freed once written. `pace`, if given, is
+     * called before each batch, and may wait.
+     * Throws what the base's WriteRun() throws; the run is then abandoned (AbandonWriteOut()).
+     */
+    void WritePrepared(WriteOutRun& run, const std::function<uint256(int)>& block_at, uint64_t batch_bytes = DEFAULT_DB_CACHE_BATCH,
+                       const std::function<void()>& pace = {});
     //! Coins a disconnect restored that the database may never have held (see DisconnectTip()): the next
     //! run writes them first, before its marker, and a forced flush before anything (TakeRestored()). The
     //! database may hold them from now on, so none of them stays fresh: a later spend is written as an
