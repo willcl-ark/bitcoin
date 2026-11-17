@@ -745,6 +745,16 @@ private:
             for (const uint32_t i : items) Prefetch(hashes[i]);
             for (const uint32_t i : items) PrefetchNode(hashes[i], whole(i));
         }
+        //! Ask for what an unlink of the node writes, the links of its two neighbours on its list
+        //! (Detach()). Reads the node.
+        static void PrefetchLinks(const Node& node)
+        {
+            if (node.second.list == LIST_NONE) return;
+            if (const Node* prev{node.second.prev}) Ahead(&prev->second.next, /*to_write=*/true);
+            if (const Node* next{node.second.next}) Ahead(&next->second.prev, /*to_write=*/true);
+        }
+        //! Ask for a line that is about to be written.
+        static void PrefetchWrite(const void* p) { Ahead(p, /*to_write=*/true); }
         iterator find(const COutPoint& key) const { return find(key, KeyHash(key)); }
         iterator find(const COutPoint& key, uint64_t hash) const
         {
@@ -797,12 +807,17 @@ private:
     private:
         static constexpr size_t MIN_BUCKETS{16};
         //! A hint only: without the builtin the probe waits for its memory.
-        static void Ahead(const void* p)
+        static void Ahead(const void* p, bool to_write = false)
         {
 #if defined(__GNUC__) || defined(__clang__)
-            __builtin_prefetch(p);
+            if (to_write) {
+                __builtin_prefetch(p, 1);
+            } else {
+                __builtin_prefetch(p);
+            }
 #else
             (void)p;
+            (void)to_write;
 #endif
         }
         static void Free(Cell* cell)
@@ -923,6 +938,9 @@ private:
     //! Take the entry off the list it is on. Before any change of its coin or height, which its place
     //! and its bucket's byte sum depend on.
     void Detach(Shard& shard, Node& node) const EXCLUSIVE_LOCKS_REQUIRED(shard.mutex);
+    //! Ask for what Detach() of the node writes besides the node: its neighbours' links and, for a dirty
+    //! entry, the byte sum of its span. Reads the node.
+    void PrefetchDetach(const Shard& shard, const Node& node) const EXCLUSIVE_LOCKS_REQUIRED(shard.mutex);
     //! Put a detached entry on the list its state calls for.
     void Attach(Shard& shard, Node& node) const EXCLUSIVE_LOCKS_REQUIRED(shard.mutex);
     //! A lookup found the entry.
