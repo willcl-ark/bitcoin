@@ -1569,6 +1569,14 @@ BlockManager::~BlockManager()
         m_effects.ApplyCompletions();
     }
     m_effects.Stop();
+    // A write-out run's effect queues its coin write here: drained once m_effects can queue no more.
+    while (true) {
+        m_coin_writes.WaitForIO();
+        if (!m_coin_writes.HasPendingCompletions()) break;
+        LOCK(::cs_main);
+        m_coin_writes.ApplyCompletions();
+    }
+    m_coin_writes.Stop();
 }
 
 BlockManager::BlockManager(const util::SignalInterrupt& interrupt, Options opts, util::ByteLedger* ledger)
@@ -1582,6 +1590,7 @@ BlockManager::BlockManager(const util::SignalInterrupt& interrupt, Options opts,
 {
     m_ledger[util::ByteAccountId::UndoBacklog].SetLimit(MAX_UNDO_BACKLOG_BYTES);
     m_effects.Start();
+    m_coin_writes.Start();
     m_block_tree_db = std::make_unique<BlockTreeDB>(m_opts.block_tree_db_params);
 
     if (m_opts.block_tree_db_params.wipe_data) {

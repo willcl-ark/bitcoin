@@ -529,6 +529,16 @@ public:
         TRY_LOCK(::cs_main, locked);
         if (locked) m_effects.ApplyCompletions();
     }, &m_ledger[util::ByteAccountId::UndoBacklog]};
+    /**
+     * The executor that writes the coins of a write-out run, queued by the run's effect on m_effects once the
+     * block index is committed (Chainstate::StartWriteOutRun()). Apart from m_effects so that the undo
+     * writes of the blocks published meanwhile do not wait behind it. Its completions are applied under
+     * cs_main as m_effects' are, and by Chainstate::SettleWriteOut().
+     */
+    kernel::EffectsExecutor m_coin_writes{[this] {
+        TRY_LOCK(::cs_main, locked);
+        if (locked) m_coin_writes.ApplyCompletions();
+    }};
     //! Set on the executor when a block's undo data could not be written (a fatal error is raised with
     //! it). The block is connected in memory by then; no chainstate write is made once this is set, so
     //! that the database never holds a block's coins without the undo data to take them back.

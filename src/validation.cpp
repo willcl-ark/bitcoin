@@ -132,6 +132,14 @@ static constexpr util::WorkerTaskType WRITE_OUT_TASK{"Coins write-out run failed
 */
 static constexpr auto DATABASE_WRITE_INTERVAL_MIN{50min};
 static constexpr auto DATABASE_WRITE_INTERVAL_MAX{70min};
+/** Most dirty bytes a write-out run takes. A run's changes are collected under cs_main, at about 40ns a
+ *  change across the flush helpers: a run of 1 GiB held up the tip for over 300ms. A cache that needs more
+ *  written has it written by several runs, one after the other. */
+static constexpr size_t MAX_WRITE_OUT_RUN_BYTES{256_MiB};
+/** While a write-out run is in flight the coins cache may run over its budget by this share of it (a quarter,
+ *  the share a run for memory frees). What a run collected becomes evictable only when it lands, and blocks
+ *  go on dirtying the cache meanwhile, at the first fill of a reindex about as fast as runs write it. */
+static constexpr size_t WRITE_OUT_OVERRUN_DIVISOR{4};
 /** Maximum age of our tip for us to be considered current for fee estimation */
 static constexpr std::chrono::hours MAX_FEE_ESTIMATION_TIP_AGE{3};
 const std::vector<std::string> CHECKLEVEL_DOC {
@@ -2023,8 +2031,32 @@ void Chainstate::ResetCoinsViews()
 void Chainstate::SettleWriteOut()
 {
     AssertLockHeld(::cs_main);
+    // A run's effect on m_effects queues its coin write on m_coin_writes (StartWriteOutRun()).
     m_blockman.m_effects.WaitForIO();
+    m_blockman.m_coin_writes.WaitForIO();
     m_blockman.m_effects.ApplyCompletions();
+    m_blockman.m_coin_writes.ApplyCompletions();
+}
+
+/**
+ * Before a batch of a write-out run: wait while the coins database has more level-0 files than its compaction
+ * keeps up with. Nothing waits for the run, but the connect workers read the database for every coin the
+ * cache misses, and a read looks into every level-0 file, whose keys overlap. Written as fast as it is
+ * prepared, a 1 GiB run outran the compaction to LevelDB's own write stop (12 files), and the workers' reads
+ * during the compaction that followed stalled the tip for up to 0.65s. At most a few seconds per batch, so
+ * that a compaction that cannot keep up slows the run without stopping it.
+ */
+static void PaceCoinWrite(CCoinsViewDB& db)
+{
+    static constexpr int MAX_LEVEL0_FILES{6};
+    static constexpr auto MAX_WAIT{3s};
+    const auto give_up{SteadyClock::now() + MAX_WAIT};
+    while (SteadyClock::now() < give_up) {
+        const auto files{db.GetDBProperty("leveldb.num-files-at-level0")};
+        const auto count{files ? ToIntegral<int>(*files) : std::nullopt};
+        if (!count || *count <= MAX_LEVEL0_FILES) return;
+        std::this_thread::sleep_for(10ms);
+    }
 }
 
 bool Chainstate::StartWriteOutRun(BlockValidationState& state, int bound_height, bool final, std::optional<size_t> evict_to,
@@ -2079,30 +2111,62 @@ bool Chainstate::StartWriteOutRun(BlockValidationState& state, int bound_height,
         bool for_prune;
     };
     const FlushTrace trace{NodeClock::now(), store.GetCacheSize(), store.DynamicMemoryUsage(), mode, for_prune};
-    std::shared_ptr<CoinsStore::WriteOutRun> run{store.BeginWriteOut(bound_height, head->nHeight, head->GetBlockHash(), final)};
+    std::shared_ptr<CoinsStore::WriteOutRun> run;
+    {
+        LOG_TIME_MILLIS_WITH_CATEGORY("collect coins write-out run", BCLog::BENCH);
+        run = store.PrepareWriteOut(bound_height, head->nHeight, head->GetBlockHash(), final);
+    }
     if (!run) return true;
-    LogDebug(BCLog::COINDB, "Starting a coins write-out run: changes at or below height %d, head %d%s",
-             bound_height, head->nHeight, run->final ? ", final" : "");
+    LogDebug(BCLog::COINDB, "Starting a coins write-out run: %u changes (%.1f MiB) at or below height %d, head %d%s",
+             (unsigned int)run->count, run->bytes / double(1_MiB), bound_height, head->nHeight, run->final ? ", final" : "");
 
-    // Durability order inside the effect: block and undo files synced, block index committed, then the
-    // coins with their marker. The executor runs effects in order, so the undo writes queued before this
-    // run have landed by the time it runs. The coins are streamed from the tier a chunk at a time, each
-    // collected under its shard's lock, written and settled; nothing is confirmed into the tier meanwhile
-    // (the thread that started the run waits for it before it publishes another block), so the run sees
-    // one state of it. The head and its ancestors do not change in the block index, so the effect looks the
-    // settled head up there.
+    // Durability order: block and undo files synced, block index committed, then the coins with their
+    // marker. The first two are an effect on m_effects, which runs effects in order, so the undo writes
+    // queued before this run have landed by the time it runs. That effect then queues the coins on
+    // m_coin_writes, so that the undo writes of the blocks published while the coins are written do not
+    // wait behind them. The run was collected at once above, in one state of the tier, so blocks may be
+    // confirmed into the tier while it is written (CoinsStore::WritePrepared()). The head and its ancestors
+    // do not change in the block index, so the write looks the settled head up there.
     auto index_batch{std::make_shared<node::BlockManager::IndexBatch>(m_blockman.PrepareBlockIndexBatch())};
     node::BlockManager& blockman{m_blockman};
     CCoinsViewDB& db{CoinsDB()};
+    kernel::EffectsExecutor::Completion finish{[this, run, trace](bool ok) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) {
+        AssertLockHeld(::cs_main);
+        if (!m_coins_views || !m_coins_views->m_store) return;
+        CoinsStore& store{CoinsStoreTip()};
+        if (!ok) {
+            store.AbandonWriteOut();
+            ++m_write_out_runs_failed;
+            m_chainman.GetNotifications().fatalError(_("System error while writing the chainstate to disk."));
+            return;
+        }
+        const auto landing_start{SteadyClock::now()};
+        store.CommitWriteOut(*run);
+        (void)trace;
+        TRACEPOINT(utxocache, flush,
+            int64_t{Ticks<std::chrono::microseconds>(NodeClock::now() - trace.start)},
+            (uint32_t)trace.mode,
+            trace.count,
+            trace.usage,
+            trace.for_prune);
+        LogDebug(BCLog::COINDB, "Coins write-out run landed: %u changes (%.1f MiB), settled at height %d%s",
+                 (unsigned int)run->count, run->bytes / double(1_MiB), run->settled_height, run->final ? ", final" : "");
+        m_chainman.time_run_landing += SteadyClock::now() - landing_start;
+        m_last_flushed_block = m_blockman.LookupBlockIndex(run->new_head);
+        if (m_chainman.m_options.signals) {
+            m_chainman.m_options.signals->ChainStateFlushed(this->GetRole(), GetLocator(m_last_flushed_block));
+        }
+        if (!m_chainman.m_interrupt && ShouldCompactChainstate(m_chainman.IsInitialBlockDownload())) {
+            try {
+                CoinsDB().CompactFullAsync();
+            } catch (const std::system_error& e) { // what std::async throws when no thread can be started
+                LogWarning("Failed to start chainstate compaction (%s)", e.what());
+            }
+        }
+    }};
     m_blockman.m_effects.Enqueue(
-        [run, index_batch, &store, &db, head, &blockman, batch_bytes{m_chainman.m_options.coins_view.batch_write_bytes}]() -> bool {
-            // The index batch is lost if the run ends before committing it (m_index_batch_lost).
+        [run, index_batch, &store, &db, head, &blockman, finish, evict_to, batch_bytes{m_chainman.m_options.coins_view.batch_write_bytes}]() -> bool {
             bool committed{false};
-            const auto fail{[&] {
-                if (!committed) blockman.m_index_batch_lost = true;
-                return false;
-            }};
-            bool written{false};
             const auto failure{util::RunWorkerTask(WRITE_OUT_TASK, [&] {
                 // The undo writes queued before this run have run; see ConnectBlock() for one that failed.
                 // Nor after a sync that failed on the way here (an undo file finished on this executor).
@@ -2112,47 +2176,33 @@ bool Chainstate::StartWriteOutRun(BlockValidationState& state, int bound_height,
                 if (!blockman.SyncBatchFiles(*index_batch)) return;
                 blockman.CommitBlockIndexBatch(*index_batch);
                 committed = true;
-                store.StreamWriteOut(*run, [head](int height) { return Assert(head->GetAncestor(height))->GetBlockHash(); }, batch_bytes);
-                written = true;
             })};
             if (failure) LogError("%s", failure->what);
-            return written || fail();
+            if (!committed) {
+                blockman.m_index_batch_lost = true;
+                return false;
+            }
+            blockman.m_coin_writes.Enqueue(
+                [run, &store, &db, head, evict_to, batch_bytes]() -> bool {
+                    const auto write_failure{util::RunWorkerTask(WRITE_OUT_TASK, [&] {
+                        // Before the write, the clean copies of old coins the budget can no longer afford.
+                        if (evict_to) store.EvictClean(*evict_to);
+                        store.WritePrepared(*run, [head](int height) { return Assert(head->GetAncestor(height))->GetBlockHash(); }, batch_bytes,
+                                            [&db] { PaceCoinWrite(db); });
+                        // What the run wrote is clean now: a run started for memory frees it here, beside the
+                        // connector, not at the next crossing nor under cs_main at the landing. The owner
+                        // evicts only when no run is in flight (FlushStateToDisk()).
+                        if (evict_to) store.EvictClean(*evict_to);
+                    })};
+                    if (write_failure) LogError("%s", write_failure->what);
+                    return !write_failure;
+                },
+                finish);
+            return true;
         },
-        [this, run, evict_to, trace](bool ok) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) {
-            AssertLockHeld(::cs_main);
-            if (!m_coins_views || !m_coins_views->m_store) return;
-            CoinsStore& store{CoinsStoreTip()};
-            if (!ok) {
-                store.AbandonWriteOut();
-                ++m_write_out_runs_failed;
-                m_chainman.GetNotifications().fatalError(_("System error while writing the chainstate to disk."));
-                return;
-            }
-            const auto landing_start{SteadyClock::now()};
-            store.CommitWriteOut(*run);
-            (void)trace;
-            TRACEPOINT(utxocache, flush,
-                int64_t{Ticks<std::chrono::microseconds>(NodeClock::now() - trace.start)},
-                (uint32_t)trace.mode,
-                trace.count,
-                trace.usage,
-                trace.for_prune);
-            LogDebug(BCLog::COINDB, "Coins write-out run landed: %u changes (%.1f MiB), settled at height %d%s",
-                     (unsigned int)run->count, run->bytes / double(1_MiB), run->settled_height, run->final ? ", final" : "");
-            // What the run wrote is clean now: a run started for memory frees it here, not at the next crossing.
-            if (evict_to) store.EvictClean(*evict_to);
-            m_chainman.time_run_landing += SteadyClock::now() - landing_start;
-            m_last_flushed_block = m_blockman.LookupBlockIndex(run->new_head);
-            if (m_chainman.m_options.signals) {
-                m_chainman.m_options.signals->ChainStateFlushed(this->GetRole(), GetLocator(m_last_flushed_block));
-            }
-            if (!m_chainman.m_interrupt && ShouldCompactChainstate(m_chainman.IsInitialBlockDownload())) {
-                try {
-                    CoinsDB().CompactFullAsync();
-                } catch (const std::system_error& e) { // what std::async throws when no thread can be started
-                    LogWarning("Failed to start chainstate compaction (%s)", e.what());
-                }
-            }
+        // The run's outcome is the coin write's (`finish`, on m_coin_writes), unless it ended here.
+        [finish](bool ok) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) {
+            if (!ok) finish(false);
         },
         0);
     return true;
@@ -3370,7 +3420,9 @@ bool Chainstate::FlushStateToDisk(
     {
         bool fFlushForPrune = false;
 
-        CoinsCacheSizeState cache_state = GetCoinsCacheSizeState();
+        const size_t overrun{CoinsStoreTip().RunInFlight() ? m_coinstip_cache_size_bytes / WRITE_OUT_OVERRUN_DIVISOR : 0};
+        CoinsCacheSizeState cache_state = GetCoinsCacheSizeState(m_coinstip_cache_size_bytes + overrun,
+                                                                 m_mempool ? m_mempool->m_opts.max_size_bytes : 0);
         if (m_blockman.IsPruneMode() && (m_blockman.m_check_for_pruning || nManualPruneHeight > 0) && m_chainman.m_blockman.m_blockfiles_indexed) {
             // What is queued lands before files are chosen: an undo write still to come must not find its
             // block pruned (its completion would mark the undo data stored again), and a write-out run in
@@ -3449,9 +3501,10 @@ bool Chainstate::FlushStateToDisk(
         bool fCacheLarge = mode == FlushStateMode::PERIODIC && cache_state >= CoinsCacheSizeState::LARGE;
         // The cache is over the limit, we have to write now.
         bool fCacheCritical = mode == FlushStateMode::IF_NEEDED && cache_state >= CoinsCacheSizeState::CRITICAL;
-        // It's been a while since we wrote the block index and chain state to disk. Do this frequently, so we don't need to redownload or reindex after a crash.
-        bool fPeriodicWrite = mode == FlushStateMode::PERIODIC && nNow >= m_next_write;
         CoinsStore& store{CoinsStoreTip()};
+        // It's been a while since we wrote the block index and chain state to disk. Do this frequently, so we don't need to redownload or reindex after a crash.
+        // A run in flight is part of the write, or comes before it: it is due again once the run lands.
+        bool fPeriodicWrite = mode == FlushStateMode::PERIODIC && nNow >= m_next_write && !store.RunInFlight();
         // A forced flush writes everything and waits, as it always did. Everything else is a write-out run
         // of the young tier's oldest changes on the executor: the flush became a lag.
         const bool synchronous{mode == FlushStateMode::FORCE_FLUSH || mode == FlushStateMode::FORCE_SYNC};
@@ -3460,6 +3513,8 @@ bool Chainstate::FlushStateToDisk(
         bool should_write = synchronous || lag_run;
         // Whether anything went to disk: a lag run that found nothing to write does not count.
         bool wrote{synchronous};
+        // Whether the periodic write wrote only part of what it is due to write, and stays due.
+        bool periodic_partial{false};
         // Whether a block index that records the files pruned by this call is on disk.
         bool prune_recorded{false};
         // Write blocks, block index and best chain related state to disk.
@@ -3545,41 +3600,49 @@ bool Chainstate::FlushStateToDisk(
                         (bool)fFlushForPrune);
                 }
             } else {
-                // With a run in flight nothing is started and the caller tries again later. That is never a
-                // critical cache: a run outlives this function only when its wait is deferred, in the
-                // window's publishing hold, and the connecting thread settles it before it flushes again;
-                // the other callers that flush as needed hold the chainstate mutex or settle first.
-                Assume(!fCacheCritical || !store.RunInFlight());
+                // With a run in flight nothing is started and the caller tries again later. A run outlives
+                // this function when its wait is deferred, in the window's publishing hold, and the window
+                // goes on publishing while it writes, over the budget by up to WRITE_OUT_OVERRUN_DIVISOR's
+                // share of it. Beyond that it lands first.
+                if (fCacheCritical && store.RunInFlight()) SettleWriteOut();
                 // Nor a call that prunes: it settled the run before it chose the files.
                 Assume(!fFlushForPrune || !store.RunInFlight());
                 const CBlockIndex* head{store.GetBestBlock().IsNull() ? nullptr : m_blockman.LookupBlockIndex(store.GetBestBlock())};
                 if (!store.RunInFlight() && head) {
                     const int tip_height{head->nHeight};
-                    // Before any dirty entry is written, drop the clean copies of old coins the budget can
-                    // no longer afford. The budget is the total the trigger measured the tier against
-                    // (GetCoinsCacheSizeState()), the mempool's unused allowance included: a target taken
+                    // The writer drops the clean copies of old coins the budget can no longer afford before
+                    // it writes, beside the connector rather than here under cs_main; the bound is taken before
+                    // they go, and a run may write somewhat more than it would have after them. The budget is
+                    // the total the trigger measured the tier against (GetCoinsCacheSizeState()), the
+                    // mempool's unused allowance included: a target taken
                     // from the cache size alone would have a run write far below what set it off.
                     const int64_t mempool_spare{m_mempool ? std::max<int64_t>(int64_t(m_mempool->m_opts.max_size_bytes) - int64_t(m_mempool->DynamicMemoryUsage()), 0) : 0};
                     const size_t budget{m_coinstip_cache_size_bytes + static_cast<size_t>(mempool_spare)};
                     const size_t target{budget - budget / 4};
                     const bool pressure{fCacheLarge || fCacheCritical};
-                    if (pressure) store.EvictClean(target);
                     const size_t usage{store.DynamicMemoryUsage()};
                     std::optional<int> bound;
                     bool final{false};
                     if (fPeriodicWrite) {
-                        // The periodic write persists everything, as it always did.
-                        bound = tip_height;
-                        final = true;
+                        // The periodic write persists everything, as it always did, in runs of at most
+                        // MAX_WRITE_OUT_RUN_BYTES: each but the last writes the oldest changes and leaves the
+                        // write due, so that the next flush after it lands starts another.
+                        bound = store.BoundForBytes(MAX_WRITE_OUT_RUN_BYTES, tip_height);
+                        final = *bound >= tip_height;
+                        periodic_partial = !final;
                     } else if (pressure && usage > target) {
-                        bound = store.BoundForBytes(usage - target, tip_height);
+                        bound = store.BoundForBytes(std::min(usage - target, MAX_WRITE_OUT_RUN_BYTES), tip_height);
                     } else if (test_every_block) {
                         bound = tip_height - 2;
                     }
                     const uint64_t failed_runs{m_write_out_runs_failed};
                     if (bound) {
-                        // What a run for memory wrote is evicted down to the target when it lands.
-                        if (!StartWriteOutRun(state, *bound, final, pressure ? std::optional<size_t>{target} : std::nullopt, mode, fFlushForPrune)) return false;
+                        // A cache over the target is evicted down to it around the run, whatever started it: a
+                        // periodic write that catches up in several runs (MAX_WRITE_OUT_RUN_BYTES) otherwise
+                        // leaves the cache to grow over the budget meanwhile, and a critical flush waits for
+                        // the run in flight.
+                        const std::optional<size_t> evict_to{usage > target ? std::optional<size_t>{target} : std::nullopt};
+                        if (!StartWriteOutRun(state, *bound, final, evict_to, mode, fFlushForPrune)) return false;
                     }
                     if (store.RunInFlight()) {
                         wrote = true;
@@ -3588,10 +3651,10 @@ bool Chainstate::FlushStateToDisk(
                         // changes, not everything) and what remains (the young tier, not an emptied cache);
                         // a write that outlived the connection would leave a crash between two blocks with
                         // the later block accepted but not durable, which is not how a node behaves today
-                        // (feature_dbcrash pins that). The connect window is the exception: its connector
-                        // waits as soon as it has released cs_main, before it publishes or stages another
-                        // block, so that the database write is not made under the lock. A run that pruning
-                        // rests on is always waited for here: the files are unlinked below.
+                        // (feature_dbcrash pins that). The connect window is the exception
+                        // (m_defer_write_out_wait): the run is written while it goes on staging and
+                        // publishing blocks, so that neither the write nor a wait for it holds up the tip. A
+                        // run that pruning rests on is always waited for here: the files are unlinked below.
                         if (!m_defer_write_out_wait || fFlushForPrune) {
                             SettleWriteOut();
                             // The run wrote the block index before the coins, unless it failed.
@@ -3634,7 +3697,7 @@ bool Chainstate::FlushStateToDisk(
 
         // Only a write moves the timer: an event that evicted clean entries and wrote nothing, or found a run
         // in flight, leaves the periodic write due when it was.
-        if (wrote || m_next_write == NodeClock::time_point::max()) {
+        if ((wrote && !periodic_partial) || m_next_write == NodeClock::time_point::max()) {
             constexpr auto range{DATABASE_WRITE_INTERVAL_MAX - DATABASE_WRITE_INTERVAL_MIN};
             m_next_write = FastRandomContext().rand_uniform_delay(NodeClock::now() + DATABASE_WRITE_INTERVAL_MIN, range);
         }
@@ -3754,6 +3817,9 @@ bool Chainstate::DisconnectTip(BlockValidationState& state, DisconnectedBlockTra
     CBlockIndex *pindexDelete = m_chain.Tip();
     assert(pindexDelete);
     assert(pindexDelete->pprev);
+    // A write-out run may still be writing beside the connector (StartWriteOutRun()). What is restored below
+    // is decided against the written head, which the run moves when it lands: it lands first.
+    if (CoinsStoreTip().RunInFlight()) SettleWriteOut();
     // Read block from disk.
     std::shared_ptr<CBlock> pblock = std::make_shared<CBlock>();
     CBlock& block = *pblock;
@@ -5144,7 +5210,6 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
             SteadyClock::duration pending_stage{};
             SteadyClock::duration pending_periodic{};
             SteadyClock::duration pending_write{};
-            SteadyClock::duration pending_run{};
             SteadyClock::duration pending_queue{};
             while (!step_over) {
                 const auto stage_start{SteadyClock::now()};
@@ -5271,7 +5336,6 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                 if (const auto limit{m_chainman.m_bytes_in_flight[util::ByteAccountId::UndoBacklog].Limit()}; limit != 0) m_blockman.m_effects.WaitForBacklogBelow(limit);
                 const auto waited{SteadyClock::now() - wait_start};
                 SteadyClock::time_point periodic_start;
-                bool run_pending{false};
                 // Whether the next block in flight is published in the hold that published this one: it is
                 // complete, and neither of the waits made between two holds would be made before it (the
                 // undo backlog, the validation interface queue). Asked without waiting, under the hold.
@@ -5295,11 +5359,10 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                     m_chainman.time_window_stage += pending_stage;
                     m_chainman.time_window_periodic += pending_periodic;
                     m_chainman.time_window_write += pending_write;
-                    m_chainman.time_window_run += pending_run;
                     m_chainman.time_window_queue += pending_queue;
-                    pending_stage = pending_periodic = pending_write = pending_run = pending_queue = {};
+                    pending_stage = pending_periodic = pending_write = pending_queue = {};
                     const auto blocks{std::max<int64_t>(1, m_chainman.num_blocks_total)};
-                    LogDebug(BCLog::BENCH, "  - Window wait: %.2fms [%.2fs (%.2fms/blk)] stage [%.2fs (%.2fms/blk)] after [%.2fs (%.2fms/blk)]: write %.2fs, run %.2fs (landing %.2fs), queue %.2fs",
+                    LogDebug(BCLog::BENCH, "  - Window wait: %.2fms [%.2fs (%.2fms/blk)] stage [%.2fs (%.2fms/blk)] after [%.2fs (%.2fms/blk)]: write %.2fs, landing %.2fs, queue %.2fs",
                              Ticks<MillisecondsDouble>(waited),
                              Ticks<SecondsDouble>(m_chainman.time_window_wait),
                              Ticks<MillisecondsDouble>(m_chainman.time_window_wait) / blocks,
@@ -5308,7 +5371,6 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                              Ticks<SecondsDouble>(m_chainman.time_window_periodic),
                              Ticks<MillisecondsDouble>(m_chainman.time_window_periodic) / blocks,
                              Ticks<SecondsDouble>(m_chainman.time_window_write),
-                             Ticks<SecondsDouble>(m_chainman.time_window_run),
                              Ticks<SecondsDouble>(m_chainman.time_run_landing),
                              Ticks<SecondsDouble>(m_chainman.time_window_queue));
                     // Publish the block, and then every block above it that is complete already: a block
@@ -5316,7 +5378,7 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                     // its own, and with one the tip would move at the pace at which this thread gets the
                     // lock back. Each block is published as it is alone: its role, its periodic write, its
                     // notification and what its failure or a stop does are per block, and the first block
-                    // that ends the step, starts a write-out run or would be waited for ends the hold.
+                    // that ends the step or would be waited for ends the hold.
                     while (true) {
                         if (std::holds_alternative<connect_phase::ReadFailed>(staged->at)) {
                             DrainWindow(*step);
@@ -5341,7 +5403,14 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                         // GetRole() from BACKGROUND to NORMAL. Read per block, under this hold: a step that uses the
                         // window releases cs_main between blocks, and a snapshot activated meanwhile changes the role.
                         const kernel::ChainstateRole role{this->GetRole()};
-                        if (!PublishConnectTip(state, *staged, staged->In<connect_phase::Validated>(), role, step->disconnectpool, step->blocks_disconnected)) {
+                        // A write-out run the publication's check starts, with the cache over its budget, is not
+                        // waited for in the window either, as the periodic write's below: the cache may run over
+                        // its budget while a run is in flight (WRITE_OUT_OVERRUN_DIVISOR), and beyond that the
+                        // run is waited for.
+                        m_defer_write_out_wait = step->use_window;
+                        const bool tip_published{PublishConnectTip(state, *staged, staged->In<connect_phase::Validated>(), role, step->disconnectpool, step->blocks_disconnected)};
+                        m_defer_write_out_wait = false;
+                        if (!tip_published) {
                             // The blocks above it rested on it.
                             DrainWindow(*step);
                             if (m_window_retry_serial) {
@@ -5387,10 +5456,9 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                             // the periodic write, which a pass does once per step at the tip. The window goes on
                             // unless a listener asked to stop or the node is going down, in which case the step
                             // ends here, closed as a finished step is.
-                            // A write-out run it starts is waited for below, once the lock is released: the
-                            // database write is not made under cs_main. Nothing is published meanwhile (this
-                            // thread publishes), so the run sees no new confirmed change; the workers already
-                            // in flight go on applying, and what they touch stays dirty for the next run.
+                            // A write-out run it starts is not waited for: the run is collected here, under
+                            // cs_main, and written on the coin write executor while the window goes on. What
+                            // the workers and later confirmations change stays dirty for the next run.
                             // The run is queued ahead of this block's UpdatedBlockTip (NotifyTipAdvanced() below):
                             // the validation queue has its ChainStateFlushed first, where master notifies the tip
                             // and writes afterwards. No subscriber in the tree relates the two signals.
@@ -5404,7 +5472,6 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                                 MaybeUpdateMempoolForReorg(step->disconnectpool, false);
                                 return false;
                             }
-                            run_pending = CoinsStoreTip().RunInFlight();
                             CBlockIndex* tip{m_chain.Tip()};
                             const bool stop{NotifyTipAdvanced(tip, tip->pprev, m_chainman.IsInitialBlockDownload())};
                             notified_tip = tip;
@@ -5415,7 +5482,6 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                                 // shutdown only.
                                 // The window's blocks are unwound next: the run lands first.
                                 SettleWriteOut();
-                                run_pending = false;
                                 DrainWindow(*step);
                                 if (!FinishConnectStep(state, *step)) return false;
                                 step.reset();
@@ -5423,7 +5489,7 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                                 interrupted = true;
                                 pass_done = true;
                                 step_over = true;
-                            } else if (!run_pending && next_block_ready()) {
+                            } else if (next_block_ready()) {
                                 pending_periodic += SteadyClock::now() - periodic_start;
                                 published.push_back(std::move(staged));
                                 staged = std::move(step->in_flight.front());
@@ -5439,12 +5505,9 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                     }
                 }
                 if (leave) break;
-                // The write-out run the periodic write started: waited for with no lock held, before another
-                // block is staged or published.
-                const auto run_start{SteadyClock::now()};
-                if (run_pending) m_blockman.SettleUndoWrites();
+                // A write-out run the periodic write started is not waited for: it writes what it collected
+                // while the window goes on staging and publishing (StartWriteOutRun()).
                 const auto queue_start{SteadyClock::now()};
-                pending_run += queue_start - run_start;
                 // As a pass does once per step at the tip: do not run ahead of the validation interface
                 // queue by more than a few callbacks (indexes and wallets consume it at their own pace).
                 if (step && step->use_window && m_chainman.m_options.signals) LimitValidationInterfaceQueue(*m_chainman.m_options.signals);
@@ -8585,7 +8648,9 @@ ChainstateManager::~ChainstateManager()
     // would finish them in its own destructor, outlives the chainstates. The node and the kernel library
     // have reset the coins views before, which settles too; a test need not have.
     m_blockman.m_effects.WaitForIO();
+    m_blockman.m_coin_writes.WaitForIO();
     m_blockman.m_effects.ApplyCompletions();
+    m_blockman.m_coin_writes.ApplyCompletions();
 
     m_versionbitscache.Clear();
 }

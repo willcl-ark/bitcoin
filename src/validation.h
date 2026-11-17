@@ -1133,10 +1133,11 @@ public:
      * Start a write-out run of the young tier: every change at or below `bound_height` goes to the coins
      * database on the block manager's executor, behind the undo writes queued so far and together with the
      * block-file sync and the block index write, so that the marker never names a tip whose data is not
-     * durable. The run streams from the tier a chunk at a time, each chunk clean as it lands. The completion
-     * (under cs_main) records the head the database now holds, evicts clean entries down to `evict_to`
-     * bytes if given, and notifies ChainStateFlushed. `final` drains the tier, and is forced while the
-     * written head is not on the active chain: after a disconnect only a whole write leaves the database
+     * durable. The run is collected at once, under cs_main, and written on the block manager's coin write
+     * executor while blocks go on being connected (CoinsStore::WritePrepared()). Given `evict_to`, the writer
+     * evicts clean entries down to that many bytes before and after it writes. The completion (under cs_main)
+     * records the head the database now holds and notifies ChainStateFlushed. `final` drains the tier, and is
+     * forced while the written head is not on the active chain: after a disconnect only a whole write leaves the database
      * at a block the marker can name. Returns false on a fatal error.
      */
     //! `mode` and `for_prune` are the flush's that starts the run, for the utxocache:flush tracepoint the run
@@ -1402,8 +1403,8 @@ protected:
 
     NodeClock::time_point m_next_write{NodeClock::time_point::max()};
     const CBlockIndex* m_last_flushed_block GUARDED_BY(::cs_main){nullptr};
-    //! Set by the connect window around its periodic write: a write-out run started there is waited for
-    //! by the connector once it has released cs_main, not inside FlushStateToDisk().
+    //! Set by the connect window around its publications and its periodic write: a write-out run started
+    //! there is not waited for inside FlushStateToDisk(), but written while the window goes on.
     bool m_defer_write_out_wait GUARDED_BY(::cs_main){false};
     //! The write-out runs that failed (a fatal error is raised for each). What rests on a run having
     //! landed, the removal of pruned files, compares it across the wait.
@@ -1582,11 +1583,9 @@ private:
     SteadyClock::duration GUARDED_BY(::cs_main) time_window_stage{};
     //! The connector's work after a publication: the periodic write, the tip notification, the queue limit.
     SteadyClock::duration GUARDED_BY(::cs_main) time_window_periodic{};
-    //! Its parts: the periodic write call (which evicts and starts a write-out run when the cache is large),
-    //! the wait for the run it started, the validation interface queue's limit; and, inside the wait for
-    //! a run, the run's landing on this thread (the commit and the eviction of what it wrote).
+    //! Its parts: the periodic write call (which starts a write-out run when the cache is large), the
+    //! validation interface queue's limit; and, wherever a run lands, its landing (the commit).
     SteadyClock::duration GUARDED_BY(::cs_main) time_window_write{};
-    SteadyClock::duration GUARDED_BY(::cs_main) time_window_run{};
     SteadyClock::duration GUARDED_BY(::cs_main) time_window_queue{};
     SteadyClock::duration GUARDED_BY(::cs_main) time_run_landing{};
     //! The connect pool's work on the window's blocks, summed over the published blocks, as wall time and
