@@ -103,6 +103,13 @@ public:
         //! Whether or not the internal RNG behaves deterministically (this is
         //! a test-only option).
         bool deterministic_rng{false};
+        //! Whether a peer's block is processed to its end on the message
+        //! handler, before the next message (this is a test-only option): no
+        //! receive task is started for it on the connect pool
+        //! (HandOffBlock() declines), and the handler activates the chain
+        //! itself, not the connector thread. The one switch for it: nothing
+        //! else selects these paths, and the paths ask nothing else.
+        bool blocks_on_message_handler{false};
         //! Number of headers sent in one getheaders message result (this is
         //! a test-only option).
         uint32_t max_headers_result{MAX_HEADERS_RESULTS};
@@ -169,6 +176,10 @@ public:
 
     /** Send ping message to all peers */
     virtual void SendPings() = 0;
+
+    /** Wait for the blocks of peers that are being processed off the message handler thread. For shutdown,
+     *  once the message handler has stopped and before anything the processing of a block relies on goes. */
+    virtual void FinishBlockTasks() = 0;
 
     /** Set the height of the best block and its time (seconds since epoch). */
     virtual void SetBestBlock(int height, std::chrono::seconds time) = 0;
