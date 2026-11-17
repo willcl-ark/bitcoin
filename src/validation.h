@@ -29,6 +29,7 @@
 #include <txdb.h>
 #include <txmempool.h>
 #include <uint256.h>
+#include <undo.h>
 #include <util/byte_units.h>
 #include <util/check.h>
 #include <util/fs.h>
@@ -41,10 +42,12 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
 #include <set>
+#include <shared_mutex>
 #include <span>
 #include <string>
 #include <type_traits>
@@ -372,8 +375,17 @@ private:
     //! Pre-initialized hasher to avoid having to recreate it for every hash calculation.
     CSHA256 m_script_execution_cache_hasher;
 
-public:
+    /**
+     * Guards m_script_execution_cache. CuckooCache tolerates concurrent lookups
+     * and erasures but no insert concurrent with anything, so lookups take the
+     * lock shared and inserts take it exclusively, as SignatureCache does.
+     * This is what lets block connection consult the cache without cs_main
+     * while mempool acceptance inserts into it under cs_main.
+     */
+    mutable std::shared_mutex m_script_execution_cache_mutex;
     CuckooCache::cache<uint256, SignatureCacheHasher> m_script_execution_cache;
+
+public:
     SignatureCache m_signature_cache;
 
     ValidationCache(size_t script_execution_cache_bytes, size_t signature_cache_bytes);
@@ -383,6 +395,29 @@ public:
 
     //! Return a copy of the pre-initialized hasher.
     CSHA256 ScriptExecutionCacheHasher() const { return m_script_execution_cache_hasher; }
+
+    /**
+     * Whether the script execution identified by `entry` was already verified.
+     * With `erase`, a hit is marked for garbage collection: a block connection
+     * is the last time an entry made by mempool acceptance is useful.
+     */
+    bool ScriptExecutionCached(const uint256& entry, bool erase) const
+    {
+        std::shared_lock lock{m_script_execution_cache_mutex};
+        return m_script_execution_cache.contains(entry, erase);
+    }
+
+    void CacheScriptExecution(const uint256& entry)
+    {
+        std::unique_lock lock{m_script_execution_cache_mutex};
+        m_script_execution_cache.insert(entry);
+    }
+
+    void TestOnlyResetScriptExecutionCache()
+    {
+        std::unique_lock lock{m_script_execution_cache_mutex};
+        m_script_execution_cache.TestOnlyReset();
+    }
 };
 
 /** Functions for validating blocks and updating the block tree */
@@ -453,6 +488,108 @@ enum DisconnectResult
     DISCONNECT_UNCLEAN, // Rolled back, but UTXO set was inconsistent with block.
     DISCONNECT_FAILED   // Something else went wrong.
 };
+
+/**
+ * Which consensus deployments are active for a block. Evaluated by the node
+ * from the header chain (see ChainstateManager::MakeBlockValidationContext),
+ * and consumed by the validation functions, which thereby need neither the
+ * ChainstateManager nor the version bits cache.
+ */
+struct DeploymentFlags {
+    bool heightincb{false}; //!< BIP34
+    bool dersig{false};     //!< BIP66
+    bool cltv{false};       //!< BIP65
+    bool csv{false};        //!< BIP68, BIP112, BIP113
+    bool segwit{false};     //!< BIP141, BIP143, BIP147
+};
+
+/**
+ * Everything a block validation function needs from the node besides the
+ * block itself and the coins view. The node builds one of these under cs_main
+ * from configuration and the header chain; the validation functions read it
+ * and touch no other node state, so they can be called and tested without a
+ * ChainstateManager. ConnectBlock() and DisconnectBlock() take no block index
+ * entry beside it; the contextual header and block checks still take the
+ * previous entry for the difficulty calculation.
+ *
+ * Every member is a copy, with two exceptions: params refers to the chain's
+ * constant parameters, and median_time_past_at is a function, because which
+ * ancestors a block's relative lock times refer to is known only once its
+ * inputs are looked up.
+ */
+struct BlockValidationContext {
+    const Consensus::Params& params;
+    //! Clock reading used for the future-timestamp check of the header.
+    NodeClock::time_point now;
+    DeploymentFlags deployments;
+    //! Script flags to enforce for this block, see GetBlockScriptFlags().
+    script_verify_flags script_flags;
+    //! Whether to verify input scripts at all. False only under -assumevalid.
+    bool check_scripts{true};
+    //! The block's hash.
+    uint256 block_hash;
+    //! Hash of the previous block index entry; null for the genesis block. The
+    //! coins view must be at this block.
+    uint256 prev_block_hash;
+    //! The block's height.
+    int height{0};
+    //! Median time past of the previous block; 0 for the genesis block.
+    int64_t prev_median_time_past{0};
+    //! Whether the block is checked for BIP30, see EnforceBIP30().
+    bool enforce_bip30{true};
+    /**
+     * Median time past of the block's ancestor at a height below the block's
+     * own (BIP68 measures a time lock from the block before the spent coin's).
+     * The node's implementation walks the header chain from the previous
+     * block and reads only an entry's height, time and links to its
+     * ancestors. Those are written in the hold of cs_main that creates or
+     * loads the entry and never after, so the lookup may be called without
+     * cs_main once that hold is over, for as long as the block index lives.
+     */
+    std::function<int64_t(int)> median_time_past_at;
+};
+
+/** Outputs of the pure ConnectBlock() besides the mutated coins view.
+ *  ConnectBlock() resets the object it is given before it fills it. */
+struct ConnectBlockResult {
+    //! Undo data for the connected block; partially filled when connection failed.
+    CBlockUndo undo;
+    int num_inputs{0};
+    int64_t sigops_cost{0};
+    //! True when the block failed CheckBlock() before any UTXO work was done.
+    bool failed_in_check_block{false};
+    //! Phase boundaries, for the caller's bench logging.
+    SteadyClock::time_point time_start{};
+    SteadyClock::time_point time_checked{};
+    SteadyClock::time_point time_forks{};
+    SteadyClock::time_point time_connected{};
+    SteadyClock::time_point time_verified{};
+};
+
+/**
+ * Apply `block` to `view`, checking every consensus rule that needs the UTXO
+ * set. Pure apart from the view and from what it is handed to use: it reads
+ * node state only through the context's callbacks (median_time_past_at),
+ * reads and updates the script execution cache, erases the entries of the
+ * signature cache that its script checks hit (as on master: a block's
+ * signatures are not looked up twice), reads the steady clock for its
+ * timings, writes nothing to disk and does no logging. Script checks run
+ * on `check_queue` when it is
+ * non-null and has worker threads, otherwise inline; they are skipped
+ * entirely when `ctx.check_scripts` is false. With `just_check` the block's
+ * PoW and merkle root are not rechecked, the script execution cache takes the
+ * results of the checks that run inline, and the view's best block is left
+ * untouched.
+ *
+ * On failure `state` holds the reason and the view may be partially updated.
+ *
+ * The caller needs exclusive use of `block` for the call: CheckBlock() records
+ * its results in the block's mutable fields. The node's callers hold cs_main.
+ */
+bool ConnectBlock(const CBlock& block, const BlockValidationContext& ctx,
+                  CCoinsViewCache& view, CCheckQueue<CScriptCheck>* check_queue,
+                  ValidationCache& validation_cache, bool just_check,
+                  BlockValidationState& state, ConnectBlockResult& result);
 
 struct ConnectedBlock;
 
@@ -1030,6 +1167,15 @@ public:
     kernel::Notifications& GetNotifications() const { return m_options.notifications; };
 
     /**
+     * Build the context for validating the block `block_hash` whose parent is
+     * `prev` (nullptr for genesis): consensus parameters, the current time,
+     * the deployments active at that height and the script flags they imply.
+     * `check_scripts` is left at true; callers that skip script verification
+     * under -assumevalid clear it themselves.
+     */
+    BlockValidationContext MakeBlockValidationContext(const uint256& block_hash, const CBlockIndex* prev) const EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+
+    /**
      * Make various assertions about the state of the block index.
      *
      * By default this only executes fully when using the Regtest chain; see: m_options.check_block_index.
@@ -1435,6 +1581,7 @@ bool DeploymentEnabled(const ChainstateManager& chainman, DEP dep)
 
 /** Identifies blocks that overwrote an existing coinbase output in the UTXO set (see BIP30) */
 bool IsBIP30Repeat(const CBlockIndex& block_index);
+bool IsBIP30Repeat(const uint256& block_hash, int block_height);
 
 /** Identifies blocks which coinbase output was subsequently overwritten in the UTXO set (see BIP30) */
 bool IsBIP30Unspendable(const uint256& block_hash, int block_height);
@@ -1453,8 +1600,28 @@ inline constexpr script_verify_flags CONSENSUS_SCRIPT_VERIFY_FLAGS{
     | SCRIPT_VERIFY_NULLDUMMY
 };
 
-// Returns the script flags which should be checked for a given block
-// (a subset of CONSENSUS_SCRIPT_VERIFY_FLAGS)
+/** Evaluate which deployments are active for the block following `prev` (nullptr for genesis). */
+DeploymentFlags EvaluateDeploymentFlags(const CBlockIndex* prev, const ChainstateManager& chainman);
+
+/**
+ * Undo the effects of `block` on `view`, using its undo data. Pure apart from
+ * the view it mutates: no disk access, no node state. The undo data is
+ * consumed. On DISCONNECT_UNCLEAN the view has been rolled back but was
+ * inconsistent with the block; on DISCONNECT_FAILED the undo data did not
+ * match the block or the view, and the view may be partially modified.
+ * `block_hash` and `height` are the block's own.
+ */
+DisconnectResult DisconnectBlock(const CBlock& block, CBlockUndo&& block_undo, const uint256& block_hash, int height, CCoinsViewCache& view);
+
+/**
+ * Returns the script flags which should be checked for a given block
+ * (a subset of CONSENSUS_SCRIPT_VERIFY_FLAGS). Pure function of the block
+ * hash (for the historical exceptions), the active deployments and the
+ * consensus parameters.
+ */
+script_verify_flags GetBlockScriptFlags(const uint256& block_hash, const DeploymentFlags& deployments, const Consensus::Params& params);
+
+// Convenience wrapper evaluating the deployments for `block_index` itself.
 script_verify_flags GetBlockScriptFlags(const CBlockIndex& block_index, const ChainstateManager& chainman);
 
 /** The context CheckInputScripts is called in, which decides how a
@@ -1475,7 +1642,6 @@ bool CheckInputScripts(const CTransaction& tx, TxValidationState& state,
                        bool cacheSigStore,
                        bool cacheFullScriptStore, PrecomputedTransactionData& txdata,
                        ValidationCache& validation_cache,
-                       std::vector<CScriptCheck>* pvChecks = nullptr)
-                       EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+                       std::vector<CScriptCheck>* pvChecks = nullptr);
 
 #endif // BITCOIN_VALIDATION_H
