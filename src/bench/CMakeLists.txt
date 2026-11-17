@@ -51,6 +51,7 @@ add_executable(bench_bitcoin
   sign_transaction.cpp
   streams_findbyte.cpp
   strencodings.cpp
+  threadpool.cpp
   txgraph.cpp
   txorphanage.cpp
   uint256_blob.cpp
