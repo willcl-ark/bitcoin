@@ -757,6 +757,63 @@ BOOST_AUTO_TEST_CASE(streamed_run_records_the_settled_head)
     store.SanityCheck();
 }
 
+//! A prepared run is written on another thread (WritePrepared()) while the owner confirms blocks. A coin the
+//! database never had and an open block spent is carried from that block's record at collection, so the
+//! block's confirmation meanwhile, which frees the record, takes nothing from the run.
+BOOST_AUTO_TEST_CASE(prepared_run_written_while_blocks_confirm)
+{
+    CCoinsViewDB db{MemoryDb("store"), {}};
+    CoinsStore store{&db, 4, true};
+    // The shards are collected across the pool's workers too.
+    store.SetFlushHelpers(FlushHelpers());
+    const auto hash{[](int height) { return uint256{static_cast<uint8_t>(height)}; }};
+    const auto outpoint{[](int n) { return COutPoint{Txid::FromUint256(uint256{static_cast<uint8_t>(100 + n)}), 0}; }};
+    for (int height{1}; height <= 4; ++height) {
+        store.SetBestBlock(hash(height), height);
+        store.AddCoin(outpoint(height), RandomCoin(m_rng, height), false);
+    }
+    const auto b5{store.BeginBlock(5)};
+    BOOST_CHECK(store.ApplySpend(b5, outpoint(1), nullptr));
+
+    auto run{store.PrepareWriteOut(/*bound_height=*/2, /*head_height=*/4, hash(4), /*final=*/false)};
+    BOOST_REQUIRE(run);
+    BOOST_CHECK_EQUAL(run->count, 2U);
+    // A batch per change, so that the writes interleave with what the owner does.
+    std::thread writer{[&] { store.WritePrepared(*run, hash, /*batch_bytes=*/1); }};
+    store.ConfirmBlock(b5);
+    store.SetBestBlock(hash(5), 5);
+    const auto b6{store.BeginBlock(6)};
+    store.ApplyCreate(b6, outpoint(6), RandomCoin(m_rng, 6), false);
+    BOOST_CHECK(store.ApplySpend(b6, outpoint(2), nullptr));
+    store.ConfirmBlock(b6);
+    store.SetBestBlock(hash(6), 6);
+    writer.join();
+    // Settled by the writer: nothing is left for the commit.
+    BOOST_CHECK(run->nodes.empty());
+    store.CommitWriteOut(*run);
+
+    BOOST_CHECK(run->writes.empty());
+    BOOST_CHECK(run->parts.empty());
+    BOOST_CHECK_EQUAL(run->settled_height, 2);
+    BOOST_CHECK((db.GetHeadBlocks() == std::vector<uint256>{hash(4), hash(2)}));
+    BOOST_CHECK(store.WrittenHead() == hash(2));
+    // The state at the run's head: the spends of blocks 5 and 6 are not in it, nothing above the bound is.
+    BOOST_CHECK(db.HaveCoin(outpoint(1)));
+    BOOST_CHECK(db.HaveCoin(outpoint(2)));
+    BOOST_CHECK(!db.HaveCoin(outpoint(3)));
+    BOOST_CHECK(!store.HaveCoin(outpoint(1)));
+    BOOST_CHECK(!store.HaveCoin(outpoint(2)));
+
+    // The erases are owed still, and a drain writes them.
+    store.Sync();
+    BOOST_CHECK(!db.HaveCoin(outpoint(1)));
+    BOOST_CHECK(!db.HaveCoin(outpoint(2)));
+    BOOST_CHECK(db.HaveCoin(outpoint(3)));
+    BOOST_CHECK(db.HaveCoin(outpoint(6)));
+    BOOST_CHECK(db.GetBestBlock() == hash(6));
+    store.SanityCheck();
+}
+
 //! Changes made under a block's identity are seen by appliers and not by readers until the block is
 //! confirmed; unwinding makes them disappear; conflicts are told apart by height.
 BOOST_AUTO_TEST_CASE(block_identity_visibility_and_conflicts)
