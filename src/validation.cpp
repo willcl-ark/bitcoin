@@ -4082,6 +4082,9 @@ void Chainstate::ReadForConnectTask(StagedConnect& staged, std::shared_ptr<std::
     WAITED_FOR_UNDER_LOCK("a window block's read");
     const FlatFilePos pos{staged.In<connect_phase::Staged>().ctx.block_pos};
     auto read{std::make_shared<node::BlockManager::BlockBytes>(m_blockman.ReadBlockBytes(pos))};
+    // The pages the system keeps of block files already read are memory the store's huge pages are then
+    // not granted from. The files well behind this block's are let go.
+    if (read->data) m_blockman.ReleaseBlockFilesBelow(pos.nFile - node::BlockManager::BLOCK_FILE_RELEASE_LAG);
     // `staged` is the connector's to free once the task has marked the block applied: the promise is kept
     // beside it, not in it.
     const auto task{[this, &staged, read, done] {

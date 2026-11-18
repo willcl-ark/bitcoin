@@ -748,7 +748,17 @@ private:
     //! Read a block's bytes (or the part of them) into the buffer `buffer_for` returns for their number.
     util::Expected<void, ReadRawError> ReadRawBlockInto(const FlatFilePos& pos, std::optional<std::pair<size_t, size_t>> block_part,
                                                         const std::function<std::span<std::byte>(size_t)>& buffer_for) const;
+    //! The files below this one were released.
+    mutable std::atomic<int> m_block_files_released{0};
 public:
+    //! How many block files behind the one a sync reads from the files are released (ReleaseBlockFilesBelow()):
+    //! blocks are stored as they arrived, so a chain read in height order comes from a band of files, and a
+    //! file released too early is only read from the disk again.
+    static constexpr int BLOCK_FILE_RELEASE_LAG{16};
+    //! Tell the system that the block files below `file` will not be read again soon, so that it need not
+    //! keep them in its page cache. Each file is named once, by whichever thread first passes it. Advice
+    //! only: nothing depends on it, and where the system has no such call nothing is done.
+    void ReleaseBlockFilesBelow(int file) const noexcept;
 
     bool ReadBlockUndo(CBlockUndo& blockundo, const CBlockIndex& index) const;
 
