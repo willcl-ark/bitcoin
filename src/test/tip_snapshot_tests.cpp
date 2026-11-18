@@ -10,8 +10,11 @@
 #include <test/util/setup_common.h>
 #include <test/util/validation.h>
 #include <validation.h>
+#include <validationinterface.h>
 
 #include <boost/test/unit_test.hpp>
+
+#include <vector>
 
 BOOST_FIXTURE_TEST_SUITE(tip_snapshot_tests, TestChain100Setup)
 
