@@ -45,6 +45,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <shared_mutex>
 #include <span>
 #include <string>
 #include <type_traits>
@@ -372,8 +373,17 @@ private:
     //! Pre-initialized hasher to avoid having to recreate it for every hash calculation.
     CSHA256 m_script_execution_cache_hasher;
 
-public:
+    /**
+     * Guards m_script_execution_cache. CuckooCache tolerates concurrent lookups
+     * and erasures but no insert concurrent with anything, so lookups take the
+     * lock shared and inserts take it exclusively: block connection consults
+     * the cache without cs_main while mempool acceptance inserts into it.
+     */
+    mutable std::shared_mutex m_script_execution_cache_mutex;
     CuckooCache::cache<uint256, SignatureCacheHasher> m_script_execution_cache;
+    std::atomic<bool> m_empty{true};
+
+public:
     SignatureCache m_signature_cache;
 
     ValidationCache(size_t script_execution_cache_bytes, size_t signature_cache_bytes);
@@ -383,6 +393,32 @@ public:
 
     //! Return a copy of the pre-initialized hasher.
     CSHA256 ScriptExecutionCacheHasher() const { return m_script_execution_cache_hasher; }
+
+    /**
+     * Whether the script execution identified by `entry` was already verified.
+     * With `erase`, a hit is marked for garbage collection: a block connection
+     * is the last time an entry made by mempool acceptance is useful.
+     */
+    bool ScriptExecutionCached(const uint256& entry, bool erase) const
+    {
+        if (m_empty.load(std::memory_order_acquire)) return false;
+        std::shared_lock lock{m_script_execution_cache_mutex};
+        return m_script_execution_cache.contains(entry, erase);
+    }
+
+    void CacheScriptExecution(const uint256& entry)
+    {
+        std::unique_lock lock{m_script_execution_cache_mutex};
+        m_script_execution_cache.insert(entry);
+        m_empty.store(false, std::memory_order_release);
+    }
+
+    void TestOnlyResetScriptExecutionCache()
+    {
+        std::unique_lock lock{m_script_execution_cache_mutex};
+        m_script_execution_cache.TestOnlyReset();
+        m_empty.store(true, std::memory_order_release);
+    }
 };
 
 /** Functions for validating blocks and updating the block tree */
@@ -1463,7 +1499,6 @@ bool CheckInputScripts(const CTransaction& tx, TxValidationState& state,
                        bool cacheSigStore,
                        bool cacheFullScriptStore, PrecomputedTransactionData& txdata,
                        ValidationCache& validation_cache,
-                       std::vector<CScriptCheck>* pvChecks = nullptr)
-                       EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+                       std::vector<CScriptCheck>* pvChecks = nullptr);
 
 #endif // BITCOIN_VALIDATION_H
