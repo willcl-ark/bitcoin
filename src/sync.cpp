@@ -11,6 +11,7 @@
 #include <util/strencodings.h>
 #include <util/threadnames.h>
 
+#include <algorithm>
 #include <map>
 #include <mutex>
 #include <set>
@@ -91,6 +92,10 @@ struct LockData {
     LockStacks m_lock_stacks GUARDED_BY(dd_mutex);
     LockOrders lockorders GUARDED_BY(dd_mutex);
     InvLockOrders invlockorders GUARDED_BY(dd_mutex);
+    //! Locks that work on another thread's queue may take, see NO_WAIT_LOCK.
+    std::map<void*, std::string> no_wait_locks GUARDED_BY(dd_mutex);
+    //! The name prefixes of the threads of a pool with a free worker, see LOCK_TASK.
+    std::vector<std::string> lock_task_threads GUARDED_BY(dd_mutex);
     StdMutex dd_mutex;
 };
 
@@ -216,10 +221,82 @@ static void pop_lock()
     }
 }
 
+static std::string LocksHeld();
+
+//! What this thread is doing that another thread waits for under a listed lock, see WAITED_FOR_UNDER_LOCK.
+static thread_local const char* t_waited_work{nullptr};
+
+const char* SetWaitedWork(const char* what)
+{
+    return std::exchange(t_waited_work, what);
+}
+
+static void CheckWaitedWork(void* cs, const CLockLocation& locklocation)
+{
+    if (!t_waited_work) return;
+    std::string name;
+    {
+        LockData& lockdata = GetLockData();
+        STDLOCK(lockdata.dd_mutex);
+        const auto it{lockdata.no_wait_locks.find(cs)};
+        if (it == lockdata.no_wait_locks.end()) return;
+        // A lock this thread holds already is taken again without a wait (the work runs on the waiter).
+        if (const auto stack{lockdata.m_lock_stacks.find(std::this_thread::get_id())}; stack != lockdata.m_lock_stacks.end()) {
+            if (std::ranges::any_of(stack->second, [&](const LockStackItem& item) { return item.first == cs; })) return;
+        }
+        name = it->second;
+    }
+    const std::string message{strprintf("taking %s in %s, which is waited for under such a lock", name, t_waited_work)};
+    LogError("LOCK IN WAITED-FOR WORK DETECTED: %s at %s", message, locklocation.ToString());
+    if (g_debug_lockorder_abort) {
+        tfm::format(std::cerr, "Assertion failed: %s at %s; locks held:\n%s", message, locklocation.ToString(), LocksHeld());
+        abort();
+    }
+    throw std::logic_error(message);
+}
+
+//! The lock task this thread runs, see LOCK_TASK.
+static thread_local const char* t_lock_task{nullptr};
+
+const char* SetLockTask(const char* what)
+{
+    return std::exchange(t_lock_task, what);
+}
+
+static void CheckLockTask(void* cs, const CLockLocation& locklocation)
+{
+    if (t_lock_task) return;
+    const std::string& thread{util::ThreadGetInternalName()};
+    std::string name;
+    {
+        LockData& lockdata = GetLockData();
+        STDLOCK(lockdata.dd_mutex);
+        if (std::ranges::none_of(lockdata.lock_task_threads, [&](const std::string& prefix) { return thread.starts_with(prefix); })) return;
+        const auto it{lockdata.no_wait_locks.find(cs)};
+        if (it == lockdata.no_wait_locks.end()) return;
+        if (const auto stack{lockdata.m_lock_stacks.find(std::this_thread::get_id())}; stack != lockdata.m_lock_stacks.end()) {
+            if (std::ranges::any_of(stack->second, [&](const LockStackItem& item) { return item.first == cs; })) return;
+        }
+        name = it->second;
+    }
+    const std::string message{strprintf("taking %s on %s outside a lock task", name, thread)};
+    LogError("LOCK OUTSIDE A LOCK TASK DETECTED: %s at %s", message, locklocation.ToString());
+    if (g_debug_lockorder_abort) {
+        tfm::format(std::cerr, "Assertion failed: %s at %s; locks held:\n%s", message, locklocation.ToString(), LocksHeld());
+        abort();
+    }
+    throw std::logic_error(message);
+}
+
 template <typename MutexType>
 void EnterCritical(const char* pszName, const char* pszFile, int nLine, MutexType* cs, bool fTry)
 {
-    push_lock(cs, CLockLocation(pszName, pszFile, nLine, fTry, util::ThreadGetInternalName()));
+    const CLockLocation locklocation{pszName, pszFile, nLine, fTry, util::ThreadGetInternalName()};
+    if (!fTry) {
+        CheckWaitedWork(cs, locklocation);
+        CheckLockTask(cs, locklocation);
+    }
+    push_lock(cs, locklocation);
 }
 template void EnterCritical(const char*, const char*, int, std::mutex*, bool);
 template void EnterCritical(const char*, const char*, int, std::recursive_mutex*, bool);
@@ -300,10 +377,50 @@ void AssertLockNotHeldInternal(const char* pszName, const char* pszFile, int nLi
 template void AssertLockNotHeldInternal(const char*, const char*, int, Mutex*);
 template void AssertLockNotHeldInternal(const char*, const char*, int, RecursiveMutex*);
 
+void RegisterLockTaskThreads(const char* name_prefix)
+{
+    LockData& lockdata = GetLockData();
+    STDLOCK(lockdata.dd_mutex);
+    if (std::ranges::find(lockdata.lock_task_threads, name_prefix) == lockdata.lock_task_threads.end()) lockdata.lock_task_threads.emplace_back(name_prefix);
+}
+
+void RegisterNoWaitLock(const char* name, void* cs)
+{
+    LockData& lockdata = GetLockData();
+    STDLOCK(lockdata.dd_mutex);
+    lockdata.no_wait_locks.insert_or_assign(cs, name);
+}
+
+void AssertNoWaitLockHeld(const char* waiting_for, const char* file, int line)
+{
+    std::string held;
+    {
+        LockData& lockdata = GetLockData();
+        STDLOCK(lockdata.dd_mutex);
+        const auto stack{lockdata.m_lock_stacks.find(std::this_thread::get_id())};
+        if (stack == lockdata.m_lock_stacks.end()) return;
+        for (const LockStackItem& i : stack->second) {
+            if (const auto it{lockdata.no_wait_locks.find(i.first)}; it != lockdata.no_wait_locks.end()) {
+                held = it->second;
+                break;
+            }
+        }
+    }
+    if (held.empty()) return;
+    const std::string message{strprintf("waiting for %s while holding %s", waiting_for, held)};
+    LogError("WAIT UNDER LOCK DETECTED: %s at %s:%i", message, file, line);
+    if (g_debug_lockorder_abort) {
+        tfm::format(std::cerr, "Assertion failed: %s at %s:%i; locks held:\n%s", message, file, line, LocksHeld());
+        abort();
+    }
+    throw std::logic_error(message);
+}
+
 void DeleteLock(void* cs)
 {
     LockData& lockdata = GetLockData();
     STDLOCK(lockdata.dd_mutex);
+    lockdata.no_wait_locks.erase(cs);
     const LockPair item = std::make_pair(cs, nullptr);
     LockOrders::iterator it = lockdata.lockorders.lower_bound(item);
     while (it != lockdata.lockorders.end() && it->first.first == cs) {
