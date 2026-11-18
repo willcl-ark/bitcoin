@@ -2155,7 +2155,7 @@ void BlockApplyView::ApplyChanges()
         // that creates over one repeats an earlier transaction whose inputs are spent, and its block is
         // invalid. Such a create meets the coin it would overwrite as a conflict and changes nothing, so
         // the block's unwind leaves the coin as it was. The rule relies on BIP30 or BIP34 keeping such a
-        // block out: with neither (a chain where BIP30 is not enforced and BIP34 is not active yet) a block that
+        // block out: with neither (-test=bip30_off on a chain where BIP34 is not active yet) a block that
         // spends an output and makes it again with a repeated transaction is not handled.
         const bool may_overwrite{!entry.IsFresh() && !entry.coin.IsSpent() && entry.coin.IsCoinBase()};
         // The entry itself: the store takes the coin from where it is, and the view is emptied after.

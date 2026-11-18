@@ -13,6 +13,8 @@
 #include <util/chaintype.h>
 #include <validation.h>
 
+#include <algorithm>
+
 #include <boost/test/unit_test.hpp>
 #include <test/util/common.h>
 #include <test/util/logging.h>
@@ -392,6 +394,8 @@ struct LeftBlockFileSetup : public BasicTestingSetup {
     void CheckLeftFileTrimmedNotSynced() EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
     {
         const fs::path left{m_args.GetBlocksDirPath() / fs::u8path(strprintf("blk%05u.dat", first.nFile))};
+        // The trim is the effects executor's.
+        blockman.m_effects.WaitForIO();
         BOOST_CHECK_EQUAL(fs::file_size(left), blockman.GetBlockFileInfo(first.nFile)->nSize);
         BOOST_CHECK(LeftFileDurability() == node::DurabilityState::Unsynced);
     }
@@ -405,6 +409,18 @@ BOOST_FIXTURE_TEST_CASE(blockmanager_left_file_synced_before_the_index_records_i
     CheckLeftFileTrimmedNotSynced();
     BOOST_CHECK(blockman.SyncWrittenFiles());
     BOOST_CHECK(LeftFileDurability() == node::DurabilityState::Synced);
+}
+
+//! So does a write-out run's index batch: it owes the left file's sync, makes it, and may then be committed.
+BOOST_FIXTURE_TEST_CASE(blockmanager_left_file_synced_by_the_index_batch, LeftBlockFileSetup)
+{
+    LOCK(::cs_main);
+    CheckLeftFileTrimmedNotSynced();
+    auto batch{blockman.PrepareBlockIndexBatch()};
+    BOOST_CHECK(std::ranges::any_of(batch.block_syncs, [&](const FlatFilePos& owed) { return owed.nFile == first.nFile; }));
+    BOOST_CHECK(blockman.SyncBatchFiles(batch));
+    BOOST_CHECK(batch.block_syncs.empty());
+    blockman.CommitBlockIndexBatch(batch);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
