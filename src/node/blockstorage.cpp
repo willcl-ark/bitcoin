@@ -541,6 +541,9 @@ void BlockManager::WriteBlockIndexDB()
     std::vector<const CBlockIndex*> vBlocks;
     vBlocks.reserve(m_dirty_blockindex.size());
     for (std::set<CBlockIndex*>::iterator it = m_dirty_blockindex.begin(); it != m_dirty_blockindex.end();) {
+        // The index never records bytes that a crash could still lose.
+        Assume(DURABILITY_TABLE.Next(DataDurability(**it), DurabilityEvent::Record));
+        Assume(DURABILITY_TABLE.Next(UndoDurability(**it), DurabilityEvent::Record));
         vBlocks.push_back(*it);
         m_dirty_blockindex.erase(it++);
     }

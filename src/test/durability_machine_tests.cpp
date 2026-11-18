@@ -27,8 +27,22 @@
 #include <memory>
 
 using node::DurabilityState;
+using node::FLUSH_TABLE;
+using node::FlushPhase;
+using node::FlushStep;
 
 BOOST_AUTO_TEST_SUITE(durability_machine_tests)
+
+BOOST_AUTO_TEST_CASE(flush_table)
+{
+    using S = FlushPhase;
+    using E = FlushStep;
+    // The order the write-out relies on, by name.
+    BOOST_CHECK(!FLUSH_TABLE.Next(S::Start, E::WriteIndex)); // no index write before the files are synced
+    BOOST_CHECK(!FLUSH_TABLE.Next(S::FilesSynced, E::Unlink)); // no unlink while the index still refers to the file
+    BOOST_CHECK(!FLUSH_TABLE.Next(S::FilesSynced, E::WriteCoins)); // no coins ahead of the index
+    BOOST_CHECK(!FLUSH_TABLE.Next(S::CoinsWritten, E::WriteCoins));
+}
 
 // A block's bytes are Unsynced from the write until the next write-out, which syncs every file
 // written to before it records the block in the index; pruning the file leaves nothing to record.
