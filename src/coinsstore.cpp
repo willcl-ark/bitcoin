@@ -435,16 +435,21 @@ std::optional<Coin> CoinsStore::OwedValue(int creator_height, const COutPoint& o
     return std::nullopt;
 }
 
-void CoinsStore::Record(WindowBlock& mine, std::vector<Undo>& undo, std::vector<COutPoint>* plain_creates, int64_t& delta)
+void CoinsStore::Record(WindowBlock& mine, std::vector<Undo>& undo, std::vector<COutPoint>* plain_creates, std::vector<StoredCoin>& long_coins, int64_t& delta)
 {
     if (delta != 0) mine.dirty_delta.fetch_add(std::exchange(delta, 0), std::memory_order_relaxed);
+    // A long coin comes with the item that points into it.
     if (undo.empty() && (!plain_creates || plain_creates->empty())) return;
     LOCK(mine.mutex);
     for (const Undo& item : undo) {
         if (item.spend && item.owed) mine.owed_spends = true;
     }
-    mine.record.insert(mine.record.end(), std::make_move_iterator(undo.begin()), std::make_move_iterator(undo.end()));
+    mine.record.insert(mine.record.end(), undo.begin(), undo.end());
     undo.clear();
+    if (!long_coins.empty()) {
+        mine.long_coins.insert(mine.long_coins.end(), std::make_move_iterator(long_coins.begin()), std::make_move_iterator(long_coins.end()));
+        long_coins.clear();
+    }
     if (plain_creates) {
         mine.plain_creates.insert(mine.plain_creates.end(), plain_creates->begin(), plain_creates->end());
         plain_creates->clear();
@@ -626,14 +631,14 @@ void CoinsStore::EmplaceCoinInternalDANGER(const COutPoint& outpoint, Coin&& coi
     Assert(m_open_slots.load(std::memory_order_relaxed) == 0); // see "Confirmed changes without a block identity"
     Shard& shard{ShardFor(outpoint)};
     LOCK(shard.mutex);
-    const size_t usage{coin.DynamicMemoryUsage()};
     auto [it, inserted]{shard.map.try_emplace(outpoint)};
     if (inserted) Resized(shard);
     if (!inserted) return;
     Entry& entry{it->second};
     entry.coin = std::move(coin);
     Transit(entry, coins_entry::ABSENT, entry.coin.IsSpent() ? Event::ConfirmedSpend : Event::ConfirmedWrite, m_change_height);
-    AddUsage(shard, usage);
+    // As the entry holds the coin: a script a Coin keeps inline may be on the heap here, and the reverse.
+    AddUsage(shard, entry.coin.DynamicMemoryUsage());
     Attach(shard, *it);
 }
 
@@ -827,7 +832,7 @@ size_t CoinsStore::OpenBlocks() const
     return open;
 }
 
-bool CoinsStore::CreateLocked(Shard& shard, int height, const COutPoint& outpoint, uint64_t hash, Coin&& coin, bool possible_overwrite, bool must_be_new, bool base_unseen, std::vector<Undo>& undo, std::vector<COutPoint>& plain_creates, int64_t& delta)
+bool CoinsStore::CreateLocked(Shard& shard, int height, const COutPoint& outpoint, uint64_t hash, Coin&& coin, bool possible_overwrite, bool must_be_new, bool base_unseen, std::vector<Undo>& undo, std::vector<COutPoint>& plain_creates, std::vector<StoredCoin>& long_coins, int64_t& delta)
 {
     AssertLockHeld(shard.mutex);
     // The coin's height is what tells the create from a confirmed one (Pending()).
@@ -897,7 +902,7 @@ bool CoinsStore::CreateLocked(Shard& shard, int height, const COutPoint& outpoin
             // put back by an unwind, a coin that was fresh is written, and erased when it is spent, where
             // neither was needed. One write and one erase at most, at those two blocks.
             if (!entry.coin.IsSpent()) {
-                item.coin = entry.coin;
+                item.coin = Recorded(StoredCoin{entry.coin}, long_coins);
                 item.height = entry.height;
                 item.dirty = entry.dirty;
             }
@@ -917,19 +922,20 @@ bool CoinsStore::CreateLocked(Shard& shard, int height, const COutPoint& outpoin
     if (item.coin.IsSpent()) {
         plain_creates.push_back(outpoint);
     } else {
-        undo.push_back(std::move(item));
+        undo.push_back(item);
     }
     return true;
 }
 
 //! Whether `coin` is the one a block validated its spend against. Two coins of an outpoint are told
 //! apart by where they were made: the outputs of a transaction made twice are the same.
-static bool IsCoin(const Coin& coin, const Coin& known)
+template <typename AnyCoin>
+static bool IsCoin(const AnyCoin& coin, const Coin& known)
 {
     return coin.nHeight == known.nHeight && coin.fCoinBase == known.fCoinBase;
 }
 
-CoinsStore::SpendResult CoinsStore::SpendLocked(Shard& shard, int height, bool mark_fresh, const COutPoint& outpoint, uint64_t hash, const Coin* from_base, const Coin* known, std::vector<Undo>& undo, int64_t& delta)
+CoinsStore::SpendResult CoinsStore::SpendLocked(Shard& shard, int height, bool mark_fresh, const COutPoint& outpoint, uint64_t hash, const Coin* from_base, const Coin* known, std::vector<Undo>& undo, std::vector<StoredCoin>& long_coins, int64_t& delta)
 {
     AssertLockHeld(shard.mutex);
     auto it{shard.map.find(outpoint, hash)};
@@ -945,7 +951,7 @@ CoinsStore::SpendResult CoinsStore::SpendLocked(Shard& shard, int height, bool m
         Transit(marker, coins_entry::ABSENT, Event::BlockSpendMarker, height);
         Attach(shard, *it);
         ++delta;
-        undo.push_back(Undo{.coin = *from_base, .outpoint = outpoint, .height = static_cast<int32_t>(from_base->nHeight), .spend = true});
+        undo.push_back(Undo{.coin = Recorded(StoredCoin{*from_base}, long_coins), .outpoint = outpoint, .height = static_cast<int32_t>(from_base->nHeight), .spend = true});
         return SpendResult::DONE;
     }
     Entry& entry{it->second};
@@ -972,7 +978,9 @@ CoinsStore::SpendResult CoinsStore::SpendLocked(Shard& shard, int height, bool m
             const int64_t moved{item->dirty ? 0 : 1};
             theirs.dirty_delta.fetch_sub(moved, std::memory_order_relaxed);
             delta += moved;
-            undo.push_back(std::move(*item));
+            // The item as it is; a long coin stays the displaced block's, and this block gets its own.
+            undo.push_back(*item);
+            undo.back().coin = Recorded(StoredCoin{item->coin}, long_coins);
             item->dead = true;
         }
         Detach(shard, *it);
@@ -991,7 +999,7 @@ CoinsStore::SpendResult CoinsStore::SpendLocked(Shard& shard, int height, bool m
     const State from{StateOf(entry)};
     Detach(shard, *it);
     SubUsage(shard, entry.coin.DynamicMemoryUsage());
-    item.coin = std::move(entry.coin);
+    item.coin = Recorded(std::move(entry.coin), long_coins);
     if (entry.fresh && !mark_fresh) {
         // Never written: the database has nothing to erase and the tier nothing to keep. The coin is in
         // the record, for the unwind and for whoever is still to see it.
@@ -1005,7 +1013,7 @@ CoinsStore::SpendResult CoinsStore::SpendLocked(Shard& shard, int height, bool m
         Transit(entry, from, Event::BlockSpend, height);
         Attach(shard, *it);
     }
-    undo.push_back(std::move(item));
+    undo.push_back(item);
     return SpendResult::DONE;
 }
 
@@ -1017,6 +1025,7 @@ bool CoinsStore::ApplySpend(BlockId block, const COutPoint& outpoint, const Coin
     WindowBlock& mine{m_window[block]};
     const bool mark_fresh{mine.mark_fresh_spends.load(std::memory_order_relaxed)};
     std::vector<Undo> undo;
+    std::vector<StoredCoin> long_coins;
     int64_t delta{0};
     std::optional<Coin> from_base;
     uint64_t settles{0};
@@ -1028,9 +1037,9 @@ bool CoinsStore::ApplySpend(BlockId block, const COutPoint& outpoint, const Coin
             // A write-out settled entries of the shard while the base was read (as in LookupFor()): the
             // coin read may be stale, and inserting it would hide a double spend. Read again.
             if (from_base && shard.settles != settles) from_base.reset();
-            result = SpendLocked(shard, height, mark_fresh, outpoint, hash, from_base ? &*from_base : nullptr, known, undo, delta);
+            result = SpendLocked(shard, height, mark_fresh, outpoint, hash, from_base ? &*from_base : nullptr, known, undo, long_coins, delta);
             settles = shard.settles;
-            Record(mine, undo, /*plain_creates=*/nullptr, delta);
+            Record(mine, undo, /*plain_creates=*/nullptr, long_coins, delta);
         }
         if (result == SpendResult::DONE) return true;
         if (result == SpendResult::CONFLICT) break;
@@ -1105,6 +1114,7 @@ void CoinsStore::ApplyBatch(BlockId block, std::vector<Change>&& changes)
     // A shard's changes, until they are in the record.
     std::vector<Undo> undo;
     std::vector<COutPoint> plain_creates;
+    std::vector<StoredCoin> long_coins;
     int64_t delta{0};
     uint32_t conflicts{0};
     std::vector<const Change*> misses;
@@ -1123,16 +1133,16 @@ void CoinsStore::ApplyBatch(BlockId block, std::vector<Change>&& changes)
             const Change& change{changes[i]};
             const COutPoint& outpoint{*change.outpoint};
             if (change.coin->IsSpent()) {
-                switch (SpendLocked(shard, height, mark_fresh, outpoint, hashes[i], nullptr, change.known_coin ? change.coin : nullptr, undo, delta)) {
+                switch (SpendLocked(shard, height, mark_fresh, outpoint, hashes[i], nullptr, change.known_coin ? change.coin : nullptr, undo, long_coins, delta)) {
                 case SpendResult::DONE: break;
                 case SpendResult::CONFLICT: ++conflicts; break;
                 case SpendResult::MISS: misses.push_back(&change); break;
                 }
-            } else if (!CreateLocked(shard, height, outpoint, hashes[i], std::move(*change.coin), change.possible_overwrite, change.must_be_new, base_unseen, undo, plain_creates, delta)) {
+            } else if (!CreateLocked(shard, height, outpoint, hashes[i], std::move(*change.coin), change.possible_overwrite, change.must_be_new, base_unseen, undo, plain_creates, long_coins, delta)) {
                 ++conflicts;
             }
         }
-        Record(mine, undo, &plain_creates, delta);
+        Record(mine, undo, &plain_creates, long_coins, delta);
     });
     if (conflicts != 0) {
         LOCK(mine.mutex);
@@ -1176,6 +1186,7 @@ void CoinsStore::ConfirmBlock(BlockId block)
     WindowBlock& slot{m_window[block]};
     std::vector<Undo> record;
     std::vector<COutPoint> plain_creates;
+    std::vector<StoredCoin> long_coins;
     const int height{slot.height.load(std::memory_order_relaxed)};
     // From the lowest up: a block confirmed after a higher one had its changes read as confirmed while it
     // was open.
@@ -1191,6 +1202,7 @@ void CoinsStore::ConfirmBlock(BlockId block)
         m_confirmed_height.store(height, std::memory_order_release);
         record.swap(slot.record);
         plain_creates.swap(slot.plain_creates);
+        long_coins.swap(slot.long_coins);
         slot.conflicts = 0;
         slot.status.store(BlockStatus::FREE, std::memory_order_release);
     }
@@ -1242,7 +1254,8 @@ void CoinsStore::ConfirmBlock(BlockId block)
             Attach(shard, *it);
         }
     }
-    // The record and the plain creates are freed as they go out of scope here, outside the slot's mutex.
+    // The record, the plain creates and the long coins are freed as they go out of scope here, outside the
+    // slot's mutex. Nothing of a record item or a plain create is read for it.
 }
 
 void CoinsStore::UnwindItem(Shard& shard, int height, Undo&& item)
@@ -1262,7 +1275,7 @@ void CoinsStore::UnwindItem(Shard& shard, int height, Undo&& item)
             // nothing and goes with the entry below: the database still has it.
             Detach(shard, *it);
             SubUsage(shard, entry.coin.DynamicMemoryUsage());
-            entry.coin = std::move(item.coin);
+            entry.coin = StoredCoin{item.coin};
             AddUsage(shard, entry.coin.DynamicMemoryUsage());
             Transit(entry, Event::UnwindCreateToCoin, item.height);
             Attach(shard, *it);
@@ -1290,7 +1303,7 @@ void CoinsStore::UnwindItem(Shard& shard, int height, Undo&& item)
     }
     const auto restore{[&](Entry& entry) EXCLUSIVE_LOCKS_REQUIRED(shard.mutex) {
         const State from{StateOf(entry)};
-        entry.coin = std::move(item.coin);
+        entry.coin = StoredCoin{item.coin};
         AddUsage(shard, entry.coin.DynamicMemoryUsage());
         // As the record has it. Clean, the coin has been written since (CollectRecords()) and is anyone's.
         using namespace coins_entry;
@@ -1349,7 +1362,8 @@ void CoinsStore::UnwindBlock(BlockId block)
             Undo& recorded{slot.record[left]};
             if (recorded.dead) continue;
             recorded.dead = true;
-            item = std::move(recorded);
+            // A long coin stays in the slot until the unwind is through.
+            item = recorded;
         }
         UnwindItem(shard, height, std::move(item));
     }
@@ -1366,6 +1380,7 @@ void CoinsStore::UnwindBlock(BlockId block)
     {
         LOCK(slot.mutex);
         std::vector<Undo>{}.swap(slot.record);
+        std::vector<StoredCoin>{}.swap(slot.long_coins);
         slot.conflicts = 0;
         slot.status.store(BlockStatus::FREE, std::memory_order_release);
     }

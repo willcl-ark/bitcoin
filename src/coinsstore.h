@@ -9,6 +9,7 @@
 #include <coins_entry_machine.h>
 #include <crypto/common.h>
 #include <kernel/caches.h>
+#include <memusage.h>
 #include <primitives/transaction.h>
 #include <sync.h>
 #include <uint256.h>
@@ -20,6 +21,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -28,6 +30,7 @@
 #include <optional>
 #include <span>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -77,6 +80,171 @@
  * valid until the thread's next call: no lock of the caller keeps an applier
  * from spending the entry.
  */
+/**
+ * The bytes of a StoredCoin without the ownership of its script: what an open block's record keeps of a coin
+ * (CoinsStore::Undo), copied as bytes and destroyed without a look at them. With a script of up to INLINE bytes
+ * it is the whole coin. With a longer one it points into the heap block of the StoredCoin it was copied from and
+ * is good for as long as that one lives (a StoredCoin that is moved keeps its block).
+ */
+class StoredCoinData
+{
+    friend class StoredCoin;
+
+    //! First, so that the fields below follow it without padding.
+    CAmount m_value{-1};
+
+public:
+    static constexpr size_t INLINE{35};
+
+    //! The coin as a Coin: what lookups hand out and records keep.
+    Coin ToCoin() const
+    {
+        Coin coin;
+        if (IsSpent()) return coin;
+        coin.out.nValue = m_value;
+        const unsigned char* bytes{Script()};
+        coin.out.scriptPubKey.assign(bytes, bytes + ScriptSize());
+        coin.nHeight = nHeight;
+        coin.fCoinBase = fCoinBase;
+        return coin;
+    }
+    operator Coin() const { return ToCoin(); }
+
+    //! As Coin::IsSpent() (CTxOut::IsNull()).
+    bool IsSpent() const { return m_value == -1; }
+    //! Whether the script is in a heap block.
+    bool OnHeap() const { return m_size == HEAP; }
+    //! As Coin::DynamicMemoryUsage(): the heap memory of a script longer than INLINE bytes.
+    size_t DynamicMemoryUsage() const { return m_size == HEAP ? memusage::MallocUsage(sizeof(uint32_t) + ScriptSize()) : 0; }
+
+    //! One type for both, as in Coin: a compiler that starts a new unit where the type changes (MSVC) would
+    //! not pack a bool into the height's word.
+    uint32_t nHeight : 31 {0};
+    uint32_t fCoinBase : 1 {0};
+
+private:
+    //! The marker in m_size of a script on the heap: m_bytes holds the pointer, the allocation the script's
+    //! length (four bytes) and then its bytes.
+    static constexpr uint8_t HEAP{0xff};
+    static_assert(INLINE < HEAP && INLINE >= sizeof(unsigned char*));
+
+    uint8_t m_size{0};
+    unsigned char m_bytes[INLINE];
+
+    unsigned char* HeapBlock() const
+    {
+        unsigned char* block;
+        std::memcpy(&block, m_bytes, sizeof(block));
+        return block;
+    }
+    size_t ScriptSize() const
+    {
+        if (m_size != HEAP) return m_size;
+        uint32_t size;
+        std::memcpy(&size, HeapBlock(), sizeof(size));
+        return size;
+    }
+    const unsigned char* Script() const { return m_size == HEAP ? HeapBlock() + sizeof(uint32_t) : m_bytes; }
+};
+static_assert(std::is_trivially_copyable_v<StoredCoinData> && std::is_trivially_destructible_v<StoredCoinData>);
+
+/**
+ * A coin as the store's entries hold it: the amount, the height and the coinbase flag of a Coin, and its output
+ * script inline up to INLINE (35) bytes, so that the common output scripts, the 34-byte P2WSH and P2TR outputs
+ * included, take no allocation of their own, as in a Coin, whose CScript keeps 36 bytes inline. A longer script
+ * is on the heap here too. The bytes are kept as they are: a Coin converted to a StoredCoin and back is the same
+ * coin. 48 bytes, where a Coin is 56.
+ */
+class StoredCoin : public StoredCoinData
+{
+public:
+    StoredCoin() = default;
+    StoredCoin(const Coin& coin) { Assign(coin); }
+    StoredCoin(const StoredCoin& other) : StoredCoinData{} { CopyFrom(other); }
+    //! A coin of its own from the bytes of one: the script copied, also where it is on the heap.
+    explicit StoredCoin(const StoredCoinData& other) { CopyFrom(other); }
+    StoredCoin(StoredCoin&& other) noexcept { MoveFrom(other); }
+    StoredCoin& operator=(const Coin& coin)
+    {
+        Release();
+        Assign(coin);
+        return *this;
+    }
+    StoredCoin& operator=(const StoredCoin& other)
+    {
+        if (this != &other) {
+            Release();
+            CopyFrom(other);
+        }
+        return *this;
+    }
+    StoredCoin& operator=(StoredCoin&& other) noexcept
+    {
+        if (this != &other) {
+            Release();
+            MoveFrom(other);
+        }
+        return *this;
+    }
+    ~StoredCoin() { Release(); }
+
+    //! As Coin::Clear().
+    void Clear()
+    {
+        Release();
+        m_value = -1;
+        nHeight = 0;
+        fCoinBase = false;
+    }
+
+private:
+    void SetScript(const unsigned char* bytes, size_t size)
+    {
+        if (size <= INLINE) {
+            m_size = static_cast<uint8_t>(size);
+            if (size) std::memcpy(m_bytes, bytes, size);
+            return;
+        }
+        auto* block{new unsigned char[sizeof(uint32_t) + size]};
+        const uint32_t size32{static_cast<uint32_t>(size)};
+        std::memcpy(block, &size32, sizeof(size32));
+        std::memcpy(block + sizeof(uint32_t), bytes, size);
+        std::memcpy(m_bytes, &block, sizeof(block));
+        m_size = HEAP;
+    }
+    void Assign(const Coin& coin)
+    {
+        m_value = coin.out.nValue;
+        nHeight = coin.nHeight;
+        fCoinBase = coin.fCoinBase;
+        const CScript& script{coin.out.scriptPubKey};
+        SetScript(script.data(), script.size());
+    }
+    void CopyFrom(const StoredCoinData& other)
+    {
+        m_value = other.m_value;
+        nHeight = other.nHeight;
+        fCoinBase = other.fCoinBase;
+        SetScript(other.Script(), other.ScriptSize());
+    }
+    void MoveFrom(StoredCoin& other) noexcept
+    {
+        m_value = other.m_value;
+        nHeight = other.nHeight;
+        fCoinBase = other.fCoinBase;
+        m_size = other.m_size;
+        std::memcpy(m_bytes, other.m_bytes, INLINE);
+        other.m_size = 0;
+        other.m_value = -1;
+    }
+    void Release() noexcept
+    {
+        if (m_size == HEAP) delete[] HeapBlock();
+        m_size = 0;
+    }
+};
+static_assert(sizeof(StoredCoin) == 48);
+
 class CoinsStore : public CCoinsViewCache
 {
     struct Entry;
@@ -393,8 +561,9 @@ private:
      */
     struct Undo {
         //! A spend: the coin. A create: the confirmed coin it went over. A create that went over none is
-        //! not an item but an outpoint (WindowBlock::plain_creates).
-        Coin coin;
+        //! not an item but an outpoint (WindowBlock::plain_creates). The coin's bytes as the entry held
+        //! them; a script over StoredCoin::INLINE bytes is owned by the block's WindowBlock::long_coins.
+        StoredCoinData coin;
         COutPoint outpoint;
         //! A spend: the entry's change height before it.
         int32_t height{0};
@@ -408,6 +577,9 @@ private:
         //! No longer the block's: a lower block took the spend over, or the unwind is past it.
         bool dead : 1 {false};
     };
+    //! An item is copied as bytes and a record is freed without a read of its items: ConfirmBlock() frees it
+    //! on the connector, which would otherwise pull every item out of the cache of the worker that wrote it.
+    static_assert(sizeof(Undo) == 96 && std::is_trivially_copyable_v<Undo> && std::is_trivially_destructible_v<Undo>);
     /**
      * A block identity's slot. Status and height are read by lookups from every worker at once, so they
      * are atomics read without a lock: the height is written before the status that makes the slot
@@ -443,6 +615,9 @@ private:
         //! nothing to put back for one and nothing of it for anyone to read, so the outpoint is all the
         //! unwind needs, a third of an item to write and nothing to destroy.
         std::vector<COutPoint> plain_creates GUARDED_BY(mutex);
+        //! The coins of the record's items whose script is on the heap (rare): an item points into its coin
+        //! here. Freed with the record; an item taken over by a lower block gets a copy there (Recorded()).
+        std::vector<StoredCoin> long_coins GUARDED_BY(mutex);
     };
     //! Which of its shard's lists an entry is on.
     enum List : uint8_t { LIST_NONE, LIST_DIRTY, LIST_CLEAN };
@@ -459,7 +634,7 @@ private:
      * they refer to: the entry is then pending, an open block's, which the write-out passes over.
      */
     struct Entry {
-        Coin coin;
+        StoredCoin coin;
         //! The height the entry is filed under, the write-out's age: the last change's as a rule, and an
         //! earlier one's where that change is owed still (coins_entry::Height).
         int32_t height{0};
@@ -1044,10 +1219,18 @@ private:
     //! BIP30 duplicates, over a confirmed coin not yet written), the coin's value in the confirmed state;
     //! else the erase.
     std::optional<Coin> OwedValue(int creator_height, const COutPoint& outpoint) const;
-    //! Append `undo` to the block's record, `plain_creates` (if given) to its plain creates, and add `delta`
-    //! to its dirty delta, emptying all three. With the shard of the changes still held: who finds their
-    //! traces in the shard finds the record complete.
-    static void Record(WindowBlock& mine, std::vector<Undo>& undo, std::vector<COutPoint>* plain_creates, int64_t& delta);
+    //! Append `undo` to the block's record, `plain_creates` (if given) to its plain creates, `long_coins` to
+    //! its long coins, and add `delta` to its dirty delta, emptying all four. With the shard of the changes
+    //! still held: who finds their traces in the shard finds the record complete.
+    static void Record(WindowBlock& mine, std::vector<Undo>& undo, std::vector<COutPoint>* plain_creates, std::vector<StoredCoin>& long_coins, int64_t& delta);
+    //! `coin` as a record item keeps it. A coin with its script on the heap goes to `long_coins`, which are
+    //! handed to Record() with the item.
+    static StoredCoinData Recorded(StoredCoin&& coin, std::vector<StoredCoin>& long_coins)
+    {
+        if (!coin.OnHeap()) return coin;
+        long_coins.push_back(std::move(coin));
+        return long_coins.back();
+    }
     /**
      * Visit the shards of a block's items, `shard_of[i]` being item i's: `work(shard, items)` runs once
      * for every shard that has any, with its lock held and the indices of its items in their order. The
@@ -1075,15 +1258,15 @@ private:
     //! The map's size or bucket count may have changed: count the difference into the totals.
     void Resized(Shard& shard) const EXCLUSIVE_LOCKS_REQUIRED(shard.mutex);
     //! A create of the block at `height` (ApplyBatch()) with the shard held. The change goes to `plain_creates`,
-    //! or over a confirmed coin to `undo`, and what it adds to the dirty entries to `delta`, for the caller to
-    //! hand to Record() before it lets go of the shard. False: not made, a conflict for the block (the outpoint
-    //! is another open block's to settle).
-    bool CreateLocked(Shard& shard, int height, const COutPoint& outpoint, uint64_t hash, Coin&& coin, bool possible_overwrite, bool must_be_new, bool base_unseen, std::vector<Undo>& undo, std::vector<COutPoint>& plain_creates, int64_t& delta) EXCLUSIVE_LOCKS_REQUIRED(shard.mutex);
+    //! or over a confirmed coin to `undo` (with `long_coins`, Recorded()), and what it adds to the dirty entries
+    //! to `delta`, for the caller to hand to Record() before it lets go of the shard. False: not made, a conflict
+    //! for the block (the outpoint is another open block's to settle).
+    bool CreateLocked(Shard& shard, int height, const COutPoint& outpoint, uint64_t hash, Coin&& coin, bool possible_overwrite, bool must_be_new, bool base_unseen, std::vector<Undo>& undo, std::vector<COutPoint>& plain_creates, std::vector<StoredCoin>& long_coins, int64_t& delta) EXCLUSIVE_LOCKS_REQUIRED(shard.mutex);
     enum class SpendResult { DONE, CONFLICT, MISS };
-    //! ApplySpend() for the block at `height` with the shard held, `undo` and `delta` as for
+    //! ApplySpend() for the block at `height` with the shard held, `undo`, `long_coins` and `delta` as for
     //! CreateLocked(). MISS: the entry is not in the tier and `from_base` was not given; the caller reads
     //! the base with the shard unlocked and comes back with the coin. The caller counts a CONFLICT.
-    SpendResult SpendLocked(Shard& shard, int height, bool mark_fresh, const COutPoint& outpoint, uint64_t hash, const Coin* from_base, const Coin* known, std::vector<Undo>& undo, int64_t& delta) EXCLUSIVE_LOCKS_REQUIRED(shard.mutex);
+    SpendResult SpendLocked(Shard& shard, int height, bool mark_fresh, const COutPoint& outpoint, uint64_t hash, const Coin* from_base, const Coin* known, std::vector<Undo>& undo, std::vector<StoredCoin>& long_coins, int64_t& delta) EXCLUSIVE_LOCKS_REQUIRED(shard.mutex);
     //! One item of the record of the block at `height`, which is being unwound, taken back with the shard held.
     void UnwindItem(Shard& shard, int height, Undo&& item) EXCLUSIVE_LOCKS_REQUIRED(shard.mutex);
     /**
@@ -1104,7 +1287,8 @@ private:
      * fork height, a run bounded between the two would settle the database above its creation without
      * it. Any other coin takes the change height.
      */
-    int TagFor(const Coin& coin) const
+    template <typename AnyCoin>
+    int TagFor(const AnyCoin& coin) const
     {
         const int settled{m_run_in_flight ? m_inflight_settled_height : m_written_height};
         return coin.nHeight > settled ? static_cast<int>(coin.nHeight) : m_change_height;
