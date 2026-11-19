@@ -18,9 +18,11 @@
 
 #include <array>
 #include <atomic>
+#include <bit>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <limits>
@@ -90,8 +92,15 @@ class StoredCoinData
 {
     friend class StoredCoin;
 
-    //! First, so that the fields below follow it without padding.
-    CAmount m_value{-1};
+    //! The amount, as bytes: an amount would align the coin to eight.
+    unsigned char m_value[sizeof(CAmount)]{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+    CAmount Value() const
+    {
+        CAmount value;
+        std::memcpy(&value, m_value, sizeof(value));
+        return value;
+    }
+    void SetValue(CAmount value) { std::memcpy(m_value, &value, sizeof(value)); }
 
 public:
     static constexpr size_t INLINE{35};
@@ -101,7 +110,7 @@ public:
     {
         Coin coin;
         if (IsSpent()) return coin;
-        coin.out.nValue = m_value;
+        coin.out.nValue = Value();
         const unsigned char* bytes{Script()};
         coin.out.scriptPubKey.assign(bytes, bytes + ScriptSize());
         coin.nHeight = nHeight;
@@ -111,7 +120,7 @@ public:
     operator Coin() const { return ToCoin(); }
 
     //! As Coin::IsSpent() (CTxOut::IsNull()).
-    bool IsSpent() const { return m_value == -1; }
+    bool IsSpent() const { return Value() == -1; }
     //! Whether the script is in a heap block.
     bool OnHeap() const { return m_size == HEAP; }
     //! As Coin::DynamicMemoryUsage(): the heap memory of a script longer than INLINE bytes.
@@ -153,7 +162,8 @@ static_assert(std::is_trivially_copyable_v<StoredCoinData> && std::is_trivially_
  * script inline up to INLINE (35) bytes, so that the common output scripts, the 34-byte P2WSH and P2TR outputs
  * included, take no allocation of their own, as in a Coin, whose CScript keeps 36 bytes inline. A longer script
  * is on the heap here too. The bytes are kept as they are: a Coin converted to a StoredCoin and back is the same
- * coin. 48 bytes, where a Coin is 56.
+ * coin. 48 bytes aligned to four, where a Coin is 56 aligned to eight, so that an entry and its key pack without
+ * padding (CoinsStore::Map::Cell).
  */
 class StoredCoin : public StoredCoinData
 {
@@ -192,7 +202,7 @@ public:
     void Clear()
     {
         Release();
-        m_value = -1;
+        SetValue(-1);
         nHeight = 0;
         fCoinBase = false;
     }
@@ -214,7 +224,7 @@ private:
     }
     void Assign(const Coin& coin)
     {
-        m_value = coin.out.nValue;
+        SetValue(coin.out.nValue);
         nHeight = coin.nHeight;
         fCoinBase = coin.fCoinBase;
         const CScript& script{coin.out.scriptPubKey};
@@ -222,20 +232,20 @@ private:
     }
     void CopyFrom(const StoredCoinData& other)
     {
-        m_value = other.m_value;
+        std::memcpy(m_value, other.m_value, sizeof(m_value));
         nHeight = other.nHeight;
         fCoinBase = other.fCoinBase;
         SetScript(other.Script(), other.ScriptSize());
     }
     void MoveFrom(StoredCoin& other) noexcept
     {
-        m_value = other.m_value;
+        std::memcpy(m_value, other.m_value, sizeof(m_value));
         nHeight = other.nHeight;
         fCoinBase = other.fCoinBase;
         m_size = other.m_size;
         std::memcpy(m_bytes, other.m_bytes, INLINE);
         other.m_size = 0;
-        other.m_value = -1;
+        other.SetValue(-1);
     }
     void Release() noexcept
     {
@@ -243,14 +253,24 @@ private:
         m_size = 0;
     }
 };
-static_assert(sizeof(StoredCoin) == 48);
+static_assert(sizeof(StoredCoin) == 48 && alignof(StoredCoin) == 4);
 
 class CoinsStore : public CCoinsViewCache
 {
     struct Entry;
     //! A map node: an outpoint and its entry. Nodes never move, so the lists and a run in flight refer to
-    //! entries by node pointer.
+    //! entries by node: by pointer, or by the node's number where the reference is kept (NodeLink).
     using Node = std::pair<const COutPoint, Entry>;
+    //! A node's place on a list, as its cell's number (Map::NodeNumber()): four bytes, not a pointer's eight.
+    //! Reads and writes as a Node*.
+    struct NodeLink {
+        uint32_t number{0};
+        NodeLink() = default;
+        NodeLink(std::nullptr_t) {}
+        NodeLink(const Node* node) : number{Map::NodeNumber(node)} {}
+        operator Node*() const { return Map::NodeAt(number); }
+        Node* operator->() const { return Map::NodeAt(number); }
+    };
 
 public:
     //! The identity of a block being connected, from BeginBlock(); 0 is "no block" (a confirmed change).
@@ -579,7 +599,7 @@ private:
     };
     //! An item is copied as bytes and a record is freed without a read of its items: ConfirmBlock() frees it
     //! on the connector, which would otherwise pull every item out of the cache of the worker that wrote it.
-    static_assert(sizeof(Undo) == 96 && std::is_trivially_copyable_v<Undo> && std::is_trivially_destructible_v<Undo>);
+    static_assert(sizeof(Undo) == 92 && std::is_trivially_copyable_v<Undo> && std::is_trivially_destructible_v<Undo>);
     /**
      * A block identity's slot. Status and height are read by lookups from every worker at once, so they
      * are atomics read without a lock: the height is written before the status that makes the slot
@@ -652,8 +672,8 @@ private:
         //! (BeginBlock()); a run or a flush drops it otherwise.
         bool unwritten : 1 {false};
         uint8_t list : 2 {LIST_NONE};
-        Node* prev{nullptr};
-        Node* next{nullptr};
+        NodeLink prev;
+        NodeLink next;
     };
     //! The huge page size the hint below is made for (x86-64's; elsewhere the hint is as harmless as none).
     static constexpr size_t HUGE_PAGE_BYTES{size_t{2} << 20};
@@ -661,14 +681,15 @@ private:
     //! pages where it can (Linux's transparent huge pages, in their "madvise" or "always" mode): a lookup
     //! lands on a random node of a large map, and with small pages misses the TLB for the bucket and again
     //! for the node. Only a hint. Freed with FreeRegion().
-    static void* HintedRegion(size_t bytes);
+    static void* HintedRegion(size_t bytes, size_t align = HUGE_PAGE_BYTES);
     static inline std::atomic<size_t> s_node_region_bytes{0};
     //! The size of the regions the nodes' memory is asked for in.
     static constexpr size_t NODE_REGION_BYTES{size_t{32} << 20};
     //! From this much node memory of the process on, the next region is made ready ahead of its use
     //! (NodeRegion()); below it a region ahead would be a large share of a small store.
     static constexpr size_t NODE_REGION_AHEAD_FROM{size_t{1} << 30};
-    //! A region of NODE_REGION_BYTES for nodes, as HintedRegion() gives it. The system supplies memory at
+    //! A region of NODE_REGION_BYTES for nodes, as HintedRegion() gives it, aligned to its size so that a node's
+    //! address finds the region's number (NodeAllocator::Number()). The system supplies memory at
     //! its first touch, on the touching thread, which for a node is a thread connecting blocks under a
     //! shard's mutex. Once the store is large, a thread of its own therefore asks for the next region as
     //! soon as one is taken and touches all of it; a region asked for before the next is ready is supplied
@@ -676,7 +697,7 @@ private:
     static void* NodeRegion();
     struct RegionAhead;
     static RegionAhead& RegionAheadState();
-    static void FreeRegion(void* region) noexcept { ::operator delete(region, std::align_val_t{HUGE_PAGE_BYTES}); }
+    static void FreeRegion(void* region, size_t align = HUGE_PAGE_BYTES) noexcept { ::operator delete(region, std::align_val_t{align}); }
     //! A shard's entries are inserted and erased by whichever thread holds its mutex, so a node is often freed
     //! by another thread than the one that allocated it. A thread keeps the nodes it frees for its own next
     //! insertions: a list of up to MAX_KEPT nodes and one full list beside it. A thread with two full lists
@@ -686,11 +707,36 @@ private:
     //! The depot carves new lists from regions of REGION_BYTES, asked for with the huge page hint
     //! (HintedRegion()). A node is never given back: one that is freed waits, with its thread or in the
     //! depot, for the next insertion, and the regions stay with the process.
+    //!
+    //! A node has a number of 32 bits, which links hold in place of its address (Number(), At()): its
+    //! region's number in the high bits and its place in the region in the low ones. A region is aligned
+    //! to its size and begins with its number, in a slot of its own, so that no node has the number 0.
     template <typename T>
     struct NodeAllocator {
         using value_type = T;
         static constexpr size_t MAX_KEPT{1024};
         static constexpr size_t REGION_BYTES{NODE_REGION_BYTES};
+        static constexpr unsigned SLOT_BITS{static_cast<unsigned>(std::bit_width(REGION_BYTES / sizeof(T)))};
+        //! 2^13 regions of 32 MiB for 104-byte nodes, 256 GiB of them.
+        static constexpr size_t MAX_REGIONS{size_t{1} << (32 - SLOT_BITS)};
+        //! The regions by number, each written once, when the depot takes it. Constant-initialized and never
+        //! destroyed (trivially destructible), so a lookup needs no guard and nodes may outlive static objects.
+        static inline std::atomic<std::byte*> s_regions[MAX_REGIONS]{};
+        static uint32_t Number(const T* node)
+        {
+            static_assert(std::has_single_bit(REGION_BYTES) && SLOT_BITS < 32);
+            const auto address{reinterpret_cast<uintptr_t>(node)};
+            const uintptr_t base{address & ~uintptr_t{REGION_BYTES - 1}};
+            uint32_t region;
+            std::memcpy(&region, reinterpret_cast<const void*>(base), sizeof(region));
+            return (region << SLOT_BITS) | static_cast<uint32_t>((address - base) / sizeof(T));
+        }
+        static T* At(uint32_t number)
+        {
+            if (number == 0) return nullptr;
+            std::byte* const base{s_regions[number >> SLOT_BITS].load(std::memory_order_relaxed)};
+            return reinterpret_cast<T*>(base + (number & ((uint32_t{1} << SLOT_BITS) - 1)) * sizeof(T));
+        }
         //! The next full list after this one in the depot: the second word of a list's first node.
         static void*& NextList(void* list) { return static_cast<void**>(list)[1]; }
         //! Full lists, each MAX_KEPT nodes, for whichever thread next runs out, and the region new ones are
@@ -704,6 +750,7 @@ private:
             //! What is left of the newest region.
             std::byte* fresh GUARDED_BY(mutex){nullptr};
             size_t fresh_bytes GUARDED_BY(mutex){0};
+            uint32_t regions GUARDED_BY(mutex){0};
             void Give(void* list) EXCLUSIVE_LOCKS_REQUIRED(!mutex)
             {
                 LOCK(mutex);
@@ -734,9 +781,15 @@ private:
                     LOCK(mutex);
                     if (lists) return std::exchange(lists, NextList(lists));
                     if (fresh_bytes < LIST_BYTES) {
-                        // The remainder, less than a list, is left behind.
-                        fresh = static_cast<std::byte*>(NodeRegion());
-                        fresh_bytes = REGION_BYTES;
+                        // The remainder, less than a list, is left behind. The region's first slot holds
+                        // its number; past the last number (256 GiB of nodes) there is none to give.
+                        const uint32_t number{regions++};
+                        if (number >= MAX_REGIONS) std::abort();
+                        auto* region{static_cast<std::byte*>(NodeRegion())};
+                        std::memcpy(region, &number, sizeof(number));
+                        s_regions[number].store(region, std::memory_order_relaxed);
+                        fresh = region + sizeof(T);
+                        fresh_bytes = REGION_BYTES - sizeof(T);
                         s_node_region_bytes.fetch_add(REGION_BYTES, std::memory_order_relaxed);
                     }
                     nodes = fresh;
@@ -778,7 +831,8 @@ private:
         };
         static Kept& Mine()
         {
-            static_assert(sizeof(T) >= 2 * sizeof(void*) && sizeof(T) % alignof(T) == 0 && alignof(T) <= HUGE_PAGE_BYTES);
+            // A free node holds two pointers (the links of its lists), and nodes lie back to back from an aligned start.
+            static_assert(sizeof(T) >= 2 * sizeof(void*) && sizeof(T) % alignof(void*) == 0 && alignof(T) <= alignof(void*));
             thread_local Kept kept;
             return kept;
         }
@@ -839,19 +893,39 @@ private:
     /**
      * A shard's table: chained, with nodes that never move (the lists and a run in flight point at them),
      * of the std::unordered_map interface as far as the store uses it. The bucket array is a power of two
-     * and a chain ends at a null pointer. A caller with many keys for one shard hashes them first and asks
+     * and a chain ends at a link of zero. A caller with many keys for one shard hashes them first and asks
      * for their buckets and nodes ahead (Prefetch(), PrefetchNode()).
      */
     class Map
     {
     public:
         using value_type = Node;
+        //! The chain's link is the next cell's number (NodeAllocator::Number()), 0 at the chain's end.
         struct Cell {
-            Cell* chain;
+            uint32_t chain;
             Node node;
         };
-        //! The link and the key are in a cell's first cache line (PrefetchNode()).
-        static_assert(sizeof(Cell*) + sizeof(COutPoint) <= 64 && alignof(Node) <= alignof(Cell*));
+        //! The node follows the link without padding, so that the link and the key are a cell's first bytes.
+        //! Cells lie back to back in their region (NodeAllocator) and are not a multiple of a cache line long:
+        //! a cell starts anywhere in a line, its key may lie across two lines and the cell across three
+        //! (PrefetchNode()).
+        static constexpr size_t NODE_OFFSET{sizeof(uint32_t)};
+        static constexpr size_t LINE_BYTES{64};
+        static_assert(NODE_OFFSET + sizeof(COutPoint) <= LINE_BYTES && alignof(Node) <= alignof(uint32_t) && sizeof(Cell) == NODE_OFFSET + sizeof(Node));
+        static_assert(sizeof(Cell) <= 2 * LINE_BYTES);
+        static Cell* CellAt(uint32_t number) { return NodeAllocator<Cell>::At(number); }
+        static uint32_t CellNumber(const Cell* cell) { return NodeAllocator<Cell>::Number(cell); }
+        static Node* NodeAt(uint32_t number)
+        {
+            Cell* const cell{CellAt(number)};
+            return cell ? &cell->node : nullptr;
+        }
+        static uint32_t NodeNumber(const Node* node)
+        {
+            return node ? CellNumber(reinterpret_cast<const Cell*>(reinterpret_cast<const std::byte*>(node) - NODE_OFFSET)) : 0;
+        }
+        //! A bucket is the number of its chain's first cell.
+        static constexpr size_t BUCKET_BYTES{sizeof(uint32_t)};
         class iterator
         {
         public:
@@ -862,8 +936,8 @@ private:
             bool operator==(const iterator& other) const { return m_cell == other.m_cell; }
             iterator& operator++()
             {
-                m_cell = m_cell->chain;
-                while (!m_cell && ++m_bucket < m_map->m_bucket_count) m_cell = m_map->m_buckets[m_bucket];
+                m_cell = CellAt(m_cell->chain);
+                while (!m_cell && ++m_bucket < m_map->m_bucket_count) m_cell = CellAt(m_map->m_buckets[m_bucket]);
                 return *this;
             }
 
@@ -880,8 +954,8 @@ private:
         ~Map()
         {
             for (size_t b{0}; b < m_bucket_count; ++b) {
-                for (Cell* cell{m_buckets[b]}; cell;) {
-                    Cell* next{cell->chain};
+                for (Cell* cell{CellAt(m_buckets[b])}; cell;) {
+                    Cell* next{CellAt(cell->chain)};
                     Free(cell);
                     cell = next;
                 }
@@ -894,7 +968,7 @@ private:
         iterator begin() const
         {
             for (size_t b{0}; b < m_bucket_count; ++b) {
-                if (m_buckets[b]) return {this, b, m_buckets[b]};
+                if (m_buckets[b]) return {this, b, CellAt(m_buckets[b])};
             }
             return {};
         }
@@ -903,14 +977,21 @@ private:
         {
             if (m_bucket_count != 0) Ahead(&m_buckets[hash & (m_bucket_count - 1)]);
         }
-        //! Ask for the first node of the bucket's chain: its first cache line, which has the key, and with
-        //! `whole` the second too, which has the rest of the entry. Reads the bucket.
+        //! Ask for the first node of the bucket's chain: the lines its link and key lie on, and with `whole`
+        //! every line of the cell, which has the rest of the entry and its list links at the end. A line asked
+        //! for twice costs nothing. Reads the bucket.
         void PrefetchNode(uint64_t hash, bool whole) const
         {
             if (m_bucket_count == 0) return;
-            if (const Cell* cell{m_buckets[hash & (m_bucket_count - 1)]}) {
-                Ahead(cell);
-                if (whole) Ahead(reinterpret_cast<const char*>(cell) + 64);
+            if (const Cell* cell{CellAt(m_buckets[hash & (m_bucket_count - 1)])}) {
+                const char* const first{reinterpret_cast<const char*>(cell)};
+                Ahead(first);
+                if (whole) {
+                    Ahead(first + LINE_BYTES);
+                    Ahead(first + sizeof(Cell) - 1);
+                } else {
+                    Ahead(first + NODE_OFFSET + sizeof(COutPoint) - 1);
+                }
             }
         }
         //! Ask for every item's bucket, then every chain's first node, before the first probe waits for one.
@@ -935,7 +1016,7 @@ private:
         {
             if (m_bucket_count == 0) return {};
             const size_t bucket{hash & (m_bucket_count - 1)};
-            for (Cell* cell{m_buckets[bucket]}; cell; cell = cell->chain) {
+            for (Cell* cell{CellAt(m_buckets[bucket])}; cell; cell = CellAt(cell->chain)) {
                 if (cell->node.first == key) return {this, bucket, cell};
             }
             return {};
@@ -949,7 +1030,7 @@ private:
             Cell* cell{NodeAllocator<Cell>{}.allocate(1)};
             new (&cell->node) Node(std::piecewise_construct, std::forward_as_tuple(key), std::tuple<>());
             cell->chain = m_buckets[bucket];
-            m_buckets[bucket] = cell;
+            m_buckets[bucket] = CellNumber(cell);
             ++m_size;
             return {iterator{this, bucket, cell}, true};
         }
@@ -957,8 +1038,9 @@ private:
         {
             iterator next{it};
             ++next;
-            Cell** link{&m_buckets[it.m_bucket]};
-            while (*link != it.m_cell) link = &(*link)->chain;
+            const uint32_t number{CellNumber(it.m_cell)};
+            uint32_t* link{&m_buckets[it.m_bucket]};
+            while (*link != number) link = &CellAt(*link)->chain;
             *link = it.m_cell->chain;
             Free(it.m_cell);
             --m_size;
@@ -1002,18 +1084,18 @@ private:
         }
         void Rebucket(size_t count)
         {
-            Buckets buckets{nullptr, BucketsDeleter{count * sizeof(Cell*) >= HUGE_PAGE_BYTES}};
+            Buckets buckets{nullptr, BucketsDeleter{count * BUCKET_BYTES >= HUGE_PAGE_BYTES}};
             if (count != 0) {
                 // An array of a huge page or more (a power of two, so a multiple of it) asks for huge pages.
-                void* array{buckets.get_deleter().hinted ? HintedRegion(count * sizeof(Cell*)) : ::operator new(count * sizeof(Cell*))};
-                buckets.reset(new (array) Cell*[count]());
+                void* array{buckets.get_deleter().hinted ? HintedRegion(count * BUCKET_BYTES) : ::operator new(count * BUCKET_BYTES)};
+                buckets.reset(new (array) uint32_t[count]());
             }
             for (size_t b{0}; b < m_bucket_count; ++b) {
-                for (Cell* cell{m_buckets[b]}; cell;) {
-                    Cell* next{cell->chain};
+                for (Cell* cell{CellAt(m_buckets[b])}; cell;) {
+                    Cell* next{CellAt(cell->chain)};
                     const size_t bucket{KeyHash(cell->node.first) & (count - 1)};
                     cell->chain = buckets[bucket];
-                    buckets[bucket] = cell;
+                    buckets[bucket] = CellNumber(cell);
                     cell = next;
                 }
             }
@@ -1023,7 +1105,7 @@ private:
 
         struct BucketsDeleter {
             bool hinted;
-            void operator()(Cell** array) const noexcept
+            void operator()(uint32_t* array) const noexcept
             {
                 if (hinted) {
                     FreeRegion(array);
@@ -1032,7 +1114,7 @@ private:
                 }
             }
         };
-        using Buckets = std::unique_ptr<Cell*[], BucketsDeleter>;
+        using Buckets = std::unique_ptr<uint32_t[], BucketsDeleter>;
         Buckets m_buckets{nullptr, BucketsDeleter{false}};
         size_t m_bucket_count{0};
         size_t m_size{0};
