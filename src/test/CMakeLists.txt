@@ -118,6 +118,7 @@ add_executable(test_bitcoin
   testnet4_miner_tests.cpp
   threadpool_tests.cpp
   timeoffsets_tests.cpp
+  tip_snapshot_tests.cpp
   torcontrol_tests.cpp
   transaction_tests.cpp
   translation_tests.cpp
@@ -140,6 +141,7 @@ add_executable(test_bitcoin
   util_tests.cpp
   util_threadnames_tests.cpp
   util_trace_tests.cpp
+  util_worker_task_tests.cpp
   validation_block_tests.cpp
   validation_chainstate_tests.cpp
   validation_chainstatemanager_tests.cpp
