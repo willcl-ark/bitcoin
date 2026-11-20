@@ -331,6 +331,8 @@ void BlockManager::FindFilesToPruneManual(
         if (fileinfo.nSize == 0 || fileinfo.nHeightLast > (unsigned)last_block_can_prune || fileinfo.nHeightFirst < (unsigned)min_block_to_prune) {
             continue;
         }
+        // a block is being written to the file with cs_main released
+        if (m_blockfiles_being_written.contains(fileNumber)) continue;
 
         PruneOneBlockFile(fileNumber);
         setFilesToPrune.insert(fileNumber);
@@ -406,6 +408,8 @@ void BlockManager::FindFilesToPrune(
             if (fileinfo.nHeightLast > (unsigned)last_block_can_prune || fileinfo.nHeightFirst < (unsigned)min_block_to_prune) {
                 continue;
             }
+            // a block is being written to the file with cs_main released
+            if (m_blockfiles_being_written.contains(fileNumber)) continue;
 
             PruneOneBlockFile(fileNumber);
             // Queue up the files for removal
@@ -845,6 +849,18 @@ bool BlockManager::FlushBlockFile(int blockfile_num, bool fFinalize, bool finali
     return success;
 }
 
+void BlockManager::TrimBlockFile(int blockfile_num, bool trim_undo)
+{
+    AssertLockHeld(::cs_main);
+    // A failed trim leaves pre-allocated bytes in the file and nothing else: its data and its sync are untouched.
+    if (!m_block_file_seq.Truncate(FlatFilePos(blockfile_num, m_blockfile_info[blockfile_num].nSize))) {
+        LogWarning("Failed to trim block file %05i", blockfile_num);
+    }
+    if (trim_undo && !m_undo_file_seq.Truncate(FlatFilePos(blockfile_num, m_blockfile_info[blockfile_num].nUndoSize))) {
+        LogWarning("Failed to trim undo file %05i", blockfile_num);
+    }
+}
+
 BlockfileType BlockManager::BlockfileTypeForHeight(int height)
 {
     if (!m_snapshot_height) {
@@ -962,18 +978,11 @@ FlatFilePos BlockManager::FindNextBlockPos(uint64_t nAddSize, unsigned int nHeig
         LogDebug(BCLog::BLOCKSTORAGE, "Leaving block file %i: %s (onto %i) (height %i)\n",
                  last_blockfile, m_blockfile_info[last_blockfile].ToString(), nFile, nHeight);
 
-        // Do not propagate the return code. The flush concerns a previous block
-        // and undo file that has already been written to. If a flush fails
-        // here, and we crash, there is no expected additional block data
-        // inconsistency arising from the flush failure here. However, the undo
-        // data may be inconsistent after a crash if the flush is called during
-        // a reindex. A flush error might also leave some of the data files
-        // untrimmed.
-        if (!FlushBlockFile(last_blockfile, /*fFinalize=*/true, finalize_undo)) {
-            LogWarning(
-                          "Failed to flush previous block file %05i (finalize=1, finalize_undo=%i) before opening new block file %05i\n",
-                          last_blockfile, finalize_undo, nFile);
-        }
+        // The file is trimmed, not synced. It stays marked unsynced (m_unsynced_block_files, its undo file in
+        // m_unsynced_undo_files), and whatever records its blocks in the block index syncs it first
+        // (SyncWrittenFiles()). A sync here would be made under cs_main, holding every block being stored behind
+        // it, for a durability nothing reads yet.
+        TrimBlockFile(last_blockfile, /*trim_undo=*/finalize_undo);
         // No undo data yet in the new file, so reset our undo-height tracking.
         m_blockfile_cursors[chain_type] = BlockfileCursor{nFile};
     }
@@ -1208,20 +1217,43 @@ BlockManager::ReadRawBlockResult BlockManager::ReadRawBlock(const FlatFilePos& p
     }
 }
 
-FlatFilePos BlockManager::WriteBlock(const CBlock& block, int nHeight)
+FlatFilePos BlockManager::AllocateBlockPos(const CBlock& block, int nHeight)
 {
     AssertLockHeld(::cs_main);
     const unsigned int block_size{static_cast<unsigned int>(GetSerializeSize(TX_WITH_WITNESS(block)))};
     FlatFilePos pos{FindNextBlockPos(block_size + STORAGE_HEADER_BYTES, nHeight, block.GetBlockTime())};
     if (pos.IsNull()) {
         LogError("FindNextBlockPos failed for %s while writing block", pos.ToString());
-        return FlatFilePos();
     }
+    return pos;
+}
+
+void BlockManager::PinBlockFile(int file)
+{
+    AssertLockHeld(::cs_main);
+    ++m_blockfiles_being_written[file];
+}
+
+void BlockManager::UnpinBlockFile(int file)
+{
+    AssertLockHeld(::cs_main);
+    const auto it{m_blockfiles_being_written.find(file)};
+    if (!Assume(it != m_blockfiles_being_written.end())) return;
+    if (--it->second == 0) m_blockfiles_being_written.erase(it);
+    // The write was made off the lock, after its position was claimed: a sync made in between did not
+    // cover its bytes, also where the cursor left the file meanwhile and finalized it. The file is marked
+    // again, and whatever writes the block index next syncs it first (SyncWrittenFiles()).
+    m_unsynced_block_files.insert(file);
+}
+
+bool BlockManager::WriteBlockAt(const CBlock& block, FlatFilePos& pos)
+{
+    const unsigned int block_size{static_cast<unsigned int>(GetSerializeSize(TX_WITH_WITNESS(block)))};
     AutoFile file{OpenBlockFile(pos, /*fReadOnly=*/false)};
     if (file.IsNull()) {
         LogError("OpenBlockFile failed for %s while writing block", pos.ToString());
         m_opts.notifications.fatalError(_("Failed to write block."));
-        return FlatFilePos();
+        return false;
     }
     {
         BufferedWriter fileout{file};
@@ -1236,9 +1268,18 @@ FlatFilePos BlockManager::WriteBlock(const CBlock& block, int nHeight)
     if (file.fclose() != 0) {
         LogError("Failed to close block file %s: %s", pos.ToString(), SysErrorString(errno));
         m_opts.notifications.fatalError(_("Failed to close file when writing block."));
-        return FlatFilePos();
+        return false;
     }
 
+    return true;
+}
+
+FlatFilePos BlockManager::WriteBlock(const CBlock& block, int nHeight)
+{
+    AssertLockHeld(::cs_main);
+    FlatFilePos pos{AllocateBlockPos(block, nHeight)};
+    if (pos.IsNull()) return FlatFilePos();
+    if (!WriteBlockAt(block, pos)) return FlatFilePos();
     return pos;
 }
 

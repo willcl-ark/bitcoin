@@ -211,6 +211,10 @@ private:
     /** Return false if block file or undo file flushing fails. */
     [[nodiscard]] bool FlushBlockFile(int blockfile_num, bool fFinalize, bool finalize_undo) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
+    /** Trim a block file the write position has left, and its undo file where that is finished too, without a
+     *  sync: both stay marked unsynced until whatever records their blocks in the block index syncs them. */
+    void TrimBlockFile(int blockfile_num, bool trim_undo) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+
     /** Return false if undo file flushing fails. */
     [[nodiscard]] bool FlushUndoFile(int block_file, bool finalize = false) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
@@ -327,6 +331,10 @@ protected:
     //! SyncWrittenFiles().
     bool m_sync_failed GUARDED_BY(::cs_main){false};
 
+    /** Block files with a block write in flight outside cs_main, by the number of such writes. Pruning
+     *  leaves them alone. */
+    std::map<int, int> m_blockfiles_being_written GUARDED_BY(::cs_main);
+
 public:
     using Options = kernel::BlockManagerOpts;
     using ReadRawBlockResult = util::Expected<std::vector<std::byte>, ReadRawError>;
@@ -421,6 +429,25 @@ public:
      */
     FlatFilePos WriteBlock(const CBlock& block, int nHeight) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
+    /**
+     * A block write in two steps, for callers that want the file write
+     * outside cs_main: AllocateBlockPos() claims the space (and does the
+     * file bookkeeping) under the lock, WriteBlockAt() writes the block
+     * there without it. On success pos is advanced past the storage header
+     * to the block's data position, as WriteBlock() returns it. The
+     * allocated space is lost if the write fails, which is a fatal error.
+     */
+    FlatFilePos AllocateBlockPos(const CBlock& block, int nHeight) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    [[nodiscard]] bool WriteBlockAt(const CBlock& block, FlatFilePos& pos);
+    /**
+     * Between the two steps the caller keeps the block's file from being
+     * pruned: the file's heights may all be prunable (a block of the pruned
+     * past, stored again), and a file unlinked under the write would leave
+     * the index pointing at lost bytes. Unpinned under the hold of cs_main
+     * that records the block, or gives it up.
+     */
+    void PinBlockFile(int file) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    void UnpinBlockFile(int file) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
     /** Update blockfile info while processing a block during reindex. The block must be available on disk.
      *
      * @param[in]  block        the block being processed
