@@ -11,6 +11,7 @@
 #include <test/util/random.h>
 #include <test/util/setup_common.h>
 #include <txdb.h>
+#include <undo.h>
 #include <util/threadpool.h>
 #include <util/byte_units.h>
 
@@ -2136,6 +2137,177 @@ BOOST_AUTO_TEST_CASE(block_apply_view_reads_a_database_coin_once)
     view.Unwind();
     BOOST_CHECK(store.HaveCoin(kept_coin));
     store.SanityCheck();
+}
+
+//! A block connected alone gives its undo data to the apply: the spend of a coin that only the database
+//! holds is recorded from the coin there, without a second read of the base. Unwound, the block leaves the
+//! coin as the database has it; confirmed, the erase is owed and written. Undo data that does not fit the
+//! block or one of its transactions is not used, and the apply reads the base as it does without any; a
+//! coin in it that is not the one the block validated against is a conflict.
+BOOST_AUTO_TEST_CASE(block_apply_view_takes_a_missed_coin_from_the_undo)
+{
+    CCoinsViewDB db{MemoryDb("store"), {}};
+    ReadCountingBase base{&db};
+    CoinsStore store{&base, 4, true};
+    store.SetBestBlock(uint256::ONE, 1);
+    const COutPoint outpoint{Txid::FromUint256(uint256{10}), 0};
+    const Coin coin{RandomCoin(m_rng, 1)};
+    store.AddCoin(outpoint, Coin{coin}, false);
+    store.Sync();
+    store.EvictClean(0);
+    BOOST_REQUIRE_EQUAL(store.GetCacheSize(), 0U); // the coin is in the database only
+    util::NotNull pool{std::make_shared<ThreadPool>("test")}; // no workers: lookups are served inline
+    BlockApplyView view{store, pool, /*deterministic=*/true};
+
+    // The block: a coinbase and one transaction that spends the coin, with the undo data of that spend.
+    CBlock block;
+    block.vtx.push_back(MakeTransactionRef(CMutableTransaction{}));
+    CMutableTransaction spender;
+    spender.vin.emplace_back(outpoint);
+    block.vtx.push_back(MakeTransactionRef(spender));
+    CBlockUndo undo;
+    undo.vtxundo.emplace_back();
+    undo.vtxundo[0].vprevout.push_back(coin);
+
+    // Unwound: one read, at the lookup.
+    base.m_reads = 0;
+    view.BeginBlock(2);
+    BOOST_CHECK(view.SpendCoin(outpoint));
+    BOOST_CHECK_EQUAL(base.m_reads, 1);
+    BOOST_CHECK(!store.HaveCoinInCache(outpoint)); // at the tip the lookup leaves nothing behind
+    view.ApplyChanges(&block, &undo);
+    BOOST_CHECK_EQUAL(base.m_reads, 1); // the apply took the coin from the undo data
+    BOOST_CHECK_EQUAL(view.Conflicts(), 0U);
+    view.Unwind();
+    BOOST_CHECK_EQUAL(base.m_reads, 1);
+    BOOST_CHECK(store.HaveCoin(outpoint));
+    BOOST_CHECK_EQUAL(store.OpenBlocks(), 0U);
+    store.SanityCheck();
+    store.Sync();
+    {
+        const auto in_db{db.PeekCoin(outpoint)};
+        BOOST_REQUIRE(in_db.has_value());
+        BOOST_CHECK(in_db->out == coin.out);
+        BOOST_CHECK_EQUAL(in_db->nHeight, coin.nHeight);
+    }
+
+    // Undo data for another number of transactions is not the block's: the apply reads the base.
+    store.EvictClean(0);
+    BOOST_REQUIRE(!store.HaveCoinInCache(outpoint));
+    CBlockUndo other_undo{undo};
+    other_undo.vtxundo.emplace_back();
+    base.m_reads = 0;
+    view.BeginBlock(2);
+    BOOST_CHECK(view.SpendCoin(outpoint));
+    view.ApplyChanges(&block, &other_undo);
+    BOOST_CHECK_EQUAL(base.m_reads, 2);
+    view.Unwind();
+    BOOST_CHECK(store.HaveCoin(outpoint));
+    store.SanityCheck();
+
+    // Nor is a transaction's undo data with another number of coins than the transaction has inputs.
+    store.EvictClean(0);
+    BOOST_REQUIRE(!store.HaveCoinInCache(outpoint));
+    CBlockUndo longer_undo{undo};
+    longer_undo.vtxundo[0].vprevout.push_back(coin);
+    base.m_reads = 0;
+    view.BeginBlock(2);
+    BOOST_CHECK(view.SpendCoin(outpoint));
+    view.ApplyChanges(&block, &longer_undo);
+    BOOST_CHECK_EQUAL(base.m_reads, 2);
+    BOOST_CHECK_EQUAL(view.Conflicts(), 0U);
+    view.Unwind();
+    BOOST_CHECK(store.HaveCoin(outpoint));
+    store.SanityCheck();
+
+    // Undo data with another coin than the one the block validated its spend against: a conflict, as for
+    // any other coin met in place of the known one. Nothing is spent and the base is not asked.
+    store.EvictClean(0);
+    BOOST_REQUIRE(!store.HaveCoinInCache(outpoint));
+    CBlockUndo wrong_undo{undo};
+    wrong_undo.vtxundo[0].vprevout[0].fCoinBase = true;
+    base.m_reads = 0;
+    view.BeginBlock(2);
+    BOOST_CHECK(view.SpendCoin(outpoint));
+    view.ApplyChanges(&block, &wrong_undo);
+    BOOST_CHECK_EQUAL(base.m_reads, 1);
+    BOOST_CHECK_EQUAL(view.Conflicts(), 1U);
+    view.Unwind();
+    BOOST_CHECK(store.HaveCoin(outpoint));
+    BOOST_CHECK_EQUAL(store.OpenBlocks(), 0U);
+    store.SanityCheck();
+
+    // Confirmed: the spend made from the undo data is the block's, and its erase reaches the database.
+    store.EvictClean(0);
+    BOOST_REQUIRE(!store.HaveCoinInCache(outpoint));
+    base.m_reads = 0;
+    view.BeginBlock(2);
+    BOOST_CHECK(view.SpendCoin(outpoint));
+    view.SetBestBlock(uint256{2});
+    view.ApplyChanges(&block, &undo);
+    BOOST_CHECK_EQUAL(view.Conflicts(), 0U);
+    view.Confirm();
+    BOOST_CHECK_EQUAL(base.m_reads, 1);
+    BOOST_CHECK(!store.HaveCoin(outpoint));
+    store.SanityCheck();
+    store.Sync();
+    BOOST_CHECK(!db.PeekCoin(outpoint).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(block_apply_view_takes_the_missed_coins_of_several_inputs_from_the_undo)
+{
+    CCoinsViewDB db{MemoryDb("store"), {}};
+    ReadCountingBase base{&db};
+    CoinsStore store{&base, 4, true};
+    store.SetBestBlock(uint256::ONE, 1);
+    std::vector<COutPoint> outpoints;
+    std::vector<Coin> coins;
+    for (uint8_t i{0}; i < 3; ++i) {
+        outpoints.emplace_back(Txid::FromUint256(uint256{static_cast<uint8_t>(20 + i)}), 0);
+        coins.push_back(RandomCoin(m_rng, 1));
+        store.AddCoin(outpoints.back(), Coin{coins.back()}, false);
+    }
+    store.Sync();
+    store.EvictClean(0);
+    BOOST_REQUIRE_EQUAL(store.GetCacheSize(), 0U); // the coins are in the database only
+    util::NotNull pool{std::make_shared<ThreadPool>("test")}; // no workers: lookups are served inline
+    BlockApplyView view{store, pool, /*deterministic=*/true};
+
+    // The block: a coinbase, a transaction with two inputs and one with one. The undo data has an entry
+    // for each transaction but the coinbase, with a coin for each input in the inputs' order.
+    CBlock block;
+    block.vtx.push_back(MakeTransactionRef(CMutableTransaction{}));
+    CMutableTransaction two_inputs;
+    two_inputs.vin.emplace_back(outpoints[0]);
+    two_inputs.vin.emplace_back(outpoints[1]);
+    block.vtx.push_back(MakeTransactionRef(two_inputs));
+    CMutableTransaction one_input;
+    one_input.vin.emplace_back(outpoints[2]);
+    block.vtx.push_back(MakeTransactionRef(one_input));
+    CBlockUndo undo;
+    undo.vtxundo.resize(2);
+    undo.vtxundo[0].vprevout.push_back(coins[0]);
+    undo.vtxundo[0].vprevout.push_back(coins[1]);
+    undo.vtxundo[1].vprevout.push_back(coins[2]);
+
+    // One read for each coin, at the lookups; the apply takes all three from the undo data.
+    base.m_reads = 0;
+    view.BeginBlock(2);
+    for (const COutPoint& outpoint : outpoints) BOOST_CHECK(view.SpendCoin(outpoint));
+    BOOST_CHECK_EQUAL(base.m_reads, 3);
+    view.ApplyChanges(&block, &undo);
+    BOOST_CHECK_EQUAL(base.m_reads, 3);
+    BOOST_CHECK_EQUAL(view.Conflicts(), 0U);
+    // Unwound, each coin is back as it was: none went to another input's outpoint.
+    view.Unwind();
+    BOOST_CHECK_EQUAL(store.OpenBlocks(), 0U);
+    store.SanityCheck();
+    for (size_t i{0}; i < outpoints.size(); ++i) {
+        const auto coin{store.PeekCoin(outpoints[i])};
+        BOOST_REQUIRE(coin.has_value());
+        BOOST_CHECK(coin->out == coins[i].out);
+        BOOST_CHECK_EQUAL(coin->nHeight, coins[i].nHeight);
+    }
 }
 
 //! The blocks of a window, each applied by a thread of its own while this thread confirms them from the

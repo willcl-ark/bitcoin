@@ -3224,6 +3224,7 @@ bool Chainstate::FinishConnectBlock(const CBlock& block, BlockValidationState& s
         const uint32_t undo_size{result.undo_size ? *result.undo_size : static_cast<uint32_t>(GetSerializeSize(result.undo))};
         const FlatFilePos pos{m_blockman.ClaimUndoPos(*pindex, undo_size)};
         auto undo{std::make_shared<const CBlockUndo>(std::move(result.undo))};
+        result.queued_undo = undo;
         const uint256 prev_hash{pindex->pprev->GetBlockHash()};
         const FlatFilePos data_pos{pos.nFile, pos.nPos + node::STORAGE_HEADER_BYTES};
         node::BlockManager& blockman{m_blockman};
@@ -4376,8 +4377,11 @@ bool Chainstate::PublishConnectTip(
             // (CoinsStore::UnwindBlock()).
             return false;
         }
+        // Its undo data has every coin it spent, as it read them: the apply takes from there what the store
+        // does not hold, rather than reading the database a second time (BlockApplyView::ApplyChanges()).
         if (apply_after_undo) {
-            view.ApplyChanges();
+            const ConnectBlockResult& result{validated.result};
+            view.ApplyChanges(block_to_connect.get(), result.queued_undo ? result.queued_undo.get() : &result.undo);
             // The check above came before this apply. Alone, there is no other block to conflict with.
             Assert(view.Conflicts() == 0);
         }
