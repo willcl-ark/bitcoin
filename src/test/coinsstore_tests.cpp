@@ -5,6 +5,7 @@
 #include <coins.h>
 #include <coinsstore.h>
 #include <dbwrapper.h>
+#include <primitives/block.h>
 #include <script/script.h>
 #include <test/util/random.h>
 #include <test/util/setup_common.h>
@@ -1967,6 +1968,219 @@ BOOST_AUTO_TEST_CASE(block_apply_view_reads_a_database_coin_once)
     view.Unwind();
     BOOST_CHECK(store.HaveCoin(kept_coin));
     store.SanityCheck();
+}
+
+//! A window block announces its transactions; until its changes are applied a higher block is told that
+//! their coins are pending, and no other block is. The mark goes with the apply, with the unwind, and
+//! does not pass to the next block in the slot.
+BOOST_AUTO_TEST_CASE(pending_creates_are_announced_until_applied)
+{
+    CCoinsViewDB db{MemoryDb("store"), {}};
+    CoinsStore store{&db, 4, true};
+    store.SetBestBlock(uint256::ONE, 1);
+    util::NotNull pool{std::make_shared<ThreadPool>("test")};
+    BlockApplyView lower{store, pool, /*deterministic=*/true};
+    BlockApplyView higher{store, pool, /*deterministic=*/true};
+    const auto make_block{[](uint32_t salt) {
+        CBlock block;
+        for (uint32_t i{0}; i < 3; ++i) {
+            CMutableTransaction mtx;
+            mtx.vin.emplace_back(COutPoint{Txid::FromUint256(uint256{static_cast<uint8_t>(salt)}), i});
+            mtx.vout.emplace_back(1000 + i, CScript{} << OP_TRUE);
+            block.vtx.push_back(MakeTransactionRef(std::move(mtx)));
+        }
+        return block;
+    }};
+    const CBlock block_low{make_block(20)};
+    const CBlock block_high{make_block(21)};
+    const Txid low_txid{block_low.vtx[1]->GetHash()};
+    const Txid high_txid{block_high.vtx[1]->GetHash()};
+
+    lower.BeginBlock(2);
+    higher.BeginBlock(3);
+    BOOST_CHECK(!higher.CreatesPendingBelow(low_txid)); // nothing announced
+    lower.AnnounceCreates(block_low);
+    higher.AnnounceCreates(block_high);
+    for (const auto& tx : block_low.vtx) BOOST_CHECK(higher.CreatesPendingBelow(tx->GetHash()));
+    BOOST_CHECK(!lower.CreatesPendingBelow(low_txid));   // its own
+    BOOST_CHECK(!higher.CreatesPendingBelow(high_txid)); // its own
+    BOOST_CHECK(!lower.CreatesPendingBelow(high_txid));  // a higher block's
+    BOOST_CHECK(!store.CreatesPendingBelow(CoinsStore::NO_BLOCK, low_txid));
+    BOOST_CHECK(!higher.CreatesPendingBelow(Txid::FromUint256(uint256{22})));
+
+    // Applied: the coin is in the store, and is looked up there.
+    AddCoins(lower, *block_low.vtx[1], 2);
+    lower.ApplyChanges();
+    BOOST_CHECK(!higher.CreatesPendingBelow(low_txid));
+    BOOST_CHECK(higher.HaveCoin(COutPoint{low_txid, 0}));
+    higher.Unwind();
+    lower.Unwind();
+
+    // Unwound before it applied: nothing is pending, and the next block in the slot starts without the mark.
+    lower.BeginBlock(2);
+    higher.BeginBlock(3);
+    lower.AnnounceCreates(block_low);
+    BOOST_CHECK(higher.CreatesPendingBelow(low_txid));
+    higher.Unwind();
+    lower.Unwind();
+    lower.BeginBlock(2);
+    higher.BeginBlock(3);
+    BOOST_CHECK(!higher.CreatesPendingBelow(low_txid));
+    // A block with nothing to apply is applied all the same.
+    lower.AnnounceCreates(block_low);
+    BOOST_CHECK(higher.CreatesPendingBelow(low_txid));
+    lower.ApplyChanges();
+    BOOST_CHECK(!higher.CreatesPendingBelow(low_txid));
+    higher.Unwind();
+    lower.Unwind();
+    BOOST_CHECK_EQUAL(store.OpenBlocks(), 0U);
+    store.SanityCheck();
+}
+
+//! A StoredCoin gives back the coin it was made from, byte for byte, whatever the script's length: inline up to
+//! StoredCoin::INLINE bytes, on the heap beyond; copies, moves and assignments keep it, and it reports heap
+//! memory only for a script on the heap.
+BOOST_AUTO_TEST_CASE(stored_coin_round_trip)
+{
+    const auto make_coin{[](size_t script_size, CAmount value, uint32_t height, bool coinbase) {
+        CScript script;
+        for (size_t i{0}; i < script_size; ++i) script.push_back(static_cast<unsigned char>(i * 7 + script_size));
+        return Coin{CTxOut{value, script}, static_cast<int>(height), coinbase};
+    }};
+    const auto same{[](const Coin& a, const Coin& b) {
+        return a.out == b.out && a.nHeight == b.nHeight && a.fCoinBase == b.fCoinBase && a.IsSpent() == b.IsSpent();
+    }};
+    std::vector<size_t> sizes;
+    for (size_t size{0}; size <= 40; ++size) sizes.push_back(size);
+    sizes.push_back(255);
+    sizes.push_back(256);
+    sizes.push_back(10000);
+    for (const size_t size : sizes) {
+        for (const bool coinbase : {false, true}) {
+            const Coin coin{make_coin(size, 50 * COIN + static_cast<CAmount>(size), (1u << 31) - 1 - static_cast<uint32_t>(size), coinbase)};
+            const StoredCoin stored{coin};
+            BOOST_CHECK(same(stored.ToCoin(), coin));
+            BOOST_CHECK(!stored.IsSpent());
+            BOOST_CHECK_EQUAL(stored.nHeight, coin.nHeight);
+            BOOST_CHECK_EQUAL(stored.fCoinBase, coin.fCoinBase);
+            BOOST_CHECK_EQUAL(stored.DynamicMemoryUsage() == 0, size <= StoredCoin::INLINE);
+            // Copies and moves.
+            StoredCoin copy{stored};
+            BOOST_CHECK(same(copy.ToCoin(), coin));
+            StoredCoin moved{std::move(copy)};
+            BOOST_CHECK(same(moved.ToCoin(), coin));
+            BOOST_CHECK(copy.IsSpent()); // NOLINT(bugprone-use-after-move): the moved-from state is a spent coin
+            // Assignments over a coin with a script of the other kind, inline over heap and heap over inline.
+            StoredCoin other{make_coin(size <= StoredCoin::INLINE ? 100 : 10, 1, 1, false)};
+            other = stored;
+            BOOST_CHECK(same(other.ToCoin(), coin));
+            other = make_coin(size <= StoredCoin::INLINE ? 100 : 10, 2, 2, true);
+            BOOST_CHECK(same(other.ToCoin(), make_coin(size <= StoredCoin::INLINE ? 100 : 10, 2, 2, true)));
+            other = std::move(moved);
+            BOOST_CHECK(same(other.ToCoin(), coin));
+            other.Clear();
+            BOOST_CHECK(other.IsSpent());
+            BOOST_CHECK(same(other.ToCoin(), Coin{}));
+            BOOST_CHECK_EQUAL(other.DynamicMemoryUsage(), 0U);
+        }
+    }
+    // A spent coin, and the default.
+    BOOST_CHECK(StoredCoin{}.IsSpent());
+    BOOST_CHECK(same(StoredCoin{Coin{}}.ToCoin(), Coin{}));
+    // Every standard output script is inline.
+    for (const size_t standard : {size_t{22}, size_t{23}, size_t{25}, size_t{34}, size_t{35}}) {
+        BOOST_CHECK_EQUAL(StoredCoin{make_coin(standard, 1, 1, false)}.DynamicMemoryUsage(), 0U);
+    }
+}
+
+//! A node's links hold its number, not its address (CoinsStore::NodeAllocator::Number()): with more entries
+//! than one region of nodes holds, numbers of several regions are in the chains and on the lists, and every
+//! entry is still found, spent and listed where it belongs. About 80 MiB of nodes.
+BOOST_AUTO_TEST_CASE(node_numbers_span_regions)
+{
+    CCoinsViewDB db{MemoryDb("store"), {}};
+    CoinsStore store{&db, 4, true};
+    static constexpr uint32_t COINS{700'000};
+    const auto outpoint{[](uint32_t i) { return COutPoint{Txid::FromUint256(uint256{static_cast<uint8_t>(i % 251)}), i}; }};
+    for (uint32_t i{0}; i < COINS; ++i) {
+        const int height{static_cast<int>(1 + i / 100'000)};
+        if (i % 100'000 == 0) store.SetBestBlock(uint256{static_cast<uint8_t>(height)}, height);
+        store.AddCoin(outpoint(i), Coin{CTxOut{CAmount{i + 1}, CScript() << OP_TRUE}, height, false}, false);
+    }
+    BOOST_CHECK_EQUAL(store.GetCacheSize(), COINS);
+    store.SanityCheck();
+    // Spends at a later height move entries between the lists of their heights.
+    store.SetBestBlock(uint256{100}, 100);
+    store.SetChangeHeight(100);
+    for (uint32_t i{0}; i < COINS; i += 3) BOOST_REQUIRE(store.SpendCoin(outpoint(i)));
+    store.SanityCheck();
+    for (uint32_t i{0}; i < COINS; ++i) {
+        const Coin& coin{store.AccessCoin(outpoint(i))};
+        if (i % 3 == 0) {
+            BOOST_REQUIRE(coin.IsSpent());
+        } else {
+            BOOST_REQUIRE_EQUAL(coin.out.nValue, CAmount{i + 1});
+        }
+    }
+    // Written out and evicted, every node goes back.
+    store.Sync();
+    store.SanityCheck();
+}
+
+//! A large block's changes are applied by shard on the pool's workers beside the calling thread
+//! (CoinsStore::VisitShardsShared()): the result is the one of applying them on the calling thread alone, the
+//! spends of coins the store holds, of coins only the database has and of coins the block made itself, and
+//! the creates, and the block is unwound as completely.
+BOOST_AUTO_TEST_CASE(apply_by_shard_on_workers_matches_alone)
+{
+    static constexpr uint32_t OLD{3000}, NEW{3000};
+    const auto old_outpoint{[](uint32_t i) { return COutPoint{Txid::FromUint256(uint256{static_cast<uint8_t>(1 + i % 200)}), i}; }};
+    const auto new_outpoint{[](uint32_t i) { return COutPoint{Txid::FromUint256(uint256{static_cast<uint8_t>(201 + i % 50)}), i}; }};
+    const auto coin{[](uint32_t i, int height) { return Coin{CTxOut{CAmount{i + 1}, CScript() << OP_TRUE}, height, false}; }};
+    std::vector<COutPoint> universe;
+    for (uint32_t i{0}; i < OLD; ++i) universe.push_back(old_outpoint(i));
+    for (uint32_t i{0}; i < NEW; ++i) universe.push_back(new_outpoint(i));
+
+    // The same block, applied with workers and without; once confirmed, once unwound.
+    const auto run{[&](size_t workers, bool confirm) {
+        CCoinsViewDB db{MemoryDb("store"), {}};
+        CoinsStore store{&db, CoinsStore::DEFAULT_SHARDS, /*deterministic=*/true};
+        store.SetBestBlock(uint256::ONE, 1);
+        for (uint32_t i{0}; i < OLD; ++i) store.AddCoin(old_outpoint(i), coin(i, 1), false);
+        store.Sync();
+        // Half the old coins only in the database: the apply meets their spends as misses.
+        store.EvictClean(0);
+        for (uint32_t i{0}; i < OLD; i += 2) BOOST_REQUIRE(store.AccessCoin(old_outpoint(i)).out.nValue == CAmount{i + 1});
+        auto pool{std::make_shared<ThreadPool>("apply")};
+        if (workers > 0) pool->Start(workers);
+        BlockApplyView view{store, util::NotNull{pool}, /*deterministic=*/true};
+        view.BeginBlock(2);
+        view.SetKeepBaseReads(true);
+        for (uint32_t i{0}; i < OLD; i += 3) BOOST_REQUIRE(view.SpendCoin(old_outpoint(i)));
+        for (uint32_t i{0}; i < NEW; ++i) view.AddCoin(new_outpoint(i), coin(i, 2), false);
+        for (uint32_t i{0}; i < NEW; i += 5) BOOST_REQUIRE(view.SpendCoin(new_outpoint(i)));
+        view.ApplyChanges();
+        BOOST_CHECK_EQUAL(view.Conflicts(), 0U);
+        if (confirm) {
+            view.SetBestBlock(uint256{2});
+            view.Confirm();
+        } else {
+            view.Unwind();
+        }
+        store.SanityCheck();
+        auto visible{Visible(store, universe)};
+        if (workers > 0) pool->Stop();
+        return visible;
+    }};
+    for (const bool confirm : {true, false}) {
+        const auto alone{run(0, confirm)};
+        const auto shared{run(4, confirm)};
+        for (const COutPoint& op : universe) BOOST_CHECK_MESSAGE(Same(alone.at(op), shared.at(op)), "mismatch at " << op.ToString());
+    }
+    // The confirmed state is the block's.
+    const auto confirmed{run(4, true)};
+    for (uint32_t i{0}; i < OLD; ++i) BOOST_CHECK_EQUAL(confirmed.at(old_outpoint(i)).has_value(), i % 3 != 0);
+    for (uint32_t i{0}; i < NEW; ++i) BOOST_CHECK_EQUAL(confirmed.at(new_outpoint(i)).has_value(), i % 5 != 0);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -9,6 +9,8 @@
 #include <coins_entry_machine.h>
 #include <crypto/common.h>
 #include <kernel/caches.h>
+#include <memusage.h>
+#include <undo.h>
 #include <primitives/transaction.h>
 #include <sync.h>
 #include <uint256.h>
@@ -17,9 +19,12 @@
 
 #include <array>
 #include <atomic>
+#include <bit>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -77,12 +82,173 @@
  * valid until the thread's next call: no lock of the caller keeps an applier
  * from spending the entry.
  */
+/**
+ * A coin as the store's entries hold it: the amount, the height and the coinbase flag of a Coin, and its output
+ * script inline up to INLINE (35) bytes, so that every standard script, the 34-byte P2WSH and P2TR outputs
+ * included, takes no allocation of its own; a Coin's CScript keeps 28 bytes inline and puts a 34-byte script on
+ * the heap. A longer script is on the heap here too. The bytes are kept as they are: a Coin converted to a
+ * StoredCoin and back is the same coin. The same 48 bytes as a Coin, aligned to four, so that an entry and
+ * its key pack without padding (CoinsStore::Map::Cell).
+ */
+class StoredCoin
+{
+    //! The amount, as bytes: an amount would align the coin to eight.
+    unsigned char m_value[sizeof(CAmount)]{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+    CAmount Value() const
+    {
+        CAmount value;
+        std::memcpy(&value, m_value, sizeof(value));
+        return value;
+    }
+    void SetValue(CAmount value) { std::memcpy(m_value, &value, sizeof(value)); }
+
+public:
+    static constexpr size_t INLINE{35};
+
+    StoredCoin() = default;
+    StoredCoin(const Coin& coin) { Assign(coin); }
+    StoredCoin(const StoredCoin& other) { CopyFrom(other); }
+    StoredCoin(StoredCoin&& other) noexcept { MoveFrom(other); }
+    StoredCoin& operator=(const Coin& coin)
+    {
+        Release();
+        Assign(coin);
+        return *this;
+    }
+    StoredCoin& operator=(const StoredCoin& other)
+    {
+        if (this != &other) {
+            Release();
+            CopyFrom(other);
+        }
+        return *this;
+    }
+    StoredCoin& operator=(StoredCoin&& other) noexcept
+    {
+        if (this != &other) {
+            Release();
+            MoveFrom(other);
+        }
+        return *this;
+    }
+    ~StoredCoin() { Release(); }
+
+    //! The coin as a Coin: what lookups hand out and records keep.
+    Coin ToCoin() const
+    {
+        Coin coin;
+        if (IsSpent()) return coin;
+        coin.out.nValue = Value();
+        const unsigned char* bytes{Script()};
+        coin.out.scriptPubKey.assign(bytes, bytes + ScriptSize());
+        coin.nHeight = nHeight;
+        coin.fCoinBase = fCoinBase;
+        return coin;
+    }
+    operator Coin() const { return ToCoin(); }
+
+    //! As Coin::IsSpent() (CTxOut::IsNull()).
+    bool IsSpent() const { return Value() == -1; }
+    //! As Coin::Clear().
+    void Clear()
+    {
+        Release();
+        SetValue(-1);
+        nHeight = 0;
+        fCoinBase = false;
+    }
+    //! As Coin::DynamicMemoryUsage(): the heap memory of a script longer than INLINE bytes.
+    size_t DynamicMemoryUsage() const { return m_size == HEAP ? memusage::MallocUsage(sizeof(uint32_t) + ScriptSize()) : 0; }
+
+    uint32_t nHeight : 31 {0};
+    bool fCoinBase : 1 {false};
+
+private:
+    //! The marker in m_size of a script on the heap: m_bytes holds the pointer, the allocation the script's
+    //! length (four bytes) and then its bytes.
+    static constexpr uint8_t HEAP{0xff};
+    static_assert(INLINE < HEAP && INLINE >= sizeof(unsigned char*));
+
+    uint8_t m_size{0};
+    unsigned char m_bytes[INLINE];
+
+    unsigned char* HeapBlock() const
+    {
+        unsigned char* block;
+        std::memcpy(&block, m_bytes, sizeof(block));
+        return block;
+    }
+    size_t ScriptSize() const
+    {
+        if (m_size != HEAP) return m_size;
+        uint32_t size;
+        std::memcpy(&size, HeapBlock(), sizeof(size));
+        return size;
+    }
+    const unsigned char* Script() const { return m_size == HEAP ? HeapBlock() + sizeof(uint32_t) : m_bytes; }
+    void SetScript(const unsigned char* bytes, size_t size)
+    {
+        if (size <= INLINE) {
+            m_size = static_cast<uint8_t>(size);
+            if (size) std::memcpy(m_bytes, bytes, size);
+            return;
+        }
+        auto* block{new unsigned char[sizeof(uint32_t) + size]};
+        const uint32_t size32{static_cast<uint32_t>(size)};
+        std::memcpy(block, &size32, sizeof(size32));
+        std::memcpy(block + sizeof(uint32_t), bytes, size);
+        std::memcpy(m_bytes, &block, sizeof(block));
+        m_size = HEAP;
+    }
+    void Assign(const Coin& coin)
+    {
+        SetValue(coin.out.nValue);
+        nHeight = coin.nHeight;
+        fCoinBase = coin.fCoinBase;
+        const CScript& script{coin.out.scriptPubKey};
+        SetScript(script.data(), script.size());
+    }
+    void CopyFrom(const StoredCoin& other)
+    {
+        std::memcpy(m_value, other.m_value, sizeof(m_value));
+        nHeight = other.nHeight;
+        fCoinBase = other.fCoinBase;
+        SetScript(other.Script(), other.ScriptSize());
+    }
+    void MoveFrom(StoredCoin& other) noexcept
+    {
+        std::memcpy(m_value, other.m_value, sizeof(m_value));
+        nHeight = other.nHeight;
+        fCoinBase = other.fCoinBase;
+        m_size = other.m_size;
+        std::memcpy(m_bytes, other.m_bytes, INLINE);
+        other.m_size = 0;
+        other.SetValue(-1);
+    }
+    void Release() noexcept
+    {
+        if (m_size == HEAP) delete[] HeapBlock();
+        m_size = 0;
+    }
+};
+static_assert(sizeof(StoredCoin) == 48 && alignof(StoredCoin) == 4);
+
 class CoinsStore : public CCoinsViewCache
 {
     struct Entry;
     //! A map node: an outpoint and its entry. Nodes never move, so the lists and a run in flight refer to
     //! entries by node pointer.
     using Node = std::pair<const COutPoint, Entry>;
+    //! A node's place on a list, as its cell's number (Map::NodeNumber()): four bytes, not a pointer's eight.
+    //! Reads and writes as a Node*.
+    struct NodeLink {
+        uint32_t number{0};
+        NodeLink() = default;
+        NodeLink(std::nullptr_t) {}
+        NodeLink(const Node* node) : number{Map::NodeNumber(node)} {}
+        operator Node*() const { return Map::NodeAt(number); }
+        Node* operator->() const { return Map::NodeAt(number); }
+    };
 
 public:
     //! The identity of a block being connected, from BeginBlock(); 0 is "no block" (a confirmed change).
@@ -251,9 +417,15 @@ public:
     };
     /**
      * Block `block` makes `changes`, each as it would be made alone (a spend as ApplySpend()), but grouped by
-     * shard so that each shard's lock is taken once for the block.
+     * shard so that each shard's lock is taken once for the block. A spend of a coin the tier does not hold
+     * is recorded from `base_coin`'s coin where it gives one: the coin the base holds under the outpoint, as
+     * the block read it, which no other block has changed since; else after a read of the base.
      */
-    void ApplyBatch(BlockId block, std::vector<Change>&& changes);
+    //! With `helpers`, a large batch's shards are applied on its workers beside the calling thread, each shard
+    //! by one thread (VisitShardsShared()): about one worker for every APPLY_CHANGES_PER_HELPER changes.
+    //! `base_coin` is then called from several threads.
+    void ApplyBatch(BlockId block, std::vector<Change>&& changes, const std::function<const Coin*(const COutPoint&)>& base_coin = {}, ThreadPool* helpers = nullptr);
+    static constexpr size_t APPLY_CHANGES_PER_HELPER{1024};
     //! The coins among `outpoints` that block `viewer` sees and the tier holds, read with one hold of each
     //! shard's lock; what is missing, spent or invisible is left out (PeekCoinFor() one by one is the fallback).
     std::vector<std::pair<COutPoint, Coin>> FetchFor(BlockId viewer, std::vector<COutPoint>&& outpoints) const;
@@ -261,6 +433,24 @@ public:
     uint32_t ConflictCount(BlockId block) const;
     //! The block's height, as given to BeginBlock().
     int BlockHeight(BlockId block) const;
+    /**
+     * A window block says which transactions it holds, before its changes are applied: until they are
+     * (CreatesApplied()), a coin of one of those transaction ids is in no place a higher block could read
+     * it from, and CreatesPendingBelow() says so without a lookup. The ids go into one table for all open
+     * blocks, of fixed size and without a lock, where a later id may take an earlier one's place: what the
+     * table says is a hint, never a fact about a coin.
+     */
+    void AnnounceCreates(BlockId block, std::span<const CTransactionRef> txs);
+    //! The block's changes are in the store (the first ApplyBatch() of a block that announced).
+    void CreatesApplied(BlockId block);
+    /**
+     * Whether an open block below `viewer` announced `txid` and is not applied yet. True means a lookup of
+     * that transaction's outputs would find nothing now, in the tier or the database. It may be true for a
+     * transaction no such block holds (two ids that share their place and tag in the table), and false for
+     * one a block does hold: the caller may only take it as a reason to look again later, as a window
+     * block does that defers a transaction to its continuation (ConnectBlock()), never as a coin's absence.
+     */
+    bool CreatesPendingBelow(BlockId viewer, const Txid& txid) const;
     /**
      * The block becomes part of the confirmed state: the confirmed height becomes its height, which is what
      * its creates and its spent markers are told from plain ones by, and the identity is freed. No entry
@@ -403,6 +593,9 @@ private:
         std::atomic<int> begin_confirmed{-1};
         //! As given to BeginBlock(); the block's applier reads it.
         std::atomic<bool> mark_fresh_spends{false};
+        //! From AnnounceCreates() until CreatesApplied(): the block's transaction ids in the table of
+        //! pending ones stand for coins that are not in the store yet.
+        std::atomic<bool> creates_pending{false};
         /**
          * What the block's changes add to the tier's dirty entries over what they add to the confirmed
          * state's (nothing, until the block is confirmed): GetDirtyCount() takes it off again. Exact
@@ -432,7 +625,7 @@ private:
      * they refer to: the entry is then pending, an open block's, which the write-out passes over.
      */
     struct Entry {
-        Coin coin;
+        StoredCoin coin;
         //! The height the entry is filed under, the write-out's age: the last change's as a rule, and an
         //! earlier one's where that change is owed still (coins_entry::Height).
         int32_t height{0};
@@ -450,8 +643,8 @@ private:
         //! (BeginBlock()); a run or a flush drops it otherwise.
         bool unwritten : 1 {false};
         uint8_t list : 2 {LIST_NONE};
-        Node* prev{nullptr};
-        Node* next{nullptr};
+        NodeLink prev;
+        NodeLink next;
     };
     //! The huge page size the hint below is made for (x86-64's; elsewhere the hint is as harmless as none).
     static constexpr size_t HUGE_PAGE_BYTES{size_t{2} << 20};
@@ -459,9 +652,23 @@ private:
     //! pages where it can (Linux's transparent huge pages, in their "madvise" or "always" mode): a lookup
     //! lands on a random node of a large map, and with small pages misses the TLB for the bucket and again
     //! for the node. Only a hint. Freed with FreeRegion().
-    static void* HintedRegion(size_t bytes);
+    static void* HintedRegion(size_t bytes, size_t align = HUGE_PAGE_BYTES);
     static inline std::atomic<size_t> s_node_region_bytes{0};
-    static void FreeRegion(void* region) noexcept { ::operator delete(region, std::align_val_t{HUGE_PAGE_BYTES}); }
+    //! The size of the regions the nodes' memory is asked for in.
+    static constexpr size_t NODE_REGION_BYTES{size_t{32} << 20};
+    //! From this much node memory of the process on, the next region is made ready ahead of its use
+    //! (NodeRegion()); below it a region ahead would be a large share of a small store.
+    static constexpr size_t NODE_REGION_AHEAD_FROM{size_t{1} << 30};
+    //! A region of NODE_REGION_BYTES for nodes, as HintedRegion() gives it, aligned to its size so that a node's
+    //! address finds the region's number (NodeAllocator::Number()). The system supplies memory at
+    //! its first touch, on the touching thread, which for a node is a thread connecting blocks under a
+    //! shard's mutex. Once the store is large, a thread of its own therefore asks for the next region as
+    //! soon as one is taken and touches all of it; a region asked for before the next is ready is supplied
+    //! on the asking thread. The thread runs while there is a store: the last one to be destroyed joins it.
+    static void* NodeRegion();
+    struct RegionAhead;
+    static RegionAhead& RegionAheadState();
+    static void FreeRegion(void* region, size_t align = HUGE_PAGE_BYTES) noexcept { ::operator delete(region, std::align_val_t{align}); }
     //! A shard's entries are inserted and erased by whichever thread holds its mutex, so a node is often freed
     //! by another thread than the one that allocated it. A thread keeps the nodes it frees for its own next
     //! insertions: a list of up to MAX_KEPT nodes and one full list beside it. A thread with two full lists
@@ -471,11 +678,37 @@ private:
     //! The depot carves new lists from regions of REGION_BYTES, asked for with the huge page hint
     //! (HintedRegion()). A node is never given back: one that is freed waits, with its thread or in the
     //! depot, for the next insertion, and the regions stay with the process.
+    //!
+    //! A node has a number of 32 bits, which links hold in place of its address (Number(), At()): its
+    //! region's number in the high bits and its place in the region in the low ones. A region is aligned
+    //! to its size and begins with its number, in a slot of its own, so that no node has the number 0.
     template <typename T>
     struct NodeAllocator {
         using value_type = T;
         static constexpr size_t MAX_KEPT{1024};
-        static constexpr size_t REGION_BYTES{size_t{32} << 20};
+        static constexpr size_t REGION_BYTES{NODE_REGION_BYTES};
+        static constexpr unsigned SLOT_BITS{static_cast<unsigned>(std::bit_width(REGION_BYTES / sizeof(T)))};
+        //! 2^13 regions of 32 MiB for 104-byte nodes, 256 GiB of them.
+        static constexpr size_t MAX_REGIONS{size_t{1} << (32 - SLOT_BITS)};
+        //! The regions by number, each written once, when the depot takes it. Constant-initialized and never
+        //! destroyed (trivially destructible), so a lookup needs no guard and nodes may outlive static objects.
+        static inline std::atomic<std::byte*> s_regions[MAX_REGIONS]{};
+        static uint32_t Number(const T* node)
+        {
+            static_assert(std::has_single_bit(REGION_BYTES) && SLOT_BITS < 32);
+            if (!node) return 0;
+            const auto address{reinterpret_cast<uintptr_t>(node)};
+            const uintptr_t base{address & ~uintptr_t{REGION_BYTES - 1}};
+            uint32_t region;
+            std::memcpy(&region, reinterpret_cast<const void*>(base), sizeof(region));
+            return (region << SLOT_BITS) | static_cast<uint32_t>((address - base) / sizeof(T));
+        }
+        static T* At(uint32_t number)
+        {
+            if (number == 0) return nullptr;
+            std::byte* const base{s_regions[number >> SLOT_BITS].load(std::memory_order_relaxed)};
+            return reinterpret_cast<T*>(base + (number & ((uint32_t{1} << SLOT_BITS) - 1)) * sizeof(T));
+        }
         //! The next full list after this one in the depot: the second word of a list's first node.
         static void*& NextList(void* list) { return static_cast<void**>(list)[1]; }
         //! Full lists, each MAX_KEPT nodes, for whichever thread next runs out, and the region new ones are
@@ -489,6 +722,7 @@ private:
             //! What is left of the newest region.
             std::byte* fresh GUARDED_BY(mutex){nullptr};
             size_t fresh_bytes GUARDED_BY(mutex){0};
+            uint32_t regions GUARDED_BY(mutex){0};
             void Give(void* list) EXCLUSIVE_LOCKS_REQUIRED(!mutex)
             {
                 LOCK(mutex);
@@ -519,9 +753,15 @@ private:
                     LOCK(mutex);
                     if (lists) return std::exchange(lists, NextList(lists));
                     if (fresh_bytes < LIST_BYTES) {
-                        // The remainder, less than a list, is left behind.
-                        fresh = static_cast<std::byte*>(HintedRegion(REGION_BYTES));
-                        fresh_bytes = REGION_BYTES;
+                        // The remainder, less than a list, is left behind. The region's first slot holds
+                        // its number; past the last number (256 GiB of nodes) there is none to give.
+                        const uint32_t number{regions++};
+                        if (number >= MAX_REGIONS) std::abort();
+                        auto* region{static_cast<std::byte*>(NodeRegion())};
+                        std::memcpy(region, &number, sizeof(number));
+                        s_regions[number].store(region, std::memory_order_relaxed);
+                        fresh = region + sizeof(T);
+                        fresh_bytes = REGION_BYTES - sizeof(T);
                         s_node_region_bytes.fetch_add(REGION_BYTES, std::memory_order_relaxed);
                     }
                     nodes = fresh;
@@ -563,7 +803,8 @@ private:
         };
         static Kept& Mine()
         {
-            static_assert(sizeof(T) >= 2 * sizeof(void*) && sizeof(T) % alignof(T) == 0 && alignof(T) <= HUGE_PAGE_BYTES);
+            // A free node holds two pointers (the links of its lists), and nodes lie back to back from an aligned start.
+            static_assert(sizeof(T) >= 2 * sizeof(void*) && sizeof(T) % alignof(void*) == 0 && alignof(T) <= alignof(void*));
             thread_local Kept kept;
             return kept;
         }
@@ -611,11 +852,15 @@ private:
         }
         friend bool operator==(const NodeAllocator&, const NodeAllocator&) noexcept { return true; }
     };
-    //! The salted hash of an outpoint, one salt for all shards: a batch hashes its keys before it takes a shard.
+    //! Where an outpoint goes in its shard's table, one salt for all shards: a batch hashes its keys before
+    //! it takes a shard. The salted hash of the txid plus the index: the outputs of one transaction lie in
+    //! buckets next to each other, so that making them reads one cache line of the bucket array for every
+    //! eight and not one for each. A transaction has each bucket once, so a bucket holds as many entries as
+    //! under a hash of the whole outpoint.
     static uint64_t KeyHash(const COutPoint& outpoint) noexcept
     {
         static const SaltedCoinsCacheHasher hasher;
-        return hasher(outpoint);
+        return hasher(outpoint.hash) + outpoint.n;
     }
     /**
      * A shard's table: chained, with nodes that never move (the lists and a run in flight point at them),
@@ -627,10 +872,28 @@ private:
     {
     public:
         using value_type = Node;
+        //! The chain's link is the next cell's number (NodeAllocator::Number()), 0 at the chain's end.
         struct Cell {
-            Cell* chain;
+            uint32_t chain;
             Node node;
         };
+        //! The link and the key are in a cell's first cache line (PrefetchNode()); the node follows the link
+        //! without padding.
+        static constexpr size_t NODE_OFFSET{sizeof(uint32_t)};
+        static_assert(NODE_OFFSET + sizeof(COutPoint) <= 64 && alignof(Node) <= alignof(uint32_t) && sizeof(Cell) == NODE_OFFSET + sizeof(Node));
+        static Cell* CellAt(uint32_t number) { return NodeAllocator<Cell>::At(number); }
+        static uint32_t CellNumber(const Cell* cell) { return NodeAllocator<Cell>::Number(cell); }
+        static Node* NodeAt(uint32_t number)
+        {
+            Cell* const cell{CellAt(number)};
+            return cell ? &cell->node : nullptr;
+        }
+        static uint32_t NodeNumber(const Node* node)
+        {
+            return node ? CellNumber(reinterpret_cast<const Cell*>(reinterpret_cast<const std::byte*>(node) - NODE_OFFSET)) : 0;
+        }
+        //! A bucket is the number of its chain's first cell.
+        static constexpr size_t BUCKET_BYTES{sizeof(uint32_t)};
         class iterator
         {
         public:
@@ -641,8 +904,8 @@ private:
             bool operator==(const iterator& other) const { return m_cell == other.m_cell; }
             iterator& operator++()
             {
-                m_cell = m_cell->chain;
-                while (!m_cell && ++m_bucket < m_map->m_bucket_count) m_cell = m_map->m_buckets[m_bucket];
+                m_cell = CellAt(m_cell->chain);
+                while (!m_cell && ++m_bucket < m_map->m_bucket_count) m_cell = CellAt(m_map->m_buckets[m_bucket]);
                 return *this;
             }
 
@@ -659,8 +922,8 @@ private:
         ~Map()
         {
             for (size_t b{0}; b < m_bucket_count; ++b) {
-                for (Cell* cell{m_buckets[b]}; cell;) {
-                    Cell* next{cell->chain};
+                for (Cell* cell{CellAt(m_buckets[b])}; cell;) {
+                    Cell* next{CellAt(cell->chain)};
                     Free(cell);
                     cell = next;
                 }
@@ -673,7 +936,7 @@ private:
         iterator begin() const
         {
             for (size_t b{0}; b < m_bucket_count; ++b) {
-                if (m_buckets[b]) return {this, b, m_buckets[b]};
+                if (m_buckets[b]) return {this, b, CellAt(m_buckets[b])};
             }
             return {};
         }
@@ -682,27 +945,37 @@ private:
         {
             if (m_bucket_count != 0) Ahead(&m_buckets[hash & (m_bucket_count - 1)]);
         }
-        //! Ask for the first node of the bucket's chain, both of its cache lines. Reads the bucket.
-        void PrefetchNode(uint64_t hash) const
+        //! Ask for the first node of the bucket's chain: its first cache line, which has the key, and with
+        //! `whole` the second too, which has the rest of the entry. Reads the bucket.
+        void PrefetchNode(uint64_t hash, bool whole) const
         {
             if (m_bucket_count == 0) return;
-            if (const Cell* cell{m_buckets[hash & (m_bucket_count - 1)]}) {
+            if (const Cell* cell{CellAt(m_buckets[hash & (m_bucket_count - 1)])}) {
                 Ahead(cell);
-                Ahead(reinterpret_cast<const char*>(cell) + 64);
+                if (whole) Ahead(reinterpret_cast<const char*>(cell) + 64);
             }
         }
         //! Ask for every item's bucket, then every chain's first node, before the first probe waits for one.
-        void PrefetchAll(std::span<const uint64_t> hashes, std::span<const uint32_t> items) const
+        //! `whole(i)` says whether item i reads the entry it finds, or only whether there is one.
+        void PrefetchAll(std::span<const uint64_t> hashes, std::span<const uint32_t> items, auto&& whole) const
         {
             for (const uint32_t i : items) Prefetch(hashes[i]);
-            for (const uint32_t i : items) PrefetchNode(hashes[i]);
+            for (const uint32_t i : items) PrefetchNode(hashes[i], whole(i));
+        }
+        //! Ask for what an unlink of the node writes, the links of its two neighbours on its list
+        //! (Detach()). Reads the node.
+        static void PrefetchLinks(const Node& node)
+        {
+            if (node.second.list == LIST_NONE) return;
+            if (const Node* prev{node.second.prev}) Ahead(&prev->second.next, /*to_write=*/true);
+            if (const Node* next{node.second.next}) Ahead(&next->second.prev, /*to_write=*/true);
         }
         iterator find(const COutPoint& key) const { return find(key, KeyHash(key)); }
         iterator find(const COutPoint& key, uint64_t hash) const
         {
             if (m_bucket_count == 0) return {};
             const size_t bucket{hash & (m_bucket_count - 1)};
-            for (Cell* cell{m_buckets[bucket]}; cell; cell = cell->chain) {
+            for (Cell* cell{CellAt(m_buckets[bucket])}; cell; cell = CellAt(cell->chain)) {
                 if (cell->node.first == key) return {this, bucket, cell};
             }
             return {};
@@ -716,7 +989,7 @@ private:
             Cell* cell{NodeAllocator<Cell>{}.allocate(1)};
             new (&cell->node) Node(std::piecewise_construct, std::forward_as_tuple(key), std::tuple<>());
             cell->chain = m_buckets[bucket];
-            m_buckets[bucket] = cell;
+            m_buckets[bucket] = CellNumber(cell);
             ++m_size;
             return {iterator{this, bucket, cell}, true};
         }
@@ -724,8 +997,9 @@ private:
         {
             iterator next{it};
             ++next;
-            Cell** link{&m_buckets[it.m_bucket]};
-            while (*link != it.m_cell) link = &(*link)->chain;
+            const uint32_t number{CellNumber(it.m_cell)};
+            uint32_t* link{&m_buckets[it.m_bucket]};
+            while (*link != number) link = &CellAt(*link)->chain;
             *link = it.m_cell->chain;
             Free(it.m_cell);
             --m_size;
@@ -749,12 +1023,17 @@ private:
     private:
         static constexpr size_t MIN_BUCKETS{16};
         //! A hint only: without the builtin the probe waits for its memory.
-        static void Ahead(const void* p)
+        static void Ahead(const void* p, bool to_write = false)
         {
 #if defined(__GNUC__) || defined(__clang__)
-            __builtin_prefetch(p);
+            if (to_write) {
+                __builtin_prefetch(p, 1);
+            } else {
+                __builtin_prefetch(p);
+            }
 #else
             (void)p;
+            (void)to_write;
 #endif
         }
         static void Free(Cell* cell)
@@ -764,18 +1043,18 @@ private:
         }
         void Rebucket(size_t count)
         {
-            Buckets buckets{nullptr, BucketsDeleter{count * sizeof(Cell*) >= HUGE_PAGE_BYTES}};
+            Buckets buckets{nullptr, BucketsDeleter{count * BUCKET_BYTES >= HUGE_PAGE_BYTES}};
             if (count != 0) {
                 // An array of a huge page or more (a power of two, so a multiple of it) asks for huge pages.
-                void* array{buckets.get_deleter().hinted ? HintedRegion(count * sizeof(Cell*)) : ::operator new(count * sizeof(Cell*))};
-                buckets.reset(new (array) Cell*[count]());
+                void* array{buckets.get_deleter().hinted ? HintedRegion(count * BUCKET_BYTES) : ::operator new(count * BUCKET_BYTES)};
+                buckets.reset(new (array) uint32_t[count]());
             }
             for (size_t b{0}; b < m_bucket_count; ++b) {
-                for (Cell* cell{m_buckets[b]}; cell;) {
-                    Cell* next{cell->chain};
+                for (Cell* cell{CellAt(m_buckets[b])}; cell;) {
+                    Cell* next{CellAt(cell->chain)};
                     const size_t bucket{KeyHash(cell->node.first) & (count - 1)};
                     cell->chain = buckets[bucket];
-                    buckets[bucket] = cell;
+                    buckets[bucket] = CellNumber(cell);
                     cell = next;
                 }
             }
@@ -785,7 +1064,7 @@ private:
 
         struct BucketsDeleter {
             bool hinted;
-            void operator()(Cell** array) const noexcept
+            void operator()(uint32_t* array) const noexcept
             {
                 if (hinted) {
                     FreeRegion(array);
@@ -794,7 +1073,7 @@ private:
                 }
             }
         };
-        using Buckets = std::unique_ptr<Cell*[], BucketsDeleter>;
+        using Buckets = std::unique_ptr<uint32_t[], BucketsDeleter>;
         Buckets m_buckets{nullptr, BucketsDeleter{false}};
         size_t m_bucket_count{0};
         size_t m_size{0};
@@ -867,6 +1146,13 @@ private:
     size_t SumTotals(std::atomic<int64_t> Totals::* field) const;
     //! What an entry's map node costs, as DynamicMemoryUsage() counts it.
     static int64_t NodeBytes();
+    //! The region made ready ahead of its use, as DynamicMemoryUsage() counts it: memory the system has
+    //! supplied and no node lives in yet. A bound, not a reading: NODE_REGION_BYTES for a store whose own
+    //! nodes come to NODE_REGION_AHEAD_FROM, nothing for a smaller store, whose budget may be less than a
+    //! region (a chainstate beside a snapshot's). The process may hold a region all the same while this
+    //! counts nothing (NodeRegion()). Not counted, here or elsewhere: the free nodes (NodeAllocator), and
+    //! the part of the newest region no list was carved from, which the system has not supplied.
+    size_t RegionAheadBytes() const;
     /**
      * How many change heights share a list of dirty entries, as a power of two. While nothing is written
      * out the dirty entries are the coins of every height since the last write, a few to a shard for each:
@@ -1003,6 +1289,15 @@ private:
      */
     template <typename Work>
     void VisitShards(BlockId block, const std::vector<uint32_t>& shard_of, Work work) const;
+    /**
+     * As VisitShards(), with up to `helpers` tasks of `pool` taking shards beside the calling thread:
+     * `work(shard, items, participant)`, the caller being participant 0 and the helpers 1 to `helpers`, each
+     * shard by one of them. A shard is taken by whoever comes for it next, waiting for its lock. The caller
+     * returns once every shard is done; a helper that starts after that finds none left and touches nothing
+     * of the caller's. With no worker free, the caller does all of it.
+     */
+    template <typename Work>
+    void VisitShardsShared(BlockId block, const std::vector<uint32_t>& shard_of, ThreadPool& pool, size_t helpers, Work work) const;
     //! Erase an entry, keeping the shard's lists and counters right.
     void EraseEntry(Shard& shard, Map::iterator it) const EXCLUSIVE_LOCKS_REQUIRED(shard.mutex);
     //! The same for an entry reached over a list, erased by its key: a cell has no link back, so the erase
@@ -1050,7 +1345,8 @@ private:
      * fork height, a run bounded between the two would settle the database above its creation without
      * it. Any other coin takes the change height.
      */
-    int TagFor(const Coin& coin) const
+    template <typename AnyCoin>
+    int TagFor(const AnyCoin& coin) const
     {
         const int settled{m_run_in_flight ? m_inflight_settled_height : m_written_height};
         return coin.nHeight > settled ? static_cast<int>(coin.nHeight) : m_change_height;
@@ -1087,6 +1383,17 @@ private:
     std::atomic<int> m_dropped_through{-1};
     //! The slots not free, for the readers' check that there is no record to look into.
     std::atomic<int> m_open_slots{0};
+    /**
+     * The transaction ids the open blocks announced (AnnounceCreates()). An id has one place, by some of
+     * its bits, and an entry is a tag from other bits of the id with the height and the slot of the block
+     * that announced it; zero is empty. Entries are never removed: one is void once its block's slot is
+     * free, at another height or applied. 4 MiB, allocated when the first block announces, and not counted
+     * as cache: it holds no coin and does not grow.
+     */
+    static constexpr size_t PENDING_TXID_PLACES{size_t{1} << 19};
+    std::once_flag m_pending_txids_once;
+    std::unique_ptr<std::atomic<uint64_t>[]> m_pending_txids_owner; //!< set once, under m_pending_txids_once
+    std::atomic<std::atomic<uint64_t>*> m_pending_txids{nullptr};
     //! See SetBaseWrites().
     uint64_t m_batch_bytes{DEFAULT_DB_CACHE_BATCH};
     bool m_base_concurrent{false};
@@ -1124,14 +1431,21 @@ public:
     //! at the tip reads without it: one that fails leaves none of its inputs in the cache.
     //! Set before the block's first lookup; the view's reset clears it.
     void SetKeepBaseReads(bool keep) { m_keep_base_reads = keep; }
+    //! See CoinsStore::AnnounceCreates(): called with the block before its validation, by a window block.
+    void AnnounceCreates(const CBlock& block);
+    //! See CoinsStore::CreatesPendingBelow(), for the view's block.
+    bool CreatesPendingBelow(const Txid& txid) const { return HasBlock() && m_store.CreatesPendingBelow(m_block, txid); }
 
     //! Bring the block's inputs that the tier holds into the view, with one hold of each shard's lock.
     void Prefetch(const CBlock& block);
     //! Apply the view's changes so far to the store under the block's identity, grouped by shard, and drop
     //! them from the view; the next lookups read the store, where they are visible to this block. Called by
     //! the block's worker once validated (and again after a continuation), so that the work is off the
-    //! publisher; Confirm() applies what is left.
-    void ApplyChanges();
+    //! publisher; Confirm() applies what is left. A block connected alone, which no other block changes the
+    //! store beside, may give itself and its undo data: a spend of a coin the store does not hold is then
+    //! recorded from the coin the undo data has for it (the one the block read from the base), and not after
+    //! a second read of the base.
+    void ApplyChanges(const CBlock* block = nullptr, const CBlockUndo* undo = nullptr);
     //! As the cache's, and the spend left in the view keeps the height and the coinbase flag of its coin.
     bool SpendCoin(const COutPoint& outpoint, Coin* moveto = nullptr) override;
     //! As Confirm().

@@ -2929,6 +2929,18 @@ bool ConnectBlock(const CBlock& block, const BlockValidationContext& ctx,
     int& nInputs{result.num_inputs};
     int64_t& nSigOpsCost{result.sigops_cost};
     blockundo.vtxundo.reserve(block.vtx.size() - 1);
+    // Whether the view has every input of a transaction, for a block that may defer. An input the view does
+    // not hold already and whose transaction a lower block that is not applied yet holds is taken as missing
+    // without a lookup (BlockValidationContext::made_by_pending_block). The answer decides only whether the
+    // transaction is deferred.
+    const auto inputs_found{[&](const CTransaction& tx) {
+        if (!ctx.made_by_pending_block) return view.HaveInputs(tx);
+        for (const CTxIn& txin : tx.vin) {
+            if (view.HaveCoinInCache(txin.prevout)) continue;
+            if (ctx.made_by_pending_block(txin.prevout.hash) || !view.HaveCoin(txin.prevout)) return false;
+        }
+        return true;
+    }};
     for (unsigned int i = 0; i < block.vtx.size(); i++)
     {
         if (!state.IsValid()) break;
@@ -2954,7 +2966,7 @@ bool ConnectBlock(const CBlock& block, const BlockValidationContext& ctx,
             }
             if (!state.IsValid()) break;
         }
-        if (!tx.IsCoinBase() && ctx.defer_missing_inputs && !view.HaveInputs(tx)) {
+        if (!tx.IsCoinBase() && ctx.defer_missing_inputs && !inputs_found(tx)) {
             // A lower block that is still being applied may hold the missing input. Not so for an input
             // from one of this block's own transactions: it is missing because it is produced later in the
             // block (or is this transaction's own, or was spent earlier), which validating in order rejects
@@ -3208,6 +3220,7 @@ bool Chainstate::FinishConnectBlock(const CBlock& block, BlockValidationState& s
         const auto pos{m_blockman.ClaimUndoPos(state, *pindex, undo_size)};
         if (!pos) return false;
         auto undo{std::make_shared<const CBlockUndo>(std::move(result.undo))};
+        result.queued_undo = undo;
         const uint256 prev_hash{pindex->pprev->GetBlockHash()};
         const FlatFilePos data_pos{pos->nFile, pos->nPos + node::STORAGE_HEADER_BYTES};
         node::BlockManager& blockman{m_blockman};
@@ -4045,6 +4058,10 @@ void Chainstate::StageConnectTip(CBlockIndex* pindexNew, StagedConnect& staged, 
     in.ctx.check_scripts = !!staged.script_check_reason;
     // With the parent confirmed there is nothing to wait for: a missing input is final.
     in.ctx.defer_missing_inputs = staged.windowed && pindexNew->pprev != m_chain.Tip();
+    // RunConnectTask() announces a block's transactions before its validation.
+    if (in.ctx.defer_missing_inputs) {
+        in.ctx.made_by_pending_block = [view](const Txid& txid) { return view->CreatesPendingBelow(txid); };
+    }
 }
 
 //! An estimate of what a window block holds in memory between its validation and its publication, beyond
@@ -4086,6 +4103,9 @@ void Chainstate::RunConnectTask(StagedConnect& staged) noexcept
     if (!in.block) {
         auto block{m_chainman.NewBlock(/*on_pool=*/true)};
         const bool read{m_blockman.ReadBlock(*block, in.ctx.block_pos, in.ctx.block_hash, &block_bytes)};
+        // The pages the system keeps of block files already read are memory the store's huge pages are then
+        // not granted from. The files well behind this block's are let go.
+        if (read && staged.sync) m_blockman.ReleaseBlockFilesBelow(in.ctx.block_pos.nFile - node::BlockManager::BLOCK_FILE_RELEASE_LAG);
         if (!read) {
             staged.time_read = staged.time_connected = SteadyClock::now();
             staged.at.emplace<connect_phase::ReadFailed>();
@@ -4099,7 +4119,8 @@ void Chainstate::RunConnectTask(StagedConnect& staged) noexcept
     ConnectBlockResult result;
     bool ok{false};
     const auto failure{util::RunWorkerTask(CONNECT_TASK, [&] {
-            // With deferred transactions the undo data is complete only after the continuation.
+        // What the block will create, for the blocks above that would look for it before it is there.
+        if (staged.sync) staged.view->AnnounceCreates(*in.block);
         staged.view->Prefetch(*in.block);
         ok = ::ConnectBlock(*in.block, in.ctx, *staged.view, /*check_queue=*/nullptr,
                             m_chainman.m_validation_cache, /*just_check=*/false, state, result);
@@ -4298,7 +4319,12 @@ bool Chainstate::PublishConnectTip(
             // (CoinsStore::UnwindBlock()).
             return false;
         }
-        if (apply_after_undo) view.ApplyChanges();
+        // Its undo data has every coin it spent, as it read them: the apply takes from there what the store
+        // does not hold, rather than reading the database a second time (BlockApplyView::ApplyChanges()).
+        if (apply_after_undo) {
+            const ConnectBlockResult& result{validated.result};
+            view.ApplyChanges(block_to_connect.get(), result.queued_undo ? result.queued_undo.get() : &result.undo);
+        }
         time_3 = SteadyClock::now();
         m_chainman.time_connect_total += time_3 - time_2;
         assert(m_chainman.num_blocks_total > 0);
