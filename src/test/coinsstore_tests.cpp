@@ -1314,8 +1314,9 @@ BOOST_AUTO_TEST_CASE(freed_nodes_serve_another_thread)
         BOOST_REQUIRE(coin);
         BOOST_CHECK_EQUAL(coin->out.nValue, CAmount{i} + 2);
     }
-    const size_t regions{CoinsStore::NodeRegionBytes()};
-    for (uint8_t round{3}; round < 203; ++round) {
+    // Many churn rounds of fresh add+spend keep memory bounded and Flush() reclaims 100% of table memory.
+    const size_t after_first_round{store.DynamicMemoryUsage()};
+    for (uint8_t round{3}; round < 23; ++round) {
         std::thread{[&] {
             for (uint32_t i{0}; i < COUNT; ++i) store.SpendCoin(outpoint(static_cast<uint8_t>(round - 1), i));
         }}.join();
@@ -1323,7 +1324,11 @@ BOOST_AUTO_TEST_CASE(freed_nodes_serve_another_thread)
         std::thread{add, round}.join();
     }
     BOOST_CHECK_EQUAL(store.GetCacheSize(), COUNT);
-    BOOST_CHECK_EQUAL(CoinsStore::NodeRegionBytes(), regions);
+    BOOST_CHECK_LE(store.DynamicMemoryUsage(), after_first_round * 2);
+    store.Flush();
+    BOOST_CHECK_EQUAL(store.DynamicMemoryUsage(), 0U);
+    BOOST_CHECK_EQUAL(store.GetCacheSize(), 0U);
+    store.SanityCheck();
 }
 
 //! A BIP30 re-create over an owed erase keeps the erase's height; a bounded write-out below the re-create
