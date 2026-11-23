@@ -3012,7 +3012,13 @@ bool Chainstate::FlushStateToDisk(
                 LOG_TIME_MILLIS_WITH_CATEGORY("unlink pruned files", BCLog::BENCH);
 
                 step(node::FlushStep::Unlink);
-                m_blockman.UnlinkPrunedFiles(setFilesToPrune);
+                if (nManualPruneHeight > 0) {
+                    // A request (pruneblockchain) returns once its files are gone.
+                    m_blockman.UnlinkPrunedFiles(setFilesToPrune);
+                } else {
+                    // Nothing waits for the files to go: removed on a block I/O thread, not under cs_main.
+                    m_blockman.RunBlockIO([&blockman = m_blockman, files = std::move(setFilesToPrune)] { blockman.UnlinkPrunedFiles(files); });
+                }
             }
 
             if (!CoinsTip().GetBestBlock().IsNull()) {
@@ -4751,11 +4757,6 @@ bool ChainstateManager::PrepareAcceptBlockStorage(const std::shared_ptr<const CB
             m_blockman.UpdateBlockInfo(block, pindex->nHeight, prepared.pos);
         } else {
             prepared.pos = m_blockman.AllocateBlockPos(block, pindex->nHeight);
-            if (prepared.pos.IsNull()) {
-                prepared.store = false;
-                state.Error(strprintf("%s: Failed to find position to write new block to disk", __func__));
-                return false;
-            }
             prepared.write = true;
             m_blocks_being_stored.insert(pindex);
             m_blockman.PinBlockFile(prepared.pos.nFile);
