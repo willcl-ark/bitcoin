@@ -10,19 +10,19 @@
 #include <util/threadnames.h>
 #include <util/threadpool.h>
 
-
 #include <algorithm>
 #include <array>
 #include <bit>
 #include <condition_variable>
 #include <exception>
 #include <functional>
-#include <unordered_map>
 #include <limits>
 #include <map>
 #include <stdexcept>
 #include <system_error>
 #include <thread>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -30,15 +30,419 @@
 #include <sys/mman.h>
 #endif
 
-//! The region made ready ahead (NodeRegion()) and the thread that makes it. The thread is started with the
-//! first region asked for ahead and joined by the last store to be destroyed. Never destroyed itself, as
-//! the nodes' depots are not.
+// ---------------------------------------------------------------------------------------------------------
+// WindowOverlay (Txid-keyed flat open-addressed 64-shard table)
+
+void WindowOverlay::FlatTable::Rehash(size_t new_cap)
+{
+    new_cap = std::max<size_t>(16, std::bit_ceil(new_cap));
+    std::vector<uint8_t> new_ctrl(new_cap, EMPTY);
+    std::vector<TxEntry> new_slots(new_cap);
+    const size_t mask{new_cap - 1};
+    for (size_t i{0}; i < ctrl.size(); ++i) {
+        if (ctrl[i] < 2) continue;
+        size_t pos{static_cast<size_t>(slots[i].hash) & mask};
+        while (new_ctrl[pos] != EMPTY) pos = (pos + 1) & mask;
+        new_ctrl[pos] = ctrl[i];
+        new_slots[pos] = slots[i];
+    }
+    ctrl = std::move(new_ctrl);
+    slots = std::move(new_slots);
+    tombstones = 0;
+}
+
+WindowOverlay::TxEntry* WindowOverlay::FlatTable::Find(const Txid& txid, uint64_t h) noexcept
+{
+    if (size == 0) return nullptr;
+    const size_t mask{ctrl.size() - 1};
+    const uint8_t tag{Tag(h)};
+    for (size_t pos{static_cast<size_t>(h) & mask};; pos = (pos + 1) & mask) {
+        const uint8_t c{ctrl[pos]};
+        if (c == EMPTY) return nullptr;
+        if (c == tag && slots[pos].hash == h && slots[pos].tx->GetHash() == txid) return &slots[pos];
+    }
+}
+
+const WindowOverlay::TxEntry* WindowOverlay::FlatTable::Find(const Txid& txid, uint64_t h) const noexcept
+{
+    if (size == 0) return nullptr;
+    const size_t mask{ctrl.size() - 1};
+    const uint8_t tag{Tag(h)};
+    for (size_t pos{static_cast<size_t>(h) & mask};; pos = (pos + 1) & mask) {
+        const uint8_t c{ctrl[pos]};
+        if (c == EMPTY) return nullptr;
+        if (c == tag && slots[pos].hash == h && slots[pos].tx->GetHash() == txid) return &slots[pos];
+    }
+}
+
+WindowOverlay::TxEntry* WindowOverlay::FlatTable::TryInsert(const TxEntry& entry)
+{
+    if (ctrl.empty() || (size + tombstones + 1) * 4 >= ctrl.size() * 3) {
+        Rehash(std::max<size_t>(16, std::bit_ceil((size + 1) * 2)));
+    }
+    const size_t mask{ctrl.size() - 1};
+    const uint8_t tag{Tag(entry.hash)};
+    const Txid& txid{entry.tx->GetHash()};
+    size_t first_tomb{ctrl.size()};
+    for (size_t pos{static_cast<size_t>(entry.hash) & mask};; pos = (pos + 1) & mask) {
+        const uint8_t c{ctrl[pos]};
+        if (c == EMPTY) {
+            const size_t dst{first_tomb < ctrl.size() ? first_tomb : pos};
+            if (first_tomb < ctrl.size()) --tombstones;
+            ctrl[dst] = tag;
+            slots[dst] = entry;
+            ++size;
+            return nullptr;
+        }
+        if (c == TOMBSTONE) {
+            if (first_tomb == ctrl.size()) first_tomb = pos;
+        } else if (c == tag && slots[pos].hash == entry.hash && slots[pos].tx->GetHash() == txid) {
+            return &slots[pos];
+        }
+    }
+}
+
+bool WindowOverlay::FlatTable::Erase(const Txid& txid, uint64_t h, int32_t height) noexcept
+{
+    if (size == 0) return false;
+    const size_t mask{ctrl.size() - 1};
+    const uint8_t tag{Tag(h)};
+    for (size_t pos{static_cast<size_t>(h) & mask};; pos = (pos + 1) & mask) {
+        const uint8_t c{ctrl[pos]};
+        if (c == EMPTY) return false;
+        if (c == tag && slots[pos].hash == h && slots[pos].tx->GetHash() == txid) {
+            if (slots[pos].height != height) return false;
+            ctrl[pos] = TOMBSTONE;
+            slots[pos].tx = nullptr;
+            --size;
+            ++tombstones;
+            return true;
+        }
+    }
+}
+
+std::optional<Coin> WindowOverlay::ExtractCoin(const Shard& shard, const TxEntry& entry, uint32_t n)
+{
+    if (n >= entry.tx->vout.size()) return std::nullopt;
+    const CTxOut& out{entry.tx->vout[n]};
+    if (out.scriptPubKey.IsUnspendable()) return std::nullopt;
+    if (n < 64) {
+        if ((entry.intra_spent_mask & (uint64_t{1} << n)) != 0) return std::nullopt;
+    } else if (entry.has_high_intra_spend) {
+        const COutPoint op{entry.tx->GetHash(), n};
+        for (const auto& [hop, hh] : shard.high_intra_spends) {
+            if (hh == entry.height && hop == op) return std::nullopt;
+        }
+    }
+    return Coin{out, entry.height, entry.is_coinbase};
+}
+
+void WindowOverlay::AddBlockOutputs(int height, std::shared_ptr<const CBlock> block)
+{
+    if (height == 0 || !block || block->vtx.empty()) return;
+
+    {
+        LOCK(m_blocks_mutex);
+        m_blocks.insert_or_assign(height, block);
+        m_total_blocks.store(m_blocks.size(), std::memory_order_release);
+    }
+
+    const size_t n_tx{block->vtx.size()};
+    std::vector<TxEntry> entries(n_tx);
+    std::vector<uint32_t> shard_of(n_tx);
+    std::vector<std::pair<COutPoint, uint32_t>> high_spends;
+
+    // Build a tiny flat hash index of this block's txids (single allocation) to mark intra-block spends.
+    const size_t idx_cap{n_tx > 1 ? std::bit_ceil(n_tx * 2) : 0};
+    std::vector<uint32_t> tx_index(idx_cap, std::numeric_limits<uint32_t>::max());
+    const size_t idx_mask{idx_cap ? idx_cap - 1 : 0};
+
+    for (size_t i{0}; i < n_tx; ++i) {
+        const CTransaction* tx{block->vtx[i].get()};
+        const Txid& txid{tx->GetHash()};
+        const uint64_t h{TxHash(txid)};
+        entries[i] = TxEntry{
+            .tx = tx,
+            .intra_spent_mask = 0,
+            .hash = h,
+            .height = height,
+            .is_coinbase = (i == 0),
+            .has_high_intra_spend = false,
+        };
+        shard_of[i] = static_cast<uint32_t>(ShardIndex(txid));
+        if (idx_cap) {
+            size_t pos{static_cast<size_t>(h) & idx_mask};
+            while (tx_index[pos] != std::numeric_limits<uint32_t>::max()) pos = (pos + 1) & idx_mask;
+            tx_index[pos] = static_cast<uint32_t>(i);
+        }
+    }
+
+    if (idx_cap) {
+        for (size_t i{1}; i < n_tx; ++i) {
+            for (const CTxIn& in : block->vtx[i]->vin) {
+                const uint64_t h{TxHash(in.prevout.hash)};
+                for (size_t pos{static_cast<size_t>(h) & idx_mask};; pos = (pos + 1) & idx_mask) {
+                    const uint32_t idx{tx_index[pos]};
+                    if (idx == std::numeric_limits<uint32_t>::max()) break;
+                    if (entries[idx].hash == h && entries[idx].tx->GetHash() == in.prevout.hash) {
+                        if (in.prevout.n < 64) {
+                            entries[idx].intra_spent_mask |= (uint64_t{1} << in.prevout.n);
+                        } else {
+                            entries[idx].has_high_intra_spend = true;
+                            high_spends.emplace_back(in.prevout, shard_of[idx]);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    std::array<uint32_t, NUM_SHARDS + 1> starts{};
+    for (uint32_t s : shard_of) ++starts[s + 1];
+    for (size_t s{0}; s < NUM_SHARDS; ++s) starts[s + 1] += starts[s];
+    std::vector<uint32_t> order(n_tx);
+    std::array<uint32_t, NUM_SHARDS> next;
+    std::copy_n(starts.begin(), NUM_SHARDS, next.begin());
+    for (uint32_t i{0}; i < n_tx; ++i) order[next[shard_of[i]]++] = i;
+
+    for (size_t s{0}; s < NUM_SHARDS; ++s) {
+        if (starts[s] == starts[s + 1]) continue;
+        Shard& shard{m_shards[s]};
+        LOCK(shard.mutex);
+        for (uint32_t k{starts[s]}; k < starts[s + 1]; ++k) {
+            const TxEntry& e{entries[order[k]]};
+            if (TxEntry* existing{shard.txs.TryInsert(e)}) {
+                if (e.height < existing->height) {
+                    shard.dup_txs.push_back(*existing);
+                    *existing = e;
+                } else {
+                    shard.dup_txs.push_back(e);
+                }
+            }
+        }
+        if (!high_spends.empty()) {
+            for (const auto& [op, hs] : high_spends) {
+                if (hs == s) shard.high_intra_spends.emplace_back(op, height);
+            }
+        }
+    }
+}
+
+void WindowOverlay::RemoveBlocks(std::span<const int> heights, ThreadPool* pool)
+{
+    if (heights.empty()) return;
+
+    std::vector<std::pair<int, std::shared_ptr<const CBlock>>> removing;
+    removing.reserve(heights.size());
+    {
+        LOCK(m_blocks_mutex);
+        for (const int h : heights) {
+            if (auto it{m_blocks.find(h)}; it != m_blocks.end()) {
+                removing.emplace_back(h, std::move(it->second));
+                m_blocks.erase(it);
+            }
+        }
+        m_total_blocks.store(m_blocks.size(), std::memory_order_release);
+    }
+    if (removing.empty()) return;
+
+    struct RemItem {
+        const Txid* txid;
+        uint64_t hash;
+        int32_t height;
+        uint32_t shard;
+    };
+    size_t total_txs{0};
+    for (const auto& [h, block] : removing) total_txs += block->vtx.size();
+    std::vector<RemItem> items;
+    items.reserve(total_txs);
+    std::array<uint32_t, NUM_SHARDS + 1> starts{};
+    for (const auto& [h, block] : removing) {
+        for (const CTransactionRef& tx : block->vtx) {
+            const Txid& txid{tx->GetHash()};
+            const uint32_t s{static_cast<uint32_t>(ShardIndex(txid))};
+            items.push_back({&txid, TxHash(txid), h, s});
+            ++starts[s + 1];
+        }
+    }
+    if (items.empty()) return;
+
+    for (size_t s{0}; s < NUM_SHARDS; ++s) starts[s + 1] += starts[s];
+    std::vector<uint32_t> order(items.size());
+    std::array<uint32_t, NUM_SHARDS> next;
+    std::copy_n(starts.begin(), NUM_SHARDS, next.begin());
+    for (uint32_t i{0}; i < items.size(); ++i) order[next[items[i].shard]++] = i;
+
+    const auto remove_shard{[&](size_t s) noexcept {
+        if (starts[s] == starts[s + 1]) return;
+        Shard& shard{m_shards[s]};
+        LOCK(shard.mutex);
+        for (uint32_t k{starts[s]}; k < starts[s + 1]; ++k) {
+            const RemItem& item{items[order[k]]};
+            if (!shard.dup_txs.empty()) {
+                auto dit{std::find_if(shard.dup_txs.begin(), shard.dup_txs.end(), [&](const TxEntry& e) {
+                    return e.height == item.height && e.hash == item.hash && e.tx->GetHash() == *item.txid;
+                })};
+                if (dit != shard.dup_txs.end()) {
+                    *dit = shard.dup_txs.back();
+                    shard.dup_txs.pop_back();
+                    continue;
+                }
+            }
+            if (TxEntry* slot{shard.txs.Find(*item.txid, item.hash)}; slot && slot->height == item.height) {
+                if (!shard.dup_txs.empty()) {
+                    auto best{shard.dup_txs.end()};
+                    for (auto dit{shard.dup_txs.begin()}; dit != shard.dup_txs.end(); ++dit) {
+                        if (dit->hash == item.hash && dit->tx->GetHash() == *item.txid &&
+                            (best == shard.dup_txs.end() || dit->height < best->height)) {
+                            best = dit;
+                        }
+                    }
+                    if (best != shard.dup_txs.end()) {
+                        *slot = *best;
+                        *best = shard.dup_txs.back();
+                        shard.dup_txs.pop_back();
+                        continue;
+                    }
+                }
+                shard.txs.Erase(*item.txid, item.hash, item.height);
+            }
+        }
+        if (!shard.high_intra_spends.empty()) {
+            std::erase_if(shard.high_intra_spends, [&](const auto& p) {
+                return std::ranges::find(heights, p.second) != heights.end();
+            });
+        }
+    }};
+
+    const size_t helpers{pool && items.size() >= 1024 ? std::min<size_t>(pool->WorkersCount(), 8) : 0};
+    if (helpers > 0) {
+        struct Shared {
+            std::atomic<size_t> next{0};
+            std::atomic<int> active{0};
+        };
+        const auto shared{std::make_shared<Shared>()};
+        for (size_t h{0}; h < helpers; ++h) {
+            (void)pool->Submit([shared, &remove_shard]() noexcept {
+                shared->active.fetch_add(1);
+                for (size_t s{shared->next.fetch_add(1)}; s < NUM_SHARDS; s = shared->next.fetch_add(1)) {
+                    WAITED_FOR_UNDER_LOCK("a window overlay remove helper");
+                    remove_shard(s);
+                }
+                if (shared->active.fetch_sub(1) == 1) shared->active.notify_all();
+            }, /*front=*/true);
+        }
+        for (size_t s{shared->next.fetch_add(1)}; s < NUM_SHARDS; s = shared->next.fetch_add(1)) remove_shard(s);
+        for (int active{shared->active.load()}; active != 0; active = shared->active.load()) shared->active.wait(active);
+    } else {
+        for (size_t s{0}; s < NUM_SHARDS; ++s) remove_shard(s);
+    }
+}
+
+void WindowOverlay::Clear()
+{
+    std::unordered_map<int, std::shared_ptr<const CBlock>> blocks;
+    {
+        LOCK(m_blocks_mutex);
+        blocks.swap(m_blocks);
+        m_total_blocks.store(0, std::memory_order_release);
+    }
+    for (Shard& shard : m_shards) {
+        LOCK(shard.mutex);
+        shard.txs.clear();
+        shard.dup_txs.clear();
+        shard.high_intra_spends.clear();
+    }
+}
+
+std::optional<Coin> WindowOverlay::Lookup(int viewer_height, const COutPoint& outpoint) const
+{
+    if (m_total_blocks.load(std::memory_order_acquire) == 0) return std::nullopt;
+    const uint64_t h{TxHash(outpoint.hash)};
+    const Shard& shard{m_shards[ShardIndex(outpoint.hash)]};
+    LOCK(shard.mutex);
+    const TxEntry* entry{shard.txs.Find(outpoint.hash, h)};
+    if (!entry || entry->height >= viewer_height) return std::nullopt;
+    const TxEntry* best{entry};
+    if (!shard.dup_txs.empty()) {
+        for (const TxEntry& d : shard.dup_txs) {
+            if (d.hash == h && d.tx->GetHash() == outpoint.hash && d.height < viewer_height && d.height > best->height) {
+                best = &d;
+            }
+        }
+    }
+    return ExtractCoin(shard, *best, outpoint.n);
+}
+
+void WindowOverlay::Fetch(int viewer_height, std::span<const COutPoint> outpoints,
+                          std::vector<std::pair<COutPoint, Coin>>& found,
+                          std::vector<COutPoint>& misses) const
+{
+    if (outpoints.empty()) return;
+    if (m_total_blocks.load(std::memory_order_acquire) == 0) {
+        misses.insert(misses.end(), outpoints.begin(), outpoints.end());
+        return;
+    }
+    std::vector<uint32_t> shard_of;
+    std::vector<uint64_t> hashes;
+    shard_of.reserve(outpoints.size());
+    hashes.reserve(outpoints.size());
+    std::array<uint32_t, NUM_SHARDS + 1> starts{};
+    for (const COutPoint& op : outpoints) {
+        const uint32_t s{static_cast<uint32_t>(ShardIndex(op.hash))};
+        shard_of.push_back(s);
+        hashes.push_back(TxHash(op.hash));
+        ++starts[s + 1];
+    }
+    for (size_t s{0}; s < NUM_SHARDS; ++s) starts[s + 1] += starts[s];
+    std::vector<uint32_t> order(outpoints.size());
+    std::array<uint32_t, NUM_SHARDS> next;
+    std::copy_n(starts.begin(), NUM_SHARDS, next.begin());
+    for (uint32_t i{0}; i < outpoints.size(); ++i) order[next[shard_of[i]]++] = i;
+
+    for (size_t s{0}; s < NUM_SHARDS; ++s) {
+        if (starts[s] == starts[s + 1]) continue;
+        const Shard& shard{m_shards[s]};
+        LOCK(shard.mutex);
+        if (shard.txs.empty()) {
+            for (uint32_t k{starts[s]}; k < starts[s + 1]; ++k) misses.push_back(outpoints[order[k]]);
+            continue;
+        }
+        for (uint32_t k{starts[s]}; k < starts[s + 1]; ++k) {
+            const uint32_t idx{order[k]};
+            const COutPoint& op{outpoints[idx]};
+            const uint64_t h{hashes[idx]};
+            const TxEntry* entry{shard.txs.Find(op.hash, h)};
+            if (!entry || entry->height >= viewer_height) {
+                misses.push_back(op);
+                continue;
+            }
+            const TxEntry* best{entry};
+            if (!shard.dup_txs.empty()) {
+                for (const TxEntry& d : shard.dup_txs) {
+                    if (d.hash == h && d.tx->GetHash() == op.hash && d.height < viewer_height && d.height > best->height) {
+                        best = &d;
+                    }
+                }
+            }
+            if (auto coin{ExtractCoin(shard, *best, op.n)}) {
+                found.emplace_back(op, std::move(*coin));
+            } else {
+                misses.push_back(op);
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// RegionAhead & CoinsStore lifecycle
+
 struct CoinsStore::RegionAhead {
     Mutex mutex;
     std::condition_variable cv;
     void* ready GUARDED_BY(mutex){nullptr};
     bool wanted GUARDED_BY(mutex){false};
-    //! Set by the store that found itself the last, until it has joined the thread.
     bool stop GUARDED_BY(mutex){false};
     int stores GUARDED_BY(mutex){0};
     std::thread thread GUARDED_BY(mutex);
@@ -53,9 +457,13 @@ struct CoinsStore::RegionAhead {
                 if (stop) return;
                 wanted = false;
             }
-            void* next{HintedRegion(NODE_REGION_BYTES, NODE_REGION_BYTES)};
-            // Every small page, for where no huge page was to be had: the first touch of a huge page
-            // supplies all of it, and the touches after it cost nothing.
+            void* next{nullptr};
+            try {
+                next = HintedRegion(NODE_REGION_BYTES, NODE_REGION_BYTES);
+            } catch (const std::bad_alloc&) {
+                LogWarning("coinsahead: failed to preallocate %zu MiB node region", NODE_REGION_BYTES >> 20);
+                continue;
+            }
             static constexpr size_t SMALL_PAGE_BYTES{4096};
             for (size_t at{0}; at < NODE_REGION_BYTES; at += SMALL_PAGE_BYTES) static_cast<volatile std::byte*>(next)[at] = std::byte{0};
             LOCK(mutex);
@@ -79,7 +487,7 @@ CoinsStore::CoinsStore(CCoinsView* base_view, size_t shards, bool deterministic)
 {
     for (Shard& shard : m_shards) {
         LOCK(shard.mutex);
-        Resized(shard); // whatever bucket array an empty map has
+        Resized(shard);
     }
     RegionAhead& ahead{RegionAheadState()};
     LOCK(ahead.mutex);
@@ -92,8 +500,6 @@ CoinsStore::~CoinsStore()
     std::thread ending;
     {
         LOCK(ahead.mutex);
-        // Behind the last store nothing asks for a region ahead: its thread ends, and the region it had
-        // ready goes back. (A store destroyed while an earlier last one is still at this leaves it to that one.)
         if (--ahead.stores != 0 || ahead.stop) return;
         ahead.stop = true;
         ending = std::move(ahead.thread);
@@ -111,7 +517,6 @@ CoinsStore::~CoinsStore()
 
 CoinsStore::Totals& CoinsStore::MyTotals() const
 {
-    // Stripes are dealt in turn; threads beyond their number share, which costs a shared line and nothing else.
     static std::atomic<size_t> next{0};
     static thread_local const size_t stripe{next.fetch_add(1, std::memory_order_relaxed) % TOTALS_STRIPES};
     return m_totals[stripe];
@@ -121,7 +526,6 @@ size_t CoinsStore::SumTotals(std::atomic<int64_t> Totals::* field) const
 {
     int64_t total{0};
     for (const Totals& totals : m_totals) total += (totals.*field).load(std::memory_order_relaxed);
-    // Read beside a change under way, an addition can be missed whose removal is seen.
     return static_cast<size_t>(std::max<int64_t>(0, total));
 }
 
@@ -130,7 +534,6 @@ void* CoinsStore::HintedRegion(size_t bytes, size_t align)
     assert(bytes != 0 && bytes % HUGE_PAGE_BYTES == 0 && align % HUGE_PAGE_BYTES == 0);
     void* region{::operator new(bytes, std::align_val_t{align})};
 #ifdef MADV_HUGEPAGE
-    // Advice the system is free to ignore, as it does where transparent huge pages are off.
     (void)madvise(region, bytes, MADV_HUGEPAGE);
 #endif
     return region;
@@ -143,14 +546,11 @@ void* CoinsStore::NodeRegion()
     void* region;
     {
         LOCK(ahead.mutex);
-        // Nodes outside the life of any store wait for their memory themselves.
         if (ahead.stores == 0 || ahead.stop) return HintedRegion(NODE_REGION_BYTES, NODE_REGION_BYTES);
         if (!ahead.thread.joinable()) {
             try {
                 ahead.thread = std::thread{[&ahead] { ahead.Run(); }};
-            } catch (const std::system_error& e) { // what std::thread throws when no thread can be started
-                // The caller is in the middle of a batch, under a shard's mutex: it waits for its region
-                // itself, and the next call tries the thread again.
+            } catch (const std::system_error& e) {
                 LogWarning("Failed to start the coinsahead thread (%s)", e.what());
                 return HintedRegion(NODE_REGION_BYTES, NODE_REGION_BYTES);
             }
@@ -164,8 +564,6 @@ void* CoinsStore::NodeRegion()
 
 int64_t CoinsStore::NodeBytes()
 {
-    // A node's own size, not what the general allocator would hold for it: nodes are carved back to
-    // back from the depot's regions, with no header and no rounding between them.
     return static_cast<int64_t>(sizeof(Map::Cell));
 }
 
@@ -213,7 +611,6 @@ void CoinsStore::SubUsage(Shard& shard, size_t bytes) const
 void CoinsStore::Resized(Shard& shard) const
 {
     AssertLockHeld(shard.mutex);
-    // A cell for each entry and the bucket array.
     const size_t entries{shard.map.size()};
     const size_t buckets{shard.map.bucket_count()};
     if (entries == shard.entries && buckets == shard.buckets) return;
@@ -231,8 +628,6 @@ void CoinsStore::Resized(Shard& shard) const
 
 int64_t CoinsStore::DirtyBytes(const Entry& entry)
 {
-    // The node and the coin's script, as DynamicMemoryUsage() counts them: what the tier's usage falls by
-    // when the entry is written out and then evicted (or, for a spent one, erased).
     return NodeBytes() + static_cast<int64_t>(entry.coin.DynamicMemoryUsage());
 }
 
@@ -251,7 +646,6 @@ void CoinsStore::Detach(Shard& shard, Node& node) const
         MyTotals().dirty.fetch_sub(1, std::memory_order_relaxed);
         if (shard.dirty_count == 0) FreeDirtySpans(shard);
     } else if (entry.list == LIST_CLEAN) {
-        // prev is towards the young end, next towards the old end.
         if (entry.prev) entry.prev->second.next = entry.next; else shard.clean_young = entry.next;
         if (entry.next) entry.next->second.prev = entry.prev; else shard.clean_old = entry.prev;
     }
@@ -295,7 +689,6 @@ void CoinsStore::EraseDetached(Shard& shard, Map::iterator it) const
 {
     AssertLockHeld(shard.mutex);
     Assume(it->second.list == LIST_NONE);
-    // A run holds a pointer to every entry it collected until their chunk settles.
     Assert(!it->second.collected);
     shard.map.erase(it);
     Resized(shard);
@@ -316,145 +709,10 @@ void CoinsStore::EraseEntry(Shard& shard, Node& node) const
     Entry& entry{node.second};
     Detach(shard, node);
     SubUsage(shard, entry.coin.DynamicMemoryUsage());
-    Assert(!entry.collected); // as in EraseDetached()
-    // A copy of the key, which goes with the node.
+    Assert(!entry.collected);
     const COutPoint outpoint{node.first};
     shard.map.erase(outpoint);
     Resized(shard);
-}
-
-bool CoinsStore::Pending(const Entry& entry) const
-{
-    const int confirmed{m_confirmed_height.load(std::memory_order_relaxed)};
-    return entry.coin.IsSpent() ? entry.block_spend && entry.height > confirmed
-                                : entry.block_create && static_cast<int>(entry.coin.nHeight) > confirmed;
-}
-
-CoinsStore::Sight CoinsStore::See(const Entry& entry, int viewer_height) const
-{
-    // The entry's state says what there is to see, the heights say whether this viewer sees it.
-    switch (coins_entry::ReadingOf(StateOf(entry))) {
-    case coins_entry::Reading::NOTHING: return Sight::NOTHING;
-    case coins_entry::Reading::COIN: return Sight::COIN;
-    case coins_entry::Reading::BLOCK_RECORD:
-        // The viewer's own spend, or a lower block's: spent.
-        if (entry.height <= viewer_height) return Sight::NOTHING;
-        return entry.height > m_confirmed_height.load(std::memory_order_relaxed) ? Sight::RECORD : Sight::NOTHING;
-    case coins_entry::Reading::BLOCK_COIN: {
-        const int created{static_cast<int>(entry.coin.nHeight)};
-        if (created <= viewer_height) return Sight::COIN;
-        return created > m_confirmed_height.load(std::memory_order_relaxed) ? Sight::NOTHING : Sight::COIN;
-    }
-    } // no default case, so the compiler can warn about missing cases
-    assert(false);
-}
-
-CoinsStore::BlockId CoinsStore::SlotAt(int height) const
-{
-    for (BlockId id{1}; id < m_window.size(); ++id) {
-        const WindowBlock& slot{m_window[id]};
-        // The status is published last by the writer; what it publishes (the height) is read after it.
-        if (slot.status.load(std::memory_order_acquire) == BlockStatus::FREE) continue;
-        if (slot.height.load(std::memory_order_relaxed) == height) return id;
-    }
-    return NO_BLOCK;
-}
-
-void CoinsStore::ChargeDelta(int height, int64_t delta) const
-{
-    const BlockId id{SlotAt(height)};
-    if (id == NO_BLOCK) return;
-    const WindowBlock& slot{m_window[id]};
-    if (slot.status.load(std::memory_order_acquire) == BlockStatus::APPLIED) slot.dirty_delta.fetch_add(delta, std::memory_order_relaxed);
-}
-
-std::optional<Coin> CoinsStore::SeenCoin(Entry& entry, const COutPoint& outpoint, int viewer_height) const
-{
-    switch (See(entry, viewer_height)) {
-    case Sight::COIN:
-        Reference(entry);
-        return entry.coin;
-    case Sight::RECORD: return RecordCoin(entry.height, outpoint, viewer_height);
-    case Sight::NOTHING: break;
-    }
-    return std::nullopt;
-}
-
-//! The last spend of `outpoint` in a block's record that still stands, or nullptr; with the block's mutex
-//! held.
-template <typename Record>
-static auto* LiveSpend(Record& record, const COutPoint& outpoint)
-{
-    const auto item{std::find_if(record.rbegin(), record.rend(), [&](const auto& u) { return u.spend && !u.dead && u.outpoint == outpoint; })};
-    return item == record.rend() ? nullptr : &*item;
-}
-
-std::optional<Coin> CoinsStore::RecordCoin(int spender_height, const COutPoint& outpoint, int viewer_height) const
-{
-    const BlockId id{SlotAt(spender_height)};
-    if (id == NO_BLOCK) return std::nullopt;
-    const WindowBlock& slot{m_window[id]};
-    LOCK(slot.mutex);
-    if (slot.status.load(std::memory_order_relaxed) == BlockStatus::FREE || slot.height.load(std::memory_order_relaxed) != spender_height) return std::nullopt;
-    const int confirmed{m_confirmed_height.load(std::memory_order_relaxed)};
-    const auto* item{LiveSpend(slot.record, outpoint)};
-    if (!item) return std::nullopt;
-    // A coin an open block created, which is not there yet from where the viewer stands.
-    const int created{static_cast<int>(item->coin.nHeight)};
-    if (item->created && created > confirmed && created > viewer_height) return std::nullopt;
-    return item->coin;
-}
-
-std::optional<Coin> CoinsStore::RecordScan(const COutPoint& outpoint) const
-{
-    const int confirmed{m_confirmed_height.load(std::memory_order_relaxed)};
-    for (BlockId id{1}; id < m_window.size(); ++id) {
-        const WindowBlock& slot{m_window[id]};
-        if (slot.status.load(std::memory_order_acquire) == BlockStatus::FREE) continue;
-        LOCK(slot.mutex);
-        if (slot.status.load(std::memory_order_relaxed) == BlockStatus::FREE) continue;
-        if (const auto* item{LiveSpend(slot.record, outpoint)}) {
-            // A coin an open block created is no reader's.
-            if (item->created && static_cast<int>(item->coin.nHeight) > confirmed) return std::nullopt;
-            return item->coin;
-        }
-    }
-    return std::nullopt;
-}
-
-std::optional<Coin> CoinsStore::OwedValue(int creator_height, const COutPoint& outpoint) const
-{
-    const BlockId id{SlotAt(creator_height)};
-    if (id == NO_BLOCK) return std::nullopt;
-    const WindowBlock& slot{m_window[id]};
-    LOCK(slot.mutex);
-    if (slot.status.load(std::memory_order_relaxed) == BlockStatus::FREE || slot.height.load(std::memory_order_relaxed) != creator_height) return std::nullopt;
-    // A create is in the record for the coin it went over alone.
-    for (auto it{slot.record.rbegin()}; it != slot.record.rend(); ++it) {
-        if (!it->spend && !it->dead && it->outpoint == outpoint) return it->coin;
-    }
-    return std::nullopt;
-}
-
-void CoinsStore::Record(WindowBlock& mine, std::vector<Undo>& undo, std::vector<COutPoint>* plain_creates, std::vector<StoredCoin>& long_coins, int64_t& delta)
-{
-    if (delta != 0) mine.dirty_delta.fetch_add(std::exchange(delta, 0), std::memory_order_relaxed);
-    // A long coin comes with the item that points into it.
-    if (undo.empty() && (!plain_creates || plain_creates->empty())) return;
-    LOCK(mine.mutex);
-    for (const Undo& item : undo) {
-        if (item.spend && item.owed) mine.owed_spends = true;
-    }
-    mine.record.insert(mine.record.end(), undo.begin(), undo.end());
-    undo.clear();
-    if (!long_coins.empty()) {
-        mine.long_coins.insert(mine.long_coins.end(), std::make_move_iterator(long_coins.begin()), std::make_move_iterator(long_coins.end()));
-        long_coins.clear();
-    }
-    if (plain_creates) {
-        mine.plain_creates.insert(mine.plain_creates.end(), plain_creates->begin(), plain_creates->end());
-        plain_creates->clear();
-    }
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -462,36 +720,30 @@ void CoinsStore::Record(WindowBlock& mine, std::vector<Undo>& undo, std::vector<
 
 std::optional<Coin> CoinsStore::Lookup(const COutPoint& outpoint) const
 {
-    return LookupFor(NO_BLOCK, outpoint);
-}
-
-std::optional<Coin> CoinsStore::LookupFor(BlockId viewer, const COutPoint& outpoint) const
-{
-    const int viewer_height{ViewerHeight(viewer)};
     Shard& shard{ShardFor(outpoint)};
     while (true) {
         uint64_t settles;
         {
             LOCK(shard.mutex);
-            if (auto it{shard.map.find(outpoint)}; it != shard.map.end()) return SeenCoin(it->second, outpoint, viewer_height);
+            if (auto it{shard.map.find(outpoint)}; it != shard.map.end()) {
+                Entry& entry{it->second};
+                if (entry.coin.IsSpent()) return std::nullopt;
+                Reference(entry);
+                return entry.coin.ToCoin();
+            }
             settles = shard.settles;
         }
-        // A miss: read the base with the shard unlocked, then re-take the shard and insert unless another
-        // thread brought the entry in meanwhile (in which case its state wins, whatever it is).
         std::optional<Coin> coin{base->GetCoin(outpoint)};
         LOCK(shard.mutex);
-        // A write-out settled entries of the shard meanwhile: the coin may have been spent, written as an
-        // erase and dropped from the tier since the miss, with the base read before the erase. Look again.
         if (shard.settles != settles) continue;
         auto it{shard.map.find(outpoint)};
-        if (it != shard.map.end()) return SeenCoin(it->second, outpoint, viewer_height);
-        if (!coin) {
-            // In neither place. A confirmed coin the database never held and an open block spent is in that
-            // block's record alone, where a reader finds it. An applier does not look there: a lower block
-            // spending what a higher one spent is a chain that fails, and is connected again in order.
-            if (viewer == NO_BLOCK && m_open_slots.load(std::memory_order_relaxed) > 0) return RecordScan(outpoint);
-            return std::nullopt;
+        if (it != shard.map.end()) {
+            Entry& entry{it->second};
+            if (entry.coin.IsSpent()) return std::nullopt;
+            Reference(entry);
+            return entry.coin.ToCoin();
         }
+        if (!coin) return std::nullopt;
         Assert(!coin->IsSpent());
         it = shard.map.try_emplace(outpoint).first;
         Resized(shard);
@@ -503,22 +755,6 @@ std::optional<Coin> CoinsStore::LookupFor(BlockId viewer, const COutPoint& outpo
     }
 }
 
-std::optional<Coin> CoinsStore::PeekCoinFor(BlockId viewer, const COutPoint& outpoint) const
-{
-    const int viewer_height{ViewerHeight(viewer)};
-    Shard& shard{ShardFor(outpoint)};
-    {
-        LOCK(shard.mutex);
-        if (auto it{shard.map.find(outpoint)}; it != shard.map.end()) return SeenCoin(it->second, outpoint, viewer_height);
-    }
-    std::optional<Coin> coin{base->PeekCoin(outpoint)};
-    if (coin || viewer != NO_BLOCK || m_open_slots.load(std::memory_order_relaxed) == 0) return coin;
-    // As LookupFor(): a reader's coin may be in an open block's record alone.
-    LOCK(shard.mutex);
-    if (auto it{shard.map.find(outpoint)}; it != shard.map.end()) return SeenCoin(it->second, outpoint, viewer_height);
-    return RecordScan(outpoint);
-}
-
 std::optional<Coin> CoinsStore::GetCoin(const COutPoint& outpoint) const
 {
     return Lookup(outpoint);
@@ -526,7 +762,31 @@ std::optional<Coin> CoinsStore::GetCoin(const COutPoint& outpoint) const
 
 std::optional<Coin> CoinsStore::PeekCoin(const COutPoint& outpoint) const
 {
-    return PeekCoinFor(NO_BLOCK, outpoint);
+    Shard& shard{ShardFor(outpoint)};
+    while (true) {
+        uint64_t settles;
+        {
+            LOCK(shard.mutex);
+            if (auto it{shard.map.find(outpoint)}; it != shard.map.end()) {
+                Entry& entry{it->second};
+                if (entry.coin.IsSpent()) return std::nullopt;
+                Reference(entry);
+                return entry.coin.ToCoin();
+            }
+            settles = shard.settles;
+        }
+        std::optional<Coin> coin{base->PeekCoin(outpoint)};
+        if (!coin) return std::nullopt;
+        LOCK(shard.mutex);
+        if (shard.settles != settles) continue;
+        if (auto it{shard.map.find(outpoint)}; it != shard.map.end()) {
+            Entry& entry{it->second};
+            if (entry.coin.IsSpent()) return std::nullopt;
+            Reference(entry);
+            return entry.coin.ToCoin();
+        }
+        return coin;
+    }
 }
 
 bool CoinsStore::HaveCoin(const COutPoint& outpoint) const
@@ -539,20 +799,13 @@ bool CoinsStore::HaveCoinInCache(const COutPoint& outpoint) const
     Shard& shard{ShardFor(outpoint)};
     LOCK(shard.mutex);
     const auto it{shard.map.find(outpoint)};
-    if (it == shard.map.end()) return false;
-    switch (See(it->second, /*viewer_height=*/-1)) {
-    case Sight::COIN: return true;
-    case Sight::RECORD: return RecordCoin(it->second.height, outpoint, /*viewer_height=*/-1).has_value();
-    case Sight::NOTHING: break;
-    }
-    return false;
+    return it != shard.map.end() && !it->second.coin.IsSpent();
 }
 
 static const Coin STORE_EMPTY_COIN;
 
 const Coin& CoinsStore::AccessCoin(const COutPoint& outpoint) const
 {
-    // A copy, good until the thread's next call: a reference into a shard would not do (see the class).
     std::optional<Coin> coin{Lookup(outpoint)};
     if (!coin) return STORE_EMPTY_COIN;
     static thread_local Coin t_coin;
@@ -562,7 +815,9 @@ const Coin& CoinsStore::AccessCoin(const COutPoint& outpoint) const
 
 uint256 CoinsStore::GetBestBlock() const
 {
-    if (m_tier_block_hash.IsNull()) m_tier_block_hash = base->GetBestBlock();
+    if (m_tier_block_hash.IsNull()) {
+        m_tier_block_hash = base->GetBestBlock();
+    }
     return m_tier_block_hash;
 }
 
@@ -579,6 +834,8 @@ void CoinsStore::SetBestBlock(const uint256& block_hash, int height)
 }
 
 // ---------------------------------------------------------------------------------------------------------
+// Confirmed mutations
+
 void CoinsStore::KeepWritten(std::vector<CoinWrite> restored)
 {
     for (const CoinWrite& write : restored) {
@@ -586,19 +843,15 @@ void CoinsStore::KeepWritten(std::vector<CoinWrite> restored)
         LOCK(shard.mutex);
         if (auto it{shard.map.find(write.outpoint)}; it != shard.map.end()) Transit(it->second, Event::KeptWritten);
     }
+    if (m_restored.empty()) {
+        m_restored = std::move(restored);
+        return;
+    }
     m_restored.insert(m_restored.end(), std::make_move_iterator(restored.begin()), std::make_move_iterator(restored.end()));
 }
 
-// Confirmed changes without a block identity
-//
-// None is made while a block is open: such a change clears the block flags of an entry an open block
-// created or spent (coins_entry_machine.h), and the block's unwind would then skip the entry. The callers
-// keep to that (a block is disconnected, and a view written through, before any block is staged); each
-// entry point checks it.
-
 void CoinsStore::AddCoin(const COutPoint& outpoint, Coin&& coin, bool possible_overwrite)
 {
-    Assert(m_open_slots.load(std::memory_order_relaxed) == 0); // see "Confirmed changes without a block identity"
     assert(!coin.IsSpent());
     if (coin.out.scriptPubKey.IsUnspendable()) return;
     Shard& shard{ShardFor(outpoint)};
@@ -612,10 +865,7 @@ void CoinsStore::AddCoin(const COutPoint& outpoint, Coin&& coin, bool possible_o
         if (!entry.coin.IsSpent()) {
             throw std::logic_error("Attempted to overwrite an unspent coin (when possible_overwrite is false)");
         }
-        // A spent entry that is dirty records a spentness not yet in the database; re-adding the coin must
-        // not make it fresh, or a later spend would drop the entry and the database would keep the coin.
-        // A new entry, or a spent entry already written, can be fresh. (See CCoinsViewCache::AddCoin.)
-        fresh = !entry.dirty;
+        fresh = inserted;
     }
     if (!inserted) {
         Detach(shard, *it);
@@ -629,7 +879,6 @@ void CoinsStore::AddCoin(const COutPoint& outpoint, Coin&& coin, bool possible_o
 
 void CoinsStore::EmplaceCoinInternalDANGER(const COutPoint& outpoint, Coin&& coin)
 {
-    Assert(m_open_slots.load(std::memory_order_relaxed) == 0); // see "Confirmed changes without a block identity"
     Shard& shard{ShardFor(outpoint)};
     LOCK(shard.mutex);
     auto [it, inserted]{shard.map.try_emplace(outpoint)};
@@ -638,50 +887,55 @@ void CoinsStore::EmplaceCoinInternalDANGER(const COutPoint& outpoint, Coin&& coi
     Entry& entry{it->second};
     entry.coin = std::move(coin);
     Transit(entry, coins_entry::ABSENT, entry.coin.IsSpent() ? Event::ConfirmedSpend : Event::ConfirmedWrite, m_change_height);
-    // As the entry holds the coin: a script a Coin keeps inline may be on the heap here, and the reverse.
     AddUsage(shard, entry.coin.DynamicMemoryUsage());
     Attach(shard, *it);
 }
 
-void CoinsStore::SpendEntry(Shard& shard, Map::iterator it, Coin* moveto)
+bool CoinsStore::SpendEntry(Shard& shard, Map::iterator it, Coin* moveto)
 {
     AssertLockHeld(shard.mutex);
-    // As CCoinsViewCache::SpendCoin: an entry that is present is "spent" whether or not it still holds a
-    // coin, so that a caller spending an already spent entry gets the same answer from both.
     Entry& entry{it->second};
+    if (entry.coin.IsSpent()) {
+        if (moveto) *moveto = Coin{};
+        return true;
+    }
     const State from{StateOf(entry)};
     Detach(shard, *it);
     SubUsage(shard, entry.coin.DynamicMemoryUsage());
-    if (moveto) *moveto = std::move(entry.coin);
+    if (moveto) *moveto = entry.coin.ToCoin();
     if (entry.fresh) {
-        // Never written: the database has nothing to erase.
         EraseDetached(shard, it);
-        return;
+        return true;
     }
     entry.coin.Clear();
-    // Under the change height, or where an earlier change is owed still (coins_entry::Height::Lower).
     Transit(entry, from, Event::ConfirmedSpend, m_change_height);
     Attach(shard, *it);
+    return true;
 }
 
 bool CoinsStore::SpendCoin(const COutPoint& outpoint, Coin* moveto)
 {
-    Assert(m_open_slots.load(std::memory_order_relaxed) == 0); // see "Confirmed changes without a block identity"
     Shard& shard{ShardFor(outpoint)};
-    {
-        LOCK(shard.mutex);
-        if (auto it{shard.map.find(outpoint)}; it != shard.map.end()) {
-            SpendEntry(shard, it, moveto);
-            return true;
+    while (true) {
+        uint64_t settles;
+        {
+            LOCK(shard.mutex);
+            if (auto it{shard.map.find(outpoint)}; it != shard.map.end()) return SpendEntry(shard, it, moveto);
+            settles = shard.settles;
         }
+        std::optional<Coin> coin{base->GetCoin(outpoint)};
+        LOCK(shard.mutex);
+        if (shard.settles != settles) continue;
+        auto it{shard.map.find(outpoint)};
+        if (it != shard.map.end()) return SpendEntry(shard, it, moveto);
+        if (!coin) return false;
+        if (moveto) *moveto = std::move(*coin);
+        it = shard.map.try_emplace(outpoint).first;
+        Resized(shard);
+        Transit(it->second, coins_entry::ABSENT, Event::ConfirmedSpend, m_change_height);
+        Attach(shard, *it);
+        return true;
     }
-    // Not in the tier: bring the coin in from the base, then spend it; nothing to spend if the base lacks it.
-    if (!Lookup(outpoint)) return false;
-    LOCK(shard.mutex);
-    auto it{shard.map.find(outpoint)};
-    if (it == shard.map.end()) return false;
-    SpendEntry(shard, it, moveto);
-    return true;
 }
 
 void CoinsStore::Uncache(const COutPoint& outpoint)
@@ -689,377 +943,66 @@ void CoinsStore::Uncache(const COutPoint& outpoint)
     Shard& shard{ShardFor(outpoint)};
     LOCK(shard.mutex);
     auto it{shard.map.find(outpoint)};
-    if (it == shard.map.end() || it->second.dirty) return;
-    TraceUncache(outpoint, it->second.coin);
-    EraseEntry(shard, it);
+    if (it != shard.map.end() && !it->second.dirty) {
+        EraseEntry(shard, it);
+    }
 }
 
 void CoinsStore::BatchWrite(CoinsViewCacheCursor& cursor, const uint256& block_hash)
 {
-    Assert(m_open_slots.load(std::memory_order_relaxed) == 0); // see "Confirmed changes without a block identity"
     for (auto it{cursor.Begin()}; it != cursor.End(); it = cursor.NextAndMaybeErase(*it)) {
         if (!it->second.IsDirty()) continue;
         const COutPoint& outpoint{it->first};
+        CCoinsCacheEntry& child{it->second};
         Shard& shard{ShardFor(outpoint)};
         LOCK(shard.mutex);
-        auto [ours, inserted]{shard.map.try_emplace(outpoint)};
-        if (inserted) Resized(shard);
-        Entry& entry{ours->second};
-        const State from{StateOf(entry)};
-        Event event;
-        if (inserted) {
-            if (it->second.IsFresh() && it->second.coin.IsSpent()) {
-                // Created and spent inside the child: nothing to record.
-                EraseDetached(shard, ours);
-                continue;
+        auto map_it{shard.map.find(outpoint)};
+        if (map_it == shard.map.end()) {
+            if (child.IsFresh() && child.coin.IsSpent()) continue;
+            map_it = shard.map.try_emplace(outpoint).first;
+            Resized(shard);
+            Entry& entry{map_it->second};
+            if (child.coin.IsSpent()) {
+                Transit(entry, coins_entry::ABSENT, Event::ConfirmedSpend, m_change_height);
+            } else {
+                entry.coin = std::move(child.coin);
+                Transit(entry, coins_entry::ABSENT, child.IsFresh() ? Event::ConfirmedNew : Event::ConfirmedWrite, TagFor(entry.coin));
+                AddUsage(shard, entry.coin.DynamicMemoryUsage());
             }
-            entry.coin = cursor.WillErase(*it) ? std::move(it->second.coin) : it->second.coin;
-            event = entry.coin.IsSpent() ? Event::ConfirmedSpend : it->second.IsFresh() ? Event::ConfirmedNew : Event::ConfirmedWrite;
-        } else {
-            if (it->second.IsFresh() && !entry.coin.IsSpent()) {
-                throw std::logic_error("FRESH flag misapplied to coin that exists in parent cache");
-            }
-            if (entry.fresh && it->second.coin.IsSpent()) {
-                // Never written and now spent: drop it.
-                EraseEntry(shard, ours);
-                continue;
-            }
-            Detach(shard, *ours);
-            SubUsage(shard, entry.coin.DynamicMemoryUsage());
-            entry.coin = cursor.WillErase(*it) ? std::move(it->second.coin) : it->second.coin;
-            // Not made fresh: the entry may be in the database already (see CCoinsViewCache::BatchWrite).
-            event = entry.coin.IsSpent() ? Event::ConfirmedSpend : Event::BatchOverwrite;
+            Attach(shard, *map_it);
+            continue;
         }
-        Transit(entry, from, event, entry.coin.IsSpent() ? m_change_height : TagFor(entry.coin));
-        AddUsage(shard, entry.coin.DynamicMemoryUsage());
-        Attach(shard, *ours);
+        Entry& entry{map_it->second};
+        if (child.IsFresh() && !entry.coin.IsSpent()) {
+            throw std::logic_error("Fresh flag misapplied to coin that exists in parent cache");
+        }
+        if (entry.fresh && child.coin.IsSpent()) {
+            EraseEntry(shard, map_it);
+            continue;
+        }
+        const State from{StateOf(entry)};
+        Detach(shard, *map_it);
+        SubUsage(shard, entry.coin.DynamicMemoryUsage());
+        if (child.coin.IsSpent()) {
+            entry.coin.Clear();
+            Transit(entry, from, Event::ConfirmedSpend, m_change_height);
+        } else {
+            entry.coin = std::move(child.coin);
+            Transit(entry, from, Event::BatchOverwrite, TagFor(entry.coin));
+            AddUsage(shard, entry.coin.DynamicMemoryUsage());
+        }
+        Attach(shard, *map_it);
     }
-    SetBestBlock(block_hash);
+    if (!block_hash.IsNull()) SetBestBlock(block_hash);
 }
 
 // ---------------------------------------------------------------------------------------------------------
-// Changes with a block identity
-
-CoinsStore::BlockId CoinsStore::BeginBlock(int height, bool mark_fresh_spends)
-{
-    for (BlockId id{1}; id < m_window.size(); ++id) {
-        WindowBlock& slot{m_window[id]};
-        if (slot.status.load(std::memory_order_relaxed) != BlockStatus::FREE) continue;
-        // Counted before the slot shows: a reader that finds the count at zero has no record to look into.
-        m_open_slots.fetch_add(1, std::memory_order_relaxed);
-        LOCK(slot.mutex);
-        slot.conflicts = 0;
-        slot.owed_spends = false;
-        slot.dirty_delta.store(0, std::memory_order_relaxed);
-        slot.height.store(height, std::memory_order_relaxed);
-        slot.begin_confirmed.store(m_confirmed_height.load(std::memory_order_relaxed), std::memory_order_relaxed);
-        slot.mark_fresh_spends.store(mark_fresh_spends, std::memory_order_relaxed);
-        slot.creates_pending.store(false, std::memory_order_relaxed);
-        slot.status.store(BlockStatus::APPLIED, std::memory_order_release);
-        return id;
-    }
-    // More blocks open than the widest window can hold: a caller's error, never the chain's.
-    assert(false);
-    return NO_BLOCK;
-}
-
-int CoinsStore::BlockHeight(BlockId block) const
-{
-    Assert(block < m_window.size());
-    return m_window[block].height.load(std::memory_order_relaxed);
-}
-
-//! An entry of the pending transaction ids: the id's tag, the announcing block's height and its slot.
-static constexpr uint64_t PENDING_HEIGHT_MASK{0xffffff};
-static size_t PendingTxidPlace(const Txid& txid, size_t places) { return txid.ToUint256().GetUint64(1) & (places - 1); }
-static uint64_t PendingTxidTag(const Txid& txid) { return txid.ToUint256().GetUint64(2) >> 32; }
-
-void CoinsStore::AnnounceCreates(BlockId block, std::span<const CTransactionRef> txs)
-{
-    Assert(block != NO_BLOCK && block < m_window.size());
-    static_assert(MAX_WINDOW_SLOTS <= 256 && std::has_single_bit(PENDING_TXID_PLACES));
-    WindowBlock& slot{m_window[block]};
-    std::atomic<uint64_t>* table{m_pending_txids.load(std::memory_order_acquire)};
-    if (!table) {
-        std::call_once(m_pending_txids_once, [&] {
-            m_pending_txids_owner = std::make_unique<std::atomic<uint64_t>[]>(PENDING_TXID_PLACES);
-            m_pending_txids.store(m_pending_txids_owner.get(), std::memory_order_release);
-        });
-        table = m_pending_txids.load(std::memory_order_acquire);
-    }
-    const uint64_t owner{(static_cast<uint64_t>(slot.height.load(std::memory_order_relaxed)) & PENDING_HEIGHT_MASK) << 8 | block};
-    for (const CTransactionRef& tx : txs) {
-        table[PendingTxidPlace(tx->GetHash(), PENDING_TXID_PLACES)].store(PendingTxidTag(tx->GetHash()) << 32 | owner, std::memory_order_relaxed);
-    }
-    slot.creates_pending.store(true, std::memory_order_release);
-}
-
-void CoinsStore::CreatesApplied(BlockId block)
-{
-    Assert(block != NO_BLOCK && block < m_window.size());
-    m_window[block].creates_pending.store(false, std::memory_order_release);
-}
-
-bool CoinsStore::CreatesPendingBelow(BlockId viewer, const Txid& txid) const
-{
-    const std::atomic<uint64_t>* table{m_pending_txids.load(std::memory_order_acquire)};
-    if (!table || viewer == NO_BLOCK) return false;
-    const uint64_t entry{table[PendingTxidPlace(txid, PENDING_TXID_PLACES)].load(std::memory_order_relaxed)};
-    if (entry >> 32 != PendingTxidTag(txid)) return false;
-    const BlockId maker{static_cast<BlockId>(entry & 0xff)};
-    if (maker == NO_BLOCK) return false;
-    // The entry is that of a block still open at the height it was announced at, below the viewer's, whose
-    // changes are not in the store. A slot freed and claimed again has had its mark cleared.
-    const WindowBlock& slot{m_window[maker]};
-    if (!slot.creates_pending.load(std::memory_order_acquire)) return false;
-    if (slot.status.load(std::memory_order_acquire) != BlockStatus::APPLIED) return false;
-    const int height{slot.height.load(std::memory_order_relaxed)};
-    return (static_cast<uint64_t>(height) & PENDING_HEIGHT_MASK) == (entry >> 8 & PENDING_HEIGHT_MASK) && height < BlockHeight(viewer);
-}
-
-uint32_t CoinsStore::ConflictCount(BlockId block) const
-{
-    Assert(block < m_window.size());
-    LOCK(m_window[block].mutex);
-    return m_window[block].conflicts;
-}
-
-size_t CoinsStore::OpenBlocks() const
-{
-    size_t open{0};
-    for (const WindowBlock& b : m_window) {
-        if (b.status.load(std::memory_order_relaxed) == BlockStatus::APPLIED) ++open;
-    }
-    return open;
-}
-
-bool CoinsStore::CreateLocked(Shard& shard, int height, const COutPoint& outpoint, uint64_t hash, Coin&& coin, bool possible_overwrite, bool must_be_new, bool base_unseen, std::vector<Undo>& undo, std::vector<COutPoint>& plain_creates, std::vector<StoredCoin>& long_coins, int64_t& delta)
-{
-    AssertLockHeld(shard.mutex);
-    // The coin's height is what tells the create from a confirmed one (Pending()).
-    Assume(static_cast<int>(coin.nHeight) == height);
-    // No entry is no proof of no coin where changes confirmed since the block was opened have been written:
-    // a coin a lower block made here after this block's check may have left the tier for the database
-    // (EvictClean()). The block is connected again alone, where its check reads the database.
-    if (must_be_new && base_unseen && shard.map.find(outpoint, hash) == shard.map.end()) return false;
-    auto [it, inserted]{shard.map.try_emplace(outpoint, hash)};
-    Entry& entry{it->second};
-    // What the block's unwind puts back: nothing, or the confirmed coin this create overwrites.
-    Undo item{.coin = {}, .outpoint = outpoint};
-    const State from{StateOf(entry)};
-    Event event;
-    if (inserted) {
-        Resized(shard);
-        event = possible_overwrite ? Event::BlockCreateBlind : Event::BlockCreateFresh;
-        ++delta;
-    } else {
-        const bool pending{Pending(entry)};
-        // An open block's spend under a create is an outpoint made twice (BIP30), and so is a lower
-        // open block's create: not this block's to settle here. It fails, and is connected again alone.
-        // A higher block's spend comes first: its coin, which this block sees, is no defect of the caller.
-        if (pending && entry.coin.IsSpent()) return false;
-        // A coin this block sees where it took none to be: a lower block made the outpoint after this
-        // block looked (it was open then, or is still), which this block's validation could not know.
-        // Nothing is overwritten on that ground; the block is connected again alone, where the check that
-        // rejects it on its own reads the coin. A create that may overwrite and was not checked for an
-        // earlier coin (`must_be_new` false: BIP30 is not enforced at its height) overwrites.
-        if ((must_be_new || !possible_overwrite) && See(entry, height) != Sight::NOTHING) return false;
-        if (pending) {
-            const int other{static_cast<int>(entry.coin.nHeight)};
-            if (other < height) return false;
-            event = Event::BlockCreateTakeover;
-            if (other > height) {
-                // A higher block created this outpoint first: a duplicate it could not see, since this
-                // block had not produced the original yet. The higher block gets the conflict: it is not
-                // confirmed from this pass but connected again alone, in order, where it passes or fails as
-                // it would have. Its entry is this block's now, with what it added to the dirty entries.
-                const int64_t moved{entry.owed ? 0 : 1};
-                if (const BlockId id{SlotAt(other)}; id != NO_BLOCK) {
-                    WindowBlock& charged{m_window[id]};
-                    LOCK(charged.mutex);
-                    // Unless that create overwrote a confirmed coin, kept in its record for its unwind (a
-                    // coinbase at the chain's BIP30 duplicates): this block cannot see that coin and would
-                    // take the entry over without it. It fails instead, and is connected again alone once the
-                    // higher block is unwound and the coin back, where its own checks read the coin.
-                    if (std::any_of(charged.record.rbegin(), charged.record.rend(), [&](const Undo& u) {
-                            return !u.spend && !u.dead && u.outpoint == outpoint;
-                        })) {
-                        return false;
-                    }
-                    if (charged.status.load(std::memory_order_relaxed) == BlockStatus::APPLIED) ++charged.conflicts;
-                    charged.dirty_delta.fetch_sub(moved, std::memory_order_relaxed);
-                }
-                delta += moved;
-                if (possible_overwrite) event = Event::BlockCreateTakeoverBlind;
-            }
-            // Under an erase still owed the entry keeps that change's height, as below (the rule's Lower).
-        } else {
-            // A confirmed entry. Dirty, it records a change the database does not have yet, which is owed
-            // under the create while the block is open and if it is unwound (Entry::owed): the entry stays
-            // at the height of that change. What is owed is an erase, except where the entry is a dirty
-            // unspent coin (a coinbase at the chain's two BIP30 duplicates, over a coin the database does
-            // not have yet): the create's record keeps that coin for the block's unwind and for a run that
-            // passes while the block is open. The record takes the coin's dirty flag and not its fresh one:
-            // put back by an unwind, a coin that was fresh is written, and erased when it is spent, where
-            // neither was needed. One write and one erase at most, at those two blocks.
-            if (!entry.coin.IsSpent()) {
-                item.coin = Recorded(StoredCoin{entry.coin}, long_coins);
-                item.height = entry.height;
-                item.dirty = entry.dirty;
-            }
-            event = Event::BlockCreateOnConfirmed;
-            // What a dirty entry records is owed under the create, and the entry stays where that is filed.
-            if (!entry.dirty) ++delta;
-        }
-        Detach(shard, *it);
-        SubUsage(shard, entry.coin.DynamicMemoryUsage());
-    }
-    entry.coin = std::move(coin);
-    AddUsage(shard, entry.coin.DynamicMemoryUsage());
-    // Dirty from now on, where the write-out will find it once the block is confirmed; it passes over the
-    // entry until then (Pending()).
-    Transit(entry, from, event, height);
-    Attach(shard, *it);
-    if (item.coin.IsSpent()) {
-        plain_creates.push_back(outpoint);
-    } else {
-        undo.push_back(item);
-    }
-    return true;
-}
-
-//! Whether `coin` is the one a block validated its spend against. Two coins of an outpoint are told
-//! apart by where they were made: the outputs of a transaction made twice are the same.
-template <typename AnyCoin>
-static bool IsCoin(const AnyCoin& coin, const Coin& known)
-{
-    return coin.nHeight == known.nHeight && coin.fCoinBase == known.fCoinBase;
-}
-
-CoinsStore::SpendResult CoinsStore::SpendLocked(Shard& shard, int height, bool mark_fresh, const COutPoint& outpoint, uint64_t hash, const Coin* from_base, const Coin* known, std::vector<Undo>& undo, std::vector<StoredCoin>& long_coins, int64_t& delta)
-{
-    AssertLockHeld(shard.mutex);
-    auto it{shard.map.find(outpoint, hash)};
-    if (it == shard.map.end()) {
-        // Not in the tier (the block's read left nothing behind, as at the tip, or what it brought in was
-        // evicted since): the caller reads the base with the shard unlocked. The database's coin goes to
-        // the record, and the tier keeps the spend, for the erase.
-        if (!from_base) return SpendResult::MISS;
-        if (known && !IsCoin(*from_base, *known)) return SpendResult::CONFLICT;
-        it = shard.map.try_emplace(outpoint, hash).first;
-        Resized(shard);
-        Entry& marker{it->second};
-        Transit(marker, coins_entry::ABSENT, Event::BlockSpendMarker, height);
-        Attach(shard, *it);
-        ++delta;
-        undo.push_back(Undo{.coin = Recorded(StoredCoin{*from_base}, long_coins), .outpoint = outpoint, .height = static_cast<int32_t>(from_base->nHeight), .spend = true});
-        return SpendResult::DONE;
-    }
-    Entry& entry{it->second};
-    switch (See(entry, height)) {
-    case Sight::NOTHING: return SpendResult::CONFLICT;
-    case Sight::RECORD: {
-        // A higher block spent the coin first. This block displaces it: the spend, with the coin in the
-        // record, is this block's now, and the displaced block fails at its confirmation.
-        const int other{entry.height};
-        const BlockId id{SlotAt(other)};
-        if (id == NO_BLOCK) return SpendResult::CONFLICT;
-        WindowBlock& theirs{m_window[id]};
-        {
-            LOCK(theirs.mutex);
-            const BlockStatus status{theirs.status.load(std::memory_order_relaxed)};
-            if (status == BlockStatus::FREE || theirs.height.load(std::memory_order_relaxed) != other) return SpendResult::CONFLICT;
-            Undo* item{LiveSpend(theirs.record, outpoint)};
-            if (!item) return SpendResult::CONFLICT;
-            // A coin a block above this one created is not there yet.
-            const int created{static_cast<int>(item->coin.nHeight)};
-            if (item->created && created > height && created > m_confirmed_height.load(std::memory_order_relaxed)) return SpendResult::CONFLICT;
-            if (known && !IsCoin(item->coin, *known)) return SpendResult::CONFLICT;
-            if (status == BlockStatus::APPLIED) ++theirs.conflicts;
-            const int64_t moved{item->dirty ? 0 : 1};
-            theirs.dirty_delta.fetch_sub(moved, std::memory_order_relaxed);
-            delta += moved;
-            // The item as it is; a long coin stays the displaced block's, and this block gets its own.
-            undo.push_back(*item);
-            undo.back().coin = Recorded(StoredCoin{item->coin}, long_coins);
-            item->dead = true;
-        }
-        Detach(shard, *it);
-        // The same spend of the same coin, taken over: what it says of the database stays true.
-        Transit(entry, Event::BlockSpendTakeover, height);
-        Attach(shard, *it);
-        return SpendResult::DONE;
-    }
-    case Sight::COIN: break;
-    }
-    // Another coin than the block validated: lower blocks spent that one and made the outpoint again
-    // after this block looked (a transaction made twice). The verdict on the spend, the maturity of a
-    // coinbase for one, was on the other coin, so the block is connected again alone.
-    if (known && !IsCoin(entry.coin, *known)) return SpendResult::CONFLICT;
-    Undo item{.coin = {}, .outpoint = outpoint, .height = entry.height, .spend = true, .dirty = entry.dirty, .fresh = entry.fresh, .created = entry.block_create, .owed = entry.owed};
-    const State from{StateOf(entry)};
-    Detach(shard, *it);
-    SubUsage(shard, entry.coin.DynamicMemoryUsage());
-    item.coin = Recorded(std::move(entry.coin), long_coins);
-    if (entry.fresh && !mark_fresh) {
-        // Never written: the database has nothing to erase and the tier nothing to keep. The coin is in
-        // the record, for the unwind and for whoever is still to see it.
-        EraseDetached(shard, it);
-        --delta;
-    } else {
-        // The marker of a never-written coin (BeginBlock()) is as any other to the open blocks: the record
-        // has the flags to put back. To a run it is nothing to write (Entry::unwritten).
-        entry.coin.Clear();
-        if (!entry.dirty) ++delta;
-        Transit(entry, from, Event::BlockSpend, height);
-        Attach(shard, *it);
-    }
-    undo.push_back(item);
-    return SpendResult::DONE;
-}
-
-bool CoinsStore::ApplySpend(BlockId block, const COutPoint& outpoint, const Coin* known)
-{
-    assert(block != NO_BLOCK);
-    const int height{BlockHeight(block)};
-    Shard& shard{ShardFor(outpoint)};
-    WindowBlock& mine{m_window[block]};
-    const bool mark_fresh{mine.mark_fresh_spends.load(std::memory_order_relaxed)};
-    std::vector<Undo> undo;
-    std::vector<StoredCoin> long_coins;
-    int64_t delta{0};
-    std::optional<Coin> from_base;
-    uint64_t settles{0};
-    const uint64_t hash{KeyHash(outpoint)};
-    while (true) {
-        SpendResult result;
-        {
-            LOCK(shard.mutex);
-            // A write-out settled entries of the shard while the base was read (as in LookupFor()): the
-            // coin read may be stale, and inserting it would hide a double spend. Read again.
-            if (from_base && shard.settles != settles) from_base.reset();
-            result = SpendLocked(shard, height, mark_fresh, outpoint, hash, from_base ? &*from_base : nullptr, known, undo, long_coins, delta);
-            settles = shard.settles;
-            Record(mine, undo, /*plain_creates=*/nullptr, long_coins, delta);
-        }
-        if (result == SpendResult::DONE) return true;
-        if (result == SpendResult::CONFLICT) break;
-        // Not in the tier: the base, with the shard unlocked. The block saw the coin when it checked its
-        // inputs; a coin the base does not have either is a conflict.
-        from_base = base->GetCoin(outpoint);
-        if (!from_base) break;
-        Assert(!from_base->IsSpent());
-    }
-    LOCK(mine.mutex);
-    ++mine.conflicts;
-    return false;
-}
+// Shard iteration, read-only FetchConfirmed & shard-parallel CommitBatch
 
 template <typename Work>
-void CoinsStore::VisitShards(BlockId block, const std::vector<uint32_t>& shard_of, Work work) const
+void CoinsStore::VisitShards(size_t start_hint, const std::vector<uint32_t>& shard_of, Work work) const
 {
     const size_t shards{m_shards.size()};
-    // A counting sort of the items by shard: shard s has the items order[starts[s]] to order[starts[s + 1]].
     std::vector<uint32_t> starts(shards + 1, 0);
     for (const uint32_t s : shard_of) ++starts[s + 1];
     for (size_t s{0}; s < shards; ++s) starts[s + 1] += starts[s];
@@ -1068,337 +1011,511 @@ void CoinsStore::VisitShards(BlockId block, const std::vector<uint32_t>& shard_o
         std::vector<uint32_t> next(starts.begin(), starts.end() - 1);
         for (uint32_t i{0}; i < shard_of.size(); ++i) order[next[shard_of[i]]++] = i;
     }
-    const auto items{[&](size_t s) { return std::span<const uint32_t>{order}.subspan(starts[s], starts[s + 1] - starts[s]); }};
-    std::vector<uint32_t> busy;
-    size_t s{block * shards / MAX_WINDOW_SLOTS % shards};
-    for (size_t n{0}; n < shards; ++n, s = s + 1 == shards ? 0 : s + 1) {
+    const size_t first{start_hint % shards};
+    std::vector<uint32_t> deferred;
+    for (size_t n{0}, s{first}; n < shards; ++n, s = s + 1 == shards ? 0 : s + 1) {
         if (starts[s] == starts[s + 1]) continue;
         Shard& shard{m_shards[s]};
-        TRY_LOCK(shard.mutex, lock);
-        if (!lock) {
-            busy.push_back(s);
+        TRY_LOCK(shard.mutex, locked);
+        if (!locked) {
+            deferred.push_back(static_cast<uint32_t>(s));
             continue;
         }
-        work(shard, items(s));
+        work(shard, std::span<const uint32_t>{order}.subspan(starts[s], starts[s + 1] - starts[s]));
     }
-    for (const uint32_t b : busy) {
-        Shard& shard{m_shards[b]};
+    for (const uint32_t s : deferred) {
+        Shard& shard{m_shards[s]};
         LOCK(shard.mutex);
-        work(shard, items(b));
+        work(shard, std::span<const uint32_t>{order}.subspan(starts[s], starts[s + 1] - starts[s]));
     }
 }
 
-void CoinsStore::ApplyBatch(BlockId block, std::vector<Change>&& changes, const std::function<const Coin*(const COutPoint&)>& base_coin)
+template <typename Work>
+void CoinsStore::VisitShardsShared(const std::vector<uint32_t>& shard_of, ThreadPool& pool, size_t helpers, Work work) const
 {
-    assert(block != NO_BLOCK);
-    if (changes.empty()) return;
-    const int height{BlockHeight(block)};
-    std::erase_if(changes, [](const Change& change) { return !change.coin->IsSpent() && change.coin->out.scriptPubKey.IsUnspendable(); });
-    // Grouped by shard, so that each shard is taken once.
-    std::vector<uint32_t> shard_of;
-    std::vector<uint64_t> hashes;
-    shard_of.reserve(changes.size());
-    hashes.reserve(changes.size());
-    for (const Change& change : changes) {
-        shard_of.push_back(ShardIndex(*change.outpoint));
-        hashes.push_back(KeyHash(*change.outpoint));
-    }
-    WindowBlock& mine{m_window[block]};
-    const bool mark_fresh{mine.mark_fresh_spends.load(std::memory_order_relaxed)};
-    const int begin_confirmed{mine.begin_confirmed.load(std::memory_order_relaxed)};
+    const size_t shards{m_shards.size()};
+    std::vector<uint32_t> starts(shards + 1, 0);
+    for (const uint32_t s : shard_of) ++starts[s + 1];
+    for (size_t s{0}; s < shards; ++s) starts[s + 1] += starts[s];
+    std::vector<uint32_t> order(shard_of.size());
     {
-        const size_t spends(std::count_if(changes.begin(), changes.end(), [](const Change& change) { return change.coin->IsSpent(); }));
-        LOCK(mine.mutex);
-        mine.record.reserve(mine.record.size() + spends);
-        mine.plain_creates.reserve(mine.plain_creates.size() + changes.size() - spends);
+        std::vector<uint32_t> next(starts.begin(), starts.end() - 1);
+        for (uint32_t i{0}; i < shard_of.size(); ++i) order[next[shard_of[i]]++] = i;
     }
-    // A shard's changes, until they are in the record.
-    std::vector<Undo> undo;
-    std::vector<COutPoint> plain_creates;
-    std::vector<StoredCoin> long_coins;
-    int64_t delta{0};
-    uint32_t conflicts{0};
-    std::vector<const Change*> misses;
-    VisitShards(block, shard_of, [&](Shard& shard, std::span<const uint32_t> items) EXCLUSIVE_LOCKS_REQUIRED(shard.mutex) {
-        // A create looks for its outpoint only to find none.
-        shard.map.PrefetchAll(hashes, items, [&](uint32_t i) { return changes[i].coin->IsSpent(); });
-        // A spend takes its entry off a list, which writes the entry's two neighbours there: nodes that
-        // have nothing to do with the block. Asked for ahead as well, once the entries are found.
-        for (const uint32_t i : items) {
-            if (!changes[i].coin->IsSpent()) continue;
-            if (const auto it{shard.map.find(*changes[i].outpoint, hashes[i])}; it != shard.map.end()) PrefetchDetach(shard, *it);
-        }
-        // Read with the shard held: an entry dropped from it was dropped after the height was stored.
-        const bool base_unseen{m_dropped_through.load(std::memory_order_relaxed) > begin_confirmed};
-        for (const uint32_t i : items) {
-            const Change& change{changes[i]};
-            const COutPoint& outpoint{*change.outpoint};
-            if (change.coin->IsSpent()) {
-                const Coin* known{change.known_coin ? change.coin : nullptr};
-                SpendResult result{SpendLocked(shard, height, mark_fresh, outpoint, hashes[i], nullptr, known, undo, long_coins, delta)};
-                // Not in the tier: the coin given for it, the one the base holds (see the declaration).
-                if (result == SpendResult::MISS && base_coin) {
-                    if (const Coin* from_base{base_coin(outpoint)}) {
-                        result = SpendLocked(shard, height, mark_fresh, outpoint, hashes[i], from_base, known, undo, long_coins, delta);
+    std::vector<uint32_t> taken;
+    taken.reserve(shards);
+    for (size_t s{0}; s < shards; ++s) {
+        if (starts[s] != starts[s + 1]) taken.push_back(static_cast<uint32_t>(s));
+    }
+    if (taken.empty()) return;
+
+    struct Shared {
+        std::atomic<size_t> next{0};
+        std::atomic<int> active{0};
+        size_t count{0};
+    };
+    const auto shared{std::make_shared<Shared>()};
+    shared->count = taken.size();
+
+    // noexcept: work mutates in-memory shards; any allocation failure terminates rather than leaving
+    // cs_main deadlocked or helpers referencing an unwound caller stack.
+    [&]() noexcept {
+        const auto take{[&](size_t i) noexcept {
+            const uint32_t s{taken[i]};
+            Shard& shard{m_shards[s]};
+            LOCK(shard.mutex);
+            work(shard, std::span<const uint32_t>{order}.subspan(starts[s], starts[s + 1] - starts[s]));
+        }};
+        const size_t num_helpers{std::min(helpers, taken.size() - 1)};
+        if (num_helpers > 0) {
+            for (size_t h{0}; h < num_helpers; ++h) {
+                (void)pool.Submit([shared, take = &take]() noexcept {
+                    shared->active.fetch_add(1);
+                    for (size_t i{shared->next.fetch_add(1)}; i < shared->count; i = shared->next.fetch_add(1)) {
+                        WAITED_FOR_UNDER_LOCK("a shard commit helper");
+                        (*take)(i);
                     }
-                }
-                switch (result) {
-                case SpendResult::DONE: break;
-                case SpendResult::CONFLICT: ++conflicts; break;
-                case SpendResult::MISS: misses.push_back(&change); break;
-                }
-            } else if (!CreateLocked(shard, height, outpoint, hashes[i], std::move(*change.coin), change.possible_overwrite, change.must_be_new, base_unseen, undo, plain_creates, long_coins, delta)) {
-                ++conflicts;
+                    if (shared->active.fetch_sub(1) == 1) shared->active.notify_all();
+                }, /*front=*/true);
             }
         }
-        Record(mine, undo, &plain_creates, long_coins, delta);
-    });
-    if (conflicts != 0) {
-        LOCK(mine.mutex);
-        mine.conflicts += conflicts;
-    }
-    // Spends of coins the tier does not hold and no coin was given for: one by one, via the base. For a window
-    // block these are the few evicted since its lookups (BlockApplyView::SetKeepBaseReads()); a block connected
-    // alone gives them all (BlockApplyView::ApplyChanges()).
-    for (const Change* change : misses) ApplySpend(block, *change->outpoint, change->known_coin ? change->coin : nullptr);
+        for (size_t i{shared->next.fetch_add(1)}; i < shared->count; i = shared->next.fetch_add(1)) take(i);
+        for (int active{shared->active.load()}; active != 0; active = shared->active.load()) shared->active.wait(active);
+    }();
 }
 
-std::vector<std::pair<COutPoint, Coin>> CoinsStore::FetchFor(BlockId viewer, std::vector<COutPoint>&& outpoints) const
+std::vector<std::pair<COutPoint, Coin>> CoinsStore::FetchConfirmed(std::vector<COutPoint>&& outpoints) const
 {
-    const int viewer_height{ViewerHeight(viewer)};
+    std::vector<std::pair<COutPoint, Coin>> found;
+    if (outpoints.empty()) return found;
+    found.reserve(outpoints.size());
     std::vector<uint32_t> shard_of;
     std::vector<uint64_t> hashes;
     shard_of.reserve(outpoints.size());
     hashes.reserve(outpoints.size());
     for (const COutPoint& outpoint : outpoints) {
-        shard_of.push_back(ShardIndex(outpoint));
+        shard_of.push_back(static_cast<uint32_t>(ShardIndex(outpoint)));
         hashes.push_back(KeyHash(outpoint));
     }
-    std::vector<std::pair<COutPoint, Coin>> found;
-    found.reserve(outpoints.size());
-    VisitShards(viewer, shard_of, [&](Shard& shard, std::span<const uint32_t> items) EXCLUSIVE_LOCKS_REQUIRED(shard.mutex) {
+    // Use first outpoint's hash to spread start shard across workers.
+    const size_t start_hint{static_cast<size_t>(hashes[0])};
+    VisitShards(start_hint, shard_of, [&](Shard& shard, std::span<const uint32_t> items) EXCLUSIVE_LOCKS_REQUIRED(shard.mutex) {
         shard.map.PrefetchAll(hashes, items, [](uint32_t) { return true; });
         for (const uint32_t i : items) {
-            const COutPoint& outpoint{outpoints[i]};
-            const auto it{shard.map.find(outpoint, hashes[i])};
-            if (it == shard.map.end() || See(it->second, viewer_height) != Sight::COIN) continue;
+            const auto it{shard.map.find(outpoints[i], hashes[i])};
+            if (it == shard.map.end() || it->second.coin.IsSpent()) continue;
             Reference(it->second);
-            found.emplace_back(outpoint, it->second.coin);
+            found.emplace_back(outpoints[i], it->second.coin.ToCoin());
         }
     });
     return found;
 }
 
-void CoinsStore::ConfirmBlock(BlockId block)
+CoinsStore::BatchCheckResult CoinsStore::CheckBatchConflicts(std::span<BlockChanges*> blocks, ThreadPool* pool) const
 {
-    assert(block != NO_BLOCK);
-    Assert(block < m_window.size());
-    WindowBlock& slot{m_window[block]};
-    std::vector<Undo> record;
-    std::vector<COutPoint> plain_creates;
-    std::vector<StoredCoin> long_coins;
-    const int height{slot.height.load(std::memory_order_relaxed)};
-    // From the lowest up: a block confirmed after a higher one had its changes read as confirmed while it
-    // was open.
-    Assert(height > m_confirmed_height.load(std::memory_order_relaxed));
-    const bool marked{slot.mark_fresh_spends.load(std::memory_order_relaxed)};
-    bool owed_spends{false};
-    {
-        LOCK(slot.mutex);
-        Assert(slot.status.load(std::memory_order_relaxed) == BlockStatus::APPLIED);
-        owed_spends = std::exchange(slot.owed_spends, false);
-        // All there is to it: from here on the block's creates and spent markers read as anyone's
-        // (Pending(), See()). They are dirty already, on the lists of the block's height.
-        m_confirmed_height.store(height, std::memory_order_release);
-        record.swap(slot.record);
-        plain_creates.swap(slot.plain_creates);
-        long_coins.swap(slot.long_coins);
-        slot.conflicts = 0;
-        slot.status.store(BlockStatus::FREE, std::memory_order_release);
-    }
-    m_open_slots.fetch_sub(1, std::memory_order_relaxed);
-    if (marked) {
-        // The markers of coins the database never held have no one left to tell: freed here, they do not
-        // wait in the map for a run that a large cache never makes. A run may have met one first.
-        // Grouped by shard, with the entries and what their erase writes asked for ahead, as in ApplyBatch().
-        std::vector<const Undo*> spends;
-        std::vector<uint32_t> shard_of;
-        std::vector<uint64_t> hashes;
-        for (const Undo& item : record) {
-            if (!item.spend || !item.fresh || item.dead) continue;
-            spends.push_back(&item);
-            shard_of.push_back(ShardIndex(item.outpoint));
-            hashes.push_back(KeyHash(item.outpoint));
+    if (blocks.empty()) return {.accepted = 0, .conflicts = 0};
+    const size_t num_shards{m_shards.size()};
+    size_t total_ops{0};
+    for (const BlockChanges* b : blocks) total_ops += b->ops.size();
+    if (total_ops == 0) return {.accepted = blocks.size(), .conflicts = 0};
+
+    const int written_height{m_written_height};
+    const uint64_t current_epoch{m_write_out_epoch.load(std::memory_order_acquire)};
+    std::atomic<size_t> first_conflict{blocks.size()};
+    std::atomic<size_t> conflict_count{0};
+
+    struct Ref {
+        uint64_t hash;
+        uint32_t block_idx;
+        uint32_t op_idx;
+    };
+
+    const auto check_shard{[&](size_t s) noexcept {
+        thread_local std::vector<Ref> refs;
+        refs.clear();
+        for (uint32_t bi{0}; bi < blocks.size(); ++bi) {
+            const BlockChanges& b{*blocks[bi]};
+            if (b.shard_offsets.empty()) continue;
+            const uint32_t begin{b.shard_offsets[s]};
+            const uint32_t end{b.shard_offsets[s + 1]};
+            for (uint32_t oi{begin}; oi < end; ++oi) {
+                refs.push_back({b.ops[oi].key_hash, bi, oi});
+            }
         }
-        if (!spends.empty()) {
-            VisitShards(block, shard_of, [&](Shard& shard, std::span<const uint32_t> items) EXCLUSIVE_LOCKS_REQUIRED(shard.mutex) {
-                shard.map.PrefetchAll(hashes, items, [](uint32_t) { return true; });
-                for (const uint32_t i : items) {
-                    if (const auto it{shard.map.find(spends[i]->outpoint, hashes[i])}; it != shard.map.end()) PrefetchDetach(shard, *it);
-                }
-                for (const uint32_t i : items) {
-                    const auto it{shard.map.find(spends[i]->outpoint, hashes[i])};
-                    if (it == shard.map.end()) continue;
-                    const Entry& entry{it->second};
-                    if (entry.unwritten && entry.height == height) EraseEntry(shard, it);
-                }
+        if (refs.empty()) return;
+
+        if (blocks.size() > 1 && refs.size() > 1) {
+            std::sort(refs.begin(), refs.end(), [](const Ref& a, const Ref& b) {
+                return a.hash != b.hash ? a.hash < b.hash : a.block_idx < b.block_idx;
             });
         }
-    }
-    if (owed_spends) {
-        // A spend that took an entry with an erase still owed left the entry under the block's height. The
-        // erase is owed since the earlier change: the entry goes back under that height
-        // (coins_entry::Event::BlockSpendConfirmed), so that a run bounded between the two heights writes
-        // the erase. A higher block may have made the outpoint again meanwhile, over the same erase. A run
-        // that collected the entry under the block's height writes the erase itself.
-        for (const Undo& item : record) {
-            if (!item.spend || !item.owed || item.dead || item.height >= height) continue;
-            Shard& shard{ShardFor(item.outpoint)};
-            LOCK(shard.mutex);
-            const auto it{shard.map.find(item.outpoint)};
-            if (it == shard.map.end()) continue;
-            Entry& entry{it->second};
-            if (entry.height != height || entry.collected || !(entry.owed || entry.coin.IsSpent())) continue;
-            Detach(shard, *it);
-            Transit(entry, Event::BlockSpendConfirmed, item.height);
-            Attach(shard, *it);
-        }
-    }
-    // The record, the plain creates and the long coins are freed as they go out of scope here, outside the
-    // slot's mutex. Nothing of a record item or a plain create is read for it.
-}
 
-void CoinsStore::UnwindItem(Shard& shard, int height, Undo&& item)
-{
-    AssertLockHeld(shard.mutex);
-    auto it{shard.map.find(item.outpoint)};
-    if (!item.spend) {
-        // The block's create, unless the outpoint is another block's by now: a lower block's that took
-        // it over, or the marker of a higher block's spend (which goes with that block's unwind).
-        if (it == shard.map.end()) return;
-        Entry& entry{it->second};
-        if (entry.coin.IsSpent() || !entry.block_create || static_cast<int>(entry.coin.nHeight) != height) return;
-        if (item.dirty) {
-            // The create overwrote a confirmed coin the database did not have yet (CreateLocked()): put back
-            // as it was, dirty, also where a run wrote the erase owed under the create meanwhile (it cleared
-            // `owed`): the next run writes the coin again. A confirmed coin the database had (not dirty) owes
-            // nothing and goes with the entry below: the database still has it.
-            Detach(shard, *it);
-            SubUsage(shard, entry.coin.DynamicMemoryUsage());
-            entry.coin = StoredCoin{item.coin};
-            AddUsage(shard, entry.coin.DynamicMemoryUsage());
-            Transit(entry, Event::UnwindCreateToCoin, item.height);
-            Attach(shard, *it);
-            return;
+        const Shard& shard{m_shards[s]};
+        LOCK(shard.mutex);
+        for (const Ref& r : refs) shard.map.Prefetch(r.hash);
+        for (const Ref& r : refs) {
+            const CommitOp& op{blocks[r.block_idx]->ops[r.op_idx]};
+            if (op.coin.IsSpent() || blocks[r.block_idx]->must_be_new) {
+                shard.map.PrefetchNode(r.hash, /*whole=*/false);
+            }
         }
-        if (!entry.owed) {
-            EraseEntry(shard, it);
-            return;
+
+        auto record_conflict{[&](size_t bi) {
+            size_t prev{first_conflict.load(std::memory_order_relaxed)};
+            while (bi < prev && !first_conflict.compare_exchange_weak(prev, bi, std::memory_order_relaxed)) {}
+            conflict_count.fetch_add(1, std::memory_order_relaxed);
+        }};
+
+        size_t i{0};
+        while (i < refs.size()) {
+            const size_t limit{first_conflict.load(std::memory_order_relaxed)};
+            size_t j{i + 1};
+            if (blocks.size() > 1) {
+                while (j < refs.size() && refs[j].hash == refs[i].hash) ++j;
+            }
+            if (j - i == 1) {
+                // Fast path (95%+): unique key hash in this shard for the entire batch.
+                const Ref& r{refs[i]};
+                if (r.block_idx < limit) {
+                    const BlockChanges& b{*blocks[r.block_idx]};
+                    const CommitOp& op{b.ops[r.op_idx]};
+                    if (op.coin.IsSpent()) {
+                        const auto it{shard.map.find(op.outpoint, r.hash)};
+                        if (it != shard.map.end()) {
+                            if (it->second.coin.IsSpent()) record_conflict(r.block_idx);
+                        } else if (op.spent_height > written_height) {
+                            record_conflict(r.block_idx);
+                        } else if (b.validate_epoch != current_epoch && !base->HaveCoin(op.outpoint)) {
+                            record_conflict(r.block_idx);
+                        }
+                    } else if (b.must_be_new) {
+                        const auto it{shard.map.find(op.outpoint, r.hash)};
+                        if (it != shard.map.end()) {
+                            if (!it->second.coin.IsSpent()) record_conflict(r.block_idx);
+                        } else if (b.validate_epoch != current_epoch && base->HaveCoin(op.outpoint)) {
+                            record_conflict(r.block_idx);
+                        }
+                    }
+                }
+                i = j;
+                continue;
+            }
+
+            // Multiple ops share the same 64-bit hash: group by exact COutPoint.
+            for (size_t a{i}; a < j; ++a) {
+                const COutPoint& target{blocks[refs[a].block_idx]->ops[refs[a].op_idx].outpoint};
+                bool already_done{false};
+                for (size_t prev{i}; prev < a; ++prev) {
+                    if (blocks[refs[prev].block_idx]->ops[refs[prev].op_idx].outpoint == target) {
+                        already_done = true;
+                        break;
+                    }
+                }
+                if (already_done) continue;
+
+                enum class Sim : uint8_t { Absent, Unspent, Spent };
+                const auto it{shard.map.find(target, refs[a].hash)};
+                Sim sim{it == shard.map.end() ? Sim::Absent : (it->second.coin.IsSpent() ? Sim::Spent : Sim::Unspent)};
+                std::optional<Ref> live_fresh_create;
+
+                for (size_t k{a}; k < j; ++k) {
+                    const Ref& r{refs[k]};
+                    if (r.block_idx >= first_conflict.load(std::memory_order_relaxed)) break;
+                    BlockChanges& b{*blocks[r.block_idx]};
+                    CommitOp& op{b.ops[r.op_idx]};
+                    if (!(op.outpoint == target)) continue;
+                    if (op.coin.IsSpent()) {
+                        if (sim == Sim::Spent) {
+                            record_conflict(r.block_idx);
+                            break;
+                        }
+                        if (sim == Sim::Absent && (op.spent_height > written_height || (b.validate_epoch != current_epoch && !base->HaveCoin(target)))) {
+                            record_conflict(r.block_idx);
+                            break;
+                        }
+                        if (live_fresh_create) {
+                            blocks[live_fresh_create->block_idx]->ops[live_fresh_create->op_idx].cancelled = true;
+                            op.cancelled = true;
+                            live_fresh_create.reset();
+                            sim = Sim::Spent;
+                        } else {
+                            sim = Sim::Spent;
+                        }
+                    } else {
+                        if (b.must_be_new) {
+                            if (sim == Sim::Unspent || (sim == Sim::Absent && b.validate_epoch != current_epoch && base->HaveCoin(target))) {
+                                record_conflict(r.block_idx);
+                                break;
+                            }
+                        }
+                        if (sim == Sim::Absent && !op.possible_overwrite) {
+                            live_fresh_create = r;
+                        } else {
+                            live_fresh_create.reset();
+                        }
+                        sim = Sim::Unspent;
+                    }
+                }
+            }
+            i = j;
         }
-        // The erase the create went over is owed still: a spent entry again, at the height it kept.
-        const State from{StateOf(entry)};
-        Detach(shard, *it);
-        SubUsage(shard, entry.coin.DynamicMemoryUsage());
-        entry.coin.Clear();
-        Transit(entry, from, Event::UnwindCreateToErase);
-        Attach(shard, *it);
-        return;
-    }
-    // A coin an open block created goes with that block: if it is no longer applied (unwound before this
-    // one, or this block itself), there is no coin to put back.
-    bool gone{false};
-    if (const int created{static_cast<int>(item.coin.nHeight)}; item.created && created > m_confirmed_height.load(std::memory_order_relaxed)) {
-        const BlockId creator{SlotAt(created)};
-        gone = creator == NO_BLOCK || m_window[creator].status.load(std::memory_order_acquire) != BlockStatus::APPLIED;
-    }
-    const auto restore{[&](Entry& entry) EXCLUSIVE_LOCKS_REQUIRED(shard.mutex) {
-        const State from{StateOf(entry)};
-        entry.coin = StoredCoin{item.coin};
-        AddUsage(shard, entry.coin.DynamicMemoryUsage());
-        // As the record has it. Clean, the coin has been written since (CollectRecords()) and is anyone's.
-        using namespace coins_entry;
-        const State recorded{static_cast<State>((item.dirty ? DIRTY : 0) | (item.fresh ? FRESH : 0) | (item.created && item.dirty ? BLOCK_CREATE : 0) | (item.owed ? OWED : 0))};
-        Enter(entry, NextUnwindSpendRestore(from, recorded), NextHeight(UNWIND_SPEND_RESTORE_HEIGHT, from, entry.height, item.height));
     }};
-    if (it == shard.map.end()) {
-        // The spend erased the entry: a coin the database never held.
-        if (gone) return;
-        it = shard.map.try_emplace(item.outpoint).first;
-        Resized(shard);
-        restore(it->second);
-        Attach(shard, *it);
-        return;
+
+    const size_t helpers{pool && total_ops >= COMMIT_OPS_PER_HELPER
+                             ? std::min(pool->WorkersCount(), total_ops / COMMIT_OPS_PER_HELPER)
+                             : 0};
+    [&]() noexcept {
+        if (helpers > 0) {
+            struct Shared {
+                std::atomic<size_t> next{0};
+                std::atomic<int> active{0};
+                size_t count{0};
+            };
+            const auto shared{std::make_shared<Shared>()};
+            shared->count = num_shards;
+            for (size_t h{0}; h < helpers; ++h) {
+                (void)pool->Submit([shared, &check_shard]() noexcept {
+                    shared->active.fetch_add(1);
+                    for (size_t s{shared->next.fetch_add(1)}; s < shared->count; s = shared->next.fetch_add(1)) {
+                        WAITED_FOR_UNDER_LOCK("a batch conflict check helper");
+                        check_shard(s);
+                    }
+                    if (shared->active.fetch_sub(1) == 1) shared->active.notify_all();
+                }, /*front=*/true);
+            }
+            for (size_t s{shared->next.fetch_add(1)}; s < shared->count; s = shared->next.fetch_add(1)) check_shard(s);
+            for (int active{shared->active.load()}; active != 0; active = shared->active.load()) shared->active.wait(active);
+        } else {
+            for (size_t s{0}; s < num_shards; ++s) check_shard(s);
+        }
+    }();
+
+    const size_t accepted{first_conflict.load(std::memory_order_relaxed)};
+    if (accepted < blocks.size()) {
+        // Clear any cross-boundary cancellations into rejected blocks so the accepted prefix commits cleanly.
+        for (size_t bi{0}; bi < accepted; ++bi) {
+            for (CommitOp& op : blocks[bi]->ops) op.cancelled = false;
+        }
     }
-    Entry& entry{it->second};
-    // The marker the spend left; anything else is another block's.
-    if (!entry.coin.IsSpent() || !entry.block_spend || entry.height != height) return;
-    if (gone && !item.owed) {
-        EraseEntry(shard, it);
-        return;
-    }
-    Detach(shard, *it);
-    if (gone) {
-        // The erase the create went over is owed still.
-        Transit(entry, Event::UnwindSpendToErase, item.height);
-    } else {
-        restore(entry);
-    }
-    Attach(shard, *it);
+    return {.accepted = accepted, .conflicts = conflict_count.load(std::memory_order_relaxed)};
 }
 
-void CoinsStore::UnwindBlock(BlockId block)
+void CoinsStore::ApplyCheckedBlocks(std::span<BlockChanges*> blocks, const uint256& best_hash, int best_height, ThreadPool* pool, bool publish_height)
 {
-    assert(block != NO_BLOCK);
-    Assert(block < m_window.size());
-    WindowBlock& slot{m_window[block]};
-    const int height{slot.height.load(std::memory_order_relaxed)};
-    size_t left;
-    {
-        LOCK(slot.mutex);
-        Assert(slot.status.load(std::memory_order_relaxed) == BlockStatus::APPLIED);
-        slot.status.store(BlockStatus::UNWOUND, std::memory_order_release);
-        left = slot.record.size();
+    Assert(!m_run_in_flight);
+    const size_t num_shards{m_shards.size()};
+    size_t total_ops{0};
+    for (const BlockChanges* b : blocks) total_ops += b->ops.size();
+
+    if (total_ops > 0) {
+        const auto apply_shard{[&](size_t s) noexcept {
+            Shard& shard{m_shards[s]};
+            bool any{false};
+            for (const BlockChanges* b : blocks) {
+                if (!b->shard_offsets.empty() && b->shard_offsets[s] < b->shard_offsets[s + 1]) {
+                    any = true;
+                    break;
+                }
+            }
+            if (!any) return;
+
+            LOCK(shard.mutex);
+            // Prefetch buckets, nodes, and detach links for all active ops in this shard.
+            for (const BlockChanges* b : blocks) {
+                if (b->shard_offsets.empty()) continue;
+                const uint32_t end{b->shard_offsets[s + 1]};
+                for (uint32_t oi{b->shard_offsets[s]}; oi < end; ++oi) {
+                    const CommitOp& op{b->ops[oi]};
+                    if (!op.cancelled) shard.map.Prefetch(op.key_hash);
+                }
+            }
+            for (const BlockChanges* b : blocks) {
+                if (b->shard_offsets.empty()) continue;
+                const uint32_t end{b->shard_offsets[s + 1]};
+                for (uint32_t oi{b->shard_offsets[s]}; oi < end; ++oi) {
+                    const CommitOp& op{b->ops[oi]};
+                    if (!op.cancelled) shard.map.PrefetchNode(op.key_hash, op.coin.IsSpent());
+                }
+            }
+
+            // Apply in exact block height order.
+            for (BlockChanges* b : blocks) {
+                if (b->shard_offsets.empty()) continue;
+                const uint32_t end{b->shard_offsets[s + 1]};
+                for (uint32_t oi{b->shard_offsets[s]}; oi < end; ++oi) {
+                    CommitOp& op{b->ops[oi]};
+                    if (op.cancelled) continue;
+                    if (op.coin.IsSpent()) {
+                        auto it{shard.map.find(op.outpoint, op.key_hash)};
+                        if (it != shard.map.end()) {
+                            Entry& entry{it->second};
+                            const State from{StateOf(entry)};
+                            Detach(shard, *it);
+                            SubUsage(shard, entry.coin.DynamicMemoryUsage());
+                            if (entry.fresh) {
+                                EraseDetached(shard, it);
+                            } else {
+                                entry.coin.Clear();
+                                Transit(entry, from, Event::ConfirmedSpend, op.height);
+                                Attach(shard, *it);
+                            }
+                        } else {
+                            auto [ins, inserted]{shard.map.try_emplace(op.outpoint, op.key_hash)};
+                            Assert(inserted);
+                            Resized(shard);
+                            Transit(ins->second, coins_entry::ABSENT, Event::ConfirmedSpend, op.height);
+                            Attach(shard, *ins);
+                        }
+                    } else {
+                        auto [it, inserted]{shard.map.try_emplace(op.outpoint, op.key_hash)};
+                        Entry& entry{it->second};
+                        const State from{StateOf(entry)};
+                        if (inserted) {
+                            Resized(shard);
+                            entry.coin = std::move(op.coin);
+                            Transit(entry, from, op.possible_overwrite ? Event::ConfirmedWrite : Event::ConfirmedNew, op.height);
+                            AddUsage(shard, entry.coin.DynamicMemoryUsage());
+                            Attach(shard, *it);
+                        } else {
+                            Assert(op.possible_overwrite || entry.coin.IsSpent());
+                            Detach(shard, *it);
+                            SubUsage(shard, entry.coin.DynamicMemoryUsage());
+                            entry.coin = std::move(op.coin);
+                            Transit(entry, from, Event::ConfirmedWrite, op.height);
+                            AddUsage(shard, entry.coin.DynamicMemoryUsage());
+                            Attach(shard, *it);
+                        }
+                    }
+                }
+            }
+        }};
+
+        const size_t helpers{pool && total_ops >= COMMIT_OPS_PER_HELPER
+                                 ? std::min(pool->WorkersCount(), total_ops / COMMIT_OPS_PER_HELPER)
+                                 : 0};
+        [&]() noexcept {
+            if (helpers > 0) {
+                struct Shared {
+                    std::atomic<size_t> next{0};
+                    std::atomic<int> active{0};
+                    size_t count{0};
+                };
+                const auto shared{std::make_shared<Shared>()};
+                shared->count = num_shards;
+                for (size_t h{0}; h < helpers; ++h) {
+                    (void)pool->Submit([shared, &apply_shard]() noexcept {
+                        shared->active.fetch_add(1);
+                        for (size_t s{shared->next.fetch_add(1)}; s < shared->count; s = shared->next.fetch_add(1)) {
+                            WAITED_FOR_UNDER_LOCK("a shard commit helper");
+                            apply_shard(s);
+                        }
+                        if (shared->active.fetch_sub(1) == 1) shared->active.notify_all();
+                    }, /*front=*/true);
+                }
+                for (size_t s{shared->next.fetch_add(1)}; s < shared->count; s = shared->next.fetch_add(1)) apply_shard(s);
+                for (int active{shared->active.load()}; active != 0; active = shared->active.load()) shared->active.wait(active);
+            } else {
+                for (size_t s{0}; s < num_shards; ++s) apply_shard(s);
+            }
+        }();
     }
-    // The last change first. A shard is taken before the slot, as everywhere: the outpoint is read for
-    // its shard, and the item taken out of the record once the shard is held, unless a lower block took
-    // the spend over meanwhile.
-    while (left-- > 0) {
-        const COutPoint outpoint{WITH_LOCK(slot.mutex, return slot.record[left].outpoint)};
-        Shard& shard{ShardFor(outpoint)};
-        LOCK(shard.mutex);
-        Undo item;
-        {
-            LOCK(slot.mutex);
-            Undo& recorded{slot.record[left]};
-            if (recorded.dead) continue;
-            recorded.dead = true;
-            // A long coin stays in the slot until the unwind is through.
-            item = recorded;
+
+    m_tier_block_hash = best_hash;
+    m_change_height = best_height;
+    m_tier_height = best_height;
+    if (publish_height) m_confirmed_height.store(best_height, std::memory_order_release);
+}
+
+void CoinsStore::CommitBatch(std::span<CommitOp> ops, const uint256& best_hash, int best_height, ThreadPool* pool, bool publish_height)
+{
+    Assert(!m_run_in_flight);
+    std::vector<uint32_t> active_idx;
+    std::vector<uint32_t> shard_of;
+    std::vector<uint64_t> hashes;
+    active_idx.reserve(ops.size());
+    shard_of.reserve(ops.size());
+    hashes.reserve(ops.size());
+    for (uint32_t i{0}; i < ops.size(); ++i) {
+        if (ops[i].cancelled) continue;
+        active_idx.push_back(i);
+        shard_of.push_back(ops[i].shard);
+        hashes.push_back(ops[i].key_hash);
+    }
+
+    if (!active_idx.empty()) {
+        const auto apply_shard{[&](Shard& shard, std::span<const uint32_t> items) EXCLUSIVE_LOCKS_REQUIRED(shard.mutex) {
+            shard.map.PrefetchAll(hashes, items, [&](uint32_t pos) { return ops[active_idx[pos]].coin.IsSpent(); });
+            // Prefetch detach links for spends before applying.
+            for (const uint32_t pos : items) {
+                const CommitOp& op{ops[active_idx[pos]]};
+                if (!op.coin.IsSpent()) continue;
+                if (const auto it{shard.map.find(op.outpoint, op.key_hash)}; it != shard.map.end()) PrefetchDetach(shard, *it);
+            }
+            for (const uint32_t pos : items) {
+                CommitOp& op{ops[active_idx[pos]]};
+                if (op.coin.IsSpent()) {
+                    auto it{shard.map.find(op.outpoint, op.key_hash)};
+                    if (it != shard.map.end()) {
+                        Entry& entry{it->second};
+                        const State from{StateOf(entry)};
+                        Detach(shard, *it);
+                        SubUsage(shard, entry.coin.DynamicMemoryUsage());
+                        if (entry.fresh) {
+                            EraseDetached(shard, it);
+                        } else {
+                            entry.coin.Clear();
+                            Transit(entry, from, Event::ConfirmedSpend, op.height);
+                            Attach(shard, *it);
+                        }
+                    } else {
+                        // Validated coin from LevelDB not cached in CoinsStore: insert dirty spent marker.
+                        auto [ins, inserted]{shard.map.try_emplace(op.outpoint, op.key_hash)};
+                        Assert(inserted);
+                        Resized(shard);
+                        Transit(ins->second, coins_entry::ABSENT, Event::ConfirmedSpend, op.height);
+                        Attach(shard, *ins);
+                    }
+                } else {
+                    auto [it, inserted]{shard.map.try_emplace(op.outpoint, op.key_hash)};
+                    Entry& entry{it->second};
+                    const State from{StateOf(entry)};
+                    if (inserted) {
+                        Resized(shard);
+                        entry.coin = std::move(op.coin);
+                        Transit(entry, from, op.possible_overwrite ? Event::ConfirmedWrite : Event::ConfirmedNew, op.height);
+                        AddUsage(shard, entry.coin.DynamicMemoryUsage());
+                        Attach(shard, *it);
+                    } else {
+                        Assert(op.possible_overwrite || entry.coin.IsSpent());
+                        Detach(shard, *it);
+                        SubUsage(shard, entry.coin.DynamicMemoryUsage());
+                        entry.coin = std::move(op.coin);
+                        Transit(entry, from, Event::ConfirmedWrite, op.height);
+                        AddUsage(shard, entry.coin.DynamicMemoryUsage());
+                        Attach(shard, *it);
+                    }
+                }
+            }
+        }};
+
+        const size_t helpers{pool && active_idx.size() >= COMMIT_OPS_PER_HELPER
+                                 ? std::min(pool->WorkersCount(), active_idx.size() / COMMIT_OPS_PER_HELPER)
+                                 : 0};
+        if (helpers > 0) {
+            VisitShardsShared(shard_of, *pool, helpers, apply_shard);
+        } else {
+            VisitShards(/*start_hint=*/0, shard_of, apply_shard);
         }
-        UnwindItem(shard, height, std::move(item));
     }
-    // Then the creates that went over nothing, the last first. A spend of the block's own create was made
-    // after the create and is taken back before it, as it was in one record; changes of different outpoints
-    // do not depend on their order. The block's worker is through: nothing is added to the list.
-    std::vector<COutPoint> plain_creates;
-    WITH_LOCK(slot.mutex, plain_creates.swap(slot.plain_creates));
-    for (auto outpoint{plain_creates.rbegin()}; outpoint != plain_creates.rend(); ++outpoint) {
-        Shard& shard{ShardFor(*outpoint)};
-        LOCK(shard.mutex);
-        UnwindItem(shard, height, Undo{.coin = {}, .outpoint = *outpoint});
-    }
-    {
-        LOCK(slot.mutex);
-        std::vector<Undo>{}.swap(slot.record);
-        std::vector<StoredCoin>{}.swap(slot.long_coins);
-        slot.conflicts = 0;
-        slot.status.store(BlockStatus::FREE, std::memory_order_release);
-    }
-    m_open_slots.fetch_sub(1, std::memory_order_relaxed);
+
+    m_tier_block_hash = best_hash;
+    m_change_height = best_height;
+    m_tier_height = best_height;
+    if (publish_height) m_confirmed_height.store(best_height, std::memory_order_release);
 }
 
 // ---------------------------------------------------------------------------------------------------------
-// Sizes, eviction and the write-out
+// Sizing, eviction and write-out runs
 
 unsigned int CoinsStore::GetCacheSize() const
 {
@@ -1407,27 +1524,16 @@ unsigned int CoinsStore::GetCacheSize() const
 
 size_t CoinsStore::GetDirtyCount() const noexcept
 {
-    // Every dirty entry, less what the open blocks added: their changes are dirty where the write-out
-    // will find them, and count once the block is confirmed.
-    int64_t dirty{static_cast<int64_t>(SumTotals(&Totals::dirty))};
-    if (m_open_slots.load(std::memory_order_relaxed) > 0) {
-        for (const WindowBlock& slot : m_window) {
-            if (slot.status.load(std::memory_order_acquire) == BlockStatus::APPLIED) dirty -= slot.dirty_delta.load(std::memory_order_relaxed);
-        }
-    }
-    return static_cast<size_t>(std::max<int64_t>(0, dirty));
+    return SumTotals(&Totals::dirty);
 }
 
 size_t CoinsStore::DynamicMemoryUsage() const
 {
-    // The sum kept as the entries change (Totals), and the region held ahead of a large store's nodes.
     return SumTotals(&Totals::bytes) + RegionAheadBytes();
 }
 
 int CoinsStore::BoundForBytes(size_t bytes, int tip_height) const
 {
-    // Merge the shards' byte sums span by span and walk them from the oldest up; in the span the bound
-    // lies in, the entries' own heights find it.
     std::vector<int64_t> merged;
     for (const Shard& shard : m_shards) {
         LOCK(shard.mutex);
@@ -1452,36 +1558,40 @@ int CoinsStore::BoundForBytes(size_t bytes, int tip_height) const
             freed += b;
             if (freed >= static_cast<int64_t>(bytes)) return std::min<int>(h, tip_height);
         }
-        // The span lost entries between the two passes: the bound lies further up.
     }
     return tip_height;
 }
 
 size_t CoinsStore::EvictClean(size_t target_bytes)
 {
-    // Round the shards, a batch from the old end of each one's clean list at a time, so that the shards
-    // age together and no shard's lock is held for long. An entry with its mark set goes to the young end.
-    static constexpr size_t BATCH{256};
+    if (DynamicMemoryUsage() <= target_bytes) return 0;
     size_t freed{0};
-    bool progress{true};
-    while (progress && DynamicMemoryUsage() > target_bytes) {
-        progress = false;
+    // Cap clock passes so concurrent hot reads cannot spin EvictClean indefinitely.
+    for (int pass{0}; pass < 2 && DynamicMemoryUsage() > target_bytes; ++pass) {
+        bool progress{false};
         for (Shard& shard : m_shards) {
-            if (DynamicMemoryUsage() <= target_bytes) break;
+            if (DynamicMemoryUsage() <= target_bytes) return freed;
             LOCK(shard.mutex);
-            for (size_t n{0}; n < BATCH && shard.clean_old; ++n) {
-                Node& node{*shard.clean_old};
-                progress = true;
-                if (node.second.referenced) {
-                    Detach(shard, node);
-                    node.second.referenced = false;
-                    Attach(shard, node);
+            // Walk up to the current clean entries once per pass.
+            Node* stop_at{shard.clean_young};
+            while (shard.clean_old && DynamicMemoryUsage() > target_bytes) {
+                Node* node{shard.clean_old};
+                const bool reached_stop{node == stop_at};
+                if (node->second.referenced) {
+                    node->second.referenced = false;
+                    Detach(shard, *node);
+                    Attach(shard, *node);
+                    progress = true;
+                    if (reached_stop) break;
                     continue;
                 }
-                freed += static_cast<size_t>(DirtyBytes(node.second));
-                EraseEntry(shard, node);
+                EraseEntry(shard, *node);
+                ++freed;
+                progress = true;
+                if (reached_stop) break;
             }
         }
+        if (!progress) break;
     }
     return freed;
 }
@@ -1489,46 +1599,26 @@ size_t CoinsStore::EvictClean(size_t target_bytes)
 std::unique_ptr<CoinsStore::WriteOutRun> CoinsStore::BeginWriteOut(int bound_height, int head_height, const uint256& new_head, bool final)
 {
     Assert(!m_run_in_flight);
+    // Promote m_fell_below_written before checking early exit so disconnects below written_height always
+    // trigger a final run (and never drop restored coins).
+    final = final || m_fell_below_written;
     if (!final) {
-        bool any{false};
-        for (const Shard& shard : m_shards) {
-            LOCK(shard.mutex);
-            for (const Bucket& bucket : shard.dirty_spans) {
-                if (!bucket.head) continue;
-                // The shard's first list with entries holds its lowest heights.
-                for (const Node* node{bucket.head}; node && !any; node = node->second.next) {
-                    // An open block's own change is not the run's, the erase its create went over is.
-                    any = node->second.height <= bound_height && (node->second.owed || !Pending(node->second));
-                }
-                break;
-            }
-            if (any) break;
-        }
-        if (!any && m_open_slots.load(std::memory_order_relaxed) > 0) {
-            // A confirmed change an open block spent is in the block's record alone (CollectRecords()). A
-            // dead item counts as well: its live copy may be in a record this scan has passed.
-            const int confirmed{m_confirmed_height.load(std::memory_order_relaxed)};
-            for (const WindowBlock& slot : m_window) {
-                if (slot.status.load(std::memory_order_acquire) != BlockStatus::APPLIED) continue;
-                LOCK(slot.mutex);
-                for (const Undo& item : slot.record) {
-                    if (!item.spend || item.height > bound_height) continue;
-                    const bool pending_create{item.created && static_cast<int>(item.coin.nHeight) > confirmed};
-                    if (item.owed || (item.dirty && !pending_create)) {
-                        any = true;
-                        break;
+        bool any{!m_restored.empty()};
+        if (!any) {
+            for (const Shard& shard : m_shards) {
+                LOCK(shard.mutex);
+                for (const Bucket& bucket : shard.dirty_spans) {
+                    if (!bucket.head) continue;
+                    for (const Node* node{bucket.head}; node && !any; node = node->second.next) {
+                        any = node->second.height <= bound_height;
                     }
+                    break;
                 }
                 if (any) break;
             }
         }
-        // Nothing to write and no head to move: the database already holds the bound.
         if (!any && bound_height <= m_written_height) return nullptr;
     }
-    // Changes made below the written head (a disconnect's) are tagged with the fork height while the
-    // database holds the state of a block above it. Stopping at a bound would write some of them under a
-    // marker whose replay starts from the written head, which restores nothing of what they took.
-    final = final || m_fell_below_written;
     auto run{std::make_unique<WriteOutRun>()};
     run->restored = TakeRestored();
     run->new_head = new_head;
@@ -1536,38 +1626,23 @@ std::unique_ptr<CoinsStore::WriteOutRun> CoinsStore::BeginWriteOut(int bound_hei
     run->bound_height = final ? head_height : bound_height;
     run->head_height = head_height;
     run->final = final;
-    // Until every shard has been collected the bound stands in for the settled height (TagFor()).
     m_inflight_settled_height = run->bound_height;
     m_run_in_flight = true;
-    // A final run carries every change made so far; SetTierHeight() notes a disconnect below its head.
+    m_write_out_epoch.fetch_add(1, std::memory_order_release);
     if (final) m_fell_below_written = false;
-    // The highest height a run may have written (see m_dropped_through): a run bounded lower than an earlier
-    // one does not take it back. Only a disconnect lowers it (SetTierHeight()).
-    m_dropped_through.store(std::max(m_dropped_through.load(std::memory_order_relaxed), run->bound_height), std::memory_order_relaxed);
     return run;
 }
 
-//! About what a change adds to a database batch: the key and the framing, and for a coin its height, its
-//! amount and its script. Within a few percent for the common scripts and seldom below, so that a chunk
-//! collected up to the batch size is one batch.
 static uint64_t BatchBytes(const CoinWrite& write)
 {
     return write.coin ? 45 + write.coin->out.scriptPubKey.size() : 38;
 }
 
-//! Buffers of SortWrites(), kept between calls.
 struct WriteSorter {
     std::vector<std::pair<uint64_t, uint32_t>> order;
     std::vector<CoinWrite> sorted;
 };
 
-/**
- * Put the changes from `from` on in the order of the database's keys, descending: by the leading bytes
- * of the txid and, where they are equal, by the outpoint (the order of the keys, but among the outputs
- * past the 16511th of one transaction, whose index is a byte longer in the key). The database finds the
- * place of a key next to the last one it took faster than the place of a key anywhere, and a batch it
- * cuts at its batch size (CCoinsViewDB::WriteRun()) is then cut along its keys.
- */
 static void SortWrites(std::vector<CoinWrite>& writes, size_t from, WriteSorter& sorter)
 {
     const size_t count{writes.size() - from};
@@ -1591,62 +1666,38 @@ static void SortWrites(std::vector<CoinWrite>& writes, size_t from, WriteSorter&
 void CoinsStore::CollectChunk(Shard& shard, WriteOutRun& run, uint64_t limit, uint64_t& size, std::vector<CoinWrite>& writes, std::vector<Node*>& nodes) const
 {
     AssertLockHeld(shard.mutex);
-    // By index, and with no reference to a list kept across an entry: moving an owed entry to its coin's
-    // span (below) can free the lists with the shard's last dirty entry and allocate them again, longer.
     for (size_t span{0}; span < shard.dirty_spans.size(); ++span) {
-        // The oldest change this list keeps for a later run.
         int oldest_left{std::numeric_limits<int>::max()};
         for (Node* node{shard.dirty_spans[span].head}, *next{nullptr}; node; node = next) {
             next = node->second.next;
             Entry& entry{node->second};
-            // An open block's change is passed over until the block is confirmed. What the block changed
-            // is not: a confirmed coin it spent is in its record (CollectRecords()), and the change its
-            // create went over is owed by the entry, which kept that change's height.
-            const bool pending{Pending(entry)};
-            if (pending && !entry.owed) continue;
             if (!run.final && entry.height > run.bound_height) {
                 oldest_left = std::min<int>(oldest_left, entry.height);
                 continue;
             }
             if (size >= limit) return;
-            if (const int created{static_cast<int>(entry.coin.nHeight)}; entry.owed && (pending || (!run.final && created > run.bound_height))) {
-                // The create is not the run's to write, the change under it is (OwedValue()): left behind,
-                // it would be missing from a database whose marker closes at the run's head. Written, the
-                // entry owes nothing but its coin, at the coin's height.
-                writes.push_back({node->first, pending ? OwedValue(created, node->first) : std::nullopt});
+            // A confirmed coin created above the bound that overwrote an older owed erase (so entry.height
+            // stayed at the erase's height): write the erase now and move the entry to its coin's height so
+            // a partial run never writes a future coin into an earlier settled state.
+            if (!run.final && !entry.coin.IsSpent() && !entry.fresh && static_cast<int>(entry.coin.nHeight) > run.bound_height) {
+                const int created{static_cast<int>(entry.coin.nHeight)};
+                writes.push_back({node->first, std::nullopt});
                 size += BatchBytes(writes.back());
                 ++run.count;
                 Detach(shard, *node);
                 Transit(entry, Event::RunWritesOwed, created);
                 Attach(shard, *node);
-                if (pending) {
-                    // One confirmed change fewer; the entry is the open block's alone now.
-                    ChargeDelta(created, 1);
-                } else {
-                    // A confirmed coin above the bound, for a later run.
-                    run.oldest_left = std::min<int>(run.oldest_left, created);
-                }
+                run.oldest_left = std::min<int>(run.oldest_left, created);
                 continue;
             }
-            if (entry.unwritten) {
-                // The marker of a coin the database never held, its block confirmed and ConfirmBlock() not
-                // yet here: nothing to erase there, and nothing left to say here. The lists go with the
-                // shard's last dirty entry.
-                EraseEntry(shard, *node);
-                if (shard.dirty_count == 0) return;
-                continue;
-            }
-            writes.push_back({node->first, entry.coin.IsSpent() ? std::nullopt : std::make_optional(entry.coin)});
+            writes.push_back({node->first, entry.coin.IsSpent() ? std::nullopt : std::make_optional(entry.coin.ToCoin())});
             nodes.push_back(node);
             size += BatchBytes(writes.back());
             ++run.count;
             run.bytes += static_cast<size_t>(DirtyBytes(entry));
-            // Not fresh from here on (StreamWriteOut()).
             Transit(entry, Event::RunCollects);
         }
         if (oldest_left != std::numeric_limits<int>::max()) {
-            // The oldest change left behind in this shard, the lists further up holding later spans: the
-            // database holds the state one below it once the run has landed.
             run.oldest_left = std::min<int>(run.oldest_left, oldest_left);
             return;
         }
@@ -1657,159 +1708,27 @@ void CoinsStore::SettleNode(Shard& shard, Node& node) const
 {
     AssertLockHeld(shard.mutex);
     Entry& entry{node.second};
-    if (!entry.collected) return; // Changed since: stays dirty with its new change.
+    if (!entry.collected) return;
     Detach(shard, node);
-    // Clean, and what the database holds is anyone's.
     Transit(entry, Event::RunLands);
     if (entry.coin.IsSpent()) {
-        // The erase is in the database; the entry has nothing left to say.
         EraseEntry(shard, node);
         return;
     }
     Attach(shard, node);
 }
 
-int CoinsStore::CollectRecords(int bound_height, bool final, std::vector<CoinWrite>& writes, size_t& count)
-{
-    int oldest_left{std::numeric_limits<int>::max()};
-    if (m_open_slots.load(std::memory_order_relaxed) == 0) return oldest_left;
-    // A confirmed coin an open block spent is in that block's record and nowhere else: the tier has the
-    // block's marker, or nothing. If the database does not have the coin yet, the run writes it from
-    // there. The items are found with the slot held alone, and each is taken with its shard held first.
-    struct Candidate {
-        BlockId slot;
-        size_t index;
-        COutPoint outpoint;
-    };
-    std::vector<Candidate> candidates;
-    for (BlockId id{1}; id < m_window.size(); ++id) {
-        WindowBlock& slot{m_window[id]};
-        if (slot.status.load(std::memory_order_acquire) != BlockStatus::APPLIED) continue;
-        LOCK(slot.mutex);
-        if (slot.status.load(std::memory_order_relaxed) != BlockStatus::APPLIED) continue;
-        const int confirmed{m_confirmed_height.load(std::memory_order_relaxed)};
-        for (size_t i{0}; i < slot.record.size(); ++i) {
-            const Undo& item{slot.record[i]};
-            if (!item.spend) continue;
-            // Clean, the database has the coin. An open block's coin is no confirmed change, but the erase
-            // its create went over is.
-            const bool pending_create{item.created && static_cast<int>(item.coin.nHeight) > confirmed};
-            if (!item.owed && (!item.dirty || pending_create)) continue;
-            if (item.dead) {
-                // A lower block took the spend over (SpendLocked()). The item has the flags of that moment,
-                // and the live copy is in that block's record, which this scan may have passed before the
-                // takeover put it there. The outpoint is looked at again below with its shard held, where
-                // the live copy is found, or nothing if the change was written or decided since.
-                candidates.push_back({id, i, item.outpoint});
-                continue;
-            }
-            if (!final && item.height > bound_height) {
-                oldest_left = std::min<int>(oldest_left, item.height);
-                continue;
-            }
-            candidates.push_back({id, i, item.outpoint});
-        }
-    }
-    for (const Candidate& candidate : candidates) {
-        const COutPoint& outpoint{candidate.outpoint};
-        Shard& shard{ShardFor(outpoint)};
-        LOCK(shard.mutex);
-        auto it{shard.map.find(outpoint)};
-        BlockId id{candidate.slot};
-        size_t hint{candidate.index};
-        const bool marker{it != shard.map.end() && it->second.coin.IsSpent() && Pending(it->second)};
-        if (marker) {
-            // The spend is the block's whose marker this is: a lower block may have taken it over since.
-            if (const BlockId now{SlotAt(it->second.height)}; now != id) {
-                id = now;
-                hint = std::numeric_limits<size_t>::max();
-            }
-        } else if (it != shard.map.end()) {
-            continue; // decided since: the entry is anyone's
-        }
-        if (id == NO_BLOCK) continue;
-        WindowBlock& slot{m_window[id]};
-        LOCK(slot.mutex);
-        if (slot.status.load(std::memory_order_relaxed) != BlockStatus::APPLIED) continue;
-        const auto live{[&](const Undo& u) { return u.spend && !u.dead && u.outpoint == outpoint; }};
-        Undo* item{nullptr};
-        if (hint < slot.record.size() && live(slot.record[hint])) {
-            item = &slot.record[hint];
-        } else if (marker) {
-            item = LiveSpend(slot.record, outpoint);
-        }
-        if (!item) continue;
-        const int created{static_cast<int>(item->coin.nHeight)};
-        const bool pending_create{item->created && created > m_confirmed_height.load(std::memory_order_relaxed)};
-        // What the scan above asked, of the item as it is now: a spend found through a dead item was not
-        // held against the bound there, and one reached both ways is taken once.
-        if (!item->owed && (!item->dirty || pending_create)) continue;
-        if (!final && item->height > bound_height) {
-            oldest_left = std::min<int>(oldest_left, item->height);
-            continue;
-        }
-        if (item->owed && (pending_create || (!final && created > bound_height))) {
-            // The erase the create went over, and the item owes nothing but its coin from here on. An entry
-            // (CollectChunk()) writes the owed value, which may be a coin the create went over. An open
-            // block's create that an item spends is never such a one: only a coinbase goes over a coin, and
-            // none is spent within a window, which is shorter than a coinbase takes to mature. A confirmed
-            // create above the bound of a run that is not final can be one: the erase is then written in
-            // place of the coin it went over, the case BeginWriteOut() names (less than the state below
-            // the create, never a coin that state does not have).
-            writes.push_back({outpoint, std::nullopt});
-            ++count;
-            item->owed = false;
-            item->height = created;
-            if (pending_create) {
-                ChargeDelta(created, 1);
-            } else {
-                oldest_left = std::min<int>(oldest_left, created);
-            }
-        } else if (item->dirty && !pending_create) {
-            writes.push_back({outpoint, std::make_optional(item->coin)});
-            ++count;
-            item->dirty = false;
-            item->fresh = false;
-            item->owed = false;
-            // The database has the coin once the run lands, so the spend is an erase to write when the
-            // block is confirmed: its marker, if the spend left none (a coin the database never held).
-            int64_t added{1};
-            if (it == shard.map.end()) {
-                it = shard.map.try_emplace(outpoint).first;
-                Resized(shard);
-                Entry& entry{it->second};
-                Transit(entry, coins_entry::ABSENT, Event::BlockSpendMarker, slot.height.load(std::memory_order_relaxed));
-                Attach(shard, *it);
-                ++added;
-            } else {
-                // The database has the coin now, whatever the marker said.
-                Transit(it->second, Event::RunWritesRecord);
-            }
-            // The confirmed change is gone from the count, and the marker is the block's.
-            slot.dirty_delta.fetch_add(added, std::memory_order_relaxed);
-            // A reader that missed the outpoint in the tier may hold the base's answer from before.
-            ++shard.settles;
-        }
-    }
-    return oldest_left;
-}
-
 void CoinsStore::StreamWriteOut(WriteOutRun& run, const std::function<uint256(int)>& block_at, uint64_t batch_bytes)
 {
-    // At least one change to a chunk, whatever the limit.
     const uint64_t limit{std::max<uint64_t>(batch_bytes, 1)};
     uint64_t size{0};
     std::vector<CoinWrite> writes;
     std::vector<Node*> nodes;
-    // The shards the chunk took entries from, each with the offset of its first node. A chunk fills across
-    // shards, so that a small run is a few database batches and not one for every shard.
     std::vector<std::pair<Shard*, size_t>> spans;
     WriteSorter sorter;
     const auto write_chunk{[&] {
         if (writes.empty()) return;
-        // Nothing below goes by a write's place: the nodes are settled by their own list.
         SortWrites(writes, 0, sorter);
-        // Under the run's two heads (BeginWriteOut()).
         base->WriteRun(writes, run.new_head, run.old_head, /*final=*/false);
         ++run.chunks;
         for (size_t i{0}; i < spans.size(); ++i) {
@@ -1824,20 +1743,16 @@ void CoinsStore::StreamWriteOut(WriteOutRun& run, const std::function<uint256(in
         spans.clear();
         size = 0;
     }};
-    // From the highest shard down, for the reason given in Flush().
     for (size_t index{m_shards.size()}; index-- > 0;) {
         Shard& shard{m_shards[index]};
         while (true) {
             const size_t before{nodes.size()};
             WITH_LOCK(shard.mutex, CollectChunk(shard, run, limit, size, writes, nodes));
             if (nodes.size() > before) spans.emplace_back(&shard, before);
-            // Below the limit the shard has nothing more for this run, and the chunk goes on to the next.
             if (size < limit) break;
             write_chunk();
         }
     }
-    // After every shard: a coin spent from an entry the run collected is in the chunk it was collected to.
-    run.oldest_left = std::min<int>(run.oldest_left, CollectRecords(run.bound_height, run.final, writes, run.count));
     write_chunk();
     run.settled_height = std::min(run.head_height, run.oldest_left == std::numeric_limits<int>::max() ? run.head_height : run.oldest_left - 1);
     Assume(run.final || run.settled_height >= run.bound_height);
@@ -1845,9 +1760,6 @@ void CoinsStore::StreamWriteOut(WriteOutRun& run, const std::function<uint256(in
         base->WriteRun({}, run.new_head, run.old_head, /*final=*/true);
         return;
     }
-    // The database now holds the settled head's state, with every outpoint the run wrote at its value in
-    // new_head: the pair the next run starts from. On disk before the tier counts the run as written, so
-    // that the old head recorded there is never below what pruning goes by.
     run.settled_head = block_at(run.settled_height);
     base->WriteRun({}, run.new_head, run.settled_head, /*final=*/false);
 }
@@ -1855,50 +1767,36 @@ void CoinsStore::StreamWriteOut(WriteOutRun& run, const std::function<uint256(in
 void CoinsStore::CommitWriteOut(const WriteOutRun& run)
 {
     Assert(m_run_in_flight);
-    m_dropped_through.store(std::max({m_dropped_through.load(std::memory_order_relaxed), run.bound_height, run.settled_height}), std::memory_order_relaxed);
     Assert(run.final || !run.settled_head.IsNull());
     m_written_head = run.final ? run.new_head : run.settled_head;
     m_written_height = run.settled_height;
     m_run_in_flight = false;
+    m_write_out_epoch.fetch_add(1, std::memory_order_release);
 }
 
 void CoinsStore::AbandonWriteOut()
 {
-    // What the run was to carry is unwritten still, a final run's changes from below the written head too.
-    m_fell_below_written = true;
-    m_run_in_flight = false;
-    // Nothing may close the run's marker: no run and no flush follows, and the next start replays from the
-    // old head.
+    Assert(m_run_in_flight);
     m_flush_failed = true;
+    m_run_in_flight = false;
 }
 
-//! What the workers of a flush share.
+static constexpr uint64_t MAX_WIPE_WORKERS{4};
+
 struct CoinsStore::Wipe {
-    const uint256 best;
-    const uint256 old_head;
-    //! The size of a batch.
-    const uint64_t limit;
-    //! A worker's write failed: the others take no further shard.
+    uint256 best;
+    uint256 old_head;
+    uint64_t limit;
     std::atomic<bool> failed{false};
 };
 
-//! The most workers a flush has. The database takes one batch at a time: these keep it busy, and more
-//! would wait for it.
-static constexpr size_t MAX_WIPE_WORKERS{4};
-
-//! A worker of a flush: its shards, the batch it is filling, and the shards whose changes are in it.
 struct CoinsStore::WipeWorker {
-    //! The worker's shards, [begin, end), which it takes from the highest down.
     size_t begin{0};
     size_t end{0};
-    //! Called once, when the worker's first batch is in the database.
     std::function<void()> after_first_batch;
-    //! The batch: shard after shard from the highest down, each in the descending order of the keys.
     std::vector<CoinWrite> writes;
     WriteSorter sorter;
-    //! What `writes` comes to as a database batch (BatchBytes()).
     uint64_t size{0};
-    //! Shards the worker has emptied, locked until the batch with the last of their changes has landed.
     std::vector<Shard*> held;
     std::exception_ptr error;
 };
@@ -1906,7 +1804,6 @@ struct CoinsStore::WipeWorker {
 void CoinsStore::WriteWipeBatch(const Wipe& wipe, WipeWorker& worker)
 {
     if (!worker.writes.empty()) {
-        // Under the flush's two heads, as a run's chunk (BeginWriteOut()).
         base->WriteRun(worker.writes, wipe.best, wipe.old_head, /*final=*/false);
         worker.writes.clear();
         worker.size = 0;
@@ -1919,15 +1816,12 @@ void CoinsStore::WriteWipeBatch(const Wipe& wipe, WipeWorker& worker)
 uint64_t CoinsStore::WipeShard(Shard& shard, WipeWorker& worker)
 {
     AssertLockHeld(shard.mutex);
-    // The lists go with the entries; the few entries that stay, the open blocks' own changes, are put
-    // back on theirs as the walk passes them.
     FreeDirtySpans(shard);
     MyTotals().dirty.fetch_sub(static_cast<int64_t>(shard.dirty_count), std::memory_order_relaxed);
     shard.dirty_count = 0;
     shard.clean_young = nullptr;
     shard.clean_old = nullptr;
     uint64_t added{0};
-    // Where the shard's changes begin in the batch.
     const size_t from{worker.writes.size()};
     const auto add{[&](CoinWrite&& write) {
         const uint64_t bytes{BatchBytes(write)};
@@ -1939,31 +1833,13 @@ uint64_t CoinsStore::WipeShard(Shard& shard, WipeWorker& worker)
         Entry& entry{it->second};
         entry.list = LIST_NONE;
         Transit(entry, Event::Flush);
-        if (Pending(entry)) {
-            // An open block's change: not the database's until the block is confirmed, and dirty until
-            // then. The erase its create went over, or the coin it kept, is the database's now (as in
-            // CollectChunk()).
-            if (entry.owed) {
-                add({it->first, OwedValue(static_cast<int>(entry.coin.nHeight), it->first)});
-                Transit(entry, Event::RunWritesOwed, static_cast<int>(entry.coin.nHeight));
-                ChargeDelta(entry.height, 1);
-            }
-            Attach(shard, *it);
-            ++it;
-        } else {
-            // As EraseEntry(), with the coin's usage taken before the coin is moved out.
-            const size_t usage{entry.coin.DynamicMemoryUsage()};
-            // A marker of a coin the database never held is no erase to write.
-            if (entry.dirty && !entry.unwritten) {
-                add({it->first, entry.coin.IsSpent() ? std::nullopt : std::make_optional(std::move(entry.coin))});
-            }
-            SubUsage(shard, usage);
-            it = shard.map.erase(it);
+        const size_t usage{entry.coin.DynamicMemoryUsage()};
+        if (entry.dirty) {
+            add({it->first, entry.coin.IsSpent() ? std::nullopt : std::make_optional(entry.coin.ToCoin())});
         }
+        SubUsage(shard, usage);
+        it = shard.map.erase(it);
     }
-    // The map hands its entries out in the order of their hashes, and no batch ends during the walk for
-    // that reason: what the walk has passed at any point is spread over the shard's whole range of keys,
-    // and so is the rest, and two batches with a part each would cover the same range.
     SortWrites(worker.writes, from, worker.sorter);
     shard.map.rehash(0);
     Resized(shard);
@@ -1971,9 +1847,6 @@ uint64_t CoinsStore::WipeShard(Shard& shard, WipeWorker& worker)
     return added;
 }
 
-//! The most shards a flush's worker keeps locked for one batch. Shards with few changes would otherwise
-//! all end up in one batch, and ThreadSanitizer's deadlock detector follows no more than 64 mutexes held
-//! by a thread. A batch that ends for this reason is whole shards like any other.
 static constexpr size_t MAX_BATCH_SHARDS{32};
 
 void CoinsStore::RunWipeWorker(Wipe& wipe, WipeWorker& worker)
@@ -1983,9 +1856,6 @@ void CoinsStore::RunWipeWorker(Wipe& wipe, WipeWorker& worker)
         for (size_t index{worker.end}; index-- > worker.begin && !wipe.failed.load(std::memory_order_relaxed);) {
             if (worker.held.size() >= MAX_BATCH_SHARDS) WriteWipeBatch(wipe, worker);
             Shard& shard{m_shards[index]};
-            // The shard stays locked beyond its walk, among the others the batch took changes from, and
-            // they are unlocked together and not in the reverse order: the lock order checks know of the
-            // shard for its walk only.
             EnterCritical("shard.mutex", __FILE__, __LINE__, static_cast<ShardMutex::unique_lock::mutex_type*>(&shard.mutex));
             shard.mutex.lock();
             walked = &shard;
@@ -1993,14 +1863,10 @@ void CoinsStore::RunWipeWorker(Wipe& wipe, WipeWorker& worker)
             walked = nullptr;
             LeaveCritical();
             worker.held.push_back(&shard);
-            // A batch ends between two shards when it is full, or when the next shard, taken to be as
-            // large as this one, would not fit. A shard larger than a batch is a batch of its own, which
-            // the database cuts at its batch size along the keys (CCoinsViewDB::WriteRun()).
             if (worker.size >= wipe.limit || worker.size + added > wipe.limit) WriteWipeBatch(wipe, worker);
         }
         WriteWipeBatch(wipe, worker);
     } catch (const std::runtime_error&) {
-        // The base's write failed. Flush() throws it on once every worker is through.
         worker.error = std::current_exception();
         wipe.failed.store(true, std::memory_order_relaxed);
         if (walked) {
@@ -2014,34 +1880,13 @@ void CoinsStore::RunWipeWorker(Wipe& wipe, WipeWorker& worker)
 
 void CoinsStore::Flush(bool /*reallocate_cache*/)
 {
-    // One pass: a shard's changes are written as its entries are taken out of it, the coins moved rather
-    // than copied. A shard stays locked until the batch with the last of its changes is in the database: a
-    // reader of the shard (an applier, when the flush is forced on a running node) waits for the write
-    // rather than finding a coin in neither place. Every call of WriteRun() names the same two heads, and
-    // a last one closes the marker. An open block's own changes stay, dirty as they are; what the block
-    // changed is written: a change owed under its create with the shard, a confirmed coin it spent from
-    // its record once the shards are through.
-    //
-    // The batches are ranges of the database's keys that do not overlap (SetBaseWrites()). The shards are
-    // taken from the highest down, because the database's marker goes out with the first batch and its
-    // head-blocks key sorts above every coin's: that batch then covers the top of the range, not all of
-    // it. The marker's other keys are in that first batch and in the last, tiny one that closes it, and in
-    // none between (CCoinsViewDB::WriteRun()). With several workers each has a range of neighbouring
-    // shards of its own, and all but the one with the highest range start once its first batch, the
-    // marker's, is in the database.
     const uint256 best{GetBestBlock()};
     const int head_height{m_tier_height >= 0 ? m_tier_height : m_change_height};
-    // See below: the shutdown's flush after one that failed fails as well, and writes nothing.
     if (m_flush_failed) throw std::runtime_error{"the coins are not written: an earlier flush failed"};
-    // The restored coins are the caller's (FlushStateToDisk() writes them); a wipe does not.
     Assume(m_restored.empty());
     Assert(!m_run_in_flight);
     m_run_in_flight = true;
-    m_dropped_through.store(head_height, std::memory_order_relaxed);
     Wipe wipe{.best = best, .old_head = m_written_head, .limit = std::max<uint64_t>(m_batch_bytes, 1)};
-    // A worker for every two batches there may be, so that each has batches to take turns with, and no
-    // more than there are cores: a change is 38 bytes of a batch at least. A flush of a few batches, a
-    // small cache's, has one.
     const uint64_t cores{std::max(1U, std::thread::hardware_concurrency())};
     const uint64_t wanted{m_base_concurrent ? GetDirtyCount() * uint64_t{38} / wipe.limit / 2 : 1};
     std::vector<WipeWorker> workers(std::clamp<uint64_t>(wanted, 1, std::min<uint64_t>({MAX_WIPE_WORKERS, cores, m_shards.size()})));
@@ -2049,16 +1894,7 @@ void CoinsStore::Flush(bool /*reallocate_cache*/)
         workers[i].begin = m_shards.size() * i / workers.size();
         workers[i].end = m_shards.size() * (i + 1) / workers.size();
     }
-    // noexcept: tasks of the pool write into `wipe` and `workers` until they are waited for below, so nothing may
-    // leave this scope early. A failed write is the worker's error (RunWipeWorker()); anything else, a failed
-    // allocation, terminates.
     [&]() noexcept {
-        // The worker of the highest range runs here, and hands the others to the helpers' pool once its first
-        // batch is in. A range is written by whoever claims it first: a task of the pool, or this thread once
-        // its own range is done. This thread may hold cs_main, and the pool's workers may be busy with tasks
-        // waiting for it, so it never waits for a task that has not started: it takes the ranges no task has
-        // claimed, and waits only for those a task is writing. A task that comes up once its range is taken
-        // returns at once; what it shares with the flush outlives the call.
         struct Helpers {
             Mutex mutex;
             std::condition_variable cv;
@@ -2071,8 +1907,6 @@ void CoinsStore::Flush(bool /*reallocate_cache*/)
         if (workers.size() > 1 && m_flush_helpers) {
             first.after_first_batch = [&] {
                 for (size_t i{0}; i + 1 < workers.size(); ++i) {
-                    // noexcept: a failed write is the worker's error; anything else terminates rather than
-                    // leave the flush waiting for the range.
                     auto task{[this, helpers, i, &wipe, &workers]() noexcept {
                         {
                             LOCK(helpers->mutex);
@@ -2080,20 +1914,17 @@ void CoinsStore::Flush(bool /*reallocate_cache*/)
                             helpers->claimed[i] = true;
                             ++helpers->running;
                         }
-                        WAITED_FOR_UNDER_LOCK("a flush helper"); // a forced flush waits with cs_main held
+                        WAITED_FOR_UNDER_LOCK("a flush helper");
                         RunWipeWorker(wipe, workers[i]);
                         LOCK(helpers->mutex);
                         --helpers->running;
                         helpers->cv.notify_all();
                     }};
-                    // A pool that takes no task leaves the ranges to this thread.
                     if (!m_flush_helpers->Submit(std::move(task), /*front=*/true)) break;
                 }
             };
         }
         RunWipeWorker(wipe, first);
-        // The ranges no task has claimed (all of them where the highest range had nothing to write), one after
-        // the other, from the highest down.
         for (size_t i{workers.size() - 1}; i-- > 0;) {
             {
                 LOCK(helpers->mutex);
@@ -2107,23 +1938,12 @@ void CoinsStore::Flush(bool /*reallocate_cache*/)
     }();
     for (const WipeWorker& worker : workers) {
         if (!worker.error) continue;
-        // The changes of the batch that failed are gone from memory and not in the database, which is
-        // left under the marker of a run that did not end: the next start replays from the old head.
-        // Nothing may close that marker. The run stays in flight for that reason, so that no write-out
-        // run is started, and a later flush throws.
         m_flush_failed = true;
         std::rethrow_exception(worker.error);
     }
-    // After the shards: a coin spent since its shard was walked was read from the database.
-    std::vector<CoinWrite> from_records;
-    size_t record_changes{0};
     try {
-        CollectRecords(head_height, /*final=*/true, from_records, record_changes);
-        if (!from_records.empty()) base->WriteRun(from_records, best, wipe.old_head, /*final=*/false);
-        // Every shard's changes are in the database: consistent with the best block again.
         base->WriteRun({}, best, wipe.old_head, /*final=*/true);
     } catch (const std::runtime_error&) {
-        // As a worker's failure above: the marker stays open, and nothing writes again.
         m_flush_failed = true;
         throw;
     }
@@ -2131,15 +1951,12 @@ void CoinsStore::Flush(bool /*reallocate_cache*/)
     m_written_height = head_height;
     m_fell_below_written = false;
     m_run_in_flight = false;
+    m_write_out_epoch.fetch_add(1, std::memory_order_release);
 }
 
 void CoinsStore::Sync()
 {
-    // As Flush(): after a flush or run that failed nothing is written, so that the database stays under the
-    // marker of the failed one and the next start replays from its old head.
     if (m_flush_failed) throw std::runtime_error{"the coins are not written: an earlier flush failed"};
-    // The restored coins are the caller's (FlushStateToDisk() writes them); BeginWriteOut() would take them
-    // into a run that does not write them.
     Assume(m_restored.empty());
     const uint256 best{GetBestBlock()};
     const int head_height{m_tier_height >= 0 ? m_tier_height : m_change_height};
@@ -2155,7 +1972,6 @@ void CoinsStore::Sync()
 
 void CoinsStore::Reset() noexcept
 {
-    // The tier is never reset; a CCoinsViewCache child is. Nothing to do.
 }
 
 void CoinsStore::SanityCheck() const
@@ -2163,10 +1979,6 @@ void CoinsStore::SanityCheck() const
     size_t total_bytes{0};
     size_t total_entries{0};
     size_t total_dirty{0};
-    // The confirmed changes the database does not have yet: what GetDirtyCount() answers.
-    size_t confirmed_dirty{0};
-    // The spent markers of open blocks, with the height each is filed under.
-    std::map<COutPoint, int> pending_markers;
     for (const Shard& shard : m_shards) {
         LOCK(shard.mutex);
         size_t usage{0};
@@ -2181,16 +1993,7 @@ void CoinsStore::SanityCheck() const
                 ++count;
                 bytes += DirtyBytes(entry);
             }
-            // The entry is in a state an entry may rest in (coins_entry::IsStored() says which and why).
             assert(coins_entry::IsStored(StateOf(entry)));
-            // What the machine's height rules keep, as far as an entry shows it. A block's create is filed
-            // under its coin's height, or below it under the earlier change it owes.
-            if (entry.block_create) assert(entry.owed ? entry.height < static_cast<int>(entry.coin.nHeight) : entry.height == static_cast<int>(entry.coin.nHeight));
-            // An open block's spent marker is filed under its block's height, and the block's record has the
-            // height the entry goes back under (checked with the records, below).
-            if (entry.coin.IsSpent() && Pending(entry)) pending_markers.emplace(outpoint, entry.height);
-            if (entry.dirty && (entry.owed || !Pending(entry))) ++confirmed_dirty;
-            // Each entry is on the list its state calls for.
             const List list{entry.dirty ? LIST_DIRTY : LIST_CLEAN};
             assert(entry.list == list);
             if (list == LIST_CLEAN) ++clean_listed;
@@ -2201,7 +2004,6 @@ void CoinsStore::SanityCheck() const
         total_bytes += NodeBytes() * shard.map.size() + memusage::MallocUsage(Map::BUCKET_BYTES * shard.map.bucket_count()) + memusage::DynamicUsage(shard.dirty_spans) + usage;
         total_entries += shard.map.size();
         total_dirty += dirty;
-        // The lists hold exactly those entries, properly linked.
         assert(shard.dirty_spans.empty() == (dirty == 0));
         for (size_t span{0}; span < shard.dirty_spans.size(); ++span) {
             const Bucket& bucket{shard.dirty_spans[span]};
@@ -2231,29 +2033,10 @@ void CoinsStore::SanityCheck() const
         assert(shard.clean_old == prev);
         assert(count == clean_listed);
     }
-    // The totals are the shards' figures summed. (The check is the owner's, made with no change under way.)
     assert(SumTotals(&Totals::bytes) == total_bytes);
     assert(GetCacheSize() == total_entries);
     assert(SumTotals(&Totals::dirty) == total_dirty);
-    // A confirmed coin an open block spent is in the block's record, with what the database is owed for it.
-    const int confirmed{m_confirmed_height.load(std::memory_order_relaxed)};
-    for (const WindowBlock& slot : m_window) {
-        if (slot.status.load(std::memory_order_acquire) != BlockStatus::APPLIED) continue;
-        LOCK(slot.mutex);
-        for (const Undo& item : slot.record) {
-            if (!item.spend || item.dead) continue;
-            // The height the record keeps for the entry is at or below the block's, where the marker is.
-            assert(item.height <= slot.height.load(std::memory_order_relaxed));
-            if (const auto marker{pending_markers.find(item.outpoint)}; marker != pending_markers.end() && marker->second == slot.height.load(std::memory_order_relaxed)) {
-                pending_markers.erase(marker);
-            }
-            const bool pending_create{item.created && static_cast<int>(item.coin.nHeight) > confirmed};
-            if (pending_create ? item.owed : item.dirty) ++confirmed_dirty;
-        }
-    }
-    // Every open block's marker has the record that says where it goes back.
-    assert(pending_markers.empty());
-    assert(GetDirtyCount() == confirmed_dirty);
+    assert(GetDirtyCount() == total_dirty);
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -2266,168 +2049,138 @@ BlockApplyView::BlockApplyView(CoinsStore& store, util::NotNullSharedPtr<ThreadP
 
 BlockApplyView::~BlockApplyView()
 {
-    StopFetching(); // as in Confirm(): the workers read the identity
-    if (HasBlock()) {
-        m_store.UnwindBlock(m_block);
-        m_block = CoinsStore::NO_BLOCK;
-    }
-}
-
-void BlockApplyView::BeginBlock(int height, bool mark_fresh_spends)
-{
-    Assert(!HasBlock());
-    m_block = m_store.BeginBlock(height, mark_fresh_spends);
-}
-
-void BlockApplyView::Confirm()
-{
-    if (!Assume(AllInputsConsumed())) {
-        LogWarning("Block %s input prevout prefetch queue was not fully consumed; inputs were accessed out of order, so prefetching degraded to serial lookups for this block.", GetBestBlock().ToString());
-    }
-    // The prefetch workers read the block identity (ReadBase); they are gone before it is.
     StopFetching();
-    // What the block's worker has not applied yet (the tip path applies everything here).
-    ApplyChanges();
-    const CoinsStore::BlockId block{m_block};
-    m_block = CoinsStore::NO_BLOCK;
-    const int height{m_store.BlockHeight(block)};
-    m_store.ConfirmBlock(block);
-    m_store.SetBestBlock(GetBestBlock(), height);
-    Reset();
 }
 
-void BlockApplyView::Unwind()
+void BlockApplyView::PrepareBlock(int height, const WindowOverlay* overlay)
 {
-    Assert(HasBlock());
-    StopFetching(); // as in Confirm(): the workers read the identity
-    const CoinsStore::BlockId block{m_block};
-    m_block = CoinsStore::NO_BLOCK;
-    m_store.UnwindBlock(block);
-    Reset();
-}
-
-uint32_t BlockApplyView::Conflicts() const
-{
-    return HasBlock() ? m_store.ConflictCount(m_block) : 0;
+    Assert(!m_in_use);
+    m_height = height;
+    m_overlay = overlay;
+    m_in_use = true;
 }
 
 void BlockApplyView::Prefetch(const CBlock& block)
 {
-    Assert(HasBlock());
+    Assert(m_in_use);
     std::vector<COutPoint> outpoints;
+    size_t est{0};
+    for (size_t i{1}; i < block.vtx.size(); ++i) est += block.vtx[i]->vin.size();
+    outpoints.reserve(est);
     for (size_t i{1}; i < block.vtx.size(); ++i) {
         for (const CTxIn& in : block.vtx[i]->vin) outpoints.push_back(in.prevout);
     }
-    for (auto& [outpoint, coin] : m_store.FetchFor(m_block, std::move(outpoints))) {
-        const size_t usage{coin.DynamicMemoryUsage()};
-        if (cacheCoins.try_emplace(outpoint, std::move(coin)).second) cachedCoinsUsage += usage;
+    if (outpoints.empty()) return;
+
+    std::vector<std::pair<COutPoint, Coin>> found;
+    if (m_overlay) {
+        std::vector<COutPoint> misses;
+        misses.reserve(outpoints.size());
+        m_overlay->Fetch(m_height, outpoints, found, misses);
+        for (auto& [outpoint, coin] : found) {
+            const size_t usage{coin.DynamicMemoryUsage()};
+            if (cacheCoins.try_emplace(outpoint, std::move(coin)).second) cachedCoinsUsage += usage;
+        }
+        outpoints = std::move(misses);
+    }
+    if (!outpoints.empty()) {
+        for (auto& [outpoint, coin] : m_store.FetchConfirmed(std::move(outpoints))) {
+            const size_t usage{coin.DynamicMemoryUsage()};
+            if (cacheCoins.try_emplace(outpoint, std::move(coin)).second) cachedCoinsUsage += usage;
+        }
     }
 }
 
 bool BlockApplyView::SpendCoin(const COutPoint& outpoint, Coin* moveto)
 {
-    Coin local;
-    Coin& spent{moveto ? *moveto : local};
-    if (!CoinsViewOverlay::SpendCoin(outpoint, &spent)) return false;
-    // What the view keeps of a coin the base had is the spend. It keeps with it which coin that was, for
-    // the store to compare at the apply (CoinsStore::Change::known_coin).
-    if (const auto it{cacheCoins.find(outpoint)}; it != cacheCoins.end()) {
-        it->second.coin.nHeight = spent.nHeight;
-        it->second.coin.fCoinBase = spent.fCoinBase;
+    Coin tmp;
+    Coin* const target{moveto ? moveto : &tmp};
+    const bool spent{CCoinsViewCache::SpendCoin(outpoint, target)};
+    if (spent && !target->IsSpent()) {
+        if (auto it{cacheCoins.find(outpoint)}; it != cacheCoins.end()) {
+            // CCoinsViewCache::SpendCoin kept the entry in place as a dirty spent tombstone; preserve the
+            // spent coin's creation height (Coin::IsSpent() only tests out.IsNull()) for shard-parallel
+            // conflict detection without any side table.
+            it->second.coin.nHeight = target->nHeight;
+        }
     }
-    return true;
+    return spent;
 }
 
-void BlockApplyView::AnnounceCreates(const CBlock& block)
+CoinsStore::BlockChanges BlockApplyView::ExtractChanges(uint64_t validate_epoch, bool must_be_new)
 {
-    Assert(HasBlock());
-    m_store.AnnounceCreates(m_block, block.vtx);
-}
-
-void BlockApplyView::ApplyChanges(const CBlock* block, const CBlockUndo* undo)
-{
-    Assert(HasBlock());
-    if (m_dirty_count == 0) {
-        m_store.CreatesApplied(m_block);
-        return;
+    Assert(m_in_use);
+    CoinsStore::BlockChanges out;
+    out.height = m_height;
+    out.validate_epoch = validate_epoch;
+    out.must_be_new = must_be_new;
+    if (m_dirty_count > 0) {
+        const size_t num_shards{m_store.NumShards()};
+        std::vector<CoinsStore::CommitOp> unsorted;
+        unsorted.reserve(m_dirty_count);
+        out.shard_offsets.assign(num_shards + 1, 0);
+        for (auto& [outpoint, entry] : cacheCoins) {
+            if (!entry.IsDirty()) continue;
+            const bool is_spent{entry.coin.IsSpent()};
+            const int32_t spent_h{is_spent ? static_cast<int32_t>(entry.coin.nHeight) : -1};
+            if (is_spent) entry.coin.nHeight = 0;
+            const bool may_overwrite{!entry.IsFresh() && !is_spent && entry.coin.IsCoinBase()};
+            const uint32_t s{m_store.ShardOf(outpoint)};
+            ++out.shard_offsets[s + 1];
+            unsorted.push_back({
+                .outpoint = outpoint,
+                .coin = std::move(entry.coin),
+                .key_hash = CoinsStore::KeyHashOf(outpoint),
+                .shard = s,
+                .height = m_height,
+                .spent_height = spent_h,
+                .possible_overwrite = may_overwrite,
+                .cancelled = false,
+            });
+        }
+        for (size_t s{0}; s < num_shards; ++s) out.shard_offsets[s + 1] += out.shard_offsets[s];
+        std::vector<uint32_t> next(out.shard_offsets.begin(), out.shard_offsets.begin() + num_shards);
+        out.ops.resize(unsorted.size());
+        for (CoinsStore::CommitOp& op : unsorted) {
+            out.ops[next[op.shard]++] = std::move(op);
+        }
     }
-    std::vector<CoinsStore::Change> changes;
-    changes.reserve(m_dirty_count);
-    const uint32_t own_height{static_cast<uint32_t>(m_store.BlockHeight(m_block))};
-    for (auto& [outpoint, entry] : cacheCoins) {
-        if (!entry.IsDirty()) continue;
-        // A dirty spent entry is the spend of a coin the base had (a fresh one spent is erased from the view
-        // instead); a dirty unspent entry is a create, which overwrote a coin the base had unless fresh.
-        // The coin spent is known by its height (SpendCoin()), unless it is one the block made itself over
-        // a coin of the base: the store then holds what was there before.
-        const bool known_coin{entry.coin.IsSpent() && entry.coin.nHeight != own_height};
-        // Only a coinbase may overwrite an unspent coin (the chain's two BIP30 duplicates): a transaction
-        // that creates over one repeats an earlier transaction whose inputs are spent, and its block is
-        // invalid. Such a create meets the coin it would overwrite as a conflict and changes nothing, so
-        // the block's unwind leaves the coin as it was. The rule relies on BIP30 or BIP34 keeping such a
-        // block out: with neither (-test=bip30_off on a chain where BIP34 is not active yet) a block that
-        // spends an output and makes it again with a repeated transaction is not handled.
-        const bool may_overwrite{!entry.IsFresh() && !entry.coin.IsSpent() && entry.coin.IsCoinBase()};
-        // The entry itself: the store takes the coin from where it is, and the view is emptied after.
-        changes.push_back({.outpoint = &outpoint, .coin = &entry.coin, .possible_overwrite = may_overwrite, .must_be_new = m_creates_must_be_new, .known_coin = known_coin});
-    }
-    if (block && undo && undo->vtxundo.size() + 1 == block->vtx.size()) {
-        // The coins the block spent, by outpoint, made only once a spend misses the store.
-        std::unordered_map<COutPoint, const Coin*, SaltedOutpointHasher> spent;
-        const auto base_coin{[&](const COutPoint& outpoint) -> const Coin* {
-            if (spent.empty()) {
-                for (size_t i{1}; i < block->vtx.size(); ++i) {
-                    const CTransaction& tx{*block->vtx[i]};
-                    const CTxUndo& tx_undo{undo->vtxundo[i - 1]};
-                    if (tx_undo.vprevout.size() != tx.vin.size()) continue;
-                    for (size_t j{0}; j < tx.vin.size(); ++j) spent.emplace(tx.vin[j].prevout, &tx_undo.vprevout[j]);
-                }
-            }
-            const auto it{spent.find(outpoint)};
-            return it == spent.end() ? nullptr : it->second;
-        }};
-        m_store.ApplyBatch(m_block, std::move(changes), base_coin);
-    } else {
-        m_store.ApplyBatch(m_block, std::move(changes));
-    }
-    // The block's outputs are in the store, a deferred transaction's too: a higher block reads them there.
-    m_store.CreatesApplied(m_block);
-    // The references the core held into the view are gone with the block's validation; what is applied is
-    // read from the store from now on, where this block sees it. A conflict with another applied block is
-    // recorded against the loser and settled at confirmation; the core is not told, so that its verdict
-    // stays the block's own.
-    const size_t entries{cacheCoins.size()};
     cacheCoins.clear();
-    // The map's pool hands the nodes it took back out in the order they were freed, which after a few
-    // blocks is no order: every entry the next block makes, finds or walks here is then somewhere else in
-    // memory last touched many blocks ago. A new pool hands them out by address. The map is sized for as
-    // many entries again, so that it does not grow step by step in every block.
-    ReallocateCache();
-    cacheCoins.reserve(entries);
     cachedCoinsUsage = 0;
     m_dirty_count = 0;
+    return out;
+}
+
+void BlockApplyView::Confirm(const uint256& block_hash)
+{
+    if (!Assume(AllInputsConsumed())) {
+        LogWarning("Block %s input prevout prefetch queue was not fully consumed; inputs were accessed out of order, so prefetching degraded to serial lookups for this block.", GetBestBlock().ToString());
+    }
+    StopFetching();
+    auto block_changes{ExtractChanges()};
+    std::array<CoinsStore::BlockChanges*, 1> batch{&block_changes};
+    m_store.ApplyCheckedBlocks(batch, block_hash, m_height, /*pool=*/nullptr, /*publish_height=*/true);
+    Reset();
 }
 
 void BlockApplyView::Flush(bool /*reallocate_cache*/)
 {
-    Confirm();
+    Confirm(GetBestBlock());
 }
 
 std::optional<Coin> BlockApplyView::ReadBase(const COutPoint& outpoint) const
 {
-    // A window block's read leaves the coin in the tier, clean (SetKeepBaseReads()).
-    return m_keep_base_reads ? m_store.LookupFor(m_block, outpoint) : m_store.PeekCoinFor(m_block, outpoint);
+    if (m_overlay) {
+        if (auto coin{m_overlay->Lookup(m_height, outpoint)}) return coin;
+    }
+    return m_store.PeekCoin(outpoint);
 }
 
 void BlockApplyView::Reset() noexcept
 {
-    StopFetching(); // as in Confirm(): the workers read the identity
-    if (HasBlock()) {
-        // The block was neither confirmed nor unwound: it failed or was abandoned.
-        m_store.UnwindBlock(m_block);
-        m_block = CoinsStore::NO_BLOCK;
-    }
-    m_creates_must_be_new = false;
-    m_keep_base_reads = false;
+    StopFetching();
+    m_in_use = false;
+    m_height = -1;
+    m_overlay = nullptr;
     CoinsViewOverlay::Reset();
 }

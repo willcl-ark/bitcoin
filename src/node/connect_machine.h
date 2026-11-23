@@ -14,53 +14,58 @@ namespace node {
  * A block of the connect window between its staging and its publication, as the
  * connector thread and the pool's workers see it of each other:
  *
- *   Running --Apply---------> Applied
- *      |
- *      +----ApplyDeferred---> Deferred --Claim--> Continuing --Finish--> Finished
+ *   Reading --Index----------> Indexed --StartValidate--> Validating --Finish--> Done
+ *      |   \                                                  ^
+ *      |    +--IndexAndValidate-------------------------------+
+ *      +-------FailRead--------------------------------------------------------> Failed
  *
- * Running: the block's worker has it, and nobody else reads what it holds.
- * Applied: its outcome is complete, and its changes are in the store unless
- * it failed or could not be read. Deferred: its changes are in the store,
- * but transactions wait for inputs of lower blocks; nobody has it.
- * Continuing: a worker (any block's) finishes those transactions. Finished:
- * the outcome is complete.
- *
- * The state is written under the window's mutex. Whoever moves a block out of
- * Running or Continuing has written its outcome before, so a thread that reads
- * the state under the mutex may read what the state says exists.
+ * Reading: block bytes are being read/parsed and its outputs indexed into the
+ * window outputs overlay.
+ * Indexed: outputs are in the window overlay; waiting for lower in-flight blocks
+ * to finish indexing before single-pass validation starts.
+ * Validating: a worker is validating the block read-only against the confirmed
+ * CoinsStore + window overlay (single pass, zero deferred transactions).
+ * Done: validation finished; outcome and net changes are ready for ordered
+ * shard-parallel commit.
+ * Failed: block bytes could not be read or parsed; no higher block may start
+ * validating past it.
  */
 enum class WindowBlockState : uint8_t {
-    Running,
-    Applied,
-    Deferred,
-    Continuing,
-    Finished,
+    Reading,
+    Indexed,
+    Validating,
+    Done,
+    Failed,
 };
 
 enum class WindowBlockEvent : uint8_t {
-    Apply,
-    ApplyDeferred,
-    Claim,
+    Index,
+    IndexAndValidate,
+    FailRead,
+    StartValidate,
     Finish,
 };
 
 inline constexpr auto WINDOW_BLOCK_TABLE{util::MakeTransitionTable<WindowBlockState, WindowBlockEvent>({
-    {WindowBlockState::Running, WindowBlockEvent::Apply, WindowBlockState::Applied},
-    {WindowBlockState::Running, WindowBlockEvent::ApplyDeferred, WindowBlockState::Deferred},
-    {WindowBlockState::Deferred, WindowBlockEvent::Claim, WindowBlockState::Continuing},
-    {WindowBlockState::Continuing, WindowBlockEvent::Finish, WindowBlockState::Finished},
+    {WindowBlockState::Reading, WindowBlockEvent::Index, WindowBlockState::Indexed},
+    {WindowBlockState::Reading, WindowBlockEvent::IndexAndValidate, WindowBlockState::Validating},
+    {WindowBlockState::Reading, WindowBlockEvent::FailRead, WindowBlockState::Failed},
+    {WindowBlockState::Indexed, WindowBlockEvent::StartValidate, WindowBlockState::Validating},
+    {WindowBlockState::Validating, WindowBlockEvent::Finish, WindowBlockState::Done},
 })};
 
-//! The block's first pass is over, its changes in the store unless it failed: the blocks above it need
-//! not wait for it.
-constexpr bool IsApplied(WindowBlockState state) { return state != WindowBlockState::Running; }
-//! The block's outcome is complete: the connector may publish it.
+//! The block's outputs are indexed in the window overlay: higher blocks need not wait for it to start validating.
+constexpr bool IsIndexed(WindowBlockState state)
+{
+    return state == WindowBlockState::Indexed || state == WindowBlockState::Validating || state == WindowBlockState::Done;
+}
+//! The block's outcome is complete (validated or read-failed): the connector may process it.
 constexpr bool IsComplete(WindowBlockState state)
 {
-    return state == WindowBlockState::Applied || state == WindowBlockState::Finished;
+    return state == WindowBlockState::Done || state == WindowBlockState::Failed;
 }
-//! A continuation is running on the block. (Whether its own worker still runs is its task's future.)
-constexpr bool IsContinuing(WindowBlockState state) { return state == WindowBlockState::Continuing; }
+//! A worker is currently validating the block (separate from its initial parse task).
+constexpr bool IsValidating(WindowBlockState state) { return state == WindowBlockState::Validating; }
 } // namespace node
 
 #endif // BITCOIN_NODE_CONNECT_MACHINE_H

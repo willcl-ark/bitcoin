@@ -4,6 +4,7 @@
 
 #include <coins.h>
 #include <coinsstore.h>
+#include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <script/script.h>
 #include <test/fuzz/FuzzedDataProvider.h>
@@ -16,7 +17,9 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <memory>
 #include <optional>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -47,23 +50,14 @@ struct SynthBlock {
 } // namespace
 
 /**
- * The window oracle: a valid chain of synthetic blocks is applied to a CoinsStore in whatever order the
- * fuzzer picks inside a window above the confirmed tip, with spends of coins not yet visible deferred to
- * the block's confirmation and blocks occasionally unwound and applied again; blocks confirm in height
- * order. The confirmed state must equal, at every confirmation, that of a CCoinsViewCache that applied the
- * same blocks in order, and the store's bookkeeping must stay consistent.
- *
- * What the target does not reach: every chain is valid, so no conflict is ever expected and a lookup that
- * showed a block a coin it must not see is caught only if it changes the confirmed state; there is no
- * write-out and no database under the store (its base is an empty view, so no coin is fetched and no
- * spend owes an erase), no coinbase, no coin created and spent inside one block, and no BIP30 duplicate. A block's
- * changes reach the store as a connected block's do, in a batch (ApplyBatch()), but never in conflict, and
- * the blocks are unwound highest first. The store's unit tests cover those one case at a time
- * (coinsstore_tests).
+ * The window oracle: a valid chain of synthetic blocks is validated read-only against CoinsStore
+ * plus WindowOverlay (with intra-batch create+spend cancellation) and committed in exact height
+ * order via CommitBatch() in fuzzer-chosen batch sizes. The confirmed state must equal a
+ * reference CCoinsViewCache at every commit and CoinsStore::SanityCheck() must hold.
  */
 FUZZ_TARGET(coinsstore_window)
 {
-    SeedRandomStateForTest(SeedRand::ZEROS); // for the store's salted hasher
+    SeedRandomStateForTest(SeedRand::ZEROS);
     FuzzedDataProvider provider{buffer.data(), buffer.size()};
 
     CCoinsViewCache reference{&CoinsViewEmpty::Get()};
@@ -81,7 +75,7 @@ FUZZ_TARGET(coinsstore_window)
     }
     uint32_t next_fresh{seeded};
 
-    // A valid chain, built in order.
+    // Build a valid chain in order.
     std::vector<SynthBlock> chain;
     const int blocks{provider.ConsumeIntegralInRange<int>(1, 16)};
     for (int h{1}; h <= blocks; ++h) {
@@ -101,76 +95,52 @@ FUZZ_TARGET(coinsstore_window)
         chain.push_back(std::move(b));
     }
 
-    // Apply out of order, confirm in order, unwind now and then.
-    std::vector<CoinsStore::BlockId> ids(chain.size(), CoinsStore::NO_BLOCK);
-    std::vector<std::vector<uint32_t>> deferred(chain.size());
-    size_t next_to_confirm{0};
-    size_t reference_applied{0};
-    LIMITED_WHILE(next_to_confirm < chain.size() && provider.remaining_bytes() > 0, 10000)
-    {
-        std::vector<size_t> unapplied;
-        for (size_t i{next_to_confirm}; i < std::min(chain.size(), next_to_confirm + WINDOW); ++i) {
-            if (ids[i] == CoinsStore::NO_BLOCK) unapplied.push_back(i);
-        }
-        const bool lowest_applied{ids[next_to_confirm] != CoinsStore::NO_BLOCK};
-        const int action{provider.ConsumeIntegralInRange<int>(0, 9)};
-        if (!unapplied.empty() && (action < 5 || !lowest_applied)) {
-            const size_t i{unapplied[provider.ConsumeIntegralInRange<size_t>(0, unapplied.size() - 1)]};
-            const SynthBlock& b{chain[i]};
-            ids[i] = store.BeginBlock(b.height);
-            deferred[i].clear();
-            std::vector<OwnedChange> changes;
-            for (uint32_t c : b.creates) changes.push_back({.outpoint = OutpointAt(c), .coin = CoinFor(c, b.height), .possible_overwrite = false});
+    // Commit in fuzzer-chosen batches of 1..WINDOW blocks with intra-batch cancellation.
+    size_t next{0};
+    while (next < chain.size()) {
+        const size_t max_batch{std::min(WINDOW, chain.size() - next)};
+        const size_t batch_len{provider.remaining_bytes() > 0 ? provider.ConsumeIntegralInRange<size_t>(1, max_batch) : max_batch};
+
+        std::unordered_map<COutPoint, size_t, SaltedOutpointHasher> batch_live_creates;
+        std::vector<CoinsStore::CommitOp> ops;
+        int last_h{0};
+        for (size_t k{0}; k < batch_len; ++k) {
+            const SynthBlock& b{chain[next + k]};
+            last_h = b.height;
             for (uint32_t sp : b.spends) {
-                if (store.LookupFor(ids[i], OutpointAt(sp))) {
-                    changes.push_back({.outpoint = OutpointAt(sp), .coin = Coin{}, .possible_overwrite = false});
+                const COutPoint op{OutpointAt(sp)};
+                if (const auto it{batch_live_creates.find(op)}; it != batch_live_creates.end()) {
+                    ops[it->second].cancelled = true;
+                    batch_live_creates.erase(it);
                 } else {
-                    deferred[i].push_back(sp);
+                    assert(store.PeekCoin(op).has_value());
+                    ops.push_back({.outpoint = op, .coin = Coin{}, .key_hash = CoinsStore::KeyHashOf(op), .shard = store.ShardOf(op), .height = b.height});
                 }
             }
-            ApplyBatch(store, ids[i], std::move(changes));
-            assert(store.ConflictCount(ids[i]) == 0);
-        } else if (action < 7 && lowest_applied) {
-            // Unwind a random applied, unconfirmed block (the oracle's "reorg inside the window"): every
-            // applied block above it is unwound too, since its results may rest on it.
-            std::vector<size_t> applied;
-            for (size_t i{next_to_confirm}; i < chain.size() && i < next_to_confirm + WINDOW; ++i) {
-                if (ids[i] != CoinsStore::NO_BLOCK) applied.push_back(i);
+            for (uint32_t c : b.creates) {
+                const COutPoint op{OutpointAt(c)};
+                batch_live_creates.emplace(op, ops.size());
+                ops.push_back({.outpoint = op, .coin = CoinFor(c, b.height), .key_hash = CoinsStore::KeyHashOf(op), .shard = store.ShardOf(op), .height = b.height});
             }
-            const size_t from{applied[provider.ConsumeIntegralInRange<size_t>(0, applied.size() - 1)]};
-            for (size_t i{chain.size()}; i-- > from;) {
-                if (ids[i] != CoinsStore::NO_BLOCK) {
-                    store.UnwindBlock(ids[i]);
-                    ids[i] = CoinsStore::NO_BLOCK;
-                }
-            }
-        } else if (lowest_applied) {
-            const size_t i{next_to_confirm};
-            std::vector<OwnedChange> changes;
-            for (uint32_t sp : deferred[i]) {
-                assert(store.LookupFor(ids[i], OutpointAt(sp)).has_value());
-                changes.push_back({.outpoint = OutpointAt(sp), .coin = Coin{}, .possible_overwrite = false});
-            }
-            ApplyBatch(store, ids[i], std::move(changes));
-            assert(store.ConflictCount(ids[i]) == 0);
-            store.ConfirmBlock(ids[i]);
-            ++next_to_confirm;
-            // The reference catches up to the same height.
-            while (reference_applied < next_to_confirm) {
-                const SynthBlock& b{chain[reference_applied]};
-                for (uint32_t c : b.creates) reference.AddCoin(OutpointAt(c), CoinFor(c, b.height), false);
-                for (uint32_t sp : b.spends) assert(reference.SpendCoin(OutpointAt(sp)));
-                ++reference_applied;
-            }
-            // Confirmed state: identical.
-            for (uint32_t i{0}; i < NUM_OUTPOINTS; ++i) {
-                const auto a{reference.PeekCoin(OutpointAt(i))};
-                const auto b{store.PeekCoin(OutpointAt(i))};
-                assert(a.has_value() == b.has_value());
-                if (a) assert(a->out == b->out && a->nHeight == b->nHeight);
-            }
-            store.SanityCheck();
         }
+        uint256 best_hash{uint256::ONE};
+        best_hash.data()[31] = static_cast<unsigned char>(last_h);
+        store.CommitBatch(ops, best_hash, last_h);
+
+        for (size_t k{0}; k < batch_len; ++k) {
+            const SynthBlock& b{chain[next + k]};
+            for (uint32_t c : b.creates) reference.AddCoin(OutpointAt(c), CoinFor(c, b.height), false);
+            for (uint32_t sp : b.spends) assert(reference.SpendCoin(OutpointAt(sp)));
+        }
+        next += batch_len;
+
+        for (uint32_t i{0}; i < NUM_OUTPOINTS; ++i) {
+            const auto a{reference.PeekCoin(OutpointAt(i))};
+            const auto b{store.PeekCoin(OutpointAt(i))};
+            assert(a.has_value() == b.has_value());
+            if (a) assert(a->out == b->out && a->nHeight == b->nHeight);
+        }
+        store.SanityCheck();
     }
     store.SanityCheck();
 }

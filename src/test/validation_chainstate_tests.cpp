@@ -846,9 +846,7 @@ BOOST_FIXTURE_TEST_CASE(failed_periodic_write_out_ends_a_window_step, WindowStep
     BOOST_CHECK(!activated);
     BOOST_CHECK_EQUAL(m_node.exit_status.load(), EXIT_FAILURE);
     BOOST_CHECK_EQUAL(WITH_LOCK(::cs_main, return chainstate.m_chain.Height()), m_base_height + 1);
-    // The blocks above gave their places in the store back.
-    BOOST_CHECK_EQUAL(WITH_LOCK(::cs_main, return chainstate.CoinsStoreTip().OpenBlocks()), 0U);
-    // And what they held in memory; the block cache alone keeps the blocks that were not connected.
+    // Every byte held in memory by the window was released.
     for (const util::ByteAccountId id : {util::ByteAccountId::Window, util::ByteAccountId::UndoBacklog, util::ByteAccountId::PinnedBlocks}) {
         BOOST_CHECK_EQUAL(chainman.m_bytes_in_flight[id].Bytes(), 0U);
     }
@@ -895,24 +893,18 @@ BOOST_FIXTURE_TEST_CASE(unreadable_block_ends_a_window_step, WindowStepSetup)
     BOOST_CHECK_EQUAL(state.GetRejectReason(), "Failed to read block.");
     BOOST_CHECK_EQUAL(m_node.exit_status.load(), EXIT_FAILURE);
     BOOST_CHECK_EQUAL(WITH_LOCK(::cs_main, return chainstate.m_chain.Height()), m_base_height);
-    BOOST_CHECK_EQUAL(WITH_LOCK(::cs_main, return chainstate.CoinsStoreTip().OpenBlocks()), 0U);
     CheckAccountsEmpty();
     const std::lock_guard lock{m_recorder->mutex};
     BOOST_CHECK(m_recorder->connected.empty());
     BOOST_CHECK(m_recorder->tips.empty());
 }
 
-//! A block of the window with a transaction whose coin no block creates. The transaction is deferred, since
-//! the block's parent was not the tip when it was staged, and its continuation finds no coin, which in the
-//! window decides nothing: the step ends, the changes of the block above it are taken back and then its own,
-//! and the block is connected alone, where the same transaction makes it invalid. The block below it stays
-//! the tip.
+//! A block of the window with a transaction whose coin no block creates. Single-pass read-only validation
+//! rejects it immediately with zero deferred transactions; in the window a failure decides nothing, so the
+//! window drains and retries the block alone, where it is marked invalid. The block below it stays the tip.
 BOOST_FIXTURE_TEST_CASE(failing_deferral_ends_a_window_step, WindowSummarySetup)
 {
-    // Two blocks came to their publication in the window, the first and the sibling. The window deferred
-    // the sibling's transaction (a block that judges it with the rest fails there and defers nothing), the
-    // failed continuation is no conflict in the store, and the sibling is the one block connected again.
-    ExpectWindowSummary(/*blocks=*/2, /*deferred=*/1, /*conflicts=*/0, /*retries=*/1);
+    ExpectWindowSummary(/*blocks=*/2, /*deferred=*/0, /*conflicts=*/0, /*retries=*/1);
     ChainstateManager& chainman{*Assert(m_node.chainman)};
     Chainstate& chainstate{chainman.ActiveChainstate()};
     CBlockIndex* const second{WITH_LOCK(::cs_main, return chainman.m_best_header->GetAncestor(m_base_height + 2))};
@@ -979,8 +971,6 @@ BOOST_FIXTURE_TEST_CASE(failing_deferral_ends_a_window_step, WindowSummarySetup)
     // The verdict is that of the step that connected the block alone: the window gives none.
     BOOST_CHECK_EQUAL(WITH_LOCK(::cs_main, return chainstate.m_chain.Height()), m_base_height + 1);
     BOOST_CHECK(WITH_LOCK(::cs_main, return (bad_index->nStatus & BLOCK_FAILED_VALID) != 0));
-    // The block's place in the store was given back both times, and that of the block above it.
-    BOOST_CHECK_EQUAL(WITH_LOCK(::cs_main, return chainstate.CoinsStoreTip().OpenBlocks()), 0U);
     BOOST_CHECK(!WITH_LOCK(::cs_main, return chainstate.CoinsTip().HaveCoin(COutPoint{bad.vtx.back()->GetHash(), 0})));
     BOOST_CHECK(!WITH_LOCK(::cs_main, return chainstate.CoinsTip().HaveCoin(COutPoint{above.vtx[0]->GetHash(), 0})));
     m_node.validation_signals->SyncWithValidationInterfaceQueue();
@@ -1082,7 +1072,6 @@ BOOST_FIXTURE_TEST_CASE(interrupt_ends_a_window_step_at_a_published_block, Windo
     BOOST_CHECK(state.IsValid());
     BOOST_CHECK_EQUAL(m_node.exit_status.load(), EXIT_SUCCESS);
     BOOST_CHECK_EQUAL(WITH_LOCK(::cs_main, return chainstate.m_chain.Height()), stopped_at);
-    BOOST_CHECK_EQUAL(WITH_LOCK(::cs_main, return chainstate.CoinsStoreTip().OpenBlocks()), 0U);
     m_node.validation_signals->SyncWithValidationInterfaceQueue();
     // The block cache alone keeps the blocks that were not connected.
     for (const util::ByteAccountId id : {util::ByteAccountId::Window, util::ByteAccountId::UndoBacklog, util::ByteAccountId::PinnedBlocks}) {
@@ -1104,18 +1093,12 @@ BOOST_FIXTURE_TEST_CASE(interrupt_ends_a_window_step_at_a_published_block, Windo
     CheckStepOver();
 }
 
-//! A write-out between two blocks of the window, and what it does to the blocks that were opened before
-//! it. The periodic write is due at the step's first block and writes that block's changes; the blocks
-//! above were opened when the block below the first was the last confirmed one. Where outpoints made twice
-//! are looked for (BIP30, on this chain), a create of such a block that finds no entry in the store can no
-//! longer tell that no coin is there, the run may have written one and dropped it: the create counts as
-//! a conflict, in a valid block. The window gives no verdict for it: the second block is taken back with
-//! the blocks above it and connected alone, valid, and the step goes on in the window from there.
+//! A write-out between two blocks of the window no longer causes a false conflict: Stage 1 validates
+//! read-only against CoinsStore + WindowOverlay (falling back to LevelDB when a write-out evicts coins),
+//! so all blocks connect without any conflict or serial retry.
 BOOST_FIXTURE_TEST_CASE(write_out_under_open_blocks_costs_a_retry_and_no_verdict, WindowSummarySetup)
 {
-    // The second block's coinbase output is the one conflict (its commitment output is never a coin), and
-    // the second block the one connected again. The blocks above it are opened anew after the run.
-    ExpectWindowSummary(/*blocks=*/BLOCKS, /*deferred=*/0, /*conflicts=*/1, /*retries=*/1);
+    ExpectWindowSummary(/*blocks=*/BLOCKS, /*deferred=*/0, /*conflicts=*/0, /*retries=*/0);
     ChainstateManager& chainman{*Assert(m_node.chainman)};
     Chainstate& chainstate{chainman.ActiveChainstate()};
     CacheStepBlocks();
@@ -1135,11 +1118,10 @@ BOOST_FIXTURE_TEST_CASE(write_out_under_open_blocks_costs_a_retry_and_no_verdict
         stepper.Start([&] { activated = chainstate.ActivateBestChain(state); });
         stepper.WaitForStep(m_base_height, InFlightAt(m_base_height));
         BOOST_REQUIRE_GT(InFlightAt(m_base_height), 1U);
-        // The first block is published and the run is made, with the blocks above it open.
+        // The first block is published and the periodic write-out runs with higher blocks in flight.
         stepper.RunLowestBlock();
         stepper.WaitForStep(m_base_height + 1, InFlightAt(m_base_height + 1));
-        // The second block's create meets the conflict. The workers are let go for the blocks above it,
-        // which the step waits for before it takes them back, and for everything after.
+        // The second block validates cleanly with zero conflicts and zero retries.
         stepper.RunLowestBlock();
         stepper.Finish();
     }
@@ -1148,7 +1130,6 @@ BOOST_FIXTURE_TEST_CASE(write_out_under_open_blocks_costs_a_retry_and_no_verdict
     BOOST_CHECK_EQUAL(m_node.exit_status.load(), EXIT_SUCCESS);
     BOOST_CHECK_EQUAL(WITH_LOCK(::cs_main, return chainstate.m_chain.Height()), Top());
     BOOST_CHECK(WITH_LOCK(::cs_main, return second->IsValid(BLOCK_VALID_SCRIPTS)));
-    BOOST_CHECK_EQUAL(WITH_LOCK(::cs_main, return chainstate.CoinsStoreTip().OpenBlocks()), 0U);
     CheckStepOver();
 }
 

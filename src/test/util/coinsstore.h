@@ -8,29 +8,36 @@
 #include <coins.h>
 #include <coinsstore.h>
 #include <primitives/transaction.h>
+#include <uint256.h>
 
 #include <utility>
 #include <vector>
 
-//! A change that owns its outpoint and its coin, as a test writes one down (CoinsStore::Change points at
-//! a view's entry).
+//! A change that owns its outpoint and its coin, as a test writes one down.
 struct OwnedChange {
     COutPoint outpoint;
     Coin coin;
+    int height{0};
     bool possible_overwrite{false};
-    bool must_be_new{false};
-    bool known_coin{false};
 };
 
-//! CoinsStore::ApplyBatch() of `changes`.
-inline void ApplyBatch(CoinsStore& store, CoinsStore::BlockId block, std::vector<OwnedChange>&& changes)
+//! Build a CommitOp vector from `changes` and commit it in order via CoinsStore::CommitBatch().
+inline void CommitChanges(CoinsStore& store, std::vector<OwnedChange>&& changes, const uint256& best_hash, int best_height, ThreadPool* pool = nullptr)
 {
-    std::vector<CoinsStore::Change> refs;
-    refs.reserve(changes.size());
+    std::vector<CoinsStore::CommitOp> ops;
+    ops.reserve(changes.size());
     for (OwnedChange& change : changes) {
-        refs.push_back({.outpoint = &change.outpoint, .coin = &change.coin, .possible_overwrite = change.possible_overwrite, .must_be_new = change.must_be_new, .known_coin = change.known_coin});
+        ops.push_back({
+            .outpoint = change.outpoint,
+            .coin = std::move(change.coin),
+            .key_hash = CoinsStore::KeyHashOf(change.outpoint),
+            .shard = store.ShardOf(change.outpoint),
+            .height = change.height,
+            .possible_overwrite = change.possible_overwrite,
+            .cancelled = false,
+        });
     }
-    store.ApplyBatch(block, std::move(refs));
+    store.CommitBatch(ops, best_hash, best_height, pool);
 }
 
 #endif // BITCOIN_TEST_UTIL_COINSSTORE_H
