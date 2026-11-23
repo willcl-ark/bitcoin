@@ -266,9 +266,16 @@ void CCoinsViewDB::WriteCoins(const std::vector<CoinWrite>& writes)
         } else {
             batch.Erase(entry);
         }
+        if (batch.ApproximateSize() > m_options.batch_write_bytes) {
+            LogDebug(BCLog::COINDB, "Writing partial coin batch outside a run (%.2f MiB)", batch.ApproximateSize() / double(1_MiB));
+            m_db->WriteBatch(batch);
+            batch.Clear();
+        }
     }
-    LogDebug(BCLog::COINDB, "Writing %u coins outside a run (%.2f MiB)", (unsigned int)writes.size(), batch.ApproximateSize() / double(1_MiB));
-    m_db->WriteBatch(batch);
+    if (batch.ApproximateSize() > 0) {
+        LogDebug(BCLog::COINDB, "Writing %u coins outside a run (%.2f MiB)", (unsigned int)writes.size(), batch.ApproximateSize() / double(1_MiB));
+        m_db->WriteBatch(batch);
+    }
 }
 
 size_t CCoinsViewDB::EstimateSize() const

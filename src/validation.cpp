@@ -5187,7 +5187,7 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                                 GetCoinsCacheSizeState() == CoinsCacheSizeState::OK &&
                                 !(assumeutxo_target && ready_batch[0]->pindex->nHeight >= assumeutxo_target->nHeight)};
                             if (can_extend) {
-                                static constexpr size_t MAX_COMMIT_BATCH{32};
+                                static constexpr size_t MAX_COMMIT_BATCH{64};
                                 while (ready_batch.size() < MAX_COMMIT_BATCH && !step->in_flight.empty()) {
                                     if (!pinned_account.Admits()) break;
                                     if (const auto limit{m_chainman.m_bytes_in_flight[util::ByteAccountId::UndoBacklog].Limit()}; limit != 0 && m_blockman.m_effects.PendingBytes() > limit) break;
@@ -5243,13 +5243,24 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                                     fatal_error = true;
                                 }
                             } else {
-                                // All blocks in ready_batch passed Stage 1. Check conflicts and cancel
-                                // intra-batch create+spend pairs in parallel across CoinsStore shards.
+                                // Fused single-pass conflict check + ordered commit across CoinsStore shards
+                                // with exact per-block prefix rollback on any conflict.
                                 std::vector<CoinsStore::BlockChanges*> block_changes;
+                                std::vector<uint256> block_hashes;
                                 block_changes.reserve(ready_batch.size());
-                                for (auto& s : ready_batch) block_changes.push_back(&s->changes);
-                                ThreadPool* const pool{m_chainman.m_connect_pool.get().get()};
-                                const auto check{CoinsStoreTip().CheckBatchConflicts(block_changes, pool)};
+                                block_hashes.reserve(ready_batch.size());
+                                for (auto& s : ready_batch) {
+                                    block_changes.push_back(&s->changes);
+                                    block_hashes.push_back(s->pindex->GetBlockHash());
+                                }
+                                ThreadPool* const commit_pool{m_chainman.m_commit_pool && m_chainman.m_commit_pool->WorkersCount() > 0
+                                                                  ? m_chainman.m_commit_pool.get()
+                                                                  : m_chainman.m_connect_pool.get().get()};
+                                assert(ready_batch[0]->pindex->pprev == m_chain.Tip());
+                                assert(CoinsStoreTip().GetBestBlock() == (ready_batch[0]->pindex->pprev ? ready_batch[0]->pindex->pprev->GetBlockHash() : uint256{}));
+                                const auto time_commit_start{SteadyClock::now()};
+                                const auto check{CoinsStoreTip().CommitWindowBatch(block_changes, block_hashes, commit_pool, /*publish_height=*/false)};
+                                const auto time_after_apply{SteadyClock::now()};
                                 if (check.accepted == 0) {
                                     ++m_chainman.m_window_blocks;
                                     m_chainman.m_window_conflicts += check.conflicts;
@@ -5263,14 +5274,11 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                                 } else {
                                     if (check.accepted < ready_batch.size()) {
                                         push_back_from(check.accepted);
-                                        block_changes.resize(check.accepted);
                                     }
                                     accepted = check.accepted;
                                 }
 
                                 if (accepted > 0) {
-                                    assert(ready_batch[0]->pindex->pprev == m_chain.Tip());
-                                    assert(CoinsStoreTip().GetBestBlock() == (ready_batch[0]->pindex->pprev ? ready_batch[0]->pindex->pprev->GetBlockHash() : uint256{}));
                                     m_blockman.m_effects.ApplyCompletions();
 
                                     // Queue undo writes (precondition O11) and deliver BlockChecked (precondition O3) for each accepted block.
@@ -5292,14 +5300,15 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                                         Assert(rv);
                                     }
 
-                                    // Commit in exact height order across shards in parallel, remove from WindowOverlay in parallel, then publish confirmed height.
-                                    const auto time_commit_start{SteadyClock::now()};
+                                    // Advance WindowOverlay watermark and publish confirmed height immediately,
+                                    // then clean up overlay entries asynchronously off the connector thread.
+                                    const auto time_rem_start{SteadyClock::now()};
                                     CBlockIndex* const last_index{ready_batch[accepted - 1]->pindex};
-                                    CoinsStoreTip().ApplyCheckedBlocks(block_changes, last_index->GetBlockHash(), last_index->nHeight, pool, /*publish_height=*/false);
-                                    step->sync->overlay.RemoveBlocks(committed_heights, pool);
+                                    step->sync->overlay.SetCommittedHeight(last_index->nHeight);
                                     CoinsStoreTip().PublishConfirmedHeight(last_index->nHeight);
+                                    step->sync->overlay.RemoveBlocksAsync(committed_heights, commit_pool);
                                     const auto time_commit_end{SteadyClock::now()};
-                                    m_chainman.time_flush += time_commit_end - time_commit_start;
+                                    m_chainman.time_flush += (time_after_apply - time_commit_start) + (time_commit_end - time_rem_start);
 
                                     // Release apply views and extracted changes now that their blocks are committed.
                                     for (size_t i{0}; i < accepted; ++i) {
@@ -8531,10 +8540,14 @@ ChainstateManager::ChainstateManager(const util::SignalInterrupt& interrupt, Opt
       m_all_consensus_script_flags{GetAllConsensusScriptFlags(m_options.chainparams.GetConsensus())},
       m_validation_cache{m_options.script_execution_cache_bytes, m_options.signature_cache_bytes},
       m_connect_pool{std::make_shared<ThreadPool>("connect")},
+      m_commit_pool{std::make_unique<ThreadPool>("commit")},
       m_block_bins{std::make_unique<BlockBins>()}
 {
     if (const int connect_threads{std::clamp(m_options.prevoutfetch_threads_num, 0, MAX_PREVOUTFETCH_THREADS)}; connect_threads > 0) {
         m_connect_pool->Start(connect_threads);
+        if (connect_threads > 1) {
+            m_commit_pool->Start(std::max(1, connect_threads / 4));
+        }
         LogInfo("Block connection uses %d additional threads (window of %d blocks in initial block download)", connect_threads, ConnectWindow());
     }
     if (m_options.signals) {
@@ -8574,6 +8587,7 @@ std::shared_ptr<CBlock> ChainstateManager::NewBlock(bool on_pool) const
 ChainstateManager::~ChainstateManager()
 {
     StopConnector();
+    if (m_commit_pool) m_commit_pool->Stop();
     // The signals may be gone already (a test replaces them before it resets the manager): the hook is
     // disarmed, not taken from them, and waited for if it is running.
     if (m_pre_sync_target) m_pre_sync_target->Disarm();
