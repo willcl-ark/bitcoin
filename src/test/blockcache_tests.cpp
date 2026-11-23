@@ -53,6 +53,11 @@ BOOST_AUTO_TEST_CASE(budget_and_order)
     // A wrong height or hash does not find it.
     BOOST_CHECK(!cache.Take(3, MakeBlock(2)->GetHash()));
     BOOST_CHECK(!cache.Take(1, MakeBlock(2)->GetHash()));
+    // Asked without taking.
+    BOOST_CHECK(cache.Has(2, MakeBlock(2)->GetHash()));
+    BOOST_CHECK(!cache.Has(3, MakeBlock(2)->GetHash()));
+    BOOST_CHECK(!cache.Has(5, MakeBlock(5)->GetHash()));
+    BOOST_CHECK_EQUAL(cache.Count(), 3U);
 
     const auto two{cache.Take(2, MakeBlock(2)->GetHash())};
     BOOST_REQUIRE(two);

@@ -761,6 +761,9 @@ public:
     void ReleaseBlockFilesBelow(int file) const noexcept;
 
     bool ReadBlockUndo(CBlockUndo& blockundo, const CBlockIndex& index) const;
+    //! The undo data at `pos` of the block whose parent is `prev_hash`. Takes no lock: for a reader that
+    //! copied the position under cs_main and reads without it.
+    bool ReadBlockUndo(CBlockUndo& blockundo, const FlatFilePos& pos, const uint256& prev_hash) const;
 
     void CleanupBlockRevFiles() const;
 };

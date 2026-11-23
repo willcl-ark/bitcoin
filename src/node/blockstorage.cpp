@@ -890,7 +890,11 @@ bool BlockManager::ReadBlockUndo(CBlockUndo& blockundo, const CBlockIndex& index
         if (WITH_LOCK(::cs_main, return m_undo_pending.contains(&index))) const_cast<BlockManager*>(this)->SettleUndoWrites();
         pos = WITH_LOCK(::cs_main, return index.GetUndoPos());
     }
+    return ReadBlockUndo(blockundo, pos, index.pprev->GetBlockHash());
+}
 
+bool BlockManager::ReadBlockUndo(CBlockUndo& blockundo, const FlatFilePos& pos, const uint256& prev_hash) const
+{
     // Open history file to read
     AutoFile file{OpenUndoFile(pos, true)};
     if (file.IsNull()) {
@@ -903,7 +907,7 @@ bool BlockManager::ReadBlockUndo(CBlockUndo& blockundo, const CBlockIndex& index
         // Read block
         HashVerifier verifier{filein}; // Use HashVerifier, as reserializing may lose data, c.f. commit d3424243
 
-        verifier << index.pprev->GetBlockHash();
+        verifier << prev_hash;
         verifier >> blockundo;
 
         uint256 hashChecksum;

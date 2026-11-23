@@ -64,6 +64,9 @@ public:
     //! in) will never be taken.
     void Drop(int height, const uint256& hash) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
 
+    //! Whether the block `hash` at `height` is here.
+    bool Has(int height, const uint256& hash) const EXCLUSIVE_LOCKS_REQUIRED(!m_mutex) { return WITH_LOCK(m_mutex, return m_blocks.contains({height, hash})); }
+
     size_t Budget() const { return m_budget; }
     size_t Bytes() const { return m_account.Bytes(); }
     size_t Count() const EXCLUSIVE_LOCKS_REQUIRED(!m_mutex) { return WITH_LOCK(m_mutex, return m_blocks.size()); }
