@@ -694,20 +694,6 @@ struct BlockValidationContext {
      * may be called without cs_main for as long as the block index lives.
      */
     std::function<int64_t(int)> median_time_past_at;
-    /**
-     * Whether a transaction whose inputs are not all in the view is deferred rather than a consensus
-     * failure. True only while blocks below this one are still being applied (the window is incomplete):
-     * the transaction's outputs are created, its other checks wait for FinishDeferredTransactions() once
-     * every lower block is in. With a complete window a missing input is "bad-txns-inputs-missingorspent".
-     */
-    bool defer_missing_inputs{false};
-    /**
-     * With `defer_missing_inputs`: whether a lower block that is not applied yet holds the transaction
-     * `txid` (CoinsStore::CreatesPendingBelow()), so that an input from it is taken as missing without a
-     * lookup. A hint: a wrong yes defers a transaction whose inputs FinishDeferredTransactions() then
-     * finds, a wrong no costs the lookup. Not set: every input is looked up.
-     */
-    std::function<bool(const Txid&)> made_by_pending_block{};
     //! Where the block is on disk, as the index recorded it when the block was planned, for a worker that
     //! reads the block itself. Null where the block is not read from there.
     FlatFilePos block_pos{};
@@ -730,11 +716,7 @@ struct ConnectBlockResult {
     int64_t sigops_cost{0};
     //! True when the block failed CheckBlock() before any UTXO work was done.
     bool failed_in_check_block{false};
-    //! Indices into block.vtx of the transactions deferred because an input was not in the view yet
-    //! (BlockValidationContext::defer_missing_inputs); their undo slots are empty until
-    //! FinishDeferredTransactions() fills them. The block is not valid until that has run.
-    std::vector<uint32_t> deferred_txs;
-    //! The fees of the transactions checked so far; completed by FinishDeferredTransactions().
+    //! Total fees of the block's transactions.
     CAmount fees{0};
     //! Phase boundaries, for the caller's bench logging.
     SteadyClock::time_point time_start{};
@@ -749,9 +731,7 @@ struct ConnectBlockResult {
  * set. Pure apart from the view and from what it is handed to use: it reads
  * node state only through the context's callbacks, reads and updates the
  * script execution cache, erases the signature cache entries its script
- * checks hit, reads the steady clock and writes nothing to disk. Which
- * transactions a window block defers depends on the timing of the other
- * blocks (made_by_pending_block); its verdict does not.
+ * checks hit, reads the steady clock and writes nothing to disk.
  *
  * Script checks run on `check_queue` when it is non-null and has worker
  * threads, otherwise inline; they are skipped when `ctx.check_scripts` is
@@ -760,9 +740,6 @@ struct ConnectBlockResult {
  * and the view's best block is left untouched.
  *
  * On failure `state` holds the reason and the view may be partially updated.
- * With `ctx.defer_missing_inputs` true is returned with the checks of the
- * deferred transactions and the block's totals outstanding, and the block is
- * valid only once FinishDeferredTransactions() has returned true as well.
  *
  * `block` may be shared with readers on other threads: the fields
  * CheckBlock() records its results in are atomic (BlockCheckedFlag).
@@ -771,18 +748,6 @@ bool ConnectBlock(const CBlock& block, const BlockValidationContext& ctx,
                   CCoinsViewCache& view, CCheckQueue<CScriptCheck>* check_queue,
                   ValidationCache& validation_cache, bool just_check,
                   BlockValidationState& state, ConnectBlockResult& result);
-
-/**
- * Finish a block that deferred transactions, once every lower block's first pass is applied. A lower
- * block's own continuation may still be pending; what it changes meanwhile is a store conflict, settled by
- * connecting the block again alone. Checks each deferred transaction in full (inputs present and unspent,
- * amounts, maturity, BIP68, sigops, scripts), spends its inputs into its undo slot, completes the fee total
- * and the sigop count and runs the coinbase amount check. Pure in the same sense as ConnectBlock(). On
- * failure `state` holds the reason; the view may be partially updated.
- */
-bool FinishDeferredTransactions(const CBlock& block, const BlockValidationContext& ctx,
-                                CCoinsViewCache& view, ValidationCache& validation_cache,
-                                BlockValidationState& state, ConnectBlockResult& result);
 
 //! A block to disconnect and its undo data, read before the hold of cs_main that disconnects it
 //! (File I/O, above; Chainstate::ReadForDisconnect()).
@@ -1300,43 +1265,40 @@ protected:
 
     /**
      * Connecting a block happens in three parts:
-     *  - StageConnectTip(), under cs_main: open the block in a view of the
-     *    store and decide the node policy (BlockValidationContext). At the
-     *    tip the block is already read and the prefetch of the coins it
-     *    spends is started; in the window the block takes a free view, defers
-     *    the inputs lower blocks have not produced yet, and if it is on disk
-     *    its bytes are read on a block I/O thread (ReadForConnectTask()),
-     *    which hands them to its worker.
+     *  - StageConnectTip(), under cs_main: assign a view and decide the node
+     *    policy (BlockValidationContext). At the tip the block is already read
+     *    and the prefetch of the coins it spends is started; in the window the
+     *    block takes a free view and, if on disk, its bytes are read on a block
+     *    I/O thread (ReadForConnectTask()), which hands them to a worker.
      *  - RunStagedConnect() at the tip: the pure ConnectBlock() into the view
-     *    with the check queue, under cs_main. RunConnectTask() in the window:
-     *    the same on a connect pool worker with its scripts inline and no lock
-     *    held; RunContinuation() finishes what the block deferred.
-     *  - PublishConnectTip(), under cs_main and the mempool lock: queue the
-     *    undo write, confirm the block in the store, update mempool and tip,
-     *    notify. Returns true unless a system error occurred, the block was
-     *    invalid (state says which), or a window block is to be connected
-     *    again alone (state valid).
-     * What exists of the block at each part is a type of its own
-     * (connect_phase, in validation.cpp); only a Validated is published.
+     *    with the check queue, under cs_main. In the window, RunIndexTask()
+     *    parses the block and indexes its outputs into WindowOverlay (Stage 0);
+     *    once every lower in-flight block is indexed, RunValidateTask() runs
+     *    single-pass read-only validation against CoinsStore + WindowOverlay
+     *    (Stage 1) and extracts net CommitOps.
+     *  - PublishConnectTip() (solo) or batch commit in ActivateBestChain()
+     *    (window), under cs_main and the mempool lock: check conflicts against
+     *    recent spends, queue undo writes, commit the confirmed prefix in exact
+     *    height order across shards (CoinsStore::CommitBatch()), remove the
+     *    committed blocks from WindowOverlay, update mempool and tip, notify.
      */
-    void StageConnectTip(CBlockIndex* pindexNew, StagedConnect& staged, const FlatFilePos& pos, std::shared_ptr<const CBlock> block, size_t block_bytes) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    void StageConnectTip(CBlockIndex* pindexNew, StagedConnect& staged, const FlatFilePos& pos, std::shared_ptr<const CBlock> block, size_t block_bytes, const WindowOverlay* overlay = nullptr) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
     void RunStagedConnect(StagedConnect& staged) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
-    //! `read` is what ReadForConnectTask() read of a block that was staged without being in memory.
-    void RunConnectTask(StagedConnect& staged, node::BlockManager::BlockBytes read = {}) noexcept;
-    //! Read the bytes of a window block that is on disk, then hand its connect task to the pool with them.
+    //! Stage 0: parse a window block (if read from disk), index its outputs into WindowOverlay,
+    //! and launch Stage 1 validation for this block and any higher Indexed blocks now unblocked.
+    void RunIndexTask(StagedConnect& staged, node::BlockManager::BlockBytes read = {}) noexcept;
+    //! Read the bytes of a window block that is on disk, then hand its index task to the pool with them.
     //! On a block I/O thread, so that no connect pool worker waits for the disk.
     void ReadForConnectTask(StagedConnect& staged, std::shared_ptr<std::promise<void>> done) noexcept;
-    //! A windowed block's worker has applied it: mark it so and run the continuations this makes possible.
-    void OnWindowBlockApplied(StagedConnect& staged);
-    //! Finish a window block's deferred transactions and apply the result; the block is marked finished.
-    void RunContinuation(StagedConnect& s, WindowSync& sync) noexcept;
+    //! Stage 1: single-pass read-only validation of a window block against CoinsStore + WindowOverlay.
+    void RunValidateTask(StagedConnect& s, WindowSync& sync) noexcept;
     bool PublishConnectTip(
         BlockValidationState& state,
         StagedConnect& staged,
         const kernel::ChainstateRole& role,
         DisconnectedBlockTransactions& disconnectpool,
         bool reorg) EXCLUSIVE_LOCKS_REQUIRED(cs_main, m_mempool->cs);
-    //! Wait for the window's workers and take back every block still in flight, highest first.
+    //! Wait for the window's workers and reset every view still in flight.
     void DrainWindow(ConnectStep& step) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
     /**
      * The tip moved from `pindexFork` to `pindexNewTip`: UpdatedBlockTip through the effects executor

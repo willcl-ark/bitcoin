@@ -134,7 +134,6 @@ struct MainnetBlock {
             // Above BIP34's height, on the chain with the block the parameters name there.
             .enforce_bip30 = false,
             .median_time_past_at = [this](int height) { return chain[height].GetMedianTimePast(); },
-            .defer_missing_inputs = false,
         };
     }
 };
@@ -185,7 +184,7 @@ void ConnectBlockMainnetTipStore(benchmark::Bench& bench)
     BlockApplyView view{store, pool};
     bench.unit("block").run([&] {
         view.SetBestBlock(data.block.hashPrevBlock);
-        view.BeginBlock(BLOCK_HEIGHT);
+        view.PrepareBlock(BLOCK_HEIGHT);
         BlockValidationState state;
         ConnectBlockResult result;
         {
@@ -193,7 +192,7 @@ void ConnectBlockMainnetTipStore(benchmark::Bench& bench)
             const bool ok{ConnectBlock(data.block, ctx, view, /*check_queue=*/nullptr, data.validation_cache,
                                        /*just_check=*/false, state, result)};
             assert(ok);
-            view.Confirm();
+            view.Confirm(data.block_hash);
         }
         Disconnect(data, std::move(result.undo), store);
         store.SetTierHeight(BLOCK_HEIGHT - 1);

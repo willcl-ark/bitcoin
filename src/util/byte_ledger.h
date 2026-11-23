@@ -38,8 +38,7 @@ namespace util {
  * connect pool worker but one; the free nodes of the coin store's regions,
  * which the coins cache has counted at its largest; the region the coin
  * store keeps ready ahead of its use (CoinsStore::NodeRegion()) where it is
- * not in the coins cache's budget; and the coin store's table of announced
- * transaction ids (CoinsStore::AnnounceCreates()).
+ * not in the coins cache's budget; and the connect window's outputs overlay.
  */
 enum class ByteAccountId : uint8_t {
     //! Accepted blocks kept until they are connected (node::BlockCache), as measured. Limit: its budget.
