@@ -9,15 +9,19 @@
 
 namespace node {
 /**
- * Which of two ways the node processes blocks: what the initial block download
- * latch (ChainstateManager::IsInitialBlockDownload()) selects.
+ * Which of two ways the node processes blocks: the download mode in initial
+ * block download (ChainstateManager::IsInitialBlockDownload()), and out of it
+ * while the node catches up after falling behind (CatchingUp()); the tip mode
+ * otherwise.
  *
  * The latch falls once, under cs_main: where a block becomes the tip
  * (Chainstate::PublishConnectTip()), where one is disconnected whose parent
  * is dated later (Chainstate::DisconnectTip()), or, outside every operation
  * named below, when the chain is loaded and when an import of blocks ends.
+ * Catching up is decided where a tip is published
+ * (ChainstateManager::PublishTip()), from the distance to the best header.
  * An operation that spans more than one hold of cs_main, or holds none, reads
- * it once, where it starts (ChainstateManager::SyncModeNow()), and hands the
+ * the mode once, where it starts (ChainstateManager::SyncModeNow()), and hands the
  * copy down: it finishes in the mode it started in. The operations: a message
  * off the wire (PeerManagerImpl::ProcessMessage()), a step of an activation
  * (Chainstate::ActivateBestChain()), a pass of block requests to a peer
@@ -28,7 +32,8 @@ namespace node {
  * block requests, whether the message handler waits for pending blocks,
  * whether a getdata or getblocks activates the chain first, and whether a
  * historical activation gives way. Whatever else reads the latch selects
- * nothing between blocks in flight, and reads it afresh:
+ * nothing between blocks in flight, and reads it afresh; it reads the latch,
+ * not the mode, so that a node catching up keeps the tip's notifications:
  *  - under the hold of cs_main that may change it, where the reading cannot
  *    turn before the hold ends (the signals and notifications of
  *    PublishConnectTip(), FinishConnectStep() and NotifyTipAdvanced(), and
@@ -49,6 +54,19 @@ enum class SyncMode : uint8_t {
 constexpr SyncMode SyncModeOf(bool initial_block_download)
 {
     return initial_block_download ? SyncMode::Download : SyncMode::Tip;
+}
+
+//! Out of initial block download, a node whose tip falls more than a day of blocks behind its best header (it
+//! was cut off from the network while it ran: the latch never rises again) catches up in the download mode,
+//! until its tip is CATCH_UP_LEAVE_BLOCKS behind; the gap keeps a node at the edge from switching every block.
+inline constexpr int CATCH_UP_ENTER_BLOCKS{144};
+inline constexpr int CATCH_UP_LEAVE_BLOCKS{24};
+
+//! Whether a node is catching up: `catching_up` is the previous answer, `blocks_behind` the best header's
+//! height less the tip's.
+constexpr bool CatchingUp(bool catching_up, int blocks_behind)
+{
+    return blocks_behind > (catching_up ? CATCH_UP_LEAVE_BLOCKS : CATCH_UP_ENTER_BLOCKS);
 }
 } // namespace node
 

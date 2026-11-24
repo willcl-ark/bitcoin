@@ -21,6 +21,7 @@
 #include <kernel/cs_main.h> // IWYU pragma: export
 #include <node/blockcache.h>
 #include <node/blockstorage.h>
+#include <node/handoff_machine.h>
 #include <node/sync_mode.h>
 #include <node/tip_snapshot.h>
 #include <policy/feerate.h>
@@ -536,12 +537,14 @@ struct DeploymentFlags {
  * it waits for by itself.
  *
  *  O1  The only half-processed state a block can be seen in is "stored, not
- *      yet activated", and calling ActivateBestChain() closes it.
- *      ProcessNewBlock() opens it; ProcessGetBlockData() and the GETBLOCKS
- *      handler in net_processing close it before they answer.
- *      In flight: a block handed to the connector (ProcessNewBlock() with
- *      activate_async) is in that state until the connector has activated
- *      it. Wait: WaitForPendingBlocks().
+ *      yet activated", from ProcessNewBlock() until the connector has
+ *      activated it. Wait: WaitForPendingBlocks(), after
+ *      PeerManagerImpl::WaitForPendingBlocks(), before the handler of a
+ *      message that is judged against the tip (node/message_tip_rule.h) and
+ *      before an orphan is considered again. Not in initial block download,
+ *      where no transaction is accepted: there ProcessGetBlockData() and
+ *      the GETBLOCKS handler answer from what is connected, outside it they
+ *      activate before they answer.
  *  O2  When AcceptBlock() returns for a new block, its data, its position
  *      and BLOCK_VALID_TRANSACTIONS are recorded together (asserted there),
  *      in one hold of cs_main after the write (FinishAcceptBlock()). Until
@@ -562,7 +565,7 @@ struct DeploymentFlags {
  *      the message that delivers it (O13) and while its task runs on the
  *      connect pool. Deferral: its request stays in flight until the block
  *      is stored, and a second copy from the same peer is dropped while the
- *      first one's task runs. A peer that goes takes its
+ *      first one's task runs (HandOffBlock()). A peer that goes takes its
  *      requests with it, and the block may be downloaded a second time.
  *  O6  The tip is the fully connected frontier: its coins are in the tip
  *      view and its transaction counts are known. Asserted in PublishTip(),
@@ -623,10 +626,11 @@ struct DeploymentFlags {
  * made for. A transition under cs_main only decides and records.
  *
  *  - A block's write is the work between "being stored" and stored (O2): on
- *    the caller's thread, where only that block waits. The write allocates
- *    the file space it needs; the claim of its position is arithmetic.
- *  - A window block that is not in memory is read on a block I/O thread
- *    (BlockManager::RunBlockIO()).
+ *    a block I/O thread for a block received in the initial block download
+ *    (BlockManager::RunBlockIO()), on the caller's thread otherwise, where
+ *    only that block waits. The write allocates the file space it needs; the
+ *    claim of its position is arithmetic.
+ *  - A window block that is not in memory is read on a block I/O thread.
  *  - Undo writes, the trim and sync of a file that is finished, and the
  *    write-out runs with the syncs their block index batch owes, are the
  *    ordered effects executor's (BlockManager::m_effects).
@@ -1498,19 +1502,12 @@ private:
     std::atomic<uint64_t> m_window_conflicts{0};
     std::atomic<uint64_t> m_window_retries{0};
 
-    //! The connector thread (see SignalConnector()). Signals are counted; the thread records the count it
-    //! has attempted, and a waiter waits for its count to be reached.
+    //! The connector thread (see SignalConnector()). Where each block handed to it stands is one machine
+    //! (node/handoff_machine.h); a waiter keeps the ticket of a block and waits for a state of it.
     std::thread m_connector_thread;
     mutable Mutex m_connector_mutex;
     std::condition_variable m_connector_cv;
-    uint64_t m_connector_signals GUARDED_BY(m_connector_mutex){0};
-    uint64_t m_connector_done GUARDED_BY(m_connector_mutex){0};
-    //! As m_connector_signals and m_connector_done, for the active chainstate alone: the signals of blocks it
-    //! may connect (not those at or below a snapshot's base, the historical chainstate's), and the count its
-    //! activation has attempted, set before the historical chainstate's activation (WaitForPendingBlocks()).
-    uint64_t m_connector_active_signals GUARDED_BY(m_connector_mutex){0};
-    uint64_t m_connector_active_done GUARDED_BY(m_connector_mutex){0};
-    bool m_connector_stop GUARDED_BY(m_connector_mutex){false};
+    node::ConnectorHandOffs m_connector_handoffs GUARDED_BY(m_connector_mutex);
     //! Whether the connector takes blocks (util/lifecycle.h): Running from construction, with its thread
     //! started by the first block; Draining while StopConnector() waits for the pass that is running;
     //! Stopped for good after.
@@ -1607,6 +1604,9 @@ public:
      * enough work and is recent.
      */
     std::atomic_bool m_cached_is_ibd{true};
+    //! Out of initial block download, whether the current chainstate catches up (node::CatchingUp()). Written where
+    //! the tip is published (PublishTip()), under cs_main; read by SyncModeNow() without it.
+    std::atomic_bool m_catching_up{false};
 
     /**
      * The tip of the current chainstate as one value, see node::TipSnapshot.
@@ -1807,8 +1807,9 @@ public:
     /** Check whether we are doing an initial block download (synchronizing from disk or network) */
     bool IsInitialBlockDownload() const noexcept;
 
-    /** The latch as the mode it selects, for an operation to read once where it starts (node/sync_mode.h). */
-    node::SyncMode SyncModeNow() const noexcept { return node::SyncModeOf(IsInitialBlockDownload()); }
+    /** The mode, for an operation to read once where it starts (node/sync_mode.h): the download mode in initial block
+     *  download and while catching up (m_catching_up). */
+    node::SyncMode SyncModeNow() const noexcept { return node::SyncModeOf(IsInitialBlockDownload() || m_catching_up.load(std::memory_order_relaxed)); }
 
     /** Guess verification progress (as a fraction between 0.0=genesis and 1.0=current tip).
     * This is also the case in the assumeutxo context, meaning that the progress reported for
@@ -1883,9 +1884,9 @@ public:
     //! A block between the steps of ProcessNewBlock().
     struct NewBlockInProcess;
     /**
-     * ProcessNewBlock() in its three steps, for a caller that makes the block's write on another thread,
-     * such as a block I/O thread (BlockManager::RunBlockIO()), so that no connect pool worker waits for
-     * the disk.
+     * ProcessNewBlock() in its three steps, for a caller that makes the block's write on another thread:
+     * the receive task of the initial block download, which writes on a block I/O thread
+     * (BlockManager::RunBlockIO()), so that no connect pool worker waits for the disk.
      *
      *  - AcceptNewBlock(): the block's checks, its header, and the claim of its place on disk. False if
      *    the block failed, which is ProcessNewBlock()'s result then and has been reported; the other
@@ -1910,37 +1911,35 @@ public:
      * one at or below a snapshot's base (WaitForPendingBlocks()).
      */
     void SignalConnector(std::shared_ptr<const CBlock> block = nullptr, bool for_active = true) EXCLUSIVE_LOCKS_REQUIRED(!m_connector_mutex);
-    //! The number of activations signalled so far, and whether every one up to such a number has been attempted.
-    //! A ping is answered once the activations signalled before it are (ProcessMessages()), so that a peer never
-    //! sees a view older than the blocks it has already sent, which is also what the functional tests rely on.
-    uint64_t ConnectorSignals() const EXCLUSIVE_LOCKS_REQUIRED(!m_connector_mutex);
+    //! The ticket of the block handed to the connector last, and whether every block up to a ticket's that the
+    //! active chainstate may connect is DoneActive (node/handoff_machine.h). A ping is answered once the blocks
+    //! handed over before it are (ProcessMessages()), so that a peer never sees a view older than the blocks it
+    //! has already sent.
+    node::HandOffTicket LatestHandOff() const EXCLUSIVE_LOCKS_REQUIRED(!m_connector_mutex);
+    bool HandOffsDone(const node::HandOffTicket& ticket) const EXCLUSIVE_LOCKS_REQUIRED(!m_connector_mutex);
     /**
-     * Wait until the connector has connected the blocks handed to it so far (the active chainstate's
-     * activation), so that a transaction accepted afterwards is judged against them, as when the thread that
-     * accepted a block also connected it: the mempool is closed to a transaction while a block before it is
-     * pending. Called by the message handler before it takes cs_main for a peer's transaction, which may spend
-     * the outputs of a block the same or another peer sent just before. Not by BroadcastTransaction(): its
-     * callers may hold a wallet's lock, which the scheduler needs to drain the validation queue the connector
-     * waits for (LimitValidationInterfaceQueue()), and they have no order with a peer's block anyway. Holding
-     * g_msgproc_mutex while waiting is safe: only the message handler thread takes it. Not in initial block
-     * download, where a pass runs on and no transaction follows a block in order: `mode` is the caller's
-     * copy, read where its operation started, and the wait is made or not by it alone.
+     * Wait until the blocks handed to the connector so far that the active chainstate may connect are
+     * DoneActive (node/handoff_machine.h), or the connector is stopped (precondition O1). Called by the
+     * message handler before it takes cs_main for a peer's transaction and before it judges a compact
+     * block's distance from the tip. Not by BroadcastTransaction(): its callers may hold a wallet's lock,
+     * which the scheduler needs to drain the validation queue the connector waits for
+     * (LimitValidationInterfaceQueue()). Holding g_msgproc_mutex while waiting is safe: only the message
+     * handler thread takes it. Not in initial block download: `mode` is the caller's copy, read where its
+     * operation started.
      */
     void WaitForPendingBlocks(node::SyncMode mode) EXCLUSIVE_LOCKS_REQUIRED(!m_connector_mutex) LOCKS_EXCLUDED(::cs_main);
     /**
      * Whether the historical chainstate's activation is to give way: the node is out of initial block
-     * download and a block the active chainstate may connect was handed to the connector and is not attempted
-     * yet. Out of initial block download the message handler waits for that block (WaitForPendingBlocks()),
-     * and the historical chainstate's backlog may be long. In initial block download nobody waits, and
-     * giving way to every block handed over would starve the historical chainstate. Once true it stays true
-     * until the connector has attempted the block: the end of initial block download is final, and only the
-     * connector attempts.
+     * download (`mode`, the copy of the caller's step) and a block the active chainstate may connect was
+     * handed to the connector and is not taken yet, which the message handler waits for
+     * (WaitForPendingBlocks()). In initial block download nobody waits, and giving way to every block
+     * would starve the historical chainstate. Once true it stays true until the connector takes.
      */
     bool YieldHistoricalActivation(node::SyncMode mode) const EXCLUSIVE_LOCKS_REQUIRED(!m_connector_mutex);
-    bool ConnectorReached(uint64_t signals) const EXCLUSIVE_LOCKS_REQUIRED(!m_connector_mutex);
-    //! Whether the connector thread has signalled activations it has not attempted yet. Blocks accepted but not
-    //! yet connected move the active tip once it runs; callers that measure from the tip may wait for that.
-    bool ConnectorBusy() const EXCLUSIVE_LOCKS_REQUIRED(!m_connector_mutex);
+    //! Whether a block handed to the connector that the active chainstate may connect is not DoneActive yet
+    //! (Queued or Taken). Blocks accepted but not yet connected move the active tip once it runs; callers that
+    //! measure from the tip may wait for that.
+    bool AnyHandOffPending() const EXCLUSIVE_LOCKS_REQUIRED(!m_connector_mutex);
     //! Stop the connector thread and wait for it: its current pass ends at the next publication once the
     //! node is interrupted, the window drained. Called at shutdown before the chainstate is flushed and
     //! its views are reset, and again, idempotently, by the destructor. The connector does not start
@@ -2113,9 +2112,34 @@ public:
     std::optional<int> BlocksAheadOfTip() const LOCKS_EXCLUDED(::cs_main);
 
     CCheckQueue<CScriptCheck>& GetCheckQueue() { return m_script_check_queue; }
-    //! The connect pool: the parses and validations of the window's blocks during initial block download,
-    //! input prefetchers at the tip (sized by -prevoutfetchthreads). Shared by every chainstate's views.
+    //! The connect pool: the parses and validations of the window's blocks and the blocks received from
+    //! peers during initial block download, input prefetchers at the tip (sized by -prevoutfetchthreads).
+    //! Shared by every chainstate's views.
     const util::NotNullSharedPtr<ThreadPool> m_connect_pool;
+    /**
+     * The free worker (see LOCK_TASK in sync.h). The connector waits for the connect pool's workers with
+     * cs_main held (Chainstate::DrainWindow()). The work it waits for, a block's validation, takes no
+     * cs_main, but it needs a worker, and the pool also runs tasks that wait for cs_main: the receive tasks
+     * of net processing (PeerManagerImpl::HandOffBlock()). Whoever gives the pool such a task keeps to
+     * LockTaskLimit(), one fewer than the workers, so at least one worker is in no such task and the waits
+     * end. Each part of such a task that runs on the pool holds a LockTask, which checks the limit in every
+     * build; with DEBUG_LOCKORDER, cs_main taken on the pool outside one stops the node.
+     */
+    int LockTaskLimit() const;
+    //! A part of a task on the connect pool that may take cs_main, see LockTaskLimit(): counted while it runs.
+    class LockTask
+    {
+        std::atomic<int>& m_running;
+        const LockTaskScope m_scope;
+
+    public:
+        LockTask(const ChainstateManager& chainman, const char* what);
+        ~LockTask() { m_running.fetch_sub(1, std::memory_order_relaxed); }
+        LockTask(const LockTask&) = delete;
+        LockTask& operator=(const LockTask&) = delete;
+    };
+    //! The parts of tasks on the connect pool running in a LockTask.
+    mutable std::atomic<int> m_lock_tasks_running{0};
     //! The blocks each thread built in a task on the connect pool, back from their last holder (NewBlock()).
     const std::unique_ptr<BlockBins> m_block_bins;
     /**
