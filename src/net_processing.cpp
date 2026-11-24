@@ -1182,6 +1182,8 @@ private:
     //! Whether blocks are handed to tasks (util/lifecycle.h): Running from construction, Draining while
     //! FinishBlockTasks() waits for the set to empty, Stopped for good after.
     util::Lifecycle m_block_tasks_life GUARDED_BY(m_block_tasks_mutex){util::LifeState::Running};
+    //! Disarmed in ~PeerManagerImpl() so ConnectorLoop's WakeMessageHandler callback never outlives m_connman.
+    const std::shared_ptr<util::HookTarget<CConnman>> m_wake_target;
 
     /** Process compact block txns  */
     void ProcessCompactBlockTxns(CNode& pfrom, Peer& peer, const BlockTransactions& block_transactions)
@@ -2289,9 +2291,13 @@ PeerManagerImpl::PeerManagerImpl(CConnman& connman, AddrMan& addrman,
       m_txdownloadman{node::TxDownloadOptions{pool, opts.deterministic_rng}},
       m_warnings{warnings},
       m_opts{opts},
+      m_wake_target{std::make_shared<util::HookTarget<CConnman>>(m_connman)},
       m_inbound_inv_bucket(/*rate=*/m_opts.tx_send_rate, /*mult=*/1.0),
       m_outbound_inv_bucket(/*rate=*/m_opts.tx_send_rate, /*mult=*/OUTBOUND_INVENTORY_BUCKET_MULTIPLIER)
 {
+    m_chainman.SetWakeMessageHandler([target = m_wake_target] {
+        target->Run([](CConnman& connman) { connman.WakeMessageHandler(); });
+    });
     // While Erlay support is incomplete, it must be enabled explicitly via -txreconciliation.
     // This argument can go away after Erlay support is complete.
     if (opts.reconcile_txs) {
@@ -2301,6 +2307,7 @@ PeerManagerImpl::PeerManagerImpl(CConnman& connman, AddrMan& addrman,
 
 PeerManagerImpl::~PeerManagerImpl()
 {
+    m_wake_target->Disarm();
     // A block's task on the connect pool refers to this object.
     FinishBlockTasks();
 }
@@ -5724,7 +5731,7 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
             // that is another peer's task, out of it submitblock, generateblock or the mining interface.
             if (BlockTasksOutstanding(pfrom.GetId())) {
                 peer.m_pending_pong = Peer::PendingPong{.nonce = nonce, .wait_for_done = std::nullopt};
-            } else if (const node::HandOffTicket latest{m_chainman.LatestHandOff()}; !m_chainman.HandOffsDone(latest)) {
+            } else if (const node::HandOffTicket latest{m_chainman.LatestHandOff()}; !m_chainman.ActiveHandOffsDone(latest)) {
                 peer.m_pending_pong = Peer::PendingPong{.nonce = nonce, .wait_for_done = latest};
             } else {
                 MakeAndPushMessage(pfrom, NetMsgType::PONG, nonce);
@@ -5966,7 +5973,7 @@ bool PeerManagerImpl::ProcessMessages(CNode& node, std::atomic<bool>& interruptM
         // The peer's blocks that were stored have all been handed to the connector by now. The mark is the
         // node's latest hand-off, which may be another peer's block handed over after them.
         if (!pending.wait_for_done) pending.wait_for_done = m_chainman.LatestHandOff();
-        if (!m_chainman.HandOffsDone(*pending.wait_for_done)) return false;
+        if (!m_chainman.ActiveHandOffsDone(*pending.wait_for_done)) return false;
         MakeAndPushMessage(node, NetMsgType::PONG, pending.nonce);
         peer.m_pending_pong.reset();
     }
@@ -7080,7 +7087,7 @@ bool PeerManagerImpl::SendMessages(CNode& node)
                 // The download window is measured from the connected tip, which in initial block download
                 // lags the blocks already stored: the verdict waits until the connector has nothing left to
                 // attempt, and for the blocks still with the connect pool, which have not reached it yet.
-                if (BlockTasksOutstanding() || m_chainman.AnyHandOffPending()) {
+                if (BlockTasksOutstanding() || m_chainman.AnyActiveHandOffPending()) {
                     // Decided on a later pass.
                 } else if (State(staller)->m_stalling_since == 0us) {
                     State(staller)->m_stalling_since = current_time;

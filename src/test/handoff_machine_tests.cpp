@@ -68,8 +68,9 @@ BOOST_AUTO_TEST_CASE(a_block_of_the_historical_chain_is_not_waited_for_by_the_ac
     handoffs.AllAttempted();
     handoffs.Hand(/*for_active=*/false);
     BOOST_CHECK(handoffs.AnyQueued() && !handoffs.AnyActiveQueued());
-    // A transaction that follows it waits for nothing; a ping does.
+    // A transaction or active-chain ping that follows it waits for nothing; only AllAttempted waits.
     BOOST_CHECK(handoffs.ActiveChainAttempted(handoffs.Latest()));
+    BOOST_CHECK(!handoffs.AnyActiveUnattempted());
     BOOST_CHECK(!handoffs.Attempted(handoffs.Latest()));
     BOOST_CHECK(handoffs.Attempted(active));
 }

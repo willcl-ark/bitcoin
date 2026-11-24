@@ -1384,6 +1384,10 @@ protected:
     //! invalid (PublishConnectTip()).
     bool m_window_retry_serial GUARDED_BY(::cs_main){false};
 
+    //! Set by InvalidateCoinsDBOnDisk() if another thread held m_chainstate_mutex when a snapshot failed
+    //! validation: deferred until ~ChainstateManager() after all workers stop so m_coins_views is never UAF'd.
+    bool m_pending_invalidate_on_disk GUARDED_BY(::cs_main){false};
+
     /**
      * In case of an invalid snapshot, rename the coins leveldb directory so
      * that it can be examined for issue diagnosis.
@@ -1534,6 +1538,8 @@ private:
     util::Lifecycle m_connector_life GUARDED_BY(m_connector_mutex){util::LifeState::Running};
     //! The block most recently accepted for the connector, for its next activation (SignalConnector()).
     std::shared_ptr<const CBlock> m_connector_block GUARDED_BY(m_connector_mutex);
+    //! Optional callback invoked whenever the connector advances handoff state (e.g. WakeMessageHandler).
+    std::function<void()> m_wake_message_handler GUARDED_BY(m_connector_mutex);
     void ConnectorLoop() EXCLUSIVE_LOCKS_REQUIRED(!m_connector_mutex);
 
     //! Timers and counters used for benchmarking validation in both background
@@ -1788,6 +1794,15 @@ public:
     Chainstate& ActiveChainstate() const;
     CChain& ActiveChain() const EXCLUSIVE_LOCKS_REQUIRED(GetMutex()) { return ActiveChainstate().m_chain; }
     int ActiveHeight() const EXCLUSIVE_LOCKS_REQUIRED(GetMutex()) { return ActiveChain().Height(); }
+    //! Lowest active tip height across active and historical chainstates (for BlockCache admission under AssumeUTXO).
+    int MinActiveHeight() const EXCLUSIVE_LOCKS_REQUIRED(GetMutex())
+    {
+        int height{ActiveHeight()};
+        if (const Chainstate* hist{HistoricalChainstate()}) {
+            height = std::min(height, hist->m_chain.Height());
+        }
+        return height;
+    }
     CBlockIndex* ActiveTip() const EXCLUSIVE_LOCKS_REQUIRED(GetMutex()) { return ActiveChain().Tip(); }
     //! @}
 
@@ -1926,6 +1941,9 @@ public:
     //! (ProcessMessages()), so that a peer never sees a view older than the blocks it has already sent.
     node::HandOffTicket LatestHandOff() const EXCLUSIVE_LOCKS_REQUIRED(!m_connector_mutex);
     bool HandOffsDone(const node::HandOffTicket& ticket) const EXCLUSIVE_LOCKS_REQUIRED(!m_connector_mutex);
+    bool ActiveHandOffsDone(const node::HandOffTicket& ticket) const EXCLUSIVE_LOCKS_REQUIRED(!m_connector_mutex);
+    //! Register a callback invoked when the connector finishes an active/full pass (used to wake message handler).
+    void SetWakeMessageHandler(std::function<void()> wake) EXCLUSIVE_LOCKS_REQUIRED(!m_connector_mutex);
     /**
      * Wait until the blocks handed to the connector so far that the active chainstate may connect are
      * DoneActive (node/handoff_machine.h), or the connector is stopped (precondition O1). Called by the
@@ -1949,6 +1967,7 @@ public:
     //! but not yet connected move the active tip once it runs; callers that measure from the tip may wait for
     //! that.
     bool AnyHandOffPending() const EXCLUSIVE_LOCKS_REQUIRED(!m_connector_mutex);
+    bool AnyActiveHandOffPending() const EXCLUSIVE_LOCKS_REQUIRED(!m_connector_mutex);
     //! Stop the connector thread and wait for it: its current pass ends at the next publication once the
     //! node is interrupted, the window drained. Called at shutdown before the chainstate is flushed and
     //! its views are reset, and again, idempotently, by the destructor. The connector does not start

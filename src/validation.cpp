@@ -3958,8 +3958,11 @@ void Chainstate::ReadForConnectTask(StagedConnect& staged, std::shared_ptr<std::
     const FlatFilePos pos{staged.In<connect_phase::Staged>().ctx.block_pos};
     auto read{std::make_shared<node::BlockManager::BlockBytes>(m_blockman.ReadBlockBytes(pos))};
     // The pages the system keeps of block files already read are memory the store's huge pages are then
-    // not granted from. The files well behind this block's are let go.
-    if (read->data) m_blockman.ReleaseBlockFilesBelow(pos.nFile - node::BlockManager::BLOCK_FILE_RELEASE_LAG);
+    // not granted from. The files well behind this block's are let go, tracked per BlockfileType (IO-10).
+    if (read->data) {
+        const node::BlockfileType file_type{m_from_snapshot_blockhash ? node::BlockfileType::ASSUMED : node::BlockfileType::NORMAL};
+        m_blockman.ReleaseBlockFilesBelow(pos.nFile - node::BlockManager::BLOCK_FILE_RELEASE_LAG, file_type);
+    }
     const auto task{[this, &staged, read, done] {
         RunIndexTask(staged, std::move(*read));
         done->set_value();
@@ -4571,10 +4574,11 @@ bool Chainstate::PlanNextBatch(ConnectStep& step)
     step.batch.clear();
     step.next_in_batch = 0;
     // A target set since the step was planned (a snapshot activated meanwhile, AddChainstate()) bounds the step,
-    // as it bounds the candidates of the steps planned after it: this chainstate connects nothing above it.
+    // including when step.target is on a fork diverging from TargetBlock() (VAL-2).
     int end_height{step.target->nHeight};
-    if (const CBlockIndex* target{TargetBlock()}; target && step.target->GetAncestor(target->nHeight) == target) {
-        end_height = target->nHeight;
+    if (const CBlockIndex* target{TargetBlock()}) {
+        const CBlockIndex* const common{LastCommonAncestor(step.target, target)};
+        end_height = common ? common->nHeight : -1;
     }
     if (step.planned_height >= end_height) return false;
     // Don't iterate the entire list of potential improvements toward the best tip, as we likely only need
@@ -4582,6 +4586,10 @@ bool Chainstate::PlanNextBatch(ConnectStep& step)
     const int target_height{std::min(step.planned_height + 32, end_height)};
     step.batch.reserve(target_height - step.planned_height);
     for (CBlockIndex* pindexIter{step.target->GetAncestor(target_height)}; pindexIter && pindexIter->nHeight != step.planned_height; pindexIter = pindexIter->pprev) {
+        if (pindexIter->nStatus & BLOCK_FAILED_VALID) {
+            step.batch.clear();
+            return false;
+        }
         step.batch.emplace_back(pindexIter, node::BlockFactsOf(*pindexIter));
     }
     std::ranges::reverse(step.batch);
@@ -4980,12 +4988,23 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
             const size_t window{step->use_window ? static_cast<size_t>(m_chainman.ConnectWindow()) : 1};
             util::ByteAccount& window_account{m_chainman.m_bytes_in_flight[util::ByteAccountId::Window]};
             util::ByteAccount& pinned_account{m_chainman.m_bytes_in_flight[util::ByteAccountId::PinnedBlocks]};
-            // The accounts are the node's, not the chainstate's. The window's is written by a step that uses
-            // the window only. The pinned blocks' limit is set by every step but one of a reorganisation,
-            // which does not wait at it either: the signals of the blocks it connects are held back until
-            // the transactions of the disconnected blocks are back in the mempool (FinishConnectStep()).
+            // Use additive deltas on ByteAccountId::Window so concurrent active & historical chainstates
+            // under AssumeUTXO never overwrite each other's accounted bytes.
+            size_t local_window_bytes{0};
+            const auto update_window_bytes{[&](size_t next) {
+                if (next > local_window_bytes) {
+                    window_account.Add(next - local_window_bytes);
+                } else if (next < local_window_bytes) {
+                    window_account.Sub(local_window_bytes - next);
+                }
+                local_window_bytes = next;
+            }};
+            struct WindowAccountCleanup {
+                const decltype(update_window_bytes)& update;
+                ~WindowAccountCleanup() { update(0); }
+            } window_cleanup{update_window_bytes};
             if (!reorg_lock_main) {
-                const size_t share{WITH_LOCK(::cs_main, return m_coinstip_cache_size_bytes) / WINDOW_BYTES_SHARE};
+                const size_t share{WITH_LOCK(::cs_main, return std::max(m_coinstip_cache_size_bytes, m_chainman.m_total_coinstip_cache)) / WINDOW_BYTES_SHARE};
                 if (step->use_window) window_account.SetLimit(std::max(share, MIN_WINDOW_BYTES));
                 pinned_account.SetLimit(std::max(share, MIN_PINNED_BYTES));
             }
@@ -5011,7 +5030,7 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                     // its limit, and deferred to a later fill otherwise. One block is always in flight,
                     // whatever it weighs.
                     if (step->use_window && !step->in_flight.empty()) {
-                        window_account.Set(WindowBytes(*step));
+                        update_window_bytes(WindowBytes(*step));
                         if (!window_account.Admits(/*more=*/1)) break;
                     }
                     if (step->next_in_batch == step->batch.size()) {
@@ -5108,7 +5127,7 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                 }
                 release_stage_hold();
                 if (step->in_flight.empty()) {
-                    if (step->use_window) window_account.Set(0);
+                    if (step->use_window) update_window_bytes(0);
                     break;
                 }
 
@@ -5140,9 +5159,15 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                     const TipPublisher publish_at_end{m_chainman};
                     LOCK(MempoolMutex());
                     if (!step->use_window) {
-                        if (const CBlockIndex* target{TargetBlock()}; target && staged->pindex->nHeight > target->nHeight) {
+                        const CBlockIndex* const target{TargetBlock()};
+                        const bool off_target{target && (staged->pindex->nHeight > target->nHeight || target->GetAncestor(staged->pindex->nHeight) != staged->pindex)};
+                        if (off_target || m_assumeutxo == Assumeutxo::INVALID) {
                             if (staged->view && staged->view->InUse()) staged->view->Reset();
                             step->improved = true;
+                            leave = true;
+                        } else if (staged->pindex->nStatus & BLOCK_FAILED_VALID) {
+                            if (staged->view && staged->view->InUse()) staged->view->Reset();
+                            step->invalid_found = true;
                             leave = true;
                         } else {
                             const kernel::ChainstateRole role{this->GetRole()};
@@ -5183,10 +5208,16 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                             MaybeUpdateMempoolForReorg(step->disconnectpool, false);
                             return false;
                         }
-                        if (assumeutxo_target && staged->pindex->nHeight > assumeutxo_target->nHeight) {
+                        const bool off_target{assumeutxo_target && (staged->pindex->nHeight > assumeutxo_target->nHeight || assumeutxo_target->GetAncestor(staged->pindex->nHeight) != staged->pindex)};
+                        if (off_target || m_assumeutxo == Assumeutxo::INVALID) {
                             DrainWindow(*step);
                             if (staged->view && staged->view->InUse()) staged->view->Reset();
                             step->improved = true;
+                            leave = true;
+                        } else if (staged->pindex->nStatus & BLOCK_FAILED_VALID) {
+                            DrainWindow(*step);
+                            if (staged->view && staged->view->InUse()) staged->view->Reset();
+                            step->invalid_found = true;
                             leave = true;
                         } else {
                             std::vector<std::unique_ptr<StagedConnect>> ready_batch;
@@ -5206,7 +5237,8 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                                     if (const auto limit{m_chainman.m_bytes_in_flight[util::ByteAccountId::UndoBacklog].Limit()}; limit != 0 && m_blockman.m_effects.PendingBytes() > limit) break;
                                     if (m_chainman.m_options.signals && m_chainman.m_options.signals->CallbacksPending() > MAX_PENDING_VALIDATION_CALLBACKS) break;
                                     StagedConnect& next{*step->in_flight.front()};
-                                    if (assumeutxo_target && next.pindex->nHeight > assumeutxo_target->nHeight) break;
+                                    if (assumeutxo_target && (next.pindex->nHeight > assumeutxo_target->nHeight || assumeutxo_target->GetAncestor(next.pindex->nHeight) != next.pindex)) break;
+                                    if (next.pindex->nStatus & BLOCK_FAILED_VALID) break;
                                     {
                                         LOCK(next.sync->mutex);
                                         if (!node::IsComplete(next.window)) break;
@@ -6666,8 +6698,12 @@ bool ChainstateManager::FinishNewBlock(NewBlockInProcess& in)
     // for its activation (WaitForPendingBlocks()).
     bool for_active{true};
     if (in.prepared.store) {
-        // A block for the connector goes to the cache: measured here, with no lock held, not under cs_main.
-        const size_t cache_bytes{in.activate_async && m_block_cache.Budget() > 0 ? node::BlockCache::Bytes(*in.block) : 0};
+        // Fast-path before measuring Bytes(*in.block) off cs_main (IO-10): skip scanning the block when
+        // the cache is disabled or already full of lower blocks above the published tip.
+        const int approx_tip{PublishedTip().height};
+        const bool check_cache{in.activate_async && m_block_cache.Budget() > 0 &&
+                               (in.prepared.pindex && m_block_cache.MightAccept(in.prepared.pindex->nHeight, std::min(approx_tip, in.prepared.pindex->nHeight - 1)))};
+        const size_t cache_bytes{check_cache ? node::BlockCache::Bytes(*in.block) : 0};
         LOCK(cs_main);
         if (in.write_error) {
             m_blocks_being_stored.erase(in.prepared.pindex);
@@ -6693,7 +6729,7 @@ bool ChainstateManager::FinishNewBlock(NewBlockInProcess& in)
         // copy, see ActivateBestChain()), or from the cache where a later block took its place in hand or the
         // connector is busy with the blocks before it. A block that does not extend the tip is measured by the
         // cache under the lock where it was not above.
-        if (in.prepared.pindex->pprev != ActiveTip() || in.activate_async) m_block_cache.Insert(in.prepared.pindex->nHeight, in.block, ActiveHeight(), cache_bytes);
+        if (in.prepared.pindex->pprev != ActiveTip() || in.activate_async) m_block_cache.Insert(in.prepared.pindex->nHeight, in.block, MinActiveHeight(), cache_bytes);
     }
 
     NotifyHeaderTip();
@@ -6753,6 +6789,18 @@ bool ChainstateManager::HandOffsDone(const node::HandOffTicket& ticket) const
     return m_connector_handoffs.Attempted(ticket);
 }
 
+bool ChainstateManager::ActiveHandOffsDone(const node::HandOffTicket& ticket) const
+{
+    LOCK(m_connector_mutex);
+    return m_connector_handoffs.ActiveChainAttempted(ticket);
+}
+
+void ChainstateManager::SetWakeMessageHandler(std::function<void()> wake)
+{
+    LOCK(m_connector_mutex);
+    m_wake_message_handler = std::move(wake);
+}
+
 void ChainstateManager::WaitForPendingBlocks(node::SyncMode mode)
 {
     AssertLockNotHeld(::cs_main);
@@ -6769,6 +6817,12 @@ bool ChainstateManager::AnyHandOffPending() const
 {
     LOCK(m_connector_mutex);
     return m_connector_handoffs.AnyUnattempted();
+}
+
+bool ChainstateManager::AnyActiveHandOffPending() const
+{
+    LOCK(m_connector_mutex);
+    return m_connector_handoffs.AnyActiveUnattempted();
 }
 
 bool ChainstateManager::YieldHistoricalActivation(node::SyncMode mode) const
@@ -6804,9 +6858,21 @@ void ChainstateManager::ConnectorLoop()
         if (!ActiveChainstate().ActivateBestChain(state, block)) {
             LogError("%s: ActivateBestChain failed (%s)", __func__, state.ToString());
         }
-        // The blocks handed over are connected: a transaction waiting for them goes on (WaitForPendingBlocks()).
+        // The blocks handed over are connected: a transaction waiting for them goes on (WaitForPendingBlocks()),
+        // and the message handler is woken promptly so pending pongs do not wait up to 100ms (NET-3).
+        auto wake_handler{[&] {
+            std::function<void()> wake{WITH_LOCK(m_connector_mutex, return m_wake_message_handler)};
+            if (wake) wake();
+        }};
         WITH_LOCK(m_connector_mutex, m_connector_handoffs.ActiveAttempted());
         m_connector_cv.notify_all();
+        wake_handler();
+        if (m_interrupt || WITH_LOCK(m_connector_mutex, return m_connector_handoffs.Stopped())) {
+            WITH_LOCK(m_connector_mutex, m_connector_handoffs.AllAttempted());
+            m_connector_cv.notify_all();
+            wake_handler();
+            continue;
+        }
         Chainstate* bg_chain{WITH_LOCK(cs_main, return HistoricalChainstate())};
         BlockValidationState bg_state;
         if (bg_chain && !bg_chain->ActivateBestChain(bg_state, nullptr)) {
@@ -6816,11 +6882,10 @@ void ChainstateManager::ConnectorLoop()
         // after the activation: where the answer differs from what the activation itself acted on, the
         // blocks wait one pass more), the blocks of this pass stay DoneActive: that block brings the next
         // pass at once, which comes back to the historical chainstate, and they are Done with the first
-        // pass at whose end it does not give way again. A pending pong and the stalling verdict wait that
-        // long: for as many passes as active blocks keep arriving back to back, which outside initial
-        // block download is few.
+        // pass at whose end it does not give way again.
         if (!(bg_chain && YieldHistoricalActivation(SyncModeNow()))) WITH_LOCK(m_connector_mutex, m_connector_handoffs.AllAttempted());
         m_connector_cv.notify_all();
+        wake_handler();
     }
 }
 
@@ -7465,7 +7530,7 @@ void ChainstateManager::LoadExternalBlockFile(
                             nLoaded++;
                             // Only a block this call checked and stored: one another thread is storing
                             // is accepted unchecked, and the object read here may not be that block.
-                            if (accepted && stored) cache_at.emplace(accepted->nHeight, ActiveHeight());
+                            if (accepted && stored) cache_at.emplace(accepted->nHeight, MinActiveHeight());
                         }
                         if (state.IsError()) {
                             break;
@@ -8656,6 +8721,15 @@ ChainstateManager::~ChainstateManager()
     // Stop the connect pool outside cs_main before destroying members (m_chainstates, m_block_cache)
     // so no worker task outlives ChainstateManager or attempts a self-join in ~ThreadPool().
     m_connect_pool->Stop();
+    // Complete any deferred snapshot invalidation now that all workers and the connector have stopped (VAL-1).
+    {
+        LOCK(::cs_main);
+        for (const auto& cs : m_chainstates) {
+            if (cs->m_pending_invalidate_on_disk) {
+                (void)cs->InvalidateCoinsDBOnDisk();
+            }
+        }
+    }
 }
 
 Chainstate* ChainstateManager::LoadAssumeutxoChainstate()
@@ -8694,7 +8768,8 @@ Chainstate& ChainstateManager::AddChainstate(std::unique_ptr<Chainstate> chainst
     assert(!prev_chainstate.m_mempool || prev_chainstate.m_mempool->size() == 0);
     assert(!curr_chainstate.m_mempool);
     std::swap(curr_chainstate.m_mempool, prev_chainstate.m_mempool);
-    // The current chainstate changed, and with it the tip.
+    // The current chainstate changed, and with it the tip and IBD latch (NET-8).
+    UpdateIBDStatus();
     PublishTip();
     return curr_chainstate;
 }
@@ -8721,9 +8796,17 @@ util::Result<void> Chainstate::InvalidateCoinsDBOnDisk()
     // Should never be called on a non-snapshot chainstate.
     assert(m_from_snapshot_blockhash);
 
-    // Coins views no longer usable. A write-out run in flight writes through them: it lands first. The store
-    // is not checked here (CheckCoinsStore()): this is reached from a block's publication, and another thread
-    // may have a block of this chainstate staged, which the check must not meet.
+    // VAL-1: Never destroy m_coins_views while another thread is inside this chainstate's ActivateBestChain()
+    // (which may have connect-pool workers reading m_store or a solo staged block holding BlockApplyView*).
+    // If m_chainstate_mutex is busy, defer closing/renaming until ~ChainstateManager() after all pools stop.
+    TRY_LOCK(m_chainstate_mutex, cs_lock);
+    if (!cs_lock) {
+        m_pending_invalidate_on_disk = true;
+        LogWarning("[snapshot] deferring invalid snapshot coins db teardown until active validation stops");
+        return {};
+    }
+    m_pending_invalidate_on_disk = false;
+
     if (m_coins_views && m_coins_views->m_store && m_coins_views->m_store->RunInFlight()) SettleWriteOut();
     m_coins_views.reset();
 
@@ -8767,7 +8850,8 @@ bool ChainstateManager::DeleteChainstate(Chainstate& chainstate)
     assert(!prev_chainstate->m_mempool || prev_chainstate->m_mempool->size() == 0);
     assert(!curr_chainstate.m_mempool);
     std::swap(curr_chainstate.m_mempool, prev_chainstate->m_mempool);
-    // The current chainstate changed, and with it the tip.
+    // The current chainstate changed, and with it the tip and IBD latch (NET-8).
+    UpdateIBDStatus();
     PublishTip();
     return true;
 }

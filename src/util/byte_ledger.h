@@ -5,6 +5,8 @@
 #ifndef BITCOIN_UTIL_BYTE_LEDGER_H
 #define BITCOIN_UTIL_BYTE_LEDGER_H
 
+#include <util/check.h>
+
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -71,7 +73,11 @@ class ByteAccount
 
 public:
     void Add(size_t bytes) { m_bytes.fetch_add(bytes, std::memory_order_relaxed); }
-    void Sub(size_t bytes) { m_bytes.fetch_sub(bytes, std::memory_order_relaxed); }
+    void Sub(size_t bytes)
+    {
+        const size_t prev{m_bytes.fetch_sub(bytes, std::memory_order_relaxed)};
+        Assume(prev >= bytes);
+    }
     //! For a holder that works its count out anew each time.
     void Set(size_t bytes) { m_bytes.store(bytes, std::memory_order_relaxed); }
     //! Zero: the account has no limit in bytes.
@@ -84,7 +90,9 @@ public:
     bool Admits(size_t more = 0) const
     {
         const size_t limit{Limit()};
-        return limit == 0 || Bytes() + more <= limit;
+        if (limit == 0) return true;
+        const size_t cur{Bytes()};
+        return cur <= limit && more <= limit - cur;
     }
 };
 

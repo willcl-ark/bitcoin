@@ -1481,19 +1481,27 @@ bool BlockManager::ReadBlock(CBlock& block, const CBlockIndex& index) const
     return ReadBlock(block, block_pos, index.GetBlockHash());
 }
 
-void BlockManager::ReleaseBlockFilesBelow(int file) const noexcept
+void BlockManager::ReleaseBlockFilesBelow(int file, BlockfileType type) const noexcept
 {
     AssertFileWorkOffMain();
-    int from{m_block_files_released.load(std::memory_order_relaxed)};
+    if (file <= 0) return;
+    auto& released{m_block_files_released[type]};
+    int from{released.load(std::memory_order_relaxed)};
     while (from < file) {
-        if (!m_block_files_released.compare_exchange_weak(from, file, std::memory_order_relaxed)) continue;
+        if (!released.compare_exchange_weak(from, file, std::memory_order_relaxed)) continue;
+        // On first read for this BlockfileType (e.g. startup or AssumeUTXO snapshot chainstate starting at
+        // blk05000.dat), initialize the watermark without issuing thousands of open/fadvise/close syscalls.
+        if (from < 0) return;
 #if defined(__linux__) && defined(POSIX_FADV_DONTNEED)
-        for (int n{from}; n < file; ++n) {
-            const int fd{::open(m_block_file_seq.FileName(FlatFilePos{n, 0}).c_str(), O_RDONLY | O_CLOEXEC)};
-            if (fd < 0) continue;
-            // The whole file, in one call.
-            (void)::posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
-            ::close(fd);
+        try {
+            for (int n{from}; n < file; ++n) {
+                const int fd{::open(m_block_file_seq.FileName(FlatFilePos{n, 0}).c_str(), O_RDONLY | O_CLOEXEC)};
+                if (fd < 0) continue;
+                // The whole file, in one call.
+                (void)::posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
+                ::close(fd);
+            }
+        } catch (...) {
         }
 #endif
         return;

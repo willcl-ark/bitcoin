@@ -133,6 +133,8 @@ public:
     bool AnyActiveQueued() const { return m_handed_active > m_taken_active; }
     //! Whether a block is not Done yet.
     bool AnyUnattempted() const { return m_handed > m_done; }
+    //! Whether a block the active chainstate may connect is not DoneActive yet.
+    bool AnyActiveUnattempted() const { return m_handed_active > m_done_active; }
     //! Whether every block up to the ticket's that the active chainstate may connect is DoneActive or
     //! Done. A block it may not connect is not waited for, wherever it stands.
     bool ActiveChainAttempted(const HandOffTicket& ticket) const { return ticket.active <= m_done_active; }

@@ -784,17 +784,17 @@ private:
     //! Read a block's bytes (or the part of them) into the buffer `buffer_for` returns for their number.
     util::Expected<void, ReadRawError> ReadRawBlockInto(const FlatFilePos& pos, std::optional<std::pair<size_t, size_t>> block_part,
                                                         const std::function<std::span<std::byte>(size_t)>& buffer_for) const;
-    //! The files below this one were released.
-    mutable std::atomic<int> m_block_files_released{0};
+    //! Per-BlockfileType high-water mark of released block files (-1 = uninitialized, set on first read so
+    //! AssumeUTXO / high-height restarts do not issue thousands of fadvise syscalls across old files).
+    mutable std::array<std::atomic<int>, BlockfileType::NUM_TYPES> m_block_files_released{-1, -1};
 public:
     //! How many block files behind the one a sync reads from the files are released (ReleaseBlockFilesBelow()):
     //! blocks are stored as they arrived, so a chain read in height order comes from a band of files, and a
     //! file released too early is only read from the disk again.
     static constexpr int BLOCK_FILE_RELEASE_LAG{16};
-    //! Tell the system that the block files below `file` will not be read again soon, so that it need not
-    //! keep them in its page cache. Each file is named once, by whichever thread first passes it. Advice
-    //! only: nothing depends on it, and where the system has no such call nothing is done.
-    void ReleaseBlockFilesBelow(int file) const noexcept;
+    //! Tell the system that the block files below `file` for `type` will not be read again soon, so that it
+    //! need not keep them in its page cache. Initialized from the first read per BlockfileType.
+    void ReleaseBlockFilesBelow(int file, BlockfileType type = BlockfileType::NORMAL) const noexcept;
 
     bool ReadBlockUndo(CBlockUndo& blockundo, const CBlockIndex& index) const;
     //! The undo data at `pos` of the block whose parent is `prev_hash`. Takes no lock: for a reader that

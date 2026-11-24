@@ -54,6 +54,9 @@ public:
 
     //! What a block counts against the budget.
     static size_t Bytes(const CBlock& block);
+    //! Fast-path pre-check before measuring Bytes(*block) off cs_main: returns false when the cache is
+    //! disabled, `height <= tip_height`, or the cache is already full of lower blocks above `tip_height`.
+    bool MightAccept(int height, int tip_height) const EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
     //! Keep `block`, accepted at `height`, when the budget allows, after dropping blocks at or below `tip_height`.
     //! `bytes` is Bytes(*block) if the caller measured it already (with no lock held), else 0.
     void Insert(int height, const std::shared_ptr<const CBlock>& block, int tip_height, size_t bytes = 0) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);

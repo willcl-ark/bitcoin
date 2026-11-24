@@ -20,6 +20,15 @@ size_t BlockCache::Bytes(const CBlock& block)
     return sizeof(CBlock) + RecursiveDynamicUsage(block);
 }
 
+bool BlockCache::MightAccept(int height, int tip_height) const
+{
+    if (m_budget == 0 || height <= tip_height) return false;
+    LOCK(m_mutex);
+    return !(!m_blocks.empty() && m_full &&
+             m_blocks.begin()->first.first > tip_height &&
+             height > std::prev(m_blocks.end())->first.first);
+}
+
 void BlockCache::Insert(int height, const std::shared_ptr<const CBlock>& block, int tip_height, size_t bytes)
 {
     if (m_budget == 0 || height <= tip_height) return;

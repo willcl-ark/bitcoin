@@ -38,6 +38,10 @@ BOOST_AUTO_TEST_CASE(an_account_admits_up_to_its_limit)
     account.Sub(20);
     BOOST_CHECK(account.Admits());
     BOOST_CHECK(!account.Admits(1));
+    // Overflow guard: huge `more` must not wrap around unsigned addition and spuriously admit.
+    BOOST_CHECK(!account.Admits(std::numeric_limits<size_t>::max()));
+    account.Sub(100);
+    BOOST_CHECK(!account.Admits(std::numeric_limits<size_t>::max()));
 }
 
 BOOST_AUTO_TEST_CASE(an_account_without_a_limit_is_counted_and_admits_everything)
