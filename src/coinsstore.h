@@ -408,6 +408,9 @@ public:
     //! The coins among `outpoints` that the tier holds, read with one hold of each shard's lock; what is
     //! missing or spent is left out (PeekCoin() one by one is the fallback).
     std::vector<std::pair<COutPoint, Coin>> Fetch(std::vector<COutPoint>&& outpoints) const;
+    //! As Fetch() for the outpoints at the positions `which`, each coin found into `coins` at its position and
+    //! `found` set there.
+    void FetchInto(std::span<const COutPoint> outpoints, std::span<const uint32_t> which, std::vector<Coin>& coins, std::vector<uint8_t>& found) const;
     //! For a check that none of `outpoints` has a coin (BIP30), with one hold of each shard's lock. An
     //! outpoint with `may` unset has none, as GetCoin() and PeekCoin() would answer: the tier has no entry
     //! for it and the base no coin. One with `may` set is theirs to answer.
@@ -1185,6 +1188,18 @@ public:
     //! makes: FindCoin() answers when it is read.
     virtual void FindCoins(std::vector<COutPoint>& outpoints, std::span<const uint32_t> positions, int viewer_height,
                            const std::function<void(const COutPoint&, Coin&&)>& found) const = 0;
+    //! As FindCoin() for each input, into `coins` by position: `decided` is set where the window decides the
+    //! input, the coin then the output (also one an earlier transaction of the viewer's block makes) or none.
+    virtual void FindInputs(std::span<const COutPoint> outpoints, std::span<const uint32_t> positions, int viewer_height,
+                            std::vector<uint8_t>& decided, std::vector<Coin>& coins) const
+    {
+        for (size_t i{0}; i < outpoints.size(); ++i) {
+            std::optional<Coin> coin;
+            if (!FindCoin(outpoints[i], viewer_height, positions[i], coin)) continue;
+            decided[i] = 1;
+            if (coin) coins[i] = std::move(*coin);
+        }
+    }
     //! Which of the transactions' ids an unpublished block below `viewer_height` may make a transaction
     //! of: `named` is set for those. No output of the others is the window's to decide: FindCoin() would
     //! answer false for each.
@@ -1225,6 +1240,18 @@ public:
     //! Those the window's outputs have are taken from there and not asked of the store
     //! (WindowCoinSource::FindCoins()).
     void Prefetch(const CBlock& block);
+    //! The coin of each of the block's inputs by position (the coinbase has none), from the window's outputs,
+    //! the tier or the database; a spent coin where there is none. The view is left as it was.
+    void ResolveInputs(const CBlock& block, std::vector<Coin>& coins);
+    //! The transaction being checked and the coins of its inputs by position, or none: a lookup of one of its
+    //! inputs' outpoints, which the checks make with the input's own `prevout`, is answered from `coins`.
+    void SetInputs(const CTransaction* tx, std::span<const Coin> coins)
+    {
+        m_inputs_tx = tx;
+        m_inputs_coins = coins;
+    }
+    const Coin& AccessCoin(const COutPoint& outpoint) const override;
+    bool HaveCoin(const COutPoint& outpoint) const override;
     //! As the cache's, and the spend left in the view keeps the height and the coinbase flag of its coin.
     bool SpendCoin(const COutPoint& outpoint, Coin* moveto = nullptr) override;
     //! A window block's view, before the block's first transaction, answers for the block at once: the
@@ -1268,6 +1295,10 @@ private:
     int m_overlay_height{0};
     uint32_t m_own_limit{0};
     int m_height{-1};
+    const CTransaction* m_inputs_tx{nullptr};
+    std::span<const Coin> m_inputs_coins{};
+    //! The coin SetInputs() gave for `outpoint` if it is an input's own prevout, by its address.
+    const Coin* InputCoin(const COutPoint& outpoint) const;
 };
 
 #endif // BITCOIN_COINSSTORE_H
