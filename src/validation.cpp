@@ -4245,6 +4245,10 @@ struct StagedConnect {
     //! Whether the block's undo data is to be written: not for a block connected before, which has it on
     //! disk (every block of a -reindex-chainstate). Decided at staging.
     bool write_undo{true};
+    //! Whether the read of the block lets the files behind it go (BlockManager::ReleaseBlockFilesBelow()):
+    //! not while a historical chainstate syncs, whose blocks lie far behind the active one's, in files the
+    //! active chainstate's reads would let go before the historical one reads them. Decided at staging.
+    bool release_files{false};
 
     std::variant<std::monostate, connect_phase::Staged, connect_phase::ReadFailed, connect_phase::Validated> at;
     //! The phase the block is in; anything else is a defect of the caller.
@@ -4296,6 +4300,7 @@ void Chainstate::StageConnectTip(CBlockIndex* pindexNew, StagedConnect& staged, 
     assert(std::holds_alternative<std::monostate>(staged.at));
     staged.pindex = pindexNew;
     staged.write_undo = pindexNew->GetUndoPos().IsNull();
+    staged.release_files = staged.windowed && !m_chainman.HistoricalChainstate();
 
     BlockApplyView* view{staged.windowed ? m_coins_views->FreeApplyView() : &m_coins_views->TipView()};
     Assert(view);
@@ -4387,6 +4392,8 @@ void Chainstate::ReadForConnectTask(StagedConnect& staged, std::shared_ptr<std::
     WAITED_FOR_UNDER_LOCK("a window block's read");
     const FlatFilePos pos{staged.In<connect_phase::Staged>().ctx.block_pos};
     auto read{std::make_shared<node::BlockManager::BlockBytes>(m_blockman.ReadBlockBytes(pos))};
+    // Decided before the task is handed on, which may free `staged` and moves the bytes.
+    const bool release{read->data && staged.release_files};
     // `staged` is the connector's to free once the task has marked the block indexed: the promise is kept
     // beside it, not in it.
     const auto task{[this, &staged, read, done] {
@@ -4395,6 +4402,10 @@ void Chainstate::ReadForConnectTask(StagedConnect& staged, std::shared_ptr<std::
     }};
     // A pool without workers: here, on the connector, which called this itself.
     if (!m_chainman.m_connect_pool->Submit(task)) task();
+    // The pages the system keeps of block files already read are memory the store's huge pages are then
+    // not granted from. The files well behind this block's are let go, after the block's task is on its way:
+    // the first release of a pass may walk many files, and the lowest block in flight must not wait for it.
+    if (release) m_blockman.ReleaseBlockFilesBelow(pos.nFile - node::BlockManager::BLOCK_FILE_RELEASE_LAG);
 }
 
 void Chainstate::RunConnectTask(StagedConnect& staged, node::BlockManager::BlockBytes read) noexcept
