@@ -379,4 +379,33 @@ BOOST_FIXTURE_TEST_CASE(checkinputs_test, Dersig100Setup)
     }
 }
 
+BOOST_AUTO_TEST_CASE(validation_cache_empty_fastpath)
+{
+    ValidationCache cache{1 << 20, 1 << 20};
+    const uint256 entry{GetRandHash()};
+    const uint256 other{GetRandHash()};
+
+    // Both caches start empty and hit the lock-free empty fast-path.
+    BOOST_CHECK(!cache.HasScriptEntries());
+    BOOST_CHECK(!cache.ScriptExecutionCached(entry, /*erase=*/true));
+    BOOST_CHECK(!cache.m_signature_cache.HasEntries());
+    BOOST_CHECK(!cache.m_signature_cache.Get(entry, /*erase=*/true));
+
+    // Inserting flips HasScriptEntries/HasEntries and returns hits normally.
+    cache.CacheScriptExecution(entry);
+    BOOST_CHECK(cache.HasScriptEntries());
+    BOOST_CHECK(!cache.ScriptExecutionCached(other, /*erase=*/false));
+    BOOST_CHECK(cache.ScriptExecutionCached(entry, /*erase=*/false));
+    BOOST_CHECK(cache.ScriptExecutionCached(entry, /*erase=*/true));
+
+    cache.TestOnlyResetScriptExecutionCache();
+    BOOST_CHECK(!cache.HasScriptEntries());
+    BOOST_CHECK(!cache.ScriptExecutionCached(entry, /*erase=*/false));
+
+    cache.m_signature_cache.Set(entry);
+    BOOST_CHECK(cache.m_signature_cache.HasEntries());
+    BOOST_CHECK(!cache.m_signature_cache.Get(other, /*erase=*/false));
+    BOOST_CHECK(cache.m_signature_cache.Get(entry, /*erase=*/true));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

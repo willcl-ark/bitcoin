@@ -14,6 +14,7 @@
 #include <util/byte_units.h>
 #include <util/hasher.h>
 
+#include <atomic>
 #include <cstddef>
 #include <shared_mutex>
 #include <span>
@@ -45,12 +46,16 @@ private:
     typedef CuckooCache::cache<uint256, SignatureCacheHasher> map_type;
     map_type setValid;
     std::shared_mutex cs_sigcache;
+    //! Lock-free empty fast-path: skips shared_mutex reader-count contention during IBD when no entries exist.
+    std::atomic<bool> m_has_entries{false};
 
 public:
     SignatureCache(size_t max_size_bytes);
 
     SignatureCache(const SignatureCache&) = delete;
     SignatureCache& operator=(const SignatureCache&) = delete;
+
+    bool HasEntries() const noexcept { return m_has_entries.load(std::memory_order_acquire); }
 
     void ComputeEntryECDSA(uint256& entry, const uint256 &hash, const std::vector<unsigned char>& vchSig, const CPubKey& pubkey) const;
 

@@ -27,6 +27,7 @@ namespace {
 
 constexpr uint32_t NUM_OUTPOINTS{64};
 constexpr size_t WINDOW{4};
+constexpr size_t NUM_SHARDS{4};
 
 COutPoint OutpointAt(uint32_t i)
 {
@@ -47,13 +48,53 @@ struct SynthBlock {
     std::vector<uint32_t> creates;
 };
 
+CoinsStore::BlockChanges BuildBlockChanges(const CoinsStore& store, const SynthBlock& b, uint64_t epoch)
+{
+    CoinsStore::BlockChanges bc;
+    bc.height = b.height;
+    bc.validate_epoch = epoch;
+    bc.must_be_new = false;
+    bc.shard_offsets.assign(NUM_SHARDS + 1, 0);
+
+    std::vector<CoinsStore::CommitOp> raw;
+    raw.reserve(b.spends.size() + b.creates.size());
+    for (uint32_t sp : b.spends) {
+        const COutPoint op{OutpointAt(sp)};
+        raw.push_back({
+            .outpoint = op,
+            .coin = Coin{},
+            .key_hash = CoinsStore::KeyHashOf(op),
+            .shard = store.ShardOf(op),
+            .height = b.height,
+        });
+    }
+    for (uint32_t c : b.creates) {
+        const COutPoint op{OutpointAt(c)};
+        raw.push_back({
+            .outpoint = op,
+            .coin = CoinFor(c, b.height),
+            .key_hash = CoinsStore::KeyHashOf(op),
+            .shard = store.ShardOf(op),
+            .height = b.height,
+        });
+    }
+    for (const auto& op : raw) ++bc.shard_offsets[op.shard + 1];
+    for (size_t s{1}; s <= NUM_SHARDS; ++s) bc.shard_offsets[s] += bc.shard_offsets[s - 1];
+    bc.ops.resize(raw.size());
+    std::vector<uint32_t> cursor(bc.shard_offsets.begin(), bc.shard_offsets.begin() + NUM_SHARDS);
+    for (auto& op : raw) {
+        bc.ops[cursor[op.shard]++] = std::move(op);
+    }
+    return bc;
+}
+
 } // namespace
 
 /**
- * The window oracle: a valid chain of synthetic blocks is validated read-only against CoinsStore
- * plus WindowOverlay (with intra-batch create+spend cancellation) and committed in exact height
- * order via CommitBatch() in fuzzer-chosen batch sizes. The confirmed state must equal a
- * reference CCoinsViewCache at every commit and CoinsStore::SanityCheck() must hold.
+ * The window oracle: exercises CoinsStore::CommitWindowBatch() with pre-bucketed per-block
+ * BlockChanges across fuzzer-chosen batch sizes, intra-batch create+spend cancellation, and
+ * injected double-spend conflicts that trigger exact per-block prefix rollback. The confirmed
+ * state must equal a reference CCoinsViewCache at every commit and SanityCheck() must hold.
  */
 FUZZ_TARGET(coinsstore_window)
 {
@@ -61,12 +102,13 @@ FUZZ_TARGET(coinsstore_window)
     FuzzedDataProvider provider{buffer.data(), buffer.size()};
 
     CCoinsViewCache reference{&CoinsViewEmpty::Get()};
-    CoinsStore store{&CoinsViewEmpty::Get(), /*shards=*/4, /*deterministic=*/true};
+    CoinsStore store{&CoinsViewEmpty::Get(), /*shards=*/NUM_SHARDS, /*deterministic=*/true};
     reference.SetBestBlock(uint256::ONE);
     store.SetBestBlock(uint256::ONE, 0);
 
     // Seed coins.
     std::vector<uint32_t> live;
+    std::vector<uint32_t> spent_history;
     const uint32_t seeded{provider.ConsumeIntegralInRange<uint32_t>(1, 16)};
     for (uint32_t i{0}; i < seeded; ++i) {
         reference.AddCoin(OutpointAt(i), CoinFor(i, 0), false);
@@ -84,6 +126,7 @@ FUZZ_TARGET(coinsstore_window)
         for (int k{0}; k < spends && !live.empty(); ++k) {
             const size_t idx{provider.ConsumeIntegralInRange<size_t>(0, live.size() - 1)};
             b.spends.push_back(live[idx]);
+            spent_history.push_back(live[idx]);
             live.erase(live.begin() + idx);
         }
         const int creates{provider.ConsumeIntegralInRange<int>(0, 3)};
@@ -95,44 +138,50 @@ FUZZ_TARGET(coinsstore_window)
         chain.push_back(std::move(b));
     }
 
-    // Commit in fuzzer-chosen batches of 1..WINDOW blocks with intra-batch cancellation.
+    // Commit in fuzzer-chosen batches of 1..WINDOW blocks via CommitWindowBatch().
     size_t next{0};
     while (next < chain.size()) {
         const size_t max_batch{std::min(WINDOW, chain.size() - next)};
         const size_t batch_len{provider.remaining_bytes() > 0 ? provider.ConsumeIntegralInRange<size_t>(1, max_batch) : max_batch};
+        const uint64_t epoch{store.CommitEpoch()};
 
-        std::unordered_map<COutPoint, size_t, SaltedOutpointHasher> batch_live_creates;
-        std::vector<CoinsStore::CommitOp> ops;
-        int last_h{0};
+        // Optionally inject a conflicting duplicate spend on one block in the batch to test prefix rollback.
+        const bool inject_conflict{provider.remaining_bytes() > 0 && provider.ConsumeBool() && !spent_history.empty()};
+        const size_t conflict_idx{inject_conflict ? provider.ConsumeIntegralInRange<size_t>(0, batch_len - 1) : batch_len};
+
+        std::vector<CoinsStore::BlockChanges> changes;
+        std::vector<CoinsStore::BlockChanges*> ptrs;
+        std::vector<uint256> hashes;
+        changes.reserve(batch_len);
+        ptrs.reserve(batch_len);
+        hashes.reserve(batch_len);
+
         for (size_t k{0}; k < batch_len; ++k) {
-            const SynthBlock& b{chain[next + k]};
-            last_h = b.height;
-            for (uint32_t sp : b.spends) {
-                const COutPoint op{OutpointAt(sp)};
-                if (const auto it{batch_live_creates.find(op)}; it != batch_live_creates.end()) {
-                    ops[it->second].cancelled = true;
-                    batch_live_creates.erase(it);
-                } else {
-                    assert(store.PeekCoin(op).has_value());
-                    ops.push_back({.outpoint = op, .coin = Coin{}, .key_hash = CoinsStore::KeyHashOf(op), .shard = store.ShardOf(op), .height = b.height});
+            SynthBlock b{chain[next + k]};
+            if (k == conflict_idx) {
+                // Append a spend of a coin that is already missing from the store (or double-spent).
+                const uint32_t bad_id{spent_history[provider.ConsumeIntegralInRange<size_t>(0, spent_history.size() - 1)]};
+                if (!store.PeekCoin(OutpointAt(bad_id)).has_value() &&
+                    std::find(b.spends.begin(), b.spends.end(), bad_id) == b.spends.end()) {
+                    b.spends.push_back(bad_id);
                 }
             }
-            for (uint32_t c : b.creates) {
-                const COutPoint op{OutpointAt(c)};
-                batch_live_creates.emplace(op, ops.size());
-                ops.push_back({.outpoint = op, .coin = CoinFor(c, b.height), .key_hash = CoinsStore::KeyHashOf(op), .shard = store.ShardOf(op), .height = b.height});
-            }
+            changes.push_back(BuildBlockChanges(store, b, epoch));
+            uint256 h{uint256::ONE};
+            h.data()[31] = static_cast<unsigned char>(b.height);
+            hashes.push_back(h);
         }
-        uint256 best_hash{uint256::ONE};
-        best_hash.data()[31] = static_cast<unsigned char>(last_h);
-        store.CommitBatch(ops, best_hash, last_h);
+        for (auto& bc : changes) ptrs.push_back(&bc);
 
-        for (size_t k{0}; k < batch_len; ++k) {
+        const auto res{store.CommitWindowBatch(ptrs, hashes, /*pool=*/nullptr, /*publish_height=*/true)};
+        assert(res.accepted <= batch_len);
+
+        for (size_t k{0}; k < res.accepted; ++k) {
             const SynthBlock& b{chain[next + k]};
             for (uint32_t c : b.creates) reference.AddCoin(OutpointAt(c), CoinFor(c, b.height), false);
             for (uint32_t sp : b.spends) assert(reference.SpendCoin(OutpointAt(sp)));
         }
-        next += batch_len;
+        next += res.accepted;
 
         for (uint32_t i{0}; i < NUM_OUTPOINTS; ++i) {
             const auto a{reference.PeekCoin(OutpointAt(i))};
@@ -141,6 +190,7 @@ FUZZ_TARGET(coinsstore_window)
             if (a) assert(a->out == b->out && a->nHeight == b->nHeight);
         }
         store.SanityCheck();
+        // If res.accepted == 0 because conflict_idx == 0, the next loop iteration retries cleanly without conflict.
     }
     store.SanityCheck();
 }

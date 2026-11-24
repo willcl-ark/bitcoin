@@ -407,6 +407,8 @@ private:
      */
     mutable std::shared_mutex m_script_execution_cache_mutex;
     CuckooCache::cache<uint256, SignatureCacheHasher> m_script_execution_cache;
+    //! Lock-free empty fast-path: skips shared_mutex contention during IBD when no script entries exist.
+    std::atomic<bool> m_has_script_entries{false};
 
 public:
     SignatureCache m_signature_cache;
@@ -419,6 +421,8 @@ public:
     //! Return a copy of the pre-initialized hasher.
     CSHA256 ScriptExecutionCacheHasher() const { return m_script_execution_cache_hasher; }
 
+    bool HasScriptEntries() const noexcept { return m_has_script_entries.load(std::memory_order_acquire); }
+
     /**
      * Whether the script execution identified by `entry` was already verified.
      * With `erase`, a hit is marked for garbage collection: a block connection
@@ -426,6 +430,7 @@ public:
      */
     bool ScriptExecutionCached(const uint256& entry, bool erase) const
     {
+        if (!HasScriptEntries()) return false;
         std::shared_lock lock{m_script_execution_cache_mutex};
         return m_script_execution_cache.contains(entry, erase);
     }
@@ -434,12 +439,14 @@ public:
     {
         std::unique_lock lock{m_script_execution_cache_mutex};
         m_script_execution_cache.insert(entry);
+        m_has_script_entries.store(true, std::memory_order_release);
     }
 
     void TestOnlyResetScriptExecutionCache()
     {
         std::unique_lock lock{m_script_execution_cache_mutex};
         m_script_execution_cache.TestOnlyReset();
+        m_has_script_entries.store(false, std::memory_order_release);
     }
 };
 
@@ -1317,6 +1324,9 @@ protected:
         bool reorg) EXCLUSIVE_LOCKS_REQUIRED(cs_main, m_mempool->cs);
     //! Wait for the window's workers and reset every view still in flight.
     void DrainWindow(ConnectStep& step) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    struct ConnectStepContext;
+    //! Execute one planned ConnectStep (Stage 0/1/2 window loop or solo block connection).
+    bool ExecuteConnectStep(BlockValidationState& state, ConnectStepContext& ctx);
     /**
      * The tip moved from `pindexFork` to `pindexNewTip`: UpdatedBlockTip through the effects executor
      * (behind the blocks' BlockConnected signals) and the kernel's blockTip notification. Returns true when
