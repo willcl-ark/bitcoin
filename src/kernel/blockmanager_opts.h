@@ -28,6 +28,9 @@ struct BlockManagerOpts {
     bool fast_prune{false};
     //! Test only (-test=crash_before_undo_write): abort the process when the first undo write effect runs.
     bool test_crash_before_undo_write{false};
+    //! Run effects synchronously on the calling thread instead of a background effects worker
+    //! (used by libbitcoinkernel so callbacks never execute off-thread or invert ordering).
+    bool synchronous_effects{false};
     const fs::path blocks_dir;
     Notifications& notifications;
     DBParams block_tree_db_params;

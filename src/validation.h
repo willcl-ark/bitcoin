@@ -1486,6 +1486,16 @@ public:
     //! The memory blocks hold from their arrival until nothing of them is left to do, by holder
     //! (util/byte_ledger.h). Declared before its holders.
     util::ByteLedger m_bytes_in_flight;
+    //! The connect pool: block appliers of the window and the blocks received from peers during initial
+    //! block download, input prefetchers at the tip (sized by -prevoutfetchthreads). Shared by every
+    //! chainstate's views. Declared before m_block_cache so cached blocks are destroyed while the pool
+    //! object still exists (after ~ChainstateManager() stops the pool).
+    const util::NotNullSharedPtr<ThreadPool> m_connect_pool;
+    //! Dedicated Stage 2 commit helper pool (runs CommitWindowBatch and async WindowOverlay cleanup
+    //! without starving behind busy Stage 1 validation workers or polluting m_connect_pool's queue).
+    const std::unique_ptr<ThreadPool> m_commit_pool;
+    //! The blocks each thread built in a task on the connect pool, back from their last holder (NewBlock()).
+    const std::unique_ptr<BlockBins> m_block_bins;
     //! Accepted blocks kept for the connect loop, so that one that arrived before its parent is connected from
     //! the object received and checked rather than read from disk and deserialized again. Filled by
     //! ProcessNewBlock() and the external block file loader, emptied by ActivateBestChain().
@@ -2101,13 +2111,6 @@ public:
     std::optional<int> BlocksAheadOfTip() const LOCKS_EXCLUDED(::cs_main);
 
     CCheckQueue<CScriptCheck>& GetCheckQueue() { return m_script_check_queue; }
-    //! The connect pool: block appliers of the window and the blocks received from peers during initial
-    //! block download, input prefetchers at the tip (sized by -prevoutfetchthreads). Shared by every
-    //! chainstate's views.
-    const util::NotNullSharedPtr<ThreadPool> m_connect_pool;
-    //! Dedicated Stage 2 commit helper pool (runs CommitWindowBatch and async WindowOverlay cleanup
-    //! without starving behind busy Stage 1 validation workers or polluting m_connect_pool's queue).
-    const std::unique_ptr<ThreadPool> m_commit_pool;
     /**
      * The free worker. The connector waits for the connect pool's workers with cs_main held
      * (Chainstate::DrainWindow()). The work it waits for, a block's validation, takes no cs_main, but it
@@ -2117,8 +2120,6 @@ public:
      * end.
      */
     int LockTaskLimit() const;
-    //! The blocks each thread built in a task on the connect pool, back from their last holder (NewBlock()).
-    const std::unique_ptr<BlockBins> m_block_bins;
     /**
      * A block to be read or received, whose destruction runs on the connect pool instead of the thread that
      * drops its last reference (for a connected block the scheduler, in its BlockConnected callback). The

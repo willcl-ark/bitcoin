@@ -472,6 +472,7 @@ struct ChainstateManagerOptions {
               .signals = context->m_signals.get()}},
           m_blockman_options{node::BlockManager::Options{
               .chainparams = *context->m_chainparams,
+              .synchronous_effects = true,
               .blocks_dir = blocks_dir,
               .notifications = *context->m_notifications,
               .block_tree_db_params = DBParams{
@@ -1327,6 +1328,7 @@ btck_ChainstateManager* btck_chainstate_manager_create(
             LogError("%s", util::ErrorString(result).original);
             return nullptr;
         }
+        chainman->m_blockman.SettleUndoWrites();
     } catch (const std::exception& e) {
         LogError("Failed to load chainstate: %s", e.what());
         return nullptr;
@@ -1354,6 +1356,7 @@ const btck_BlockTreeEntry* btck_chainstate_manager_get_best_entry(const btck_Cha
 
 void btck_chainstate_manager_destroy(btck_ChainstateManager* chainman)
 {
+    if (!chainman) return;
     {
         LOCK(btck_ChainstateManager::get(chainman).m_chainman->GetMutex());
         for (const auto& chainstate : btck_ChainstateManager::get(chainman).m_chainman->m_chainstates) {

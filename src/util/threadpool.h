@@ -56,6 +56,8 @@ private:
     // This ensures threads blocked on m_cv reliably observe the change and proceed correctly without missing signals.
     // Ref: https://en.cppreference.com/w/cpp/thread/condition_variable
     bool m_interrupt GUARDED_BY(m_mutex){false};
+    bool m_stopping GUARDED_BY(m_mutex){false};
+    std::condition_variable m_stop_cv;
     std::vector<std::thread> m_workers GUARDED_BY(m_mutex);
 
     void WorkerThread() EXCLUSIVE_LOCKS_REQUIRED(!m_mutex)
@@ -107,7 +109,7 @@ public:
     {
         assert(num_workers > 0);
         LOCK(m_mutex);
-        if (m_interrupt) throw std::runtime_error("Thread pool has been interrupted or is stopping");
+        if (m_interrupt || m_stopping) throw std::runtime_error("Thread pool has been interrupted or is stopping");
         if (!m_workers.empty()) throw std::runtime_error("Thread pool already started");
 
         // Create workers
@@ -131,13 +133,18 @@ public:
         // Notify workers and join them
         std::vector<std::thread> threads_to_join;
         {
-            LOCK(m_mutex);
+            WAIT_LOCK(m_mutex, lock);
+            if (m_stopping) {
+                m_stop_cv.wait(lock, [this]() EXCLUSIVE_LOCKS_REQUIRED(m_mutex) { return !m_stopping; });
+                return;
+            }
             // Ensure Stop() is not called from a worker thread while workers are still registered,
             // otherwise a self-join deadlock would occur.
             auto id = std::this_thread::get_id();
             for (const auto& worker : m_workers) assert(worker.get_id() != id);
             // Early shutdown to return right away on any concurrent Submit() call
             m_interrupt = true;
+            m_stopping = true;
             threads_to_join.swap(m_workers);
         }
         m_cv.notify_all();
@@ -146,11 +153,15 @@ public:
         // Free resources
         for (auto& worker : threads_to_join) worker.join();
 
-        // Since we currently wait for tasks completion, sanity-check empty queue
-        LOCK(m_mutex);
-        Assume(m_work_queue.empty());
-        // Re-allow Start() now that all workers have exited
-        m_interrupt = false;
+        {
+            // Since we currently wait for tasks completion, sanity-check empty queue
+            LOCK(m_mutex);
+            Assume(m_work_queue.empty());
+            // Re-allow Start() now that all workers have exited
+            m_interrupt = false;
+            m_stopping = false;
+        }
+        m_stop_cv.notify_all();
     }
 
     enum class SubmitError {
@@ -183,7 +194,7 @@ public:
      *          uncaught exceptions, as they would otherwise be silently discarded.
      */
     template <class F>
-    [[nodiscard]] util::Expected<Future<F>, SubmitError> Submit(F&& fn, bool front = false) noexcept EXCLUSIVE_LOCKS_REQUIRED(!m_mutex)
+    [[nodiscard]] util::Expected<Future<F>, SubmitError> Submit(F&& fn, bool front = false) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex)
     {
         PackagedTask<F> task{std::forward<F>(fn)};
         auto future{task.get_future()};
@@ -225,7 +236,7 @@ public:
      */
     template <std::ranges::sized_range R>
         requires(!std::is_lvalue_reference_v<R>)
-    [[nodiscard]] util::Expected<std::vector<RangeFuture<R>>, SubmitError> Submit(R&& fns) noexcept EXCLUSIVE_LOCKS_REQUIRED(!m_mutex)
+    [[nodiscard]] util::Expected<std::vector<RangeFuture<R>>, SubmitError> Submit(R&& fns) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex)
     {
         std::vector<RangeFuture<R>> futures;
         futures.reserve(std::ranges::size(fns));

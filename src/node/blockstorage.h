@@ -590,12 +590,10 @@ public:
      * its completions under the lock (SettleUndoWrites(),
      * ApplyCompletions() and what calls them).
      */
-    kernel::EffectsExecutor m_effects{m_ledger[util::ByteAccountId::UndoBacklog], [this] {
-        // Never block here: a thread holding cs_main may be waiting for this worker's I/O.
-        TRY_LOCK(::cs_main, locked);
-        if (locked) m_effects.ApplyCompletions();
-    }};
+    kernel::EffectsExecutor m_effects;
     ThreadPool m_block_io{"blockio"};
+    //! Whether effects and completions run synchronously on the calling thread (libbitcoinkernel mode).
+    bool SynchronousEffects() const { return m_opts.synchronous_effects; }
     //! Set on the executor when a block's undo data could not be written (a fatal error is raised with
     //! it). The block is connected in memory by then; no chainstate write is made once this is set, so
     //! that the database never holds a block's coins without the undo data to take them back.

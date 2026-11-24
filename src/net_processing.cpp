@@ -2420,12 +2420,14 @@ void PeerManagerImpl::NewPoWValidBlock(const CBlockIndex *pindex, const std::sha
     }
     // Freed on a worker of the connect pool, or here where the pool takes no task (the task is destroyed with
     // what it holds).
-    (void)m_chainman.m_connect_pool->Submit([block = std::move(previous_block), compact_block = std::move(previous_compact_block),
-                                             block_txs = std::move(previous_block_txs)]() mutable {
-        block_txs.reset();
-        compact_block.reset();
-        block.reset();
-    });
+    if (previous_block || previous_compact_block || previous_block_txs) {
+        (void)m_chainman.m_connect_pool->Submit([block = std::move(previous_block), compact_block = std::move(previous_compact_block),
+                                                 block_txs = std::move(previous_block_txs)]() mutable {
+            block_txs.reset();
+            compact_block.reset();
+            block.reset();
+        });
+    }
 
     m_connman.ForEachNode([this, pindex, &lazy_ser, &hashBlock](CNode* pnode) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) {
         AssertLockHeld(::cs_main);
@@ -4154,11 +4156,18 @@ void PeerManagerImpl::WaitForPendingBlocks(node::SyncMode mode)
 void PeerManagerImpl::FinishBlockTasks()
 {
     WAIT_LOCK(m_block_tasks_mutex, lock);
-    // Idempotent: called at shutdown and again by the destructor.
-    if (!m_block_tasks_life.DrainIfRunning()) return;
+    // Idempotent: a second concurrent caller waits until all receive tasks finish and lifecycle is Stopped.
+    if (!m_block_tasks_life.DrainIfRunning()) {
+        if (!m_block_tasks_life.Stopped()) {
+            AssertMayWait("the receive tasks");
+            m_block_tasks_cv.wait(lock, [&]() EXCLUSIVE_LOCKS_REQUIRED(m_block_tasks_mutex) { return m_block_tasks_life.Stopped(); });
+        }
+        return;
+    }
     AssertMayWait("the receive tasks");
     m_block_tasks_cv.wait(lock, [&]() EXCLUSIVE_LOCKS_REQUIRED(m_block_tasks_mutex) { return m_block_tasks.empty(); });
     m_block_tasks_life.Finish();
+    m_block_tasks_cv.notify_all();
 }
 
 void PeerManagerImpl::ProcessCompactBlockTxns(CNode& pfrom, Peer& peer, const BlockTransactions& block_transactions)

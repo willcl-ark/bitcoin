@@ -2021,8 +2021,7 @@ void Chainstate::ResetCoinsViews()
 void Chainstate::SettleWriteOut()
 {
     AssertLockHeld(::cs_main);
-    m_blockman.m_effects.WaitForIO();
-    m_blockman.m_effects.ApplyCompletions();
+    m_blockman.SettleUndoWrites();
 }
 
 bool Chainstate::StartWriteOutRun(BlockValidationState& state, int bound_height, bool final, std::optional<size_t> evict_to,
@@ -2036,6 +2035,8 @@ bool Chainstate::StartWriteOutRun(BlockValidationState& state, int bound_height,
     // Nor a sync of a block or undo file that failed: the run's batch would sync the file again and record
     // what the first sync may have lost. The fatal error is raised already (flushError()).
     if (m_blockman.SyncFailed()) return state.Error("An earlier sync of a block or undo file failed");
+    if (m_blockman.m_undo_write_failed) return state.Error("An earlier undo write failed");
+    if (m_blockman.m_index_batch_lost) return state.Error("An earlier block index batch was lost");
     Assert(!store.RunInFlight());
     // The run's new head is the block the tier's state corresponds to. During a disconnect that is already
     // the parent while m_chain still ends at the block being disconnected, so the tier's best block, not
@@ -4212,20 +4213,26 @@ bool Chainstate::PublishConnectTip(
         util::ByteAccount& pinned{m_chainman.m_bytes_in_flight[util::ByteAccountId::PinnedBlocks]};
         const size_t pinned_bytes{WindowBlockBytes(*block_to_connect, validated.result.num_inputs, /*block_bytes=*/0)};
         pinned.Add(pinned_bytes);
-        m_blockman.m_effects.Enqueue(
-            /*effect=*/nullptr,
-            [signals = m_chainman.m_options.signals, role, block = std::move(block_to_connect), pindexNew, &blockman = m_blockman, &pinned, pinned_bytes](bool) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) {
-                AssertLockHeld(::cs_main);
-                pinned.Sub(pinned_bytes);
-                // Not for a block whose undo data was not written: the node is stopping on that error, and
-                // a listener would look for undo data that is not there.
-                if (blockman.m_undo_write_failed) return;
-                signals->BlockConnected(role, block, pindexNew);
-            });
-        // Outside initial block download the signal leaves under the lock hold that moved the tip, behind
-        // the block's undo write (precondition O7). In a step that disconnected blocks it leaves once the
-        // disconnected transactions are back in the mempool (FinishConnectStep()), under the same hold.
-        if (!m_chainman.IsInitialBlockDownload() && !reorg) m_blockman.SettleUndoWrites();
+        try {
+            m_blockman.m_effects.Enqueue(
+                /*effect=*/nullptr,
+                [signals = m_chainman.m_options.signals, role, block = std::move(block_to_connect), pindexNew, &blockman = m_blockman, &pinned, pinned_bytes](bool) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) {
+                    AssertLockHeld(::cs_main);
+                    pinned.Sub(pinned_bytes);
+                    // Not for a block whose undo data was not written: the node is stopping on that error, and
+                    // a listener would look for undo data that is not there.
+                    if (blockman.m_undo_write_failed) return;
+                    signals->BlockConnected(role, block, pindexNew);
+                });
+        } catch (...) {
+            pinned.Sub(pinned_bytes);
+            throw;
+        }
+        // Outside initial block download (or in synchronous libbitcoinkernel mode) the signal leaves under
+        // the lock hold that moved the tip, behind the block's undo write (precondition O7). In a step that
+        // disconnected blocks it leaves once the disconnected transactions are back in the mempool
+        // (FinishConnectStep()), under the same hold.
+        if ((!m_chainman.IsInitialBlockDownload() || m_blockman.SynchronousEffects()) && !reorg) m_blockman.SettleUndoWrites();
     }
     return true;
 }
@@ -4687,11 +4694,10 @@ bool Chainstate::NotifyTipAdvanced(CBlockIndex* pindexNewTip, const CBlockIndex*
                 AssertLockHeld(::cs_main);
                 signals->UpdatedBlockTip(pindexNewTip, pindexFork, still_in_ibd);
             });
-        if (!still_in_ibd) {
-            // Outside initial block download the notifications leave with the pass: wait for the pass's
-            // undo writes and hand the completions on before the lock goes. Peers are announced new
-            // blocks one at a time this way, not in a batch that net_processing would turn into inv
-            // announcements.
+        if (!still_in_ibd || m_blockman.SynchronousEffects()) {
+            // Outside initial block download (or in synchronous libbitcoinkernel mode) the notifications leave
+            // with the pass: wait for the pass's undo writes and hand the completions on before the lock goes
+            // and before blockTip fires.
             m_blockman.SettleUndoWrites();
         }
     }
@@ -5360,15 +5366,20 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                                             util::ByteAccount& pinned{m_chainman.m_bytes_in_flight[util::ByteAccountId::PinnedBlocks]};
                                             const size_t pinned_bytes{WindowBlockBytes(*block_to_connect, val.result.num_inputs, /*block_bytes=*/0)};
                                             pinned.Add(pinned_bytes);
-                                            m_blockman.m_effects.Enqueue(
-                                                /*effect=*/nullptr,
-                                                [signals = m_chainman.m_options.signals, role = roles[i], block = std::move(block_to_connect), pindexNew, &blockman = m_blockman, &pinned, pinned_bytes](bool) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) {
-                                                    AssertLockHeld(::cs_main);
-                                                    pinned.Sub(pinned_bytes);
-                                                    if (blockman.m_undo_write_failed) return;
-                                                    signals->BlockConnected(role, block, pindexNew);
-                                                });
-                                            if (!m_chainman.IsInitialBlockDownload()) m_blockman.SettleUndoWrites();
+                                            try {
+                                                m_blockman.m_effects.Enqueue(
+                                                    /*effect=*/nullptr,
+                                                    [signals = m_chainman.m_options.signals, role = roles[i], block = std::move(block_to_connect), pindexNew, &blockman = m_blockman, &pinned, pinned_bytes](bool) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) {
+                                                        AssertLockHeld(::cs_main);
+                                                        pinned.Sub(pinned_bytes);
+                                                        if (blockman.m_undo_write_failed) return;
+                                                        signals->BlockConnected(role, block, pindexNew);
+                                                    });
+                                            } catch (...) {
+                                                pinned.Sub(pinned_bytes);
+                                                throw;
+                                            }
+                                            if (!m_chainman.IsInitialBlockDownload() || m_blockman.SynchronousEffects()) m_blockman.SettleUndoWrites();
                                         }
 
                                         if (i + 1 < accepted) {
@@ -6790,8 +6801,14 @@ void ChainstateManager::ConnectorLoop()
 void ChainstateManager::StopConnector()
 {
     {
-        LOCK(m_connector_mutex);
-        if (!m_connector_life.DrainIfRunning()) return;
+        WAIT_LOCK(m_connector_mutex, lock);
+        if (!m_connector_life.DrainIfRunning()) {
+            if (!m_connector_life.Stopped()) {
+                AssertMayWait("the connector");
+                m_connector_cv.wait(lock, [this]() EXCLUSIVE_LOCKS_REQUIRED(m_connector_mutex) { return m_connector_life.Stopped(); });
+            }
+            return;
+        }
         m_connector_handoffs.Stop();
     }
     m_connector_cv.notify_all();
@@ -6799,7 +6816,11 @@ void ChainstateManager::StopConnector()
         AssertMayWait("the connector");
         m_connector_thread.join();
     }
-    WITH_LOCK(m_connector_mutex, m_connector_life.Finish());
+    {
+        LOCK(m_connector_mutex);
+        m_connector_life.Finish();
+    }
+    m_connector_cv.notify_all();
 }
 
 MempoolAcceptResult ChainstateManager::ProcessTransaction(const CTransactionRef& tx, bool test_accept)
@@ -8533,15 +8554,15 @@ static ChainstateManager::Options&& Flatten(ChainstateManager::Options&& opts)
 
 ChainstateManager::ChainstateManager(const util::SignalInterrupt& interrupt, Options options, node::BlockManager::Options blockman_options)
     : m_script_check_queue{/*batch_size=*/128, std::clamp(options.worker_threads_num, 0, MAX_SCRIPTCHECK_THREADS)},
+      m_connect_pool{std::make_shared<ThreadPool>("connect")},
+      m_commit_pool{std::make_unique<ThreadPool>("commit")},
+      m_block_bins{std::make_unique<BlockBins>()},
       m_block_cache{options.block_cache_bytes, m_bytes_in_flight[util::ByteAccountId::BlockCache]},
       m_interrupt{interrupt},
       m_options{Flatten(std::move(options))},
       m_blockman{interrupt, std::move(blockman_options), &m_bytes_in_flight},
       m_all_consensus_script_flags{GetAllConsensusScriptFlags(m_options.chainparams.GetConsensus())},
-      m_validation_cache{m_options.script_execution_cache_bytes, m_options.signature_cache_bytes},
-      m_connect_pool{std::make_shared<ThreadPool>("connect")},
-      m_commit_pool{std::make_unique<ThreadPool>("commit")},
-      m_block_bins{std::make_unique<BlockBins>()}
+      m_validation_cache{m_options.script_execution_cache_bytes, m_options.signature_cache_bytes}
 {
     if (const int connect_threads{std::clamp(m_options.prevoutfetch_threads_num, 0, MAX_PREVOUTFETCH_THREADS)}; connect_threads > 0) {
         m_connect_pool->Start(connect_threads);
@@ -8579,8 +8600,10 @@ int ChainstateManager::LockTaskLimit() const
 std::shared_ptr<CBlock> ChainstateManager::NewBlock(bool on_pool) const
 {
     if (on_pool) return m_block_bins->NewBlock();
-    return std::shared_ptr<CBlock>(new CBlock, [pool = m_connect_pool](CBlock* block) {
-        if (!pool->Submit([block] { delete block; })) delete block;
+    return std::shared_ptr<CBlock>(new CBlock, [weak_pool = std::weak_ptr<ThreadPool>{m_connect_pool.get()}](CBlock* block) {
+        if (auto pool{weak_pool.lock()}; !pool || !pool->Submit([block] { delete block; })) {
+            delete block;
+        }
     });
 }
 
@@ -8595,15 +8618,18 @@ ChainstateManager::~ChainstateManager()
         LogInfo("Connect window: %u blocks validated on the connect pool (%u wide), %u transactions deferred to their block's continuation, %u conflicts, %u blocks retried alone",
                 m_window_blocks.load(), ConnectWindow(), m_window_deferred_txs.load(), m_window_conflicts.load(), m_window_retries.load());
     }
-    LOCK(::cs_main);
-    // The effects still queued end here, while the chainstates exist: a write-out run's effect and its
-    // completion hold references into a chainstate and its coins views, and the block manager, which
-    // would finish them in its own destructor, outlives the chainstates. The node and the kernel library
-    // have reset the coins views before, which settles too; a test need not have.
-    m_blockman.m_effects.WaitForIO();
-    m_blockman.m_effects.ApplyCompletions();
-
-    m_versionbitscache.Clear();
+    {
+        LOCK(::cs_main);
+        // The effects still queued end here, while the chainstates exist: a write-out run's effect and its
+        // completion hold references into a chainstate and its coins views, and the block manager, which
+        // would finish them in its own destructor, outlives the chainstates. The node and the kernel library
+        // have reset the coins views before, which settles too; a test need not have.
+        m_blockman.SettleUndoWrites();
+        m_versionbitscache.Clear();
+    }
+    // Stop the connect pool outside cs_main before destroying members (m_chainstates, m_block_cache)
+    // so no worker task outlives ChainstateManager or attempts a self-join in ~ThreadPool().
+    m_connect_pool->Stop();
 }
 
 Chainstate* ChainstateManager::LoadAssumeutxoChainstate()

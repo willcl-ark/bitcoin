@@ -131,4 +131,86 @@ BOOST_AUTO_TEST_CASE(effects_completion_hook_runs_once_per_effect)
     BOOST_CHECK_EQUAL(completed.size(), 5U);
 }
 
+BOOST_AUTO_TEST_CASE(effects_inline_mode_runs_on_caller_thread)
+{
+    const auto caller_id{std::this_thread::get_id()};
+    std::vector<int> events;
+    util::ByteAccount backlog;
+    EffectsExecutor exec{backlog, {}, /*inline_mode=*/true};
+    exec.Start();
+    for (int i = 0; i < 4; ++i) {
+        exec.Enqueue(
+            [&, i] {
+                BOOST_CHECK(std::this_thread::get_id() == caller_id);
+                events.push_back(i * 2);
+                return true;
+            },
+            [&, i](bool ok) {
+                BOOST_CHECK(ok);
+                BOOST_CHECK(std::this_thread::get_id() == caller_id);
+                events.push_back(i * 2 + 1);
+            },
+            /*bytes=*/10);
+    }
+    BOOST_CHECK_EQUAL(exec.PendingBytes(), 40U);
+    exec.WaitForBacklogBelow(20);
+    BOOST_CHECK_EQUAL(exec.PendingBytes(), 20U);
+    exec.WaitForIO();
+    BOOST_CHECK_EQUAL(exec.PendingBytes(), 0U);
+    exec.ApplyCompletions();
+    BOOST_CHECK((events == std::vector<int>{0, 2, 4, 6, 1, 3, 5, 7}));
+    exec.Stop();
+}
+
+BOOST_AUTO_TEST_CASE(effects_reentrant_apply_preserves_order)
+{
+    std::vector<int> order;
+    util::ByteAccount backlog;
+    EffectsExecutor exec{backlog, {}, /*inline_mode=*/true};
+    exec.Start();
+    exec.Enqueue([] { return true; }, [&](bool) {
+        order.push_back(1);
+        // Re-entrant ApplyCompletions() must not pull item 2 ahead of item 1's remainder.
+        exec.ApplyCompletions();
+        order.push_back(2);
+    });
+    exec.Enqueue([] { return true; }, [&](bool) {
+        order.push_back(3);
+    });
+    exec.WaitForIO();
+    exec.ApplyCompletions();
+    BOOST_CHECK((order == std::vector<int>{1, 2, 3}));
+    exec.Stop();
+}
+
+BOOST_AUTO_TEST_CASE(effects_concurrent_stop_waits_for_worker_exit)
+{
+    std::atomic<bool> release{false};
+    std::atomic<bool> started{false};
+    std::atomic<bool> finished{false};
+    util::ByteAccount backlog;
+    EffectsExecutor exec{backlog};
+    exec.Start();
+    exec.Enqueue([&] {
+        started.store(true, std::memory_order_release);
+        while (!release.load(std::memory_order_acquire)) std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        finished.store(true, std::memory_order_release);
+        return true;
+    }, {});
+    while (!started.load(std::memory_order_acquire)) std::this_thread::yield();
+
+    std::thread stopper1{[&] { exec.Stop(); }};
+    std::this_thread::sleep_for(std::chrono::milliseconds{10});
+    std::atomic<bool> stopper2_saw_finished{false};
+    std::thread stopper2{[&] {
+        exec.Stop();
+        stopper2_saw_finished.store(finished.load(std::memory_order_acquire), std::memory_order_release);
+    }};
+    std::this_thread::sleep_for(std::chrono::milliseconds{10});
+    release.store(true, std::memory_order_release);
+    stopper1.join();
+    stopper2.join();
+    BOOST_CHECK(stopper2_saw_finished.load(std::memory_order_acquire));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

@@ -1383,7 +1383,12 @@ bool BlockManager::WriteBlockUndo(const CBlockUndo& blockundo, BlockValidationSt
 
 void BlockManager::SettleUndoWrites()
 {
-    m_effects.WaitForIO();
+    if (m_opts.synchronous_effects) {
+        BLOCK_FILE_WORK_UNDER_CS_MAIN("synchronous kernel effects");
+        m_effects.WaitForIO();
+    } else {
+        m_effects.WaitForIO();
+    }
     LOCK(::cs_main);
     m_effects.ApplyCompletions();
 }
@@ -1668,7 +1673,12 @@ BlockManager::~BlockManager()
     // Finish the queued I/O and record it in the block index before the index goes away: the executor stops
     // only once no completion is left.
     while (true) {
-        m_effects.WaitForIO();
+        if (m_opts.synchronous_effects) {
+            BLOCK_FILE_WORK_UNDER_CS_MAIN("synchronous kernel effects");
+            m_effects.WaitForIO();
+        } else {
+            m_effects.WaitForIO();
+        }
         if (!m_effects.HasPendingCompletions()) break;
         LOCK(::cs_main);
         m_effects.ApplyCompletions();
@@ -1685,7 +1695,16 @@ BlockManager::BlockManager(const util::SignalInterrupt& interrupt, Options opts,
       m_block_file_seq{FlatFileSeq{m_opts.blocks_dir, "blk", m_opts.fast_prune ? 0x4000 /* 16kB */ : BLOCKFILE_CHUNK_SIZE}},
       m_undo_file_seq{FlatFileSeq{m_opts.blocks_dir, "rev", UNDOFILE_CHUNK_SIZE}},
       m_interrupt{interrupt},
-      m_ledger{ledger ? *ledger : m_own_ledger}
+      m_ledger{ledger ? *ledger : m_own_ledger},
+      m_effects{m_ledger[util::ByteAccountId::UndoBacklog],
+                m_opts.synchronous_effects
+                    ? std::function<void()>{}
+                    : std::function<void()>{[this] {
+                          // Never block here: a thread holding cs_main may be waiting for this worker's I/O.
+                          TRY_LOCK(::cs_main, locked);
+                          if (locked) m_effects.ApplyCompletions();
+                      }},
+                /*inline_mode=*/m_opts.synchronous_effects}
 {
     m_ledger[util::ByteAccountId::UndoBacklog].SetLimit(MAX_UNDO_BACKLOG_BYTES);
     m_effects.Start();

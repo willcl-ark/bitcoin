@@ -29,6 +29,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 using namespace btck;
@@ -1547,4 +1548,72 @@ BOOST_AUTO_TEST_CASE(btck_set_mock_time_tests)
     BlockValidationState ok_state{chainman->ProcessBlockHeader(header)};
     BOOST_CHECK(ok_state.GetValidationMode() == ValidationMode::VALID);
     BOOST_CHECK(ok_state.GetBlockValidationResult() == BlockValidationResult::UNSET);
+}
+
+BOOST_AUTO_TEST_CASE(btck_synchronous_callbacks_and_null_destroy)
+{
+    // KRN-1: destroying a null chainstate manager must be a safe no-op.
+    btck_chainstate_manager_destroy(nullptr);
+
+    // KRN-2: callbacks run on the caller's thread with BlockConnected strictly before BlockTip,
+    // and undo data is already readable inside BlockTip without re-entrancy.
+    const auto caller_id{std::this_thread::get_id()};
+    std::vector<std::string> events;
+    ChainMan* chainman_ptr{nullptr};
+
+    class OrderedNotifications : public TestKernelNotifications
+    {
+    public:
+        std::thread::id m_caller;
+        std::vector<std::string>& m_events;
+        ChainMan*& m_chainman;
+        OrderedNotifications(std::thread::id caller, std::vector<std::string>& events, ChainMan*& chainman)
+            : m_caller{caller}, m_events{events}, m_chainman{chainman} {}
+        void BlockTipHandler(SynchronizationState, BlockTreeEntry entry, double) override
+        {
+            BOOST_CHECK(std::this_thread::get_id() == m_caller);
+            m_events.push_back("tip:" + std::to_string(entry.GetHeight()));
+            if (m_chainman && entry.GetHeight() > 0) {
+                BOOST_CHECK_NO_THROW(m_chainman->ReadBlockSpentOutputs(entry));
+            }
+        }
+    };
+
+    class OrderedValidationInterface : public TestValidationInterface
+    {
+    public:
+        std::thread::id m_caller;
+        std::vector<std::string>& m_events;
+        OrderedValidationInterface(std::thread::id caller, std::vector<std::string>& events)
+            : m_caller{caller}, m_events{events} {}
+        void BlockConnected(Block, BlockTreeEntry entry) override
+        {
+            BOOST_CHECK(std::this_thread::get_id() == m_caller);
+            m_events.push_back("connected:" + std::to_string(entry.GetHeight()));
+        }
+    };
+
+    auto test_directory{TestDirectory{"sync_callbacks_test_bitcoin_kernel"}};
+    auto notifications{std::make_shared<OrderedNotifications>(caller_id, events, chainman_ptr)};
+    auto vi{std::make_shared<OrderedValidationInterface>(caller_id, events)};
+    ContextOptions context_options{};
+    ChainParams chain_params{ChainType::REGTEST};
+    context_options.SetChainParams(chain_params);
+    context_options.SetNotifications(notifications);
+    context_options.SetValidationInterface(vi);
+    Context context{context_options};
+    auto chainman{create_chainman(
+        test_directory, /*reindex=*/false, /*wipe_chainstate=*/false,
+        /*block_tree_db_in_memory=*/false, /*chainstate_db_in_memory=*/false, context)};
+    chainman_ptr = chainman.get();
+
+    events.clear();
+    Block block1{hex_string_to_byte_vec(REGTEST_BLOCK_DATA[0])};
+    bool new_block{false};
+    BOOST_REQUIRE(chainman->ProcessBlock(block1, &new_block));
+    BOOST_CHECK(new_block);
+    // BlockConnected must fire strictly before BlockTip, both on caller thread.
+    BOOST_REQUIRE_EQUAL(events.size(), 2U);
+    BOOST_CHECK_EQUAL(events[0], "connected:1");
+    BOOST_CHECK_EQUAL(events[1], "tip:1");
 }

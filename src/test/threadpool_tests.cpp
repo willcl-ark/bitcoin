@@ -518,4 +518,31 @@ BOOST_AUTO_TEST_CASE(front_submission_runs_before_waiting_tasks)
     threadPool.Stop();
 }
 
+BOOST_AUTO_TEST_CASE(concurrent_stop_waits_for_workers_and_blocks_start)
+{
+    ThreadPool threadPool(POOL_NAME);
+    threadPool.Start(NUM_WORKERS_DEFAULT);
+    std::counting_semaphore<> blocker(0);
+    const auto blocking_tasks = BlockWorkers(threadPool, blocker, NUM_WORKERS_DEFAULT);
+
+    std::thread stopper1{[&] { threadPool.Stop(); }};
+    while (threadPool.WorkersCount() != 0) std::this_thread::yield();
+
+    std::atomic<bool> stopper2_returned{false};
+    std::thread stopper2{[&] {
+        threadPool.Stop();
+        stopper2_returned.store(true, std::memory_order_release);
+    }};
+    UninterruptibleSleep(20ms);
+    // Second Stop() must wait until stopper1 finishes joining workers and must not reset m_interrupt early.
+    BOOST_CHECK(!stopper2_returned.load(std::memory_order_acquire));
+    BOOST_CHECK_EXCEPTION(threadPool.Start(NUM_WORKERS_DEFAULT), std::runtime_error, HasReason{"Thread pool has been interrupted or is stopping"});
+
+    blocker.release(NUM_WORKERS_DEFAULT);
+    WAIT_FOR(blocking_tasks);
+    stopper1.join();
+    stopper2.join();
+    BOOST_CHECK(stopper2_returned.load(std::memory_order_acquire));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

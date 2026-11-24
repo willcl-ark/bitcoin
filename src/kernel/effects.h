@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <optional>
 #include <thread>
 #include <utility>
 
@@ -52,7 +53,9 @@ public:
     using Completion = std::function<void(bool ok)>;
 
     //! `backlog` is the account the weight of the queued effects is kept in (util/byte_ledger.h).
-    explicit EffectsExecutor(util::ByteAccount& backlog, std::function<void()> on_completion = {});
+    //! When `inline_mode` is true, no worker thread is started; queued effects run synchronously on the
+    //! calling thread in WaitForIO() / WaitForBacklogBelow() / Stop(), keeping all callbacks on the caller.
+    explicit EffectsExecutor(util::ByteAccount& backlog, std::function<void()> on_completion = {}, bool inline_mode = false);
     ~EffectsExecutor() EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
 
     EffectsExecutor(const EffectsExecutor&) = delete;
@@ -95,6 +98,8 @@ private:
     };
 
     void Loop() EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
+    //! Execute one queued effect inline (when m_inline is true). Returns false if the queue was empty.
+    bool RunOneInline() EXCLUSIVE_LOCKS_REQUIRED(!m_mutex);
 
     mutable Mutex m_mutex;
     std::condition_variable m_cv_work;
@@ -104,9 +109,11 @@ private:
     //! The weight of the effects whose I/O has not run: changed under m_mutex, read by anyone.
     util::ByteAccount& m_backlog;
     bool m_io_running GUARDED_BY(m_mutex){false};
+    std::optional<std::thread::id> m_applying_thread GUARDED_BY(m_mutex);
     util::Lifecycle m_life GUARDED_BY(m_mutex);
     std::thread m_thread;
     const std::function<void()> m_on_completion;
+    const bool m_inline;
 };
 
 } // namespace kernel
