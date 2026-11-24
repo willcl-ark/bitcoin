@@ -390,6 +390,7 @@ public:
         int settled_height{-1};
         uint256 settled_head;
         bool final{false};
+        bool for_prune{false};
         size_t bytes{0};
     };
 
@@ -455,7 +456,7 @@ public:
     int BoundForBytes(size_t bytes, int tip_height) const;
     size_t EvictClean(size_t target_bytes);
 
-    std::unique_ptr<WriteOutRun> BeginWriteOut(int bound_height, int head_height, const uint256& new_head, bool final);
+    std::unique_ptr<WriteOutRun> BeginWriteOut(int bound_height, int head_height, const uint256& new_head, bool final, bool for_prune = false);
     void StreamWriteOut(WriteOutRun& run, const std::function<uint256(int)>& block_at, uint64_t batch_bytes = DEFAULT_DB_CACHE_BATCH);
     void KeepWritten(std::vector<CoinWrite> restored);
     std::vector<CoinWrite> TakeRestored() { return std::exchange(m_restored, {}); }

@@ -89,9 +89,14 @@ public:
      *
      * @param[in] pos The first unwritten position in the file to be flushed.
      * @param[in] finalize True if no more data will be written to this file.
+     * @param[in] commit_dir True to also fsync the parent directory; pass false when batching
+     *                       and call CommitDir() once after flushing all files.
      * @return true on success, false on failure.
      */
-    bool Flush(const FlatFilePos& pos, bool finalize = false) const;
+    bool Flush(const FlatFilePos& pos, bool finalize = false, bool commit_dir = true) const;
+
+    /** Commit the sequence's directory entry metadata to disk once after a batch of file flushes. */
+    void CommitDir() const;
 
     /**
      * Truncate off a file's pre-allocated bytes, without committing it to disk.

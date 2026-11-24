@@ -11,6 +11,10 @@
 #include <util/overflow.h>
 
 #include <stdexcept>
+#ifndef WIN32
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 FlatFileSeq::FlatFileSeq(fs::path dir, const char* prefix, uint64_t chunk_size)
   : m_dir(std::move(dir)),
@@ -39,9 +43,23 @@ FILE* FlatFileSeq::Open(const FlatFilePos& pos, bool read_only) const
     }
     fs::path path = FileName(pos);
     fs::create_directories(path.parent_path());
-    FILE* file = fsbridge::fopen(path, read_only ? "rb": "rb+");
+    FILE* file{nullptr};
+#ifndef WIN32
+    if (!read_only) {
+        // Atomically open or create without truncating so concurrent writers never race through "wb+".
+        const int fd{::open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0666)};
+        if (fd >= 0) {
+            file = ::fdopen(fd, "rb+");
+            if (!file) ::close(fd);
+        }
+    } else {
+        file = fsbridge::fopen(path, "rb");
+    }
+#else
+    file = fsbridge::fopen(path, read_only ? "rb" : "rb+");
     if (!file && !read_only)
         file = fsbridge::fopen(path, "wb+");
+#endif
     if (!file) {
         LogError("Unable to open file %s", fs::PathToString(path));
         return nullptr;
@@ -112,7 +130,7 @@ uint64_t FlatFileSeq::AllocateChunks(int file, uint64_t from, uint64_t to, bool&
     return inc_size;
 }
 
-bool FlatFileSeq::Flush(const FlatFilePos& pos, bool finalize) const
+bool FlatFileSeq::Flush(const FlatFilePos& pos, bool finalize, bool commit_dir) const
 {
     FILE* file = Open(FlatFilePos(pos.nFile, 0)); // Avoid fseek to nPos
     if (!file) {
@@ -133,13 +151,18 @@ bool FlatFileSeq::Flush(const FlatFilePos& pos, bool finalize) const
         }
         return false;
     }
-    DirectoryCommit(m_dir);
+    if (commit_dir) DirectoryCommit(m_dir);
 
     if (fclose(file) != 0) {
         LogError("Failed to close file %d after flush", pos.nFile);
         return false;
     }
     return true;
+}
+
+void FlatFileSeq::CommitDir() const
+{
+    DirectoryCommit(m_dir);
 }
 
 bool FlatFileSeq::Truncate(const FlatFilePos& pos) const

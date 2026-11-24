@@ -64,7 +64,7 @@ public:
     //! a caller that writes neighbouring coins together are disjoint ranges only without them. Several threads
     //! (the store's flush workers, up to four) may call it at once with the same pair of heads and neither
     //! final, and the database takes the batches one after the other.
-    void WriteRun(const std::vector<CoinWrite>& writes, const uint256& new_head, const uint256& old_head, bool final) override EXCLUSIVE_LOCKS_REQUIRED(!m_marker_mutex);
+    void WriteRun(const std::vector<CoinWrite>& writes, const uint256& new_head, const uint256& old_head, bool final, bool sync = false) override EXCLUSIVE_LOCKS_REQUIRED(!m_marker_mutex);
     //! Write coins in one batch and touch nothing else: no marker, no best block. Only for values that are
     //! right whichever head the marker on disk names (CoinsStore::KeepWritten()).
     void WriteCoins(const std::vector<CoinWrite>& writes);

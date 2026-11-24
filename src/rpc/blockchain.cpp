@@ -263,9 +263,9 @@ UniValue blockToJSON(BlockManager& blockman, const CBlock& block, const CBlockIn
         case TxVerbosity::SHOW_DETAILS:
         case TxVerbosity::SHOW_DETAILS_AND_PREVOUT:
             CBlockUndo blockUndo;
-            blockman.SettleUndoWriteOf(blockindex); // a just-connected block's undo may be in flight
-            const bool is_not_pruned{WITH_LOCK(::cs_main, return !blockman.IsBlockPruned(blockindex))};
-            bool have_undo{is_not_pruned && WITH_LOCK(::cs_main, return blockindex.nStatus & BLOCK_HAVE_UNDO)};
+            const bool have_undo{blockman.WithSettledUndo(blockindex, [&]() EXCLUSIVE_LOCKS_REQUIRED(::cs_main) {
+                return !blockman.IsBlockPruned(blockindex) && (blockindex.nStatus & BLOCK_HAVE_UNDO);
+            })};
             if (have_undo && !blockman.ReadBlockUndo(blockUndo, blockindex)) {
                 throw JSONRPCError(RPC_INTERNAL_ERROR, "Undo data expected but can't be read. This could be due to disk corruption or a conflict with a pruning event.");
             }
@@ -757,11 +757,9 @@ static CBlockUndo GetUndoChecked(BlockManager& blockman, const CBlockIndex& bloc
     // The Genesis block does not have undo data
     if (blockindex.nHeight == 0) return blockUndo;
 
-    blockman.SettleUndoWriteOf(blockindex); // a just-connected block's undo may be in flight
-    {
-        LOCK(cs_main);
+    blockman.WithSettledUndo(blockindex, [&]() EXCLUSIVE_LOCKS_REQUIRED(::cs_main) {
         CheckBlockDataAvailability(blockman, blockindex, /*check_for_undo=*/true);
-    }
+    });
 
     if (!blockman.ReadBlockUndo(blockUndo, blockindex)) {
         throw JSONRPCError(RPC_MISC_ERROR, "Can't read undo data from disk");
@@ -3197,6 +3195,9 @@ static RPCMethod dumptxoutset()
         if (node.chainman->m_blockman.IsPruneMode()) {
             LOCK(node.chainman->GetMutex());
             const CBlockIndex* current_tip{node.chainman->ActiveChain().Tip()};
+            if (!current_tip || !node.chainman->m_blockman.HasStatus(*current_tip, /*status_mask=*/BLOCK_HAVE_MASK)) {
+                throw JSONRPCError(RPC_MISC_ERROR, "Current tip is missing block or undo data.");
+            }
             const CBlockIndex& first_block{node.chainman->m_blockman.GetFirstBlock(*current_tip, /*status_mask=*/BLOCK_HAVE_MASK)};
             if (first_block.nHeight > target_index->nHeight) {
                 throw JSONRPCError(RPC_MISC_ERROR, "Could not roll back to requested height since necessary block data is already pruned.");

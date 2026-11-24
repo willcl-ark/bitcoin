@@ -2075,8 +2075,11 @@ bool Chainstate::StartWriteOutRun(BlockValidationState& state, int bound_height,
         bool for_prune;
     };
     const FlushTrace trace{NodeClock::now(), store.GetCacheSize(), store.DynamicMemoryUsage(), mode, for_prune};
-    std::shared_ptr<CoinsStore::WriteOutRun> run{store.BeginWriteOut(bound_height, head->nHeight, head->GetBlockHash(), final)};
+    std::shared_ptr<CoinsStore::WriteOutRun> run{store.BeginWriteOut(bound_height, head->nHeight, head->GetBlockHash(), final, for_prune)};
     if (!run) return true;
+    // IO-5: if CoinsStore is ahead of m_chain.Tip() (e.g. IF_NEEDED flush before SetTip/BlockConnected),
+    // report m_chain.Tip() in ChainStateFlushed so indexes never see a locator ahead of BlockConnected.
+    const CBlockIndex* const flushed_locator_tip{m_chain.Contains(*head) ? head : m_chain.Tip()};
     LogDebug(BCLog::COINDB, "Starting a coins write-out run: changes at or below height %d, head %d%s",
              bound_height, head->nHeight, run->final ? ", final" : "");
 
@@ -2114,7 +2117,7 @@ bool Chainstate::StartWriteOutRun(BlockValidationState& state, int bound_height,
             if (failure) LogError("%s", failure->what);
             return written || fail();
         },
-        [this, run, evict_to, trace](bool ok) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) {
+        [this, run, evict_to, trace, flushed_locator_tip](bool ok) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) {
             AssertLockHeld(::cs_main);
             if (!m_coins_views || !m_coins_views->m_store) return;
             CoinsStore& store{CoinsStoreTip()};
@@ -2137,8 +2140,8 @@ bool Chainstate::StartWriteOutRun(BlockValidationState& state, int bound_height,
             // What the run wrote is clean now: a run started for memory frees it here, not at the next crossing.
             if (evict_to) store.EvictClean(*evict_to);
             m_last_flushed_block = m_blockman.LookupBlockIndex(run->new_head);
-            if (m_chainman.m_options.signals) {
-                m_chainman.m_options.signals->ChainStateFlushed(this->GetRole(), GetLocator(m_last_flushed_block));
+            if (m_chainman.m_options.signals && flushed_locator_tip) {
+                m_chainman.m_options.signals->ChainStateFlushed(this->GetRole(), GetLocator(flushed_locator_tip));
             }
             if (!m_chainman.m_interrupt && ShouldCompactChainstate(m_chainman.IsInitialBlockDownload())) {
                 try {
@@ -3209,9 +3212,10 @@ CoinsCacheSizeState Chainstate::GetCoinsCacheSizeState(
 
 bool Chainstate::FlushStateToDisk(
     BlockValidationState &state,
-    FlushStateMode mode,
-    int nManualPruneHeight)
+    FlushOptions opts)
 {
+    const FlushStateMode mode{opts.mode};
+    const int nManualPruneHeight{opts.manual_prune_height};
     LOCK(cs_main);
     assert(this->CanFlushToDisk());
     // Precondition O8: the coins' best block is the tip, its parent or the one block on top of it.
@@ -3234,7 +3238,7 @@ bool Chainstate::FlushStateToDisk(
         // waited for by the connector once it has released cs_main, and what pruning needs is decided once it
         // has landed. m_check_for_pruning stays set meanwhile.
         if (m_blockman.IsPruneMode() && (m_blockman.m_check_for_pruning || nManualPruneHeight > 0) && m_chainman.m_blockman.m_blockfiles_indexed &&
-            (nManualPruneHeight > 0 || (!m_prune_at_periodic_write && !CoinsStoreTip().RunInFlight()))) {
+            (nManualPruneHeight > 0 || (opts.allow_auto_prune && !CoinsStoreTip().RunInFlight()))) {
             // Pruning takes files for a request, or with the block files at the prune target; below it no file
             // is chosen (FindFilesToPrune()). The check is made at every allocation of block or undo space.
             const bool prunes{nManualPruneHeight > 0 || m_blockman.AtPruneTarget(*this, m_chainman)};
@@ -3288,7 +3292,7 @@ bool Chainstate::FlushStateToDisk(
                         return FatalError(m_chainman.GetNotifications(), state, _("Disk space is too low!"));
                     }
                     if (!StartWriteOutRun(state, can_prune, /*final=*/false, /*evict_to=*/std::nullopt, mode, /*for_prune=*/true)) return false;
-                    prune_deferred = m_defer_write_out_wait && nManualPruneHeight == 0;
+                    prune_deferred = opts.defer_write_out_wait && nManualPruneHeight == 0;
                     if (!prune_deferred) SettleWriteOut();
                 }
                 last_prune = std::min(last_prune, written_fork_height());
@@ -3461,7 +3465,7 @@ bool Chainstate::FlushStateToDisk(
                         // connector waits as soon as it has released cs_main, before it publishes or stages
                         // another block, so that the database write is not made under the lock. A run that
                         // pruning rests on is always waited for here: the files are unlinked below.
-                        if (!m_defer_write_out_wait || fFlushForPrune) {
+                        if (!opts.defer_write_out_wait || fFlushForPrune) {
                             SettleWriteOut();
                             // The run wrote the block index before the coins, unless it failed.
                             prune_recorded = m_write_out_runs_failed == failed_runs;
@@ -3516,7 +3520,10 @@ bool Chainstate::FlushStateToDisk(
     }
     if (full_flush_completed) {
         if (m_chainman.m_options.signals) {
-            m_chainman.m_options.signals->ChainStateFlushed(this->GetRole(), GetLocator(m_last_flushed_block));
+            const CBlockIndex* const locator_tip{(m_last_flushed_block && m_chain.Contains(*m_last_flushed_block)) ? m_last_flushed_block : m_chain.Tip()};
+            if (locator_tip) {
+                m_chainman.m_options.signals->ChainStateFlushed(this->GetRole(), GetLocator(locator_tip));
+            }
         }
 
         if (!m_chainman.m_interrupt && !CoinsDB().IsMemoryOnly() && ShouldCompactChainstate(m_chainman.IsInitialBlockDownload())) {
@@ -5323,11 +5330,9 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                                     }
 
                                     // For single-block commits (including CRITICAL cache and test_write_out_every_block),
-                                    // run IF_NEEDED flush before SetTip (precondition O8).
+                                    // run IF_NEEDED flush before SetTip (precondition O8), leaving auto-prune to PERIODIC.
                                     if (accepted == 1) {
-                                        m_prune_at_periodic_write = true;
-                                        const std::unique_ptr<bool, decltype([](bool* flag) { *flag = false; })> clear_flag{&m_prune_at_periodic_write};
-                                        if (!FlushStateToDisk(state, FlushStateMode::IF_NEEDED)) {
+                                        if (!FlushStateToDisk(state, FlushOptions{.mode = FlushStateMode::IF_NEEDED, .allow_auto_prune = false})) {
                                             DrainWindow(*step);
                                             MaybeUpdateMempoolForReorg(step->disconnectpool, false);
                                             return false;
@@ -5391,10 +5396,8 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                                     }
                                     PruneBlockIndexCandidates();
 
-                                    m_defer_write_out_wait = true;
                                     failed_runs = m_write_out_runs_failed;
-                                    const bool flushed{FlushStateToDisk(state, FlushStateMode::PERIODIC)};
-                                    m_defer_write_out_wait = false;
+                                    const bool flushed{FlushStateToDisk(state, FlushOptions{.mode = FlushStateMode::PERIODIC, .defer_write_out_wait = true})};
                                     if (!flushed) {
                                         SettleWriteOut();
                                         DrainWindow(*step);
@@ -6463,12 +6466,13 @@ bool ChainstateManager::PrepareAcceptBlockStorage(const std::shared_ptr<const CB
         return false;
     }
 
+    // Check FailedMeanwhile() before BLOCK_HAVE_DATA/m_blocks_being_stored (IO-9) so a block whose ancestor
+    // was invalidated meanwhile is rejected instead of silently returning true.
+    if (FailedMeanwhile(*pindex, state)) return false;
     // Another thread may have stored the block while the checks ran without the lock.
     if ((pindex->nStatus & BLOCK_HAVE_DATA) || m_blocks_being_stored.contains(pindex)) return true;
-    if (FailedMeanwhile(*pindex, state)) return false;
 
     // Claim the block's place in the history file; the write itself may happen without the lock.
-    if (fNewBlock) *fNewBlock = true;
     prepared.store = true;
     try {
         if (dbp) {
@@ -6476,14 +6480,23 @@ bool ChainstateManager::PrepareAcceptBlockStorage(const std::shared_ptr<const CB
             m_blockman.UpdateBlockInfo(block, pindex->nHeight, prepared.pos);
         } else {
             prepared.pos = m_blockman.AllocateBlockPos(block, pindex->nHeight);
-            prepared.write = true;
             m_blocks_being_stored.insert(pindex);
-            m_blockman.PinBlockFile(prepared.pos.nFile);
+            try {
+                m_blockman.PinBlockFile(prepared.pos.nFile);
+            } catch (...) {
+                m_blocks_being_stored.erase(pindex);
+                throw;
+            }
+            prepared.write = true;
         }
     } catch (const std::runtime_error& e) {
         prepared.store = false;
         return FatalError(GetNotifications(), state, strprintf(_("System error while saving block to disk: %s"), e.what()));
+    } catch (...) {
+        prepared.store = false;
+        throw;
     }
+    if (fNewBlock) *fNewBlock = true;
 
     // Header is valid/has work, merkle tree and segwit merkle tree are good...RELAY NOW
     // (but if it does not build on our best tip, let the SendMessages loop relay it),
@@ -6494,7 +6507,7 @@ bool ChainstateManager::PrepareAcceptBlockStorage(const std::shared_ptr<const CB
     return true;
 }
 
-bool ChainstateManager::FinishAcceptBlock(const CBlock& block, BlockValidationState& state, PreparedBlock& prepared, bool written)
+bool ChainstateManager::FinishAcceptBlock(const CBlock& block, BlockValidationState& state, PreparedBlock& prepared, bool written, bool allow_auto_prune)
 {
     AssertLockHeld(cs_main);
     Assert(prepared.store);
@@ -6533,8 +6546,10 @@ bool ChainstateManager::FinishAcceptBlock(const CBlock& block, BlockValidationSt
     // The fatal error notification inside FlushStateToDisk still fires,
     // so the node will shut down on unrecoverable flush errors regardless.
     // For state a dummy value is used, and the return value is ignored.
-    BlockValidationState flush_state_ignore;
-    (void)ActiveChainstate().FlushStateToDisk(flush_state_ignore, FlushStateMode::NONE);
+    if (allow_auto_prune) {
+        BlockValidationState flush_state_ignore;
+        (void)ActiveChainstate().FlushStateToDisk(flush_state_ignore, FlushOptions{.mode = FlushStateMode::NONE, .allow_auto_prune = true});
+    }
 
     CheckBlockIndex();
 
@@ -6558,10 +6573,18 @@ bool ChainstateManager::AcceptBlock(const std::shared_ptr<const CBlock>& pblock,
         } catch (const std::runtime_error& e) {
             m_blocks_being_stored.erase(prepared.pindex);
             m_blockman.UnpinBlockFile(prepared.pos.nFile);
+            if (fNewBlock) *fNewBlock = false;
             return FatalError(GetNotifications(), state, strprintf(_("System error while saving block to disk: %s"), e.what()));
+        } catch (...) {
+            m_blocks_being_stored.erase(prepared.pindex);
+            m_blockman.UnpinBlockFile(prepared.pos.nFile);
+            if (fNewBlock) *fNewBlock = false;
+            throw;
         }
     }
-    return FinishAcceptBlock(*pblock, state, prepared, written);
+    const bool finished{FinishAcceptBlock(*pblock, state, prepared, written)};
+    if (!finished && fNewBlock) *fNewBlock = false;
+    return finished;
 }
 
 bool ChainstateManager::ProcessNewBlock(const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked, bool* new_block, bool activate_async)
@@ -6629,7 +6652,7 @@ void ChainstateManager::WriteNewBlock(NewBlockInProcess& in)
     if (!in.prepared.store || !in.prepared.write) return;
     try {
         in.written = m_blockman.WriteBlockAt(*in.block, in.prepared.pos);
-    } catch (const std::runtime_error& e) {
+    } catch (const std::exception& e) {
         in.written = false;
         in.write_error = e.what();
     }
@@ -6649,10 +6672,13 @@ bool ChainstateManager::FinishNewBlock(NewBlockInProcess& in)
         if (in.write_error) {
             m_blocks_being_stored.erase(in.prepared.pindex);
             m_blockman.UnpinBlockFile(in.prepared.pos.nFile);
+            in.new_block = false;
             FatalError(GetNotifications(), in.state, strprintf(_("System error while saving block to disk: %s"), *in.write_error));
             return NewBlockFailed(in);
         }
-        if (!FinishAcceptBlock(*in.block, in.state, in.prepared, in.written)) {
+        // IO-4: async receive tasks defer automatic pruning to the connector's PERIODIC flush so they
+        // never block synchronously in SettleWriteOut() while holding cs_main.
+        if (!FinishAcceptBlock(*in.block, in.state, in.prepared, in.written, /*allow_auto_prune=*/!in.activate_async)) {
             // Not stored after all (the entry failed while the block was written): not a new block.
             in.new_block = false;
             return NewBlockFailed(in);

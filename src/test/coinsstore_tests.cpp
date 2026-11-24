@@ -125,13 +125,13 @@ public:
     using CCoinsViewBacked::CCoinsViewBacked;
     std::vector<CoinWrite> m_writes;
     std::function<void()> m_in_flight;
-    void WriteRun(const std::vector<CoinWrite>& writes, const uint256& new_head, const uint256& old_head, bool final) override
+    void WriteRun(const std::vector<CoinWrite>& writes, const uint256& new_head, const uint256& old_head, bool final, bool sync = false) override
     {
         if (m_in_flight) std::exchange(m_in_flight, nullptr)();
         // A run ends with a write of no changes, which closes or moves its marker.
         if (std::exchange(m_closed, writes.empty())) m_writes.clear();
         m_writes.insert(m_writes.end(), writes.begin(), writes.end());
-        CCoinsViewBacked::WriteRun(writes, new_head, old_head, final);
+        CCoinsViewBacked::WriteRun(writes, new_head, old_head, final, sync);
     }
 
 private:
@@ -559,10 +559,10 @@ class FailingBase final : public CCoinsViewBacked
 public:
     using CCoinsViewBacked::CCoinsViewBacked;
     bool m_fail{false};
-    void WriteRun(const std::vector<CoinWrite>& writes, const uint256& new_head, const uint256& old_head, bool final) override
+    void WriteRun(const std::vector<CoinWrite>& writes, const uint256& new_head, const uint256& old_head, bool final, bool sync = false) override
     {
         if (m_fail) throw std::runtime_error{"the write failed"};
-        CCoinsViewBacked::WriteRun(writes, new_head, old_head, final);
+        CCoinsViewBacked::WriteRun(writes, new_head, old_head, final, sync);
     }
 };
 
@@ -598,7 +598,7 @@ public:
     size_t m_runs GUARDED_BY(m_mutex){0};
     size_t m_changes GUARDED_BY(m_mutex){0};
     uint64_t m_bytes GUARDED_BY(m_mutex){0};
-    void WriteRun(const std::vector<CoinWrite>& writes, const uint256& new_head, const uint256& old_head, bool final) override EXCLUSIVE_LOCKS_REQUIRED(!m_mutex)
+    void WriteRun(const std::vector<CoinWrite>& writes, const uint256& new_head, const uint256& old_head, bool final, bool sync = false) override EXCLUSIVE_LOCKS_REQUIRED(!m_mutex)
     {
         {
             LOCK(m_mutex);
@@ -606,7 +606,7 @@ public:
             m_changes += writes.size();
             for (const CoinWrite& write : writes) m_bytes += write.coin ? 45 + write.coin->out.scriptPubKey.size() : 38;
         }
-        CCoinsViewBacked::WriteRun(writes, new_head, old_head, final);
+        CCoinsViewBacked::WriteRun(writes, new_head, old_head, final, sync);
     }
 };
 
@@ -669,7 +669,7 @@ public:
     std::vector<std::pair<uint256, uint256>> m_ranges GUARDED_BY(m_mutex);
     //! Runs whose changes were not in the descending order of the keys.
     size_t m_unordered GUARDED_BY(m_mutex){0};
-    void WriteRun(const std::vector<CoinWrite>& writes, const uint256& new_head, const uint256& old_head, bool final) override EXCLUSIVE_LOCKS_REQUIRED(!m_mutex)
+    void WriteRun(const std::vector<CoinWrite>& writes, const uint256& new_head, const uint256& old_head, bool final, bool sync = false) override EXCLUSIVE_LOCKS_REQUIRED(!m_mutex)
     {
         if (!writes.empty()) {
             const auto [lo, hi]{std::ranges::minmax_element(writes, {}, [](const CoinWrite& write) { return write.outpoint.hash.ToUint256(); })};
@@ -678,7 +678,7 @@ public:
             m_ranges.emplace_back(lo->outpoint.hash.ToUint256(), hi->outpoint.hash.ToUint256());
             if (!ordered) ++m_unordered;
         }
-        CCoinsViewBacked::WriteRun(writes, new_head, old_head, final);
+        CCoinsViewBacked::WriteRun(writes, new_head, old_head, final, sync);
     }
 };
 
@@ -886,10 +886,10 @@ public:
     using CCoinsViewBacked::CCoinsViewBacked;
     int m_calls{0};
     int m_fail_at{0};
-    void WriteRun(const std::vector<CoinWrite>& writes, const uint256& new_head, const uint256& old_head, bool final) override
+    void WriteRun(const std::vector<CoinWrite>& writes, const uint256& new_head, const uint256& old_head, bool final, bool sync = false) override
     {
         if (++m_calls == m_fail_at) throw std::runtime_error{"the write failed"};
-        CCoinsViewBacked::WriteRun(writes, new_head, old_head, final);
+        CCoinsViewBacked::WriteRun(writes, new_head, old_head, final, sync);
     }
 };
 

@@ -40,7 +40,7 @@ std::optional<Coin> CCoinsViewCache::PeekCoin(const COutPoint& outpoint) const
     return base->PeekCoin(outpoint);
 }
 
-void CCoinsView::WriteRun(const std::vector<CoinWrite>&, const uint256&, const uint256&, bool)
+void CCoinsView::WriteRun(const std::vector<CoinWrite>&, const uint256&, const uint256&, bool, bool)
 {
     throw std::logic_error("WriteRun is not supported by this view");
 }

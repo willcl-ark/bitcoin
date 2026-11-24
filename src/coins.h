@@ -397,7 +397,7 @@ public:
      * consistent with `new_head` and records it as the best block instead. Views that are not a database
      * do not support it.
      */
-    virtual void WriteRun(const std::vector<CoinWrite>& writes, const uint256& new_head, const uint256& old_head, bool final);
+    virtual void WriteRun(const std::vector<CoinWrite>& writes, const uint256& new_head, const uint256& old_head, bool final, bool sync = false);
 
     //! Estimate database size
     virtual size_t EstimateSize() const = 0;
@@ -424,7 +424,7 @@ public:
     {
         for (auto it{cursor.Begin()}; it != cursor.End(); it = cursor.NextAndMaybeErase(*it)) { }
     }
-    void WriteRun(const std::vector<CoinWrite>&, const uint256&, const uint256&, bool) override {}
+    void WriteRun(const std::vector<CoinWrite>&, const uint256&, const uint256&, bool, bool = false) override {}
     size_t EstimateSize() const override { return 0; }
 };
 
@@ -445,7 +445,7 @@ public:
     uint256 GetBestBlock() const override { return base->GetBestBlock(); }
     std::vector<uint256> GetHeadBlocks() const override { return base->GetHeadBlocks(); }
     void BatchWrite(CoinsViewCacheCursor& cursor, const uint256& block_hash) override { base->BatchWrite(cursor, block_hash); }
-    void WriteRun(const std::vector<CoinWrite>& writes, const uint256& new_head, const uint256& old_head, bool final) override { base->WriteRun(writes, new_head, old_head, final); }
+    void WriteRun(const std::vector<CoinWrite>& writes, const uint256& new_head, const uint256& old_head, bool final, bool sync = false) override { base->WriteRun(writes, new_head, old_head, final, sync); }
     size_t EstimateSize() const override { return base->EstimateSize(); }
 };
 

@@ -796,6 +796,16 @@ enum class FlushStateMode: uint8_t {
     FORCE_SYNC,
 };
 
+//! Explicit value-typed options for Chainstate::FlushStateToDisk(), replacing hidden modal booleans.
+struct FlushOptions {
+    FlushStateMode mode{FlushStateMode::IF_NEEDED};
+    int manual_prune_height{0};
+    //! Start any needed write-out run without waiting for it under cs_main (the caller settles off-lock).
+    bool defer_write_out_wait{false};
+    //! Whether automatic pruning checks may run during this call (false for receive tasks and pre-SetTip flushes).
+    bool allow_auto_prune{true};
+};
+
 /**
  * A convenience class for constructing the CCoinsView* hierarchy used
  * to facilitate access to the UTXO set.
@@ -1123,8 +1133,15 @@ public:
      */
     bool FlushStateToDisk(
         BlockValidationState& state,
+        FlushOptions opts);
+
+    bool FlushStateToDisk(
+        BlockValidationState& state,
         FlushStateMode mode,
-        int nManualPruneHeight = 0);
+        int nManualPruneHeight = 0)
+    {
+        return FlushStateToDisk(state, FlushOptions{.mode = mode, .manual_prune_height = nManualPruneHeight});
+    }
 
     //! Flush all changes to disk.
     void ForceFlushStateToDisk(bool wipe_cache = true);
@@ -1360,13 +1377,6 @@ protected:
 
     NodeClock::time_point m_next_write{NodeClock::time_point::max()};
     const CBlockIndex* m_last_flushed_block GUARDED_BY(::cs_main){nullptr};
-    //! Set by the connect window around its periodic write: a write-out run started there is waited for
-    //! by the connector once it has released cs_main, not inside FlushStateToDisk(). So is the run that
-    //! automatic pruning needs; the files are then chosen by the next flush.
-    bool m_defer_write_out_wait GUARDED_BY(::cs_main){false};
-    //! Set by the connect window around a block's publication: the write-out before the tip moves leaves
-    //! automatic pruning to the periodic write of the same hold.
-    bool m_prune_at_periodic_write GUARDED_BY(::cs_main){false};
     //! The write-out runs that failed (a fatal error is raised for each). What rests on a run having
     //! landed, the removal of pruned files, compares it across the wait.
     uint64_t m_write_out_runs_failed GUARDED_BY(::cs_main){0};
@@ -2017,7 +2027,7 @@ public:
     bool PrepareAcceptBlockHeader(const CBlock& block, BlockValidationState& state, CBlockIndex** ppindex, bool fRequested, bool* fNewBlock, bool min_pow_checked, PreparedBlock& prepared) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
     bool CheckAcceptBlock(const CBlock& block, BlockValidationState& state, PreparedBlock& prepared) const;
     bool PrepareAcceptBlockStorage(const std::shared_ptr<const CBlock>& pblock, BlockValidationState& state, bool checks_ok, bool invalidate_on_check_block_failure, const FlatFilePos* dbp, bool* fNewBlock, PreparedBlock& prepared) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
-    bool FinishAcceptBlock(const CBlock& block, BlockValidationState& state, PreparedBlock& prepared, bool written) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    bool FinishAcceptBlock(const CBlock& block, BlockValidationState& state, PreparedBlock& prepared, bool written, bool allow_auto_prune = true) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
     struct NewBlockInProcess {
         std::shared_ptr<const CBlock> block;
         bool activate_async{false};

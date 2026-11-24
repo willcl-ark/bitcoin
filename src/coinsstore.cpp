@@ -1711,7 +1711,7 @@ size_t CoinsStore::EvictClean(size_t target_bytes)
     return freed;
 }
 
-std::unique_ptr<CoinsStore::WriteOutRun> CoinsStore::BeginWriteOut(int bound_height, int head_height, const uint256& new_head, bool final)
+std::unique_ptr<CoinsStore::WriteOutRun> CoinsStore::BeginWriteOut(int bound_height, int head_height, const uint256& new_head, bool final, bool for_prune)
 {
     Assert(!m_run_in_flight);
     final = final || m_fell_below_written;
@@ -1754,6 +1754,7 @@ std::unique_ptr<CoinsStore::WriteOutRun> CoinsStore::BeginWriteOut(int bound_hei
     run->bound_height = final ? head_height : bound_height;
     run->head_height = head_height;
     run->final = final;
+    run->for_prune = for_prune;
     m_inflight_settled_height = run->bound_height;
     m_run_in_flight = true;
     m_write_out_epoch.fetch_add(1, std::memory_order_release);
@@ -1920,11 +1921,11 @@ void CoinsStore::StreamWriteOut(WriteOutRun& run, const std::function<uint256(in
     run.settled_height = std::min(run.head_height, run.oldest_left == std::numeric_limits<int>::max() ? run.head_height : run.oldest_left - 1);
     Assume(run.final || run.settled_height >= run.bound_height);
     if (run.final) {
-        base->WriteRun({}, run.new_head, run.old_head, /*final=*/true);
+        base->WriteRun({}, run.new_head, run.old_head, /*final=*/true, /*sync=*/true);
         return;
     }
     run.settled_head = block_at(run.settled_height);
-    base->WriteRun({}, run.new_head, run.settled_head, /*final=*/false);
+    base->WriteRun({}, run.new_head, run.settled_head, /*final=*/false, /*sync=*/run.for_prune);
 }
 
 void CoinsStore::CommitWriteOut(const WriteOutRun& run)

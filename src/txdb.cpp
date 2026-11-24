@@ -185,7 +185,7 @@ void CCoinsViewDB::BatchWrite(CoinsViewCacheCursor& cursor, const uint256& block
     LogDebug(BCLog::COINDB, "Committed %u changed transaction outputs (out of %u) to coin database...", (unsigned int)dirty_count, (unsigned int)count);
 }
 
-void CCoinsViewDB::WriteRun(const std::vector<CoinWrite>& writes, const uint256& new_head, const uint256& old_head, bool final)
+void CCoinsViewDB::WriteRun(const std::vector<CoinWrite>& writes, const uint256& new_head, const uint256& old_head, bool final, bool sync)
 {
     assert(!new_head.IsNull());
     CDBBatch batch(*m_db);
@@ -249,7 +249,9 @@ void CCoinsViewDB::WriteRun(const std::vector<CoinWrite>& writes, const uint256&
     // the batches split off above.
     const bool nearly_full{!final && batch.ApproximateSize() > m_options.batch_write_bytes / 2};
     LogDebug(BCLog::COINDB, "Writing %s run batch of %.2f MiB", final ? "final" : "last", batch.ApproximateSize() / double(1_MiB));
-    m_db->WriteBatch(batch);
+    // Sync the WAL on final runs and prune-enabling marker advances (IO-7) so UnlinkPrunedFiles()
+    // cannot outrun the DB_HEAD_BLOCKS update across a power loss.
+    m_db->WriteBatch(batch, /*fSync=*/final || sync);
     marker_landed();
     LogDebug(BCLog::COINDB, "Committed a run of %u changed transaction outputs (%u erased) to coin database, heads %s -> %s%s",
              (unsigned int)writes.size(), (unsigned int)erased, old_head.ToString(), new_head.ToString(), final ? ", final" : "");

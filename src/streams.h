@@ -703,7 +703,16 @@ class BufferedWriter
 public:
     explicit BufferedWriter(S& stream LIFETIMEBOUND, size_t size = 1 << 16) : m_dst{stream}, m_buf(size) {}
 
-    ~BufferedWriter() { flush(); }
+    ~BufferedWriter() noexcept
+    {
+        // Callers must call flush() explicitly to observe I/O errors; never throw out of a destructor.
+        if (m_buf_pos && std::uncaught_exceptions() == 0) {
+            try {
+                flush();
+            } catch (...) {
+            }
+        }
+    }
 
     void flush()
     {

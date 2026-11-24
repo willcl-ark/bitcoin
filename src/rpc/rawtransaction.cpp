@@ -372,8 +372,10 @@ static RPCMethod getrawtransaction()
     CBlockUndo blockUndo;
     CBlock block;
 
-    if (blockindex) chainman.m_blockman.SettleUndoWriteOf(*blockindex); // a just-connected block's undo may be in flight
-    if (tx->IsCoinBase() || !blockindex || WITH_LOCK(::cs_main, return !(blockindex->nStatus & BLOCK_HAVE_MASK))) {
+    const bool have_block_and_undo{blockindex && !tx->IsCoinBase() && chainman.m_blockman.WithSettledUndo(*blockindex, [&]() EXCLUSIVE_LOCKS_REQUIRED(::cs_main) {
+        return (blockindex->nStatus & BLOCK_HAVE_MASK) == BLOCK_HAVE_MASK;
+    })};
+    if (!have_block_and_undo) {
         TxToJSON(*tx, hash_block, result, chainman.ActiveChainstate());
         return result;
     }

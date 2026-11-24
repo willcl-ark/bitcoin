@@ -266,7 +266,7 @@ private:
     [[nodiscard]] bool Preallocate(Preallocation& prealloc, const FlatFileSeq& seq, const FlatFilePos& pos, uint64_t size);
 
     /** Return false if undo file flushing fails. */
-    [[nodiscard]] bool FlushUndoFile(int block_file, bool finalize = false) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    [[nodiscard]] bool FlushUndoFile(int block_file, bool finalize = false, bool commit_dir = true) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     /**
      * Helper function performing various preparations before a block can be saved to disk:
@@ -555,8 +555,8 @@ public:
      * after the claim has its undo file's sync queued behind the write when it is left (FindNextBlockPos()).
      */
     std::optional<FlatFilePos> UndoFileFinishedBy(const CBlockIndex& block, const FlatFilePos& pos) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
-    //! Trim and sync an undo file up to `undo_end`; a failure is reported and remembered (SyncFailed()),
-    //! not propagated.
+    //! Trim a finished undo file up to `undo_end` (truncate-only; syncing happens once via
+    //! SyncBatchFiles() / SyncWrittenFiles() before any block index batch records it).
     void FinishUndoFile(const FlatFilePos& undo_end);
     //! The undo write claimed for the block has run, written or failed: it no longer counts as pending.
     void UndoWriteSettled(const CBlockIndex& block) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) { m_undo_pending.erase(&block); }
@@ -613,6 +613,22 @@ public:
     //! any other block's undo is on disk already or not to be written, and its reader does not wait behind
     //! the executor's queue (a write-out run among it).
     void SettleUndoWriteOf(const CBlockIndex& block) LOCKS_EXCLUDED(::cs_main);
+    //! Wait until `block` has no pending undo write, then invoke `fn` while holding cs_main (re-settling if
+    //! an undo write was queued while cs_main was released). Prevents TOCTOU between settling and status checks.
+    template <typename Fn>
+    auto WithSettledUndo(const CBlockIndex& block, Fn&& fn) LOCKS_EXCLUDED(::cs_main)
+    {
+        AssertLockNotHeld(::cs_main);
+        while (true) {
+            {
+                LOCK(::cs_main);
+                if (!m_undo_pending.contains(&block)) {
+                    return std::forward<Fn>(fn)();
+                }
+            }
+            SettleUndoWrites();
+        }
+    }
     //! The limit of the ledger's undo backlog account: bytes of undo data queued but not yet written. The
     //! connect loop waits until the account is within it.
     static constexpr size_t MAX_UNDO_BACKLOG_BYTES{64 * 1024 * 1024};
