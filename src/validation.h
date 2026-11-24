@@ -2105,6 +2105,9 @@ public:
     //! block download, input prefetchers at the tip (sized by -prevoutfetchthreads). Shared by every
     //! chainstate's views.
     const util::NotNullSharedPtr<ThreadPool> m_connect_pool;
+    //! Dedicated Stage 2 commit helper pool (runs CommitWindowBatch and async WindowOverlay cleanup
+    //! without starving behind busy Stage 1 validation workers or polluting m_connect_pool's queue).
+    const std::unique_ptr<ThreadPool> m_commit_pool;
     /**
      * The free worker. The connector waits for the connect pool's workers with cs_main held
      * (Chainstate::DrainWindow()). The work it waits for, a block's validation, takes no cs_main, but it

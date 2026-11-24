@@ -21,6 +21,7 @@
 #include <array>
 #include <atomic>
 #include <bit>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -228,11 +229,18 @@ public:
     WindowOverlay() = default;
     WindowOverlay(const WindowOverlay&) = delete;
     WindowOverlay& operator=(const WindowOverlay&) = delete;
+    ~WindowOverlay();
 
     //! Index all transactions of `block` (marking intra-block spent outputs as invisible).
     void AddBlockOutputs(int height, std::shared_ptr<const CBlock> block);
+    //! Advance the committed-height watermark so readers ignore entries with height <= committed_height.
+    void SetCommittedHeight(int height) noexcept { m_committed_height.store(height, std::memory_order_release); }
     //! Remove transactions of committed (or drained) blocks and release their block references.
     void RemoveBlocks(std::span<const int> heights, ThreadPool* pool = nullptr);
+    //! Detach committed blocks immediately and run shard table removal asynchronously on `pool` (or inline if null/small).
+    void RemoveBlocksAsync(std::span<const int> heights, ThreadPool* pool);
+    //! Wait for any asynchronous RemoveBlocksAsync tasks to complete.
+    void WaitForRemovals();
     //! Clear all blocks and entries (used when draining a window step).
     void Clear();
 
@@ -255,6 +263,7 @@ private:
         bool has_high_intra_spend{false};
     };
     struct FlatTable {
+        static constexpr size_t NOT_FOUND{std::numeric_limits<size_t>::max()};
         static constexpr uint8_t EMPTY{0};
         static constexpr uint8_t TOMBSTONE{1};
         static uint8_t Tag(uint64_t h) noexcept { return static_cast<uint8_t>((h >> 56) | 2); }
@@ -273,9 +282,11 @@ private:
             tombstones = 0;
         }
         void Rehash(size_t new_cap);
+        size_t FindIndex(const Txid& txid, uint64_t h) const noexcept;
         TxEntry* Find(const Txid& txid, uint64_t h) noexcept;
         const TxEntry* Find(const Txid& txid, uint64_t h) const noexcept;
         TxEntry* TryInsert(const TxEntry& entry);
+        void EraseAt(size_t idx) noexcept;
         bool Erase(const Txid& txid, uint64_t h, int32_t height) noexcept;
     };
     struct alignas(64) Shard {
@@ -284,10 +295,39 @@ private:
         std::vector<TxEntry> dup_txs GUARDED_BY(mutex);
         std::vector<std::pair<COutPoint, int32_t>> high_intra_spends GUARDED_BY(mutex);
     };
+    struct RemItem {
+        const Txid* txid;
+        uint64_t hash;
+    };
+    struct BlockMeta {
+        std::shared_ptr<const CBlock> block;
+        std::vector<RemItem> items;
+        std::array<uint32_t, NUM_SHARDS + 1> starts{};
+    };
 
+    struct FastTxidHash {
+        uint64_t s0, s1, s2, s3, mul;
+        FastTxidHash()
+        {
+            SaltedCoinsCacheHasher h;
+            s0 = h(Txid::FromUint256(uint256{1}));
+            s1 = h(Txid::FromUint256(uint256{2}));
+            s2 = h(Txid::FromUint256(uint256{3}));
+            s3 = h(Txid::FromUint256(uint256{4}));
+            mul = h(Txid::FromUint256(uint256{5})) | 1ULL;
+        }
+        uint64_t operator()(const Txid& txid) const noexcept
+        {
+            const unsigned char* d{txid.ToUint256().data()};
+            uint64_t x{(ReadLE64(d) ^ s0) + (ReadLE64(d + 8) ^ s1)};
+            x ^= (ReadLE64(d + 16) ^ s2) + (ReadLE64(d + 24) ^ s3);
+            x *= mul;
+            return x ^ (x >> 32);
+        }
+    };
     static uint64_t TxHash(const Txid& txid) noexcept
     {
-        static const SaltedCoinsCacheHasher hasher;
+        static const FastTxidHash hasher;
         return hasher(txid);
     }
     static size_t ShardIndex(const Txid& txid) noexcept
@@ -295,11 +335,16 @@ private:
         return (uint64_t{ReadBE32(txid.ToUint256().data())} * NUM_SHARDS) >> 32;
     }
     static std::optional<Coin> ExtractCoin(const Shard& shard, const TxEntry& entry, uint32_t n) EXCLUSIVE_LOCKS_REQUIRED(shard.mutex);
+    void EraseDetached(std::vector<std::pair<int, BlockMeta>>& removing, ThreadPool* pool);
 
     std::array<Shard, NUM_SHARDS> m_shards;
     std::atomic<size_t> m_total_blocks{0};
+    std::atomic<int> m_committed_height{-1};
     Mutex m_blocks_mutex;
-    std::unordered_map<int, std::shared_ptr<const CBlock>> m_blocks GUARDED_BY(m_blocks_mutex);
+    std::unordered_map<int, BlockMeta> m_blocks GUARDED_BY(m_blocks_mutex);
+    Mutex m_remove_mutex;
+    std::condition_variable m_remove_cv;
+    int m_pending_removes GUARDED_BY(m_remove_mutex){0};
 };
 
 class CoinsStore : public CCoinsViewCache
@@ -307,7 +352,7 @@ class CoinsStore : public CCoinsViewCache
 public:
     static constexpr uint32_t NO_HINT{std::numeric_limits<uint32_t>::max()};
 
-    //! One confirmed change to apply in CommitBatch()/ApplyCheckedBlocks().
+    //! One confirmed change to apply in CommitBatch()/ApplyCheckedBlocks()/CommitWindowBatch().
     struct CommitOp {
         COutPoint outpoint;
         Coin coin;
@@ -351,7 +396,7 @@ public:
         size_t bytes{0};
     };
 
-    static constexpr size_t DEFAULT_SHARDS{512};
+    static constexpr size_t DEFAULT_SHARDS{256};
     static constexpr size_t COMMIT_OPS_PER_HELPER{256};
 
     explicit CoinsStore(CCoinsView* base_view, size_t shards = DEFAULT_SHARDS, bool deterministic = false);
@@ -405,8 +450,11 @@ public:
     static uint64_t KeyHashOf(const COutPoint& outpoint) noexcept { return KeyHash(outpoint); }
 
     std::vector<std::pair<COutPoint, Coin>> FetchConfirmed(std::vector<COutPoint>&& outpoints) const;
+    void FetchConfirmedInto(std::span<const COutPoint> outpoints, std::vector<std::pair<COutPoint, Coin>>& found) const;
     BatchCheckResult CheckBatchConflicts(std::span<BlockChanges*> blocks, ThreadPool* pool = nullptr) const;
     void ApplyCheckedBlocks(std::span<BlockChanges*> blocks, const uint256& best_hash, int best_height, ThreadPool* pool = nullptr, bool publish_height = true);
+    //! Fused single-pass conflict check + ordered commit across shards with exact per-block prefix rollback on conflict.
+    BatchCheckResult CommitWindowBatch(std::span<BlockChanges*> blocks, std::span<const uint256> block_hashes, ThreadPool* pool = nullptr, bool publish_height = false);
     void CommitBatch(std::span<CommitOp> ops, const uint256& best_hash, int best_height, ThreadPool* pool = nullptr, bool publish_height = true);
 
     int BoundForBytes(size_t bytes, int tip_height) const;
@@ -447,11 +495,29 @@ private:
 
     static uint64_t KeyHash(const COutPoint& outpoint) noexcept
     {
-        static const SaltedCoinsCacheHasher hasher;
-        uint64_t h{hasher(outpoint.hash)};
-        h ^= uint64_t{outpoint.n} * 0x9e3779b97f4a7c15ULL;
-        h = (h ^ (h >> 30)) * 0xbf58476d1ce4e5b9ULL;
-        return h ^ (h >> 31);
+        struct FastOutpointHash {
+            uint64_t s0, s1, s2, s3, mul;
+            FastOutpointHash()
+            {
+                SaltedCoinsCacheHasher h;
+                s0 = h(Txid::FromUint256(uint256{11}));
+                s1 = h(Txid::FromUint256(uint256{12}));
+                s2 = h(Txid::FromUint256(uint256{13}));
+                s3 = h(Txid::FromUint256(uint256{14}));
+                mul = h(Txid::FromUint256(uint256{15})) | 1ULL;
+            }
+            uint64_t operator()(const COutPoint& op) const noexcept
+            {
+                const unsigned char* d{op.hash.ToUint256().data()};
+                uint64_t h{(ReadLE64(d) ^ s0) + (ReadLE64(d + 8) ^ s1)};
+                h ^= (ReadLE64(d + 16) ^ s2) + (ReadLE64(d + 24) ^ s3);
+                h ^= uint64_t{op.n} * 0x9e3779b97f4a7c15ULL;
+                h *= mul;
+                return h ^ (h >> 31);
+            }
+        };
+        static const FastOutpointHash hasher;
+        return hasher(outpoint);
     }
 
     /**
@@ -488,7 +554,12 @@ private:
         {
             if (m_cap != 0) PrefetchRead(m_ctrl + ((static_cast<size_t>(hash) & (m_cap - 1)) & ~size_t{15}));
         }
+        void PrefetchCtrlAt(size_t idx) const noexcept
+        {
+            if (m_cap != 0) PrefetchRead(m_ctrl + (idx & ~size_t{15}));
+        }
         void PrefetchMatchedSlot(uint64_t hash, bool to_write = false) const noexcept;
+        void PrefetchInsertSlot(uint64_t hash) const noexcept;
         void PrefetchSlot(uint64_t hash, bool to_write = false) const noexcept
         {
             if (m_cap == 0) return;
@@ -562,6 +633,16 @@ private:
         bool m_mmapped{false};
     };
 
+    struct RevertMeta {
+        static constexpr uint32_t NO_COIN{std::numeric_limits<uint32_t>::max()};
+        uint32_t block_idx;
+        uint32_t op_idx;
+        uint32_t coin_idx;
+        int32_t old_height;
+        uint8_t old_flags;
+        bool existed;
+    };
+
     using ShardMutex = Mutex;
     struct alignas(64) Shard {
         mutable ShardMutex mutex;
@@ -573,7 +654,11 @@ private:
         std::vector<int64_t> dirty_span_bytes GUARDED_BY(mutex);
         size_t clock_hand GUARDED_BY(mutex){0};
         uint64_t settles GUARDED_BY(mutex){0};
+        uint64_t revert_batch_id GUARDED_BY(mutex){0};
+        std::vector<RevertMeta> revert_meta GUARDED_BY(mutex);
+        std::vector<StoredCoin> revert_coins GUARDED_BY(mutex);
     };
+    uint64_t m_commit_batch_id{0};
 
     struct alignas(64) Totals {
         std::atomic<int64_t> bytes{0};
@@ -594,7 +679,7 @@ private:
     void SyncDirtyCount(Shard& shard, int64_t delta) const EXCLUSIVE_LOCKS_REQUIRED(shard.mutex);
 
     Shard& ShardFor(const COutPoint& outpoint) const { return m_shards[ShardIndex(outpoint)]; }
-    static void Reference(Slot& slot) noexcept { if (!slot.referenced) slot.referenced = 1; }
+    static void Reference(Slot& slot) noexcept { if (!slot.dirty && !slot.referenced) slot.referenced = 1; }
 
     using State = coins_entry::State;
     using Event = coins_entry::Event;
