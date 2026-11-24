@@ -43,18 +43,23 @@ class TxSegmentRecorder
 {
     SpanReader m_reader;
     const size_t m_total;
-    TxSegments* m_segments{nullptr};
+    TxSegments& m_segments;
     size_t m_segment_start{0};
     size_t m_hold_start{0};
 
     void Close(size_t end)
     {
-        Assert(m_segments->txid_count < m_segments->txid.size());
-        m_segments->txid[m_segments->txid_count++] = {m_segment_start, end};
+        Assert(m_segments.txid_count < m_segments.txid.size());
+        Assert(m_segment_start <= end && end <= m_total);
+        m_segments.txid[m_segments.txid_count++] = {m_segment_start, end};
     }
 
 public:
-    explicit TxSegmentRecorder(std::span<const std::byte> data) : m_reader{data}, m_total{data.size()} {}
+    TxSegmentRecorder(std::span<const std::byte> data, TxSegments& segments LIFETIMEBOUND)
+        : m_reader{data}, m_total{data.size()}, m_segments{segments}
+    {
+        m_segments.begin = m_segment_start = Pos();
+    }
 
     void read(std::span<std::byte> dst) { m_reader.read(dst); }
     void ignore(size_t num_bytes) { m_reader.ignore(num_bytes); }
@@ -69,23 +74,18 @@ public:
         return *this;
     }
 
-    void Begin(TxSegments& segments)
-    {
-        m_segments = &segments;
-        segments.begin = m_segment_start = Pos();
-    }
     void End()
     {
-        Close(Pos());
-        m_segments->end = Pos();
-        m_segments = nullptr;
+        const size_t pos{Pos()};
+        Close(pos);
+        m_segments.end = pos;
     }
 
     void TxidHold() { m_hold_start = Pos(); }
     void TxidCommit() {}
     void TxidDiscard()
     {
-        m_segments->has_witness = true;
+        m_segments.has_witness = true;
         Close(m_hold_start);
         m_segment_start = Pos();
     }
@@ -96,6 +96,8 @@ public:
 //! The txid and wtxid of the transaction at `segments` in `data`: SHA256d over the recorded ranges.
 inline std::pair<Txid, Wtxid> HashTransactionSegments(std::span<const std::byte> data, const TxSegments& segments)
 {
+    Assert(segments.txid_count <= segments.txid.size());
+    Assert(segments.begin <= segments.end && segments.end <= data.size());
     const auto finish{[](CSHA256& hasher) {
         unsigned char out[CSHA256::OUTPUT_SIZE];
         hasher.Finalize(out);
@@ -106,6 +108,7 @@ inline std::pair<Txid, Wtxid> HashTransactionSegments(std::span<const std::byte>
     CSHA256 txid_hasher;
     for (size_t i{0}; i < segments.txid_count; ++i) {
         const auto [begin, end]{segments.txid[i]};
+        Assert(begin <= end && end <= data.size());
         txid_hasher.Write(bytes + begin, end - begin);
     }
     const Txid txid{Txid::FromUint256(finish(txid_hasher))};

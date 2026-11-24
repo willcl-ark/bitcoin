@@ -4403,6 +4403,8 @@ struct ConnectStep {
     std::shared_ptr<WindowSync> sync;
     //! What the block published last held in memory: the estimate for a block still being validated.
     size_t last_block_bytes{0};
+    //! Bytes currently charged by this step to ByteAccountId::Window (additive, safe under AssumeUTXO).
+    size_t accounted_window_bytes{0};
     //! The exceptions in flight when the step began.
     const int exceptions{std::uncaught_exceptions()};
 
@@ -4458,7 +4460,10 @@ void Chainstate::DrainWindow(ConnectStep& step)
     }
     step.in_flight.clear();
     if (step.sync) step.sync->overlay.Clear();
-    if (step.use_window) m_chainman.m_bytes_in_flight[util::ByteAccountId::Window].Set(0);
+    if (step.accounted_window_bytes > 0) {
+        m_chainman.m_bytes_in_flight[util::ByteAccountId::Window].Sub(step.accounted_window_bytes);
+        step.accounted_window_bytes = 0;
+    }
 }
 
 bool Chainstate::PlanConnectStep(BlockValidationState& state, ConnectStep& step)
@@ -4939,11 +4944,11 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                             reorg_publisher.emplace(m_chainman);
                             if (m_mempool) reorg_lock_mempool.emplace(m_mempool->cs, "m_mempool->cs", __FILE__, __LINE__);
                         }
-                        // The window: in initial block download, extending the tip.
-                        // A block that failed in the window is connected alone, in a step of its own
-                        // (PublishConnectTip()).
+                        // The window: enabled during IBD or during multi-block catch-up with an empty mempool,
+                        // when extending the tip (not a reorg or a serial retry of a block that failed in the window).
                         const bool retry{std::exchange(m_window_retry_serial, false)};
-                        step->use_window = !retry && mode == node::SyncMode::Download && !reorg_lock_main && m_chainman.ConnectWindow() > 1;
+                        step->use_window = !retry && !reorg_lock_main && m_chainman.ConnectWindow() > 1 &&
+                                           (mode == node::SyncMode::Download || (step->batch.size() >= 2 && (!m_mempool || m_mempool->size() == 0)));
                         if (step->use_window) step->sync = std::make_shared<WindowSync>();
                     }
 
@@ -4988,16 +4993,17 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
             const size_t window{step->use_window ? static_cast<size_t>(m_chainman.ConnectWindow()) : 1};
             util::ByteAccount& window_account{m_chainman.m_bytes_in_flight[util::ByteAccountId::Window]};
             util::ByteAccount& pinned_account{m_chainman.m_bytes_in_flight[util::ByteAccountId::PinnedBlocks]};
-            // Use additive deltas on ByteAccountId::Window so concurrent active & historical chainstates
-            // under AssumeUTXO never overwrite each other's accounted bytes.
-            size_t local_window_bytes{0};
+            // Use additive deltas on ByteAccountId::Window tracked in step->accounted_window_bytes so
+            // concurrent active & historical chainstates under AssumeUTXO never overwrite each other's bytes
+            // and DrainWindow() never causes double-subtraction.
             const auto update_window_bytes{[&](size_t next) {
-                if (next > local_window_bytes) {
-                    window_account.Add(next - local_window_bytes);
-                } else if (next < local_window_bytes) {
-                    window_account.Sub(local_window_bytes - next);
+                if (!step) return;
+                if (next > step->accounted_window_bytes) {
+                    window_account.Add(next - step->accounted_window_bytes);
+                } else if (next < step->accounted_window_bytes) {
+                    window_account.Sub(step->accounted_window_bytes - next);
                 }
-                local_window_bytes = next;
+                step->accounted_window_bytes = next;
             }};
             struct WindowAccountCleanup {
                 const decltype(update_window_bytes)& update;
@@ -5372,6 +5378,7 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                                     }
 
                                     bool stop_requested{false};
+                                    bool left_ibd_this_batch{false};
                                     for (size_t i{0}; i < accepted; ++i) {
                                         StagedConnect& cur{*ready_batch[i]};
                                         connect_phase::Validated& val{cur.In<connect_phase::Validated>()};
@@ -5389,6 +5396,7 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                                         CheckBlockStoreTransition(store_before, BlockStoreEvent::Connect, *pindexNew, m_chain);
                                         const bool was_in_ibd{m_chainman.IsInitialBlockDownload()};
                                         m_chainman.UpdateIBDStatus();
+                                        if (was_in_ibd && !m_chainman.IsInitialBlockDownload()) left_ibd_this_batch = true;
                                         if (m_mempool && m_chainman.m_options.signals && !m_chainman.IsInitialBlockDownload()) {
                                             if (was_in_ibd) m_blockman.SettleUndoWrites();
                                             m_chainman.m_options.signals->MempoolTransactionsRemovedForBlock(block_to_connect, std::move(txs_removed_for_block), pindexNew->nHeight);
@@ -5429,7 +5437,7 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                                     PruneBlockIndexCandidates();
 
                                     failed_runs = m_write_out_runs_failed;
-                                    const bool flushed{FlushStateToDisk(state, FlushOptions{.mode = FlushStateMode::PERIODIC, .defer_write_out_wait = true})};
+                                    const bool flushed{FlushStateToDisk(state, FlushOptions{.mode = FlushStateMode::PERIODIC, .defer_write_out_wait = !left_ibd_this_batch})};
                                     if (!flushed) {
                                         SettleWriteOut();
                                         DrainWindow(*step);
@@ -5457,6 +5465,12 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                                         interrupted = true;
                                         pass_done = true;
                                         step_over = true;
+                                    } else if (left_ibd_this_batch) {
+                                        // VAL-4: exit the download window immediately on IBD exit so ActiveTipChange()
+                                        // and MaybeRebalanceCaches() run promptly instead of staying in the window.
+                                        DrainWindow(*step);
+                                        step->improved = true;
+                                        leave = true;
                                     }
                                 }
                             }
@@ -6704,32 +6718,39 @@ bool ChainstateManager::FinishNewBlock(NewBlockInProcess& in)
         const bool check_cache{in.activate_async && m_block_cache.Budget() > 0 &&
                                (in.prepared.pindex && m_block_cache.MightAccept(in.prepared.pindex->nHeight, std::min(approx_tip, in.prepared.pindex->nHeight - 1)))};
         const size_t cache_bytes{check_cache ? node::BlockCache::Bytes(*in.block) : 0};
-        LOCK(cs_main);
-        if (in.write_error) {
-            m_blocks_being_stored.erase(in.prepared.pindex);
-            m_blockman.UnpinBlockFile(in.prepared.pos.nFile);
-            in.new_block = false;
-            FatalError(GetNotifications(), in.state, strprintf(_("System error while saving block to disk: %s"), *in.write_error));
-            return NewBlockFailed(in);
+        bool failed_result{false};
+        {
+            LOCK(cs_main);
+            if (in.write_error) {
+                m_blocks_being_stored.erase(in.prepared.pindex);
+                m_blockman.UnpinBlockFile(in.prepared.pos.nFile);
+                in.new_block = false;
+                FatalError(GetNotifications(), in.state, strprintf(_("System error while saving block to disk: %s"), *in.write_error));
+                NewBlockFailed(in);
+                failed_result = true;
+            } else if (!FinishAcceptBlock(*in.block, in.state, in.prepared, in.written, /*allow_auto_prune=*/!in.activate_async)) {
+                // Not stored after all (the entry failed while the block was written): not a new block.
+                in.new_block = false;
+                NewBlockFailed(in);
+                failed_result = true;
+            } else {
+                stored = true;
+                if (const CBlockIndex* base{CurrentChainstate().SnapshotBase()}; base && HistoricalChainstate()) {
+                    for_active = in.prepared.pindex->nHeight > base->nHeight;
+                }
+                // A block activated below on this thread that extends the tip is connected from the object passed
+                // in: the cache would measure it and give it back unused. A block for the connector goes to the cache
+                // whatever the chain's state: the connector takes it in hand where it is its target (and drops the
+                // copy, see ActivateBestChain()), or from the cache where a later block took its place in hand or the
+                // connector is busy with the blocks before it. A block that does not extend the tip is measured by the
+                // cache under the lock where it was not above.
+                if (in.prepared.pindex->pprev != ActiveTip() || in.activate_async) m_block_cache.Insert(in.prepared.pindex->nHeight, in.block, MinActiveHeight(), cache_bytes);
+            }
         }
-        // IO-4: async receive tasks defer automatic pruning to the connector's PERIODIC flush so they
-        // never block synchronously in SettleWriteOut() while holding cs_main.
-        if (!FinishAcceptBlock(*in.block, in.state, in.prepared, in.written, /*allow_auto_prune=*/!in.activate_async)) {
-            // Not stored after all (the entry failed while the block was written): not a new block.
-            in.new_block = false;
-            return NewBlockFailed(in);
-        }
-        stored = true;
-        if (const CBlockIndex* base{CurrentChainstate().SnapshotBase()}; base && HistoricalChainstate()) {
-            for_active = in.prepared.pindex->nHeight > base->nHeight;
-        }
-        // A block activated below on this thread that extends the tip is connected from the object passed
-        // in: the cache would measure it and give it back unused. A block for the connector goes to the cache
-        // whatever the chain's state: the connector takes it in hand where it is its target (and drops the
-        // copy, see ActivateBestChain()), or from the cache where a later block took its place in hand or the
-        // connector is busy with the blocks before it. A block that does not extend the tip is measured by the
-        // cache under the lock where it was not above.
-        if (in.prepared.pindex->pprev != ActiveTip() || in.activate_async) m_block_cache.Insert(in.prepared.pindex->nHeight, in.block, MinActiveHeight(), cache_bytes);
+        // NET-4: wake the message handler now that this block has left m_blocks_being_stored,
+        // so any stalled GETDATA request resumes immediately without busy-spinning.
+        WakeMessageHandler();
+        if (failed_result) return false;
     }
 
     NotifyHeaderTip();
@@ -6799,6 +6820,16 @@ void ChainstateManager::SetWakeMessageHandler(std::function<void()> wake)
 {
     LOCK(m_connector_mutex);
     m_wake_message_handler = std::move(wake);
+}
+
+void ChainstateManager::WakeMessageHandler() const
+{
+    std::function<void()> wake;
+    {
+        LOCK(m_connector_mutex);
+        wake = m_wake_message_handler;
+    }
+    if (wake) wake();
 }
 
 void ChainstateManager::WaitForPendingBlocks(node::SyncMode mode)

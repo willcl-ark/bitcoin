@@ -84,7 +84,9 @@ class BlockCheckedFlag
 public:
     BlockCheckedFlag() noexcept = default;
     BlockCheckedFlag(const BlockCheckedFlag& other) noexcept : m_passed{other.m_passed.load(std::memory_order_relaxed)} {}
+    BlockCheckedFlag(BlockCheckedFlag&& other) noexcept : m_passed{other.m_passed.exchange(false, std::memory_order_relaxed)} {}
     BlockCheckedFlag& operator=(const BlockCheckedFlag& other) noexcept { return *this = bool{other}; }
+    BlockCheckedFlag& operator=(BlockCheckedFlag&& other) noexcept { return *this = other.m_passed.exchange(false, std::memory_order_relaxed); }
     BlockCheckedFlag& operator=(bool passed) noexcept
     {
         m_passed.store(passed, std::memory_order_relaxed);
@@ -118,6 +120,11 @@ public:
     SERIALIZE_METHODS(CBlock, obj)
     {
         READWRITE(AsBase<CBlockHeader>(obj), obj.vtx);
+        SER_READ(obj, {
+            obj.fChecked = false;
+            obj.m_checked_witness_commitment = false;
+            obj.m_checked_merkle_root = false;
+        });
     }
 
     void SetNull()

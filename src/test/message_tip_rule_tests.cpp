@@ -40,7 +40,17 @@ BOOST_AUTO_TEST_CASE(messages_judged_against_the_tip)
     for (const node::MessageTipRule& row : node::MESSAGE_TIP_RULES) {
         if (row.rule == TipRule::PendingBlocksConnected) waits.emplace(row.type);
     }
-    const std::set<std::string> expected{NetMsgType::INV, NetMsgType::GETHEADERS, NetMsgType::TX, NetMsgType::BLOCK, NetMsgType::CMPCTBLOCK, NetMsgType::BLOCKTXN};
+    const std::set<std::string> expected{
+        NetMsgType::INV,
+        NetMsgType::GETHEADERS,
+        NetMsgType::TX,
+        NetMsgType::BLOCK,
+        NetMsgType::CMPCTBLOCK,
+        NetMsgType::BLOCKTXN,
+        NetMsgType::GETCFILTERS,
+        NetMsgType::GETCFHEADERS,
+        NetMsgType::GETCFCHECKPT,
+    };
     BOOST_CHECK(waits == expected);
 }
 

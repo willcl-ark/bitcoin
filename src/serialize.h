@@ -686,6 +686,7 @@ struct VectorFormatter
     template<typename Stream, typename V>
     void UnserElements(Stream& s, V& v, size_t size)
     {
+        assert(v.empty());
         Formatter formatter;
         size_t allocated = 0;
         while (allocated < size) {
@@ -1209,6 +1210,10 @@ public:
         }
     }
 
+    //! Direct underlying substream (one layer only).
+    auto& Substream() { return m_substream; }
+    const auto& Substream() const { return m_substream; }
+
     //! Get reference to underlying stream.
     auto& GetStream()
     {
@@ -1227,6 +1232,15 @@ public:
         }
     }
 };
+
+template <typename T>
+struct IsParamsStream : std::false_type {};
+
+template <typename SubStream, typename Params>
+struct IsParamsStream<ParamsStream<SubStream, Params>> : std::true_type {};
+
+template <typename T>
+inline constexpr bool IsParamsStream_v = IsParamsStream<std::remove_cvref_t<T>>::value;
 
 /**
  * Explicit template deduction guide is required for single-parameter

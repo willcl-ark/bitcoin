@@ -73,11 +73,11 @@ inline constexpr MessageTipRule MESSAGE_TIP_RULES[]{
     {NetMsgType::CMPCTBLOCK,   TipRule::PendingBlocksConnected}, // taken as a compact block only where it is at most two above the tip
     {NetMsgType::GETBLOCKTXN,  TipRule::TipLagTolerated},        // answered from the block asked for; its depth below a lagging tip is at most smaller
     {NetMsgType::BLOCKTXN,     TipRule::PendingBlocksConnected}, // completes a block, which is processed as one that arrives whole
-    {NetMsgType::GETCFILTERS,  TipRule::TipLagTolerated},        // answered from the filter index, which follows the tip by itself
+    {NetMsgType::GETCFILTERS,  TipRule::PendingBlocksConnected}, // compact block filter requests judge heights and stop hashes against the active chain
     {NetMsgType::CFILTER,      TipRule::Nothing},                // not processed by this node
-    {NetMsgType::GETCFHEADERS, TipRule::TipLagTolerated},        // answered from the filter index, which follows the tip by itself
+    {NetMsgType::GETCFHEADERS, TipRule::PendingBlocksConnected}, // compact block filter requests judge heights and stop hashes against the active chain
     {NetMsgType::CFHEADERS,    TipRule::Nothing},                // not processed by this node
-    {NetMsgType::GETCFCHECKPT, TipRule::TipLagTolerated},        // answered from the filter index, which follows the tip by itself
+    {NetMsgType::GETCFCHECKPT, TipRule::PendingBlocksConnected}, // compact block filter requests judge heights and stop hashes against the active chain
     {NetMsgType::CFCHECKPT,    TipRule::Nothing},                // not processed by this node
     {NetMsgType::WTXIDRELAY,   TipRule::Nothing},                // the handshake
     {NetMsgType::SENDTXRCNCL,  TipRule::Nothing},                // the handshake

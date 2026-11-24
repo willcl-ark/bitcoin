@@ -480,22 +480,26 @@ struct CTransaction::Deserialized {
     bool has_witness{false};
 };
 
+//! Peel ParamsStream layers only, without bypassing read-intercepting stream wrappers that also expose GetStream().
+template <typename Stream>
+auto& UnwrapParamsStream(Stream& s)
+{
+    if constexpr (IsParamsStream_v<Stream>) {
+        return UnwrapParamsStream(s.Substream());
+    } else {
+        return s;
+    }
+}
+
 template <typename Stream>
 CTransaction::Deserialized CTransaction::DeserializeHashed(const TransactionSerParams& params, Stream& s)
 {
     Deserialized d;
-    auto& input{[&]() -> auto& {
-        if constexpr (ContainsStream<Stream>) {
-            return s.GetStream();
-        } else {
-            return s;
-        }
-    }()};
+    auto& input{UnwrapParamsStream(s)};
     if constexpr (ContiguousInputStream<std::remove_reference_t<decltype(input)>>) {
         const std::span<const std::byte> data{input.data(), input.size()};
-        TxSegmentRecorder recorder{data};
         TxSegments segments;
-        recorder.Begin(segments);
+        TxSegmentRecorder recorder{data, segments};
         UnserializeTransaction(d.tx, recorder, params);
         recorder.End();
         std::tie(d.txid, d.wtxid) = HashTransactionSegments(data, segments);

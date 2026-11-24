@@ -493,8 +493,13 @@ struct CNodeState {
     //! The blocks to have outstanding with the peer at a time in initial block download.
     int BlocksToAskFor() const
     {
-        if (m_block_delivery_time == 0us) return 1;
-        return static_cast<int>(std::min<int64_t>(MAX_BLOCKS_IN_TRANSIT_PER_PEER, 1 + std::chrono::microseconds{BLOCK_DOWNLOAD_QUEUE_TIME} / m_block_delivery_time));
+        // NET-6: keep at least 2 blocks pipelined to avoid stop-and-wait RTT halving of throughput.
+        static constexpr int MIN_BLOCKS_IN_FLIGHT_PIPELINE{2};
+        if (m_block_delivery_time == 0us) return MIN_BLOCKS_IN_FLIGHT_PIPELINE;
+        return static_cast<int>(std::clamp<int64_t>(
+            1 + std::chrono::microseconds{BLOCK_DOWNLOAD_QUEUE_TIME} / m_block_delivery_time,
+            MIN_BLOCKS_IN_FLIGHT_PIPELINE,
+            MAX_BLOCKS_IN_TRANSIT_PER_PEER));
     }
     //! Time before which block requests should not be sent to this peer.
     std::chrono::microseconds m_block_download_paused_until{0us};
@@ -1087,7 +1092,8 @@ private:
     CTransactionRef FindTxForGetData(const Peer::TxRelay& tx_relay, const GenTxid& gtxid)
         EXCLUSIVE_LOCKS_REQUIRED(!m_most_recent_block_mutex, !tx_relay.m_tx_inventory_mutex);
 
-    void ProcessGetData(CNode& pfrom, Peer& peer, const std::atomic<bool>& interruptMsgProc)
+    //! Returns true if processing stopped because the front block request is currently being stored on disk.
+    bool ProcessGetData(CNode& pfrom, Peer& peer, const std::atomic<bool>& interruptMsgProc)
         EXCLUSIVE_LOCKS_REQUIRED(!m_most_recent_block_mutex, peer.m_getdata_requests_mutex, NetEventsInterface::g_msgproc_mutex)
         LOCKS_EXCLUDED(::cs_main);
 
@@ -2752,11 +2758,9 @@ bool PeerManagerImpl::ProcessGetBlockData(CNode& pfrom, Peer& peer, const CInv& 
         a_recent_block = m_most_recent_block;
         a_recent_compact_block = m_most_recent_compact_block;
     }
-    // The block this node announced last (NewPoWValidBlock): it is announced before it is written, which
-    // happens with cs_main released, so a request may come while it is being stored. The request is then asked
-    // again on a later call, the peer's further messages waiting behind it: once stored, the block is activated
-    // below and served only as any other block is, never unvalidated in full to a peer that would punish this
-    // node if it failed.
+    // A block that was announced (NewPoWValidBlock) before being written to disk may still be in
+    // m_blocks_being_stored when requested — even if a newer block has since overwritten m_most_recent_block.
+    // Waiting on IsBlockBeingStored() regardless of m_most_recent_block avoids spurious drops on back-to-back blocks.
     const bool announced{a_recent_block && a_recent_block->GetHash() == inv.hash};
 
     bool need_activate_chain = false;
@@ -2764,12 +2768,12 @@ bool PeerManagerImpl::ProcessGetBlockData(CNode& pfrom, Peer& peer, const CInv& 
         LOCK(cs_main);
         const CBlockIndex* pindex = m_chainman.m_blockman.LookupBlockIndex(inv.hash);
         if (pindex) {
-            // A request that waits for a state: the announced block is no longer being stored
+            // A request that waits for a state: the block is no longer being stored
             // (ChainstateManager::IsBlockBeingStored()). Read in the critical section that decides the activation:
             // the block is marked before it is announced and stored when the mark goes, so from here on it
             // is stored and activated below, or was not stored at all. Read after the activation was
             // decided, a block stored in between would be found stored and not activated, and refused.
-            if (announced && m_chainman.IsBlockBeingStored(*pindex)) return false;
+            if (m_chainman.IsBlockBeingStored(*pindex)) return false;
             if (pindex->HaveNumChainTxs() && !pindex->IsValid(BLOCK_VALID_SCRIPTS) &&
                     pindex->IsValid(BLOCK_VALID_TREE)) {
                 // Precondition O1 (validation.h):
@@ -2952,7 +2956,7 @@ CTransactionRef PeerManagerImpl::FindTxForGetData(const Peer::TxRelay& tx_relay,
     return {};
 }
 
-void PeerManagerImpl::ProcessGetData(CNode& pfrom, Peer& peer, const std::atomic<bool>& interruptMsgProc)
+bool PeerManagerImpl::ProcessGetData(CNode& pfrom, Peer& peer, const std::atomic<bool>& interruptMsgProc)
 {
     AssertLockNotHeld(cs_main);
 
@@ -2965,7 +2969,7 @@ void PeerManagerImpl::ProcessGetData(CNode& pfrom, Peer& peer, const std::atomic
     // possible, since they're common and it's efficient to batch process
     // them.
     while (it != peer.m_getdata_requests.end() && it->IsGenTxMsg()) {
-        if (interruptMsgProc) return;
+        if (interruptMsgProc) return false;
         // The send buffer provides backpressure. If there's no space in
         // the buffer, pause processing until the next call.
         if (pfrom.fPauseSend) break;
@@ -2990,10 +2994,15 @@ void PeerManagerImpl::ProcessGetData(CNode& pfrom, Peer& peer, const std::atomic
 
     // Only process one BLOCK item per call, since they're uncommon and can be
     // expensive to process.
+    bool stalled_on_storing{false};
     if (it != peer.m_getdata_requests.end() && !pfrom.fPauseSend) {
         const CInv &inv = *it;
-        // A block being stored stays at the front, asked for again on the next call (ProcessGetBlockData()).
-        if (!inv.IsGenBlkMsg() || ProcessGetBlockData(pfrom, peer, inv)) ++it;
+        // A block being stored stays at the front, asked for again once FinishNewBlock() wakes the handler.
+        if (!inv.IsGenBlkMsg() || ProcessGetBlockData(pfrom, peer, inv)) {
+            ++it;
+        } else {
+            stalled_on_storing = true;
+        }
         // else: If the first item on the queue is an unknown type, we erase it
         // and continue processing the queue on the next call.
         // NOTE: previously we wouldn't do so and the peer sending us a malformed GETDATA could
@@ -3020,6 +3029,7 @@ void PeerManagerImpl::ProcessGetData(CNode& pfrom, Peer& peer, const std::atomic
         // assume we have them and request the parents from us.
         MakeAndPushMessage(pfrom, NetMsgType::NOTFOUND, vNotFound);
     }
+    return stalled_on_storing;
 }
 
 uint32_t PeerManagerImpl::GetFetchFlags(const Peer& peer) const
@@ -4032,6 +4042,20 @@ bool PeerManagerImpl::HandOffBlock(Peer& peer, DataStream& recv, node::SyncMode 
     CBlockHeader header;
     SpanReader{std::span<const std::byte>{recv.data(), HEADER_BYTES}} >> header;
     const uint256 hash{header.GetHash()};
+    // NET-7: check duplicate and pool capacity BEFORE taking cs_main so a duplicate never resets
+    // m_stalling_since and a saturated receive pool never blocks ThreadMessageHandler under g_msgproc_mutex.
+    {
+        LOCK(m_block_tasks_mutex);
+        if (m_block_tasks.contains({peer.m_id, hash})) {
+            // The first copy's task settles the request. Processed beside it, this one would find the block
+            // being stored and remove the request before it is.
+            LogDebug(BCLog::NET, "block %s of peer=%d is with the connect pool already, dropping the copy", hash.ToString(), peer.m_id);
+            return true;
+        }
+        if (static_cast<int>(m_block_tasks.size()) >= limit) {
+            return false;
+        }
+    }
     {
         // A block in flight was requested by its index entry, so its header is known and has been checked.
         LOCK(cs_main);
@@ -4054,17 +4078,9 @@ bool PeerManagerImpl::HandOffBlock(Peer& peer, DataStream& recv, node::SyncMode 
         if (!requested) return false;
     }
     {
-        WAIT_LOCK(m_block_tasks_mutex, lock);
-        if (m_block_tasks.contains({peer.m_id, hash})) {
-            // The first copy's task settles the request. Processed beside it, this one would find the block
-            // being stored and remove the request before it is.
-            LogDebug(BCLog::NET, "block %s of peer=%d is with the connect pool already, dropping the copy", hash.ToString(), peer.m_id);
-            return true;
-        }
-        AssertMayWait("a receive task to end");
-        m_block_tasks_cv.wait(lock, [&]() EXCLUSIVE_LOCKS_REQUIRED(m_block_tasks_mutex) { return static_cast<int>(m_block_tasks.size()) < limit; });
-        // The message handler, the one caller, stops before the tasks are finished (Shutdown()): a task
-        // started behind FinishBlockTasks() would run in an object nobody waits for any more.
+        LOCK(m_block_tasks_mutex);
+        // The message handler, the one caller (g_msgproc_mutex), stops before the tasks are finished
+        // (Shutdown()): no other thread can insert into m_block_tasks between the check above and here.
         Assert(m_block_tasks_life.Running());
         m_block_tasks.emplace(peer.m_id, hash);
     }
@@ -5620,17 +5636,31 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
             return;
         }
 
-        if (mode == node::SyncMode::Download) {
-            // What the peer took for this block decides how many it is asked for at a time.
+        if (mode == node::SyncMode::Download && vRecv.size() >= 80) {
+            // NET-6: only update delivery timing for a block actually requested from this peer
+            // and not already handed off to the pool, so unsolicited/duplicate BLOCK messages cannot poison it.
+            CBlockHeader header;
+            SpanReader{std::span<const std::byte>{vRecv.data(), 80}} >> header;
+            const uint256 hash{header.GetHash()};
             LOCK(cs_main);
-            CNodeState& state{*Assert(State(pfrom.GetId()))};
-            const auto now{std::chrono::duration_cast<std::chrono::microseconds>(time_received.time_since_epoch())};
-            if (state.m_block_delivery_since != 0us && now >= state.m_block_delivery_since) {
-                // A block read together with the one before it, or under a clock that stands still, took no time.
-                const auto took{std::max<std::chrono::microseconds>(now - state.m_block_delivery_since, 1us)};
-                state.m_block_delivery_time = state.m_block_delivery_time == 0us ? took : (3 * state.m_block_delivery_time + took) / 4;
+            bool requested_on_wire{false};
+            for (auto range{mapBlocksInFlight.equal_range(hash)}; range.first != range.second; ++range.first) {
+                if (range.first->second.first == pfrom.GetId() && !range.first->second.second->with_pool) {
+                    requested_on_wire = true;
+                    break;
+                }
             }
-            state.m_block_delivery_since = now;
+            if (requested_on_wire) {
+                // What the peer took for this block decides how many it is asked for at a time.
+                CNodeState& state{*Assert(State(pfrom.GetId()))};
+                const auto now{std::chrono::duration_cast<std::chrono::microseconds>(time_received.time_since_epoch())};
+                if (state.m_block_delivery_since != 0us && now >= state.m_block_delivery_since) {
+                    // A block read together with the one before it, or under a clock that stands still, took no time.
+                    const auto took{std::max<std::chrono::microseconds>(now - state.m_block_delivery_since, 1us)};
+                    state.m_block_delivery_time = state.m_block_delivery_time == 0us ? took : (3 * state.m_block_delivery_time + took) / 4;
+                }
+                state.m_block_delivery_since = now;
+            }
         }
         // In initial block download a block the peer was asked for goes to the connect pool.
         if (HandOffBlock(peer, vRecv, mode)) return;
@@ -5941,10 +5971,11 @@ bool PeerManagerImpl::ProcessMessages(CNode& node, std::atomic<bool>& interruptM
     // the next pass, without a sleep before it.
     if (WITH_LOCK(peer.m_misbehavior_mutex, return peer.m_should_discourage)) return true;
 
+    bool stalled_on_storing{false};
     {
         LOCK(peer.m_getdata_requests_mutex);
         if (!peer.m_getdata_requests.empty()) {
-            ProcessGetData(node, peer, interruptMsgProc);
+            stalled_on_storing = ProcessGetData(node, peer, interruptMsgProc);
         }
     }
 
@@ -5959,7 +5990,7 @@ bool PeerManagerImpl::ProcessMessages(CNode& node, std::atomic<bool>& interruptM
     // and prevents m_getdata_requests to grow unbounded
     {
         LOCK(peer.m_getdata_requests_mutex);
-        if (!peer.m_getdata_requests.empty()) return true;
+        if (!peer.m_getdata_requests.empty()) return !stalled_on_storing;
     }
 
     // Don't bother if send buffer is too full to respond anyway

@@ -1942,8 +1942,10 @@ public:
     node::HandOffTicket LatestHandOff() const EXCLUSIVE_LOCKS_REQUIRED(!m_connector_mutex);
     bool HandOffsDone(const node::HandOffTicket& ticket) const EXCLUSIVE_LOCKS_REQUIRED(!m_connector_mutex);
     bool ActiveHandOffsDone(const node::HandOffTicket& ticket) const EXCLUSIVE_LOCKS_REQUIRED(!m_connector_mutex);
-    //! Register a callback invoked when the connector finishes an active/full pass (used to wake message handler).
+    //! Register a callback invoked when the connector finishes an active/full pass or a stored block settles (used to wake message handler).
     void SetWakeMessageHandler(std::function<void()> wake) EXCLUSIVE_LOCKS_REQUIRED(!m_connector_mutex);
+    //! Invoke the registered message-handler wake callback, if any.
+    void WakeMessageHandler() const EXCLUSIVE_LOCKS_REQUIRED(!m_connector_mutex);
     /**
      * Wait until the blocks handed to the connector so far that the active chainstate may connect are
      * DoneActive (node/handoff_machine.h), or the connector is stopped (precondition O1). Called by the
