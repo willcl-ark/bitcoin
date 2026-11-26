@@ -399,7 +399,9 @@ CBlock ConsumeBlock(FuzzedDataProvider& fuzzed_data_provider, const CBlock& prev
         block.nVersion = fuzzed_data_provider.ConsumeIntegral<int32_t>();
     }
     if (fuzzed_data_provider.ConsumeBool()) {
-        block.hashPrevBlock = ConsumeUInt256(fuzzed_data_provider);
+        // Consumed and not applied, so that inputs keep their meaning: the block is connected on the active tip,
+        // and ConnectBlock() asserts that the block names that parent, as every block the node connects does.
+        (void)ConsumeUInt256(fuzzed_data_provider);
     }
 
     if (fuzzed_data_provider.ConsumeBool()) {
@@ -443,7 +445,7 @@ FUZZ_TARGET(connect_block, .init = initialize_connect_block)
     FakeNodeClock clock{g_blocks.back()->Time() + 2s};
 
     LOCK(::cs_main);
-    g_setup->m_node.chainman->m_validation_cache.m_script_execution_cache.TestOnlyReset();
+    g_setup->m_node.chainman->m_validation_cache.TestOnlyResetScriptExecutionCache();
     Chainstate& active_chainstate = g_setup->m_node.chainman->ActiveChainstate();
     CBlockIndex* active_tip = active_chainstate.m_chain.Tip();
     Assert(active_tip->GetBlockHash() == g_blocks.back()->GetHash());
