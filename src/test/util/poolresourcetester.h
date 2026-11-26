@@ -108,6 +108,11 @@ public:
         std::sort(free_blocks.begin(), free_blocks.end());
         std::sort(chunks.begin(), chunks.end());
 
+        if (chunks.empty()) {
+            assert(free_blocks.empty());
+            return;
+        }
+
         auto chunk_it = chunks.begin();
         auto chunk_ptr_remaining = chunk_it->ptr;
         auto chunk_size_remaining = chunk_it->size;

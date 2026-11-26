@@ -436,6 +436,11 @@ public:
         return 0;
     }
 
+    [[nodiscard]] int fflush()
+    {
+        return m_file ? std::fflush(m_file) : 0;
+    }
+
     /** Get wrapped FILE* with transfer of ownership.
      * @note This will invalidate the AutoFile object, and makes it the responsibility of the caller
      * of this function to clean up the returned FILE*.
@@ -697,26 +702,28 @@ template <typename S>
 class BufferedWriter
 {
     S& m_dst;
-    DataBuffer m_buf;
+    std::unique_ptr<std::byte[]> m_buf;
+    size_t m_buf_size;
     size_t m_buf_pos{0};
 
 public:
-    explicit BufferedWriter(S& stream LIFETIMEBOUND, size_t size = 1 << 16) : m_dst{stream}, m_buf(size) {}
+    explicit BufferedWriter(S& stream LIFETIMEBOUND, size_t size = 1 << 16)
+        : m_dst{stream}, m_buf{std::make_unique_for_overwrite<std::byte[]>(size)}, m_buf_size{size} {}
 
     ~BufferedWriter() { flush(); }
 
     void flush()
     {
-        if (m_buf_pos) m_dst.write_buffer(std::span{m_buf}.first(m_buf_pos));
+        if (m_buf_pos) m_dst.write_buffer(std::span{m_buf.get(), m_buf_pos});
         m_buf_pos = 0;
     }
 
     void write(std::span<const std::byte> src)
     {
-        while (const auto available{std::min(src.size(), m_buf.size() - m_buf_pos)}) {
-            std::copy_n(src.begin(), available, m_buf.begin() + m_buf_pos);
+        while (const auto available{std::min(src.size(), m_buf_size - m_buf_pos)}) {
+            std::copy_n(src.begin(), available, m_buf.get() + m_buf_pos);
             m_buf_pos += available;
-            if (m_buf_pos == m_buf.size()) flush();
+            if (m_buf_pos == m_buf_size) flush();
             src = src.subspan(available);
         }
     }

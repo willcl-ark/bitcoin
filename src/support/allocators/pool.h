@@ -177,14 +177,13 @@ class PoolResource final
 
 public:
     /**
-     * Construct a new PoolResource object which allocates the first chunk.
+     * Construct a new PoolResource object; the first chunk is allocated lazily on first use.
      * chunk_size_bytes will be rounded up to next multiple of ELEM_ALIGN_BYTES.
      */
     explicit PoolResource(std::size_t chunk_size_bytes)
         : m_chunk_size_bytes(NumElemAlignBytes(chunk_size_bytes) * ELEM_ALIGN_BYTES)
     {
         assert(m_chunk_size_bytes >= MAX_BLOCK_SIZE_BYTES);
-        AllocateChunk();
     }
 
     /**

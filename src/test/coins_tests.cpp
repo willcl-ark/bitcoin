@@ -1075,15 +1075,17 @@ BOOST_AUTO_TEST_CASE(coins_resource_is_used)
 
     {
         CCoinsMap map{0, CCoinsMap::hasher{}, CCoinsMap::key_equal{}, &resource};
-        BOOST_TEST(memusage::DynamicUsage(map) >= resource.ChunkSizeBytes());
+        BOOST_TEST(memusage::DynamicUsage(map) < resource.ChunkSizeBytes());
 
         map.reserve(1000);
 
-        // The resource has preallocated a chunk, so we should have space for at several nodes without the need to allocate anything else.
+        COutPoint out_point{};
+        // The first node lazily allocates one chunk, which then holds the remaining nodes without allocating another.
+        map[out_point];
+        BOOST_TEST(memusage::DynamicUsage(map) >= resource.ChunkSizeBytes());
         const auto usage_before = memusage::DynamicUsage(map);
 
-        COutPoint out_point{};
-        for (size_t i = 0; i < 1000; ++i) {
+        for (size_t i = 1; i < 1000; ++i) {
             out_point.n = i;
             map[out_point];
         }

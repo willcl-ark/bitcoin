@@ -50,6 +50,7 @@ void SignatureCache::ComputeEntrySchnorr(uint256& entry, const uint256& hash, st
 
 bool SignatureCache::Get(const uint256& entry, const bool erase)
 {
+    if (m_empty.load(std::memory_order_acquire)) return false;
     std::shared_lock<std::shared_mutex> lock(cs_sigcache);
     return setValid.contains(entry, erase);
 }
@@ -58,6 +59,7 @@ void SignatureCache::Set(const uint256& entry)
 {
     std::unique_lock<std::shared_mutex> lock(cs_sigcache);
     setValid.insert(entry);
+    m_empty.store(false, std::memory_order_release);
 }
 
 bool CachingTransactionSignatureChecker::VerifyECDSASignature(const std::vector<unsigned char>& vchSig, const CPubKey& pubkey, const uint256& sighash) const

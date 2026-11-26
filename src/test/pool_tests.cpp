@@ -22,13 +22,12 @@ BOOST_AUTO_TEST_CASE(basic_allocating)
     auto resource = PoolResource<8, 8>();
     PoolResourceTester::CheckAllDataAccountedFor(resource);
 
-    // first chunk is already allocated
-    size_t expected_bytes_available = resource.ChunkSizeBytes();
-    BOOST_TEST(expected_bytes_available == PoolResourceTester::AvailableMemoryFromChunk(resource));
+    // first chunk is allocated lazily on first allocation
+    BOOST_TEST(0U == PoolResourceTester::AvailableMemoryFromChunk(resource));
 
-    // chunk is used, no more allocation
+    // first allocation allocates a chunk
     void* block = resource.Allocate(8, 8);
-    expected_bytes_available -= 8;
+    size_t expected_bytes_available = resource.ChunkSizeBytes() - 8;
     BOOST_TEST(expected_bytes_available == PoolResourceTester::AvailableMemoryFromChunk(resource));
 
     BOOST_TEST(0 == PoolResourceTester::FreeListSizes(resource)[1]);
@@ -171,8 +170,8 @@ BOOST_AUTO_TEST_CASE(memusage_test)
     {
         auto resource_map = Map{0, std::hash<int64_t>{}, std::equal_to<int64_t>{}, &resource};
 
-        // can't have the same resource usage
-        BOOST_TEST(memusage::DynamicUsage(std_map) != memusage::DynamicUsage(resource_map));
+        // PoolResource allocates its first chunk lazily, so empty maps have the same dynamic usage.
+        BOOST_TEST(memusage::DynamicUsage(std_map) == memusage::DynamicUsage(resource_map));
 
         for (size_t i = 0; i < 10000; ++i) {
             std_map[i];

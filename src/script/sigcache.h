@@ -14,6 +14,7 @@
 #include <util/byte_units.h>
 #include <util/hasher.h>
 
+#include <atomic>
 #include <cstddef>
 #include <shared_mutex>
 #include <span>
@@ -45,6 +46,7 @@ private:
     typedef CuckooCache::cache<uint256, SignatureCacheHasher> map_type;
     map_type setValid;
     std::shared_mutex cs_sigcache;
+    std::atomic<bool> m_empty{true};
 
 public:
     SignatureCache(size_t max_size_bytes);
