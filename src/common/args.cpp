@@ -830,6 +830,7 @@ const std::vector<std::string> TEST_OPTIONS_DOC{
     "addrman (use deterministic addrman)",
     "reindex_after_failure_noninteractive_yes (When asked for a reindex after failure interactively, simulate as-if answered with 'yes')",
     "bip94 (enforce BIP94 consensus rules)",
+    "crash_before_undo_write (abort when the first queued block undo write runs)",
 };
 
 bool HasTestOption(const ArgsManager& args, const std::string& test_option)

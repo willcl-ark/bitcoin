@@ -28,8 +28,10 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <iosfwd>
 #include <limits>
@@ -39,7 +41,9 @@
 #include <set>
 #include <span>
 #include <string>
+#include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -358,6 +362,36 @@ private:
     [[nodiscard]] bool CloseBlockWriteHandle(std::optional<int> only_file = std::nullopt) const EXCLUSIVE_LOCKS_REQUIRED(!m_block_write_mutex);
     void CloseBlockWriteHandleIfIn(const std::set<int>& files) const EXCLUSIVE_LOCKS_REQUIRED(!m_block_write_mutex);
 
+    //! Write pre-serialized undo bytes (header + undo + checksum) to `pos`, optionally reusing `open_handle`.
+    bool WriteSerializedUndo(std::vector<unsigned char>& bytes, const FlatFilePos& pos, int& open_file, std::optional<AutoFile>& open_handle, bool& out_of_space);
+
+    enum class UndoWriterState : uint8_t { Stopped, Running, Draining };
+    struct UndoWriteJob {
+        FlatFilePos pos{};
+        std::vector<unsigned char> bytes{};
+        std::set<int> files_to_unlink{};
+        std::function<void(bool)> completion{};
+        size_t bytes_size{0};
+        bool close_after{false};
+    };
+    mutable Mutex m_undo_mutex;
+    std::condition_variable m_undo_cv_work;
+    std::condition_variable m_undo_cv_done;
+    std::deque<UndoWriteJob> m_undo_queue GUARDED_BY(m_undo_mutex);
+    std::deque<std::pair<std::function<void(bool)>, bool>> m_undo_done GUARDED_BY(m_undo_mutex);
+    std::atomic<size_t> m_undo_pending_bytes{0};
+    bool m_undo_io_running GUARDED_BY(m_undo_mutex){false};
+    bool m_undo_shutting_down GUARDED_BY(m_undo_mutex){false};
+    UndoWriterState m_undo_state GUARDED_BY(m_undo_mutex){UndoWriterState::Stopped};
+    std::thread m_undo_thread;
+    bool IsUndoWriterRunning() const EXCLUSIVE_LOCKS_REQUIRED(!m_undo_mutex)
+    {
+        LOCK(m_undo_mutex);
+        return m_undo_state != UndoWriterState::Stopped;
+    }
+    void EnqueueUndoJob(UndoWriteJob job) EXCLUSIVE_LOCKS_REQUIRED(!m_undo_mutex);
+    void UndoWriterLoop() EXCLUSIVE_LOCKS_REQUIRED(!m_undo_mutex);
+
 protected:
     std::vector<CBlockFileInfo> m_blockfile_info;
 
@@ -393,6 +427,26 @@ public:
 
     const util::SignalInterrupt& m_interrupt;
     std::atomic<bool> m_importing{false};
+    std::unordered_set<const CBlockIndex*> m_undo_pending GUARDED_BY(::cs_main);
+    std::atomic<bool> m_undo_write_failed{false};
+
+    //! Wait for all queued undo I/O to finish and apply their completions under cs_main.
+    void SettleUndoWrites();
+    //! Settle queued undo writes only if `block` has an undo write in flight.
+    void SettleUndoWriteOf(const CBlockIndex& block);
+    //! Apply finished undo/callback completions in FIFO order.
+    void ApplyUndoCompletions() EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    //! Queue a callback to run under cs_main in FIFO order after all preceding undo writes.
+    void EnqueueUndoCallback(std::function<void(bool)> completion);
+    //! Queue pruned file unlinks on the ordered undo I/O thread (or run inline when non-threaded).
+    void EnqueueUnlinkPrunedFiles(std::set<int> files);
+    size_t PendingUndoBytes() const { return m_undo_pending_bytes.load(std::memory_order_relaxed); }
+    void WaitForUndoBacklogBelow(size_t limit_bytes);
+    void WaitForUndoCompletionOr(const std::function<bool()>& enough);
+    bool UndoWriteFailed() const { return m_undo_write_failed.load(std::memory_order_acquire); }
+    //! Drain and join the lazily-started undo writer thread (e.g. on IBD exit or shutdown).
+    //! Safe to call repeatedly; future async jobs will restart the thread unless shutting down.
+    void StopUndoWriter() EXCLUSIVE_LOCKS_REQUIRED(!m_undo_mutex);
 
     /**
      * Whether all blockfiles have been added to the block tree database.
@@ -463,7 +517,14 @@ public:
     /** Get block file info entry for one block file */
     CBlockFileInfo* GetBlockFileInfo(size_t n) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
+    //! Serialize `blockundo` with its storage header and checksum in a single pass.
+    std::vector<unsigned char> SerializeBlockUndo(const CBlockUndo& blockundo, const uint256& prev_hash) const;
+
     bool WriteBlockUndo(const CBlockUndo& blockundo, BlockValidationState& state, CBlockIndex& block)
+        EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+
+    //! Claim an undo file position under cs_main and enqueue the pre-serialized disk write.
+    bool QueueBlockUndo(std::vector<unsigned char> serialized_undo, BlockValidationState& state, CBlockIndex& block)
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     /** Store block on disk and update block file statistics.
@@ -593,6 +654,7 @@ private:
                                                         const std::function<std::span<std::byte>(size_t)>& buffer_for) const;
 public:
 
+    bool ReadBlockUndo(CBlockUndo& blockundo, const FlatFilePos& pos, const uint256& hash_prev) const;
     bool ReadBlockUndo(CBlockUndo& blockundo, const CBlockIndex& index) const;
 
     void CleanupBlockRevFiles() const;

@@ -3099,9 +3099,10 @@ bool Chainstate::FlushStateToDisk(
             {
                 LOG_TIME_MILLIS_WITH_CATEGORY("write block and undo data to disk", BCLog::BENCH);
 
-                // First make sure all block and undo data is flushed to disk: the file this
-                // chainstate writes to, then every other file written to since its last sync
-                // (an undo file whose block file was left behind, the other chainstate's file).
+                // First settle queued undo writes, then make sure all block and undo data is flushed
+                // to disk: the file this chainstate writes to, then every other file written to since
+                // its last sync (an undo file whose block file was left behind, the other chainstate's file).
+                m_blockman.SettleUndoWrites();
                 if (!m_blockman.FlushChainstateBlockFile(m_chain.Height()) || !m_blockman.SyncWrittenFiles()) {
                     // The specific error was already reported through flushError()
                     return state.Error("Failed to flush block or undo file");
@@ -3118,7 +3119,13 @@ bool Chainstate::FlushStateToDisk(
             if (fFlushForPrune) {
                 LOG_TIME_MILLIS_WITH_CATEGORY("unlink pruned files", BCLog::BENCH);
 
-                m_blockman.UnlinkPrunedFiles(setFilesToPrune);
+                if (nManualPruneHeight > 0) {
+                    // A request (pruneblockchain) returns once its files are gone.
+                    m_blockman.UnlinkPrunedFiles(setFilesToPrune);
+                } else {
+                    // Nothing waits for the files to go: removed on the ordered undo I/O thread, not under cs_main.
+                    m_blockman.EnqueueUnlinkPrunedFiles(std::move(setFilesToPrune));
+                }
             }
 
             if (!CoinsTip().GetBestBlock().IsNull()) {

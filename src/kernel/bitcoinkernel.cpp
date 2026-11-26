@@ -477,7 +477,8 @@ struct ChainstateManagerOptions {
               .block_tree_db_params = DBParams{
                   .path = data_dir / "blocks" / "index",
                   .cache_bytes = kernel::CacheSizes{DEFAULT_KERNEL_CACHE}.block_tree_db,
-              }}},
+              },
+              .async_undo_writes = false}},
           m_context{context}, m_chainstate_load_options{node::ChainstateLoadOptions{}}
     {
     }
@@ -1243,6 +1244,7 @@ void btck_chainstate_manager_options_set_worker_threads_num(btck_ChainstateManag
     auto& o{btck_ChainstateManagerOptions::get(opts)};
     LOCK(o.m_mutex);
     o.m_chainman_options.worker_threads_num = worker_threads;
+    o.m_blockman_options.async_undo_writes = worker_threads > 0;
 }
 
 int btck_chainstate_manager_options_set_database_cache_bytes(btck_ChainstateManagerOptions* chainman_opts, uint64_t database_cache_bytes)
