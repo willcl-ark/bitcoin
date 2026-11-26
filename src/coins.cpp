@@ -300,19 +300,58 @@ void CCoinsViewCache::Reset() noexcept
     SetBestBlock(uint256::ZERO);
 }
 
+void CCoinsView::BatchWriteSorted(const SortedBatchProducer& produce, const uint256& block_hash, size_t, size_t)
+{
+    CCoinsMapMemoryResource resource;
+    CoinsCachePair sentinel;
+    CCoinsMap map{0, SaltedCoinsCacheHasher{/*deterministic=*/true}, CCoinsMap::key_equal{}, &resource};
+    size_t dirty{0};
+    produce([&](std::span<const SortedCoinWrite> chunk) {
+        for (const auto& [outpoint, maybe_coin] : chunk) {
+            auto [it, inserted]{map.try_emplace(outpoint)};
+            if (maybe_coin) {
+                it->second.coin = *maybe_coin;
+            } else {
+                it->second.coin.Clear();
+            }
+            if (!it->second.IsDirty()) {
+                CCoinsCacheEntry::SetDirty(*it, sentinel);
+                ++dirty;
+            }
+        }
+    });
+    auto cursor{CoinsViewCacheCursor(dirty, sentinel, map, /*will_erase=*/true)};
+    BatchWrite(cursor, block_hash);
+}
+
+void CCoinsViewCache::TraceUncache(const COutPoint& hash, const Coin& coin)
+{
+    TRACEPOINT(utxocache, uncache,
+           hash.hash.data(),
+           (uint32_t)hash.n,
+           (uint32_t)coin.nHeight,
+           (int64_t)coin.out.nValue,
+           (bool)coin.IsCoinBase());
+}
+
 void CCoinsViewCache::Uncache(const COutPoint& hash)
 {
     CCoinsMap::iterator it = cacheCoins.find(hash);
     if (it != cacheCoins.end() && !it->second.IsDirty()) {
         Assume(TrySub(cachedCoinsUsage, it->second.coin.DynamicMemoryUsage()));
-        TRACEPOINT(utxocache, uncache,
-               hash.hash.data(),
-               (uint32_t)hash.n,
-               (uint32_t)it->second.coin.nHeight,
-               (int64_t)it->second.coin.out.nValue,
-               (bool)it->second.coin.IsCoinBase());
+        TraceUncache(hash, it->second.coin);
         cacheCoins.erase(it);
     }
+}
+
+bool CCoinsViewCache::HaveAnyOutput(const CBlock& block) const
+{
+    for (const auto& tx : block.vtx) {
+        for (size_t o = 0; o < tx->vout.size(); ++o) {
+            if (HaveCoin(COutPoint(tx->GetHash(), o))) return true;
+        }
+    }
+    return false;
 }
 
 unsigned int CCoinsViewCache::GetCacheSize() const {

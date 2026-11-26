@@ -2630,17 +2630,10 @@ bool ConnectBlock(const CBlock& block, const BlockValidationContext& ctx,
 
     result.time_checked = SteadyClock::now();
 
-    // BIP30: no transaction may overwrite one that is not completely spent. Whether the rule
-    // applies to this block was decided when the context was built, see EnforceBIP30().
-    if (ctx.enforce_bip30) {
-        for (const auto& tx : block.vtx) {
-            for (size_t o = 0; o < tx->vout.size(); o++) {
-                if (view.HaveCoin(COutPoint(tx->GetHash(), o))) {
-                    state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-txns-BIP30",
-                                  "tried to overwrite transaction");
-                }
-            }
-        }
+    // BIP30: no transaction may overwrite one that is not completely spent.
+    if (ctx.enforce_bip30 && view.HaveAnyOutput(block)) {
+        state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-txns-BIP30",
+                      "tried to overwrite transaction");
     }
 
     // Enforce BIP68 (sequence locks)
@@ -5897,11 +5890,11 @@ bool Chainstate::ResizeCoinsCaches(size_t coinstip_size, size_t coinsdb_size)
     }
     size_t old_coinstip_size = m_coinstip_cache_size_bytes;
     m_coinstip_cache_size_bytes = coinstip_size;
+    // The share of the coins database's cache is recorded only: the database keeps the cache it was
+    // opened with (at most MAX_COINS_DB_CACHE), since reopening it would replace the LevelDB instance
+    // under the connect window's workers, which read it without cs_main.
     m_coinsdb_cache_size_bytes = coinsdb_size;
-    CoinsDB().ResizeCache(coinsdb_size);
 
-    LogInfo("[%s] resized coinsdb cache to %.1f MiB",
-        this->ToString(), coinsdb_size / double(1_MiB));
     LogInfo("[%s] resized coinstip cache to %.1f MiB",
         this->ToString(), coinstip_size / double(1_MiB));
 

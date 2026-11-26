@@ -28,6 +28,7 @@
 #include <future>
 #include <memory>
 #include <optional>
+#include <span>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -383,6 +384,14 @@ public:
     //! The passed cursor is used to iterate through the coins.
     virtual void BatchWrite(CoinsViewCacheCursor& cursor, const uint256& block_hash) = 0;
 
+    //! A single sorted coin write (nullopt erases the outpoint).
+    using SortedCoinWrite = std::pair<COutPoint, std::optional<Coin>>;
+    //! Producer invoked by BatchWriteSorted() to emit disjoint sorted chunks of dirty coins.
+    using SortedBatchProducer = std::function<void(const std::function<void(std::span<const SortedCoinWrite>)>&)>;
+
+    //! Write pre-sorted disjoint coin batches with the same crash-recovery markers as BatchWrite().
+    virtual void BatchWriteSorted(const SortedBatchProducer& produce, const uint256& block_hash, size_t dirty_count, size_t total_count);
+
     //! Estimate database size
     virtual size_t EstimateSize() const = 0;
 };
@@ -428,6 +437,10 @@ public:
     uint256 GetBestBlock() const override { return base->GetBestBlock(); }
     std::vector<uint256> GetHeadBlocks() const override { return base->GetHeadBlocks(); }
     void BatchWrite(CoinsViewCacheCursor& cursor, const uint256& block_hash) override { base->BatchWrite(cursor, block_hash); }
+    void BatchWriteSorted(const SortedBatchProducer& produce, const uint256& block_hash, size_t dirty_count, size_t total_count) override
+    {
+        base->BatchWriteSorted(produce, block_hash, dirty_count, total_count);
+    }
     size_t EstimateSize() const override { return base->EstimateSize(); }
 };
 
@@ -438,13 +451,6 @@ class CCoinsViewCache : public CCoinsViewBacked
 private:
     const bool m_deterministic;
 
-    //! Force a reallocation of the cache map. This is required when downsizing
-    //! the cache because the map's allocator may be hanging onto a lot of
-    //! memory despite having called .clear().
-    //!
-    //! See: https://stackoverflow.com/questions/42114044/how-to-release-unordered-map-memory
-    void ReallocateCache();
-
     /**
      * @note this is marked const, but may actually append to `cacheCoins`, increasing
      * memory usage.
@@ -452,6 +458,12 @@ private:
     CCoinsMap::iterator FetchCoin(const COutPoint &outpoint) const;
 
 protected:
+    //! Force a reallocation of the cache map. This is required when downsizing
+    //! the cache because the map's allocator may be hanging onto a lot of
+    //! memory despite having called .clear().
+    //!
+    //! See: https://stackoverflow.com/questions/42114044/how-to-release-unordered-map-memory
+    void ReallocateCache();
     /**
      * Make mutable so that we can "fill the cache" even from Get-methods
      * declared as "const".
@@ -489,7 +501,7 @@ public:
     std::optional<Coin> PeekCoin(const COutPoint& outpoint) const override;
     bool HaveCoin(const COutPoint& outpoint) const override;
     uint256 GetBestBlock() const override;
-    void SetBestBlock(const uint256& block_hash);
+    virtual void SetBestBlock(const uint256& block_hash);
     void BatchWrite(CoinsViewCacheCursor& cursor, const uint256& block_hash) override;
 
     /**
@@ -497,7 +509,7 @@ public:
      * The semantics are the same as HaveCoin(), but no calls to
      * the backing CCoinsView are made.
      */
-    bool HaveCoinInCache(const COutPoint &outpoint) const;
+    virtual bool HaveCoinInCache(const COutPoint &outpoint) const;
 
     /**
      * Return a reference to Coin in the cache, or coinEmpty if not found. This is
@@ -509,13 +521,13 @@ public:
      * on! To be safe, best to not hold the returned reference through any other
      * calls to this cache.
      */
-    const Coin& AccessCoin(const COutPoint &output) const;
+    virtual const Coin& AccessCoin(const COutPoint &output) const;
 
     /**
      * Add a coin. Set possible_overwrite to true if an unspent version may
      * already exist in the cache.
      */
-    void AddCoin(const COutPoint& outpoint, Coin&& coin, bool possible_overwrite);
+    virtual void AddCoin(const COutPoint& outpoint, Coin&& coin, bool possible_overwrite);
 
     /**
      * Emplace a coin into cacheCoins without performing any checks, marking
@@ -524,14 +536,14 @@ public:
      * NOT FOR GENERAL USE. Used only when loading coins from a UTXO snapshot.
      * @sa ChainstateManager::PopulateAndValidateSnapshot()
      */
-    void EmplaceCoinInternalDANGER(const COutPoint& outpoint, Coin&& coin);
+    virtual void EmplaceCoinInternalDANGER(const COutPoint& outpoint, Coin&& coin);
 
     /**
      * Spend a coin. Pass moveto in order to get the deleted data.
      * If no unspent output exists for the passed outpoint, this call
      * has no effect.
      */
-    bool SpendCoin(const COutPoint &outpoint, Coin* moveto = nullptr);
+    virtual bool SpendCoin(const COutPoint &outpoint, Coin* moveto = nullptr);
 
     /**
      * Push the modifications applied to this cache to its base and wipe local state.
@@ -548,28 +560,32 @@ public:
      * Failure to call this method or Flush() before destruction will cause the changes
      * to be forgotten.
      */
-    void Sync();
+    virtual void Sync();
 
     /**
      * Removes the UTXO with the given outpoint from the cache, if it is
      * not modified.
      */
-    void Uncache(const COutPoint &outpoint);
+    virtual void Uncache(const COutPoint &outpoint);
+    static void TraceUncache(const COutPoint& outpoint, const Coin& coin);
 
     //! Size of the cache (in number of transaction outputs)
-    unsigned int GetCacheSize() const;
+    virtual unsigned int GetCacheSize() const;
 
     //! Number of dirty cache entries (transaction outputs)
-    size_t GetDirtyCount() const noexcept { return m_dirty_count; }
+    virtual size_t GetDirtyCount() const noexcept { return m_dirty_count; }
 
     //! Calculate the size of the cache (in bytes)
-    size_t DynamicMemoryUsage() const;
+    virtual size_t DynamicMemoryUsage() const;
 
     //! Check whether all prevouts of the transaction are present in the UTXO set represented by this view
     bool HaveInputs(const CTransaction& tx) const;
 
+    //! Check whether any output of any transaction in `block` is currently unspent (BIP30).
+    virtual bool HaveAnyOutput(const CBlock& block) const;
+
     //! Run an internal sanity check on the cache data structure. */
-    void SanityCheck() const;
+    virtual void SanityCheck() const;
 
     class ResetGuard
     {
@@ -695,7 +711,7 @@ private:
         if (i >= m_inputs.size()) return false;
 
         auto& input{m_inputs[i]};
-        input.coin = base->PeekCoin(input.outpoint);
+        input.coin = ReadBase(input.outpoint);
         // Use release so writing coin above happens before the main thread acquires.
         Assert(!input.ready.test_and_set(std::memory_order_release));
         input.ready.notify_one();
@@ -736,7 +752,7 @@ private:
         }
 
         // We will only get here for BIP30 checks, an invalid block, or if the threadpool has not been started.
-        return base->PeekCoin(outpoint);
+        return ReadBase(outpoint);
     }
 
     /// May have zero workers when input fetching is disabled.
@@ -744,6 +760,8 @@ private:
     std::vector<std::future<void>> m_futures{};
 
 protected:
+    virtual std::optional<Coin> ReadBase(const COutPoint& outpoint) const { return base->PeekCoin(outpoint); }
+
     //! StopFetching must be called here for two reasons: InputToFetch objects hold references to the
     //! block's outpoints, so they must not outlive the block being connected; and when connecting a
     //! block fails, workers must not keep fetching inputs for the block that was abandoned.
@@ -776,7 +794,7 @@ public:
 
     //! Swapping the backend or writing through to it with Sync() is not supported while fetching.
     void SetBackend(CCoinsView&) = delete;
-    void Sync() = delete;
+    void Sync() override { Assert(false); }
 
     //! Verify that all parallel fetched input prevouts have been consumed.
     bool AllInputsConsumed() const noexcept { return m_input_tail == m_inputs.size(); }
