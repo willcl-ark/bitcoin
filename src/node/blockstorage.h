@@ -12,12 +12,14 @@
 #include <kernel/blockmanager_opts.h>
 #include <kernel/chainparams.h>
 #include <kernel/cs_main.h>
+#include <kernel/effects.h>
 #include <kernel/messagestartchars.h>
 #include <primitives/block.h>
 #include <serialize.h>
 #include <streams.h>
 #include <sync.h>
 #include <uint256.h>
+#include <util/byte_ledger.h>
 #include <util/byte_units.h>
 #include <util/check.h>
 #include <util/expected.h>
@@ -41,6 +43,7 @@
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -348,6 +351,9 @@ private:
     const FlatFileSeq m_block_file_seq;
     const FlatFileSeq m_undo_file_seq;
 
+    //! Write serialized undo data and checksum to `pos`; sets `out_of_space` if preallocation ran out of disk space.
+    bool WriteUndoBytes(const CBlockUndo& blockundo, uint32_t blockundo_size, const FlatFilePos& pos, const uint256& prev_hash, bool& out_of_space);
+
 protected:
     std::vector<CBlockFileInfo> m_blockfile_info;
 
@@ -384,6 +390,16 @@ public:
     const util::SignalInterrupt& m_interrupt;
     std::atomic<bool> m_importing{false};
     ThreadPool m_block_io{"blockio"};
+    util::ByteLedger m_ledger;
+    kernel::EffectsExecutor m_effects;
+    std::unordered_set<const CBlockIndex*> m_undo_pending GUARDED_BY(::cs_main);
+    std::atomic<bool> m_undo_write_failed{false};
+
+    //! Wait for all queued undo I/O to finish and apply their completions under cs_main.
+    void SettleUndoWrites();
+    //! Settle queued undo writes only if `block` has an undo write in flight.
+    void SettleUndoWriteOf(const CBlockIndex& block);
+    bool UndoWriteFailed() const { return m_undo_write_failed.load(std::memory_order_acquire); }
 
     /**
      * Whether all blockfiles have been added to the block tree database.
@@ -455,6 +471,10 @@ public:
     CBlockFileInfo* GetBlockFileInfo(size_t n) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     bool WriteBlockUndo(const CBlockUndo& blockundo, BlockValidationState& state, CBlockIndex& block)
+        EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+
+    //! Claim an undo file position under cs_main and enqueue the disk write on m_effects.
+    bool QueueBlockUndo(std::shared_ptr<const CBlockUndo> blockundo, uint32_t blockundo_size, BlockValidationState& state, CBlockIndex& block)
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     /** Store block on disk and update block file statistics.
@@ -605,6 +625,7 @@ private:
                                                         const std::function<std::span<std::byte>(size_t)>& buffer_for) const;
 public:
 
+    bool ReadBlockUndo(CBlockUndo& blockundo, const FlatFilePos& pos, const uint256& hash_prev) const;
     bool ReadBlockUndo(CBlockUndo& blockundo, const CBlockIndex& index) const;
 
     void CleanupBlockRevFiles() const;

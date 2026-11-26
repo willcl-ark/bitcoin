@@ -41,6 +41,7 @@
 #include <util/translation.h>
 #include <validation.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <compare>
 #include <cstddef>
@@ -311,6 +312,7 @@ void BlockManager::FindFilesToPruneManual(
     assert(IsPruneMode() && nManualPruneHeight > 0);
 
     LOCK(::cs_main);
+    SettleUndoWrites();
     if (chain.m_chain.Height() < 0) {
         return;
     }
@@ -344,6 +346,7 @@ void BlockManager::FindFilesToPrune(
     ChainstateManager& chainman)
 {
     LOCK(::cs_main);
+    SettleUndoWrites();
     // Compute `target` value with maximum size (in bytes) of blocks below the
     // `last_prune` height which should be preserved and not pruned. The
     // `target` value will be derived from the -prune preference provided by the
@@ -573,9 +576,10 @@ bool BlockManager::IsBlockUndoSynced(const CBlockIndex& block) const
 bool BlockManager::SyncWrittenFiles()
 {
     AssertLockHeld(::cs_main);
+    SettleUndoWrites();
     // A sync that failed is not tried again: a second fsync of the same file can
     // report success although the pages of the first were dropped.
-    if (m_sync_failed) return false;
+    if (m_sync_failed || m_undo_write_failed.load(std::memory_order_acquire)) return false;
     // Iterate over copies: a successful sync takes the file out of its set.
     for (const int file : std::set<int>{m_unsynced_block_files}) {
         if (m_block_file_seq.Flush(FlatFilePos(file, m_blockfile_info.at(file).nSize), /*finalize=*/false)) {
@@ -759,10 +763,8 @@ CBlockFileInfo* BlockManager::GetBlockFileInfo(size_t n)
     return &m_blockfile_info.at(n);
 }
 
-bool BlockManager::ReadBlockUndo(CBlockUndo& blockundo, const CBlockIndex& index) const
+bool BlockManager::ReadBlockUndo(CBlockUndo& blockundo, const FlatFilePos& pos, const uint256& hash_prev) const
 {
-    const FlatFilePos pos{WITH_LOCK(::cs_main, return index.GetUndoPos())};
-
     // Open history file to read
     AutoFile file{OpenUndoFile(pos, true)};
     if (file.IsNull()) {
@@ -775,7 +777,7 @@ bool BlockManager::ReadBlockUndo(CBlockUndo& blockundo, const CBlockIndex& index
         // Read block
         HashVerifier verifier{filein}; // Use HashVerifier, as reserializing may lose data, c.f. commit d3424243
 
-        verifier << index.pprev->GetBlockHash();
+        verifier << hash_prev;
         verifier >> blockundo;
 
         uint256 hashChecksum;
@@ -792,6 +794,15 @@ bool BlockManager::ReadBlockUndo(CBlockUndo& blockundo, const CBlockIndex& index
     }
 
     return true;
+}
+
+bool BlockManager::ReadBlockUndo(CBlockUndo& blockundo, const CBlockIndex& index) const
+{
+    if (WITH_LOCK(::cs_main, return m_undo_pending.contains(&index))) {
+        const_cast<BlockManager*>(this)->SettleUndoWrites();
+    }
+    const FlatFilePos pos{WITH_LOCK(::cs_main, return index.GetUndoPos())};
+    return ReadBlockUndo(blockundo, pos, index.pprev->GetBlockHash());
 }
 
 bool BlockManager::FlushUndoFile(int block_file, bool finalize)
@@ -1022,7 +1033,16 @@ FlatFilePos BlockManager::FindNextBlockPos(uint64_t nAddSize, unsigned int nHeig
         // (SyncWrittenFiles()). A sync here would be made under cs_main, holding every block being stored behind
         // it, for a durability nothing reads yet.
         // The block file's trim waits until no write is in flight for it (UnpinBlockFile()).
-        if (finalize_undo) TrimUndoFile(last_blockfile);
+        if (finalize_undo) {
+            if (std::ranges::any_of(m_undo_pending, [&](const CBlockIndex* idx) { return idx->nFile == last_blockfile; })) {
+                m_effects.Enqueue(/*effect=*/nullptr, [this, file = last_blockfile](bool) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) {
+                    AssertLockHeld(::cs_main);
+                    if (!UndoWriteFailed() && m_blockfile_info[file].nUndoSize > 0) TrimUndoFile(file);
+                });
+            } else {
+                TrimUndoFile(last_blockfile);
+            }
+        }
         if (m_blockfiles_being_written.contains(last_blockfile)) {
             m_blockfiles_to_trim.insert(last_blockfile);
         } else {
@@ -1087,6 +1107,33 @@ FlatFilePos BlockManager::FindUndoPos(int nFile, uint64_t nAddSize)
     return pos;
 }
 
+bool BlockManager::WriteUndoBytes(const CBlockUndo& blockundo, uint32_t blockundo_size, const FlatFilePos& pos, const uint256& prev_hash, bool& out_of_space)
+{
+    out_of_space = false;
+    if (!Preallocate(m_undo_prealloc, m_undo_file_seq, pos, blockundo_size + UNDO_DATA_DISK_OVERHEAD, out_of_space)) {
+        return false;
+    }
+
+    AutoFile file{OpenUndoFile(pos)};
+    if (file.IsNull()) {
+        LogError("OpenUndoFile failed for %s while writing block undo", pos.ToString());
+        return false;
+    }
+    {
+        BufferedWriter fileout{file};
+        fileout << GetParams().MessageStart() << blockundo_size;
+        HashWriter hasher{};
+        hasher << prev_hash << blockundo;
+        fileout << blockundo << hasher.GetHash();
+    }
+
+    if (file.fclose() != 0) {
+        LogError("Failed to close block undo file %s: %s", pos.ToString(), SysErrorString(errno));
+        return false;
+    }
+    return true;
+}
+
 bool BlockManager::WriteBlockUndo(const CBlockUndo& blockundo, BlockValidationState& state, CBlockIndex& block)
 {
     AssertLockHeld(::cs_main);
@@ -1094,65 +1141,105 @@ bool BlockManager::WriteBlockUndo(const CBlockUndo& blockundo, BlockValidationSt
     auto& cursor = *Assert(m_blockfile_cursors[type]);
 
     // Write undo information to disk
-    if (block.GetUndoPos().IsNull()) {
+    if (block.GetUndoPos().IsNull() && !m_undo_pending.contains(&block)) {
         const auto blockundo_size{static_cast<uint32_t>(GetSerializeSize(blockundo))};
         FlatFilePos pos{FindUndoPos(block.nFile, blockundo_size + UNDO_DATA_DISK_OVERHEAD)};
-        if (!Preallocate(m_undo_prealloc, m_undo_file_seq, pos, blockundo_size + UNDO_DATA_DISK_OVERHEAD, out_of_space)) {
-            return FatalError(m_opts.notifications, state, _("Disk space is too low!"));
+        bool out_of_space{false};
+        if (!WriteUndoBytes(blockundo, blockundo_size, pos, block.pprev->GetBlockHash(), out_of_space)) {
+            return FatalError(m_opts.notifications, state, out_of_space ? _("Disk space is too low!") : _("Failed to write undo data."));
         }
+        pos.nPos += STORAGE_HEADER_BYTES;
 
-        // Open history file to append
-        AutoFile file{OpenUndoFile(pos)};
-        if (file.IsNull()) {
-            LogError("OpenUndoFile failed for %s while writing block undo", pos.ToString());
-            return FatalError(m_opts.notifications, state, _("Failed to write undo data."));
-        }
-        {
-            BufferedWriter fileout{file};
-
-            // Write index header
-            fileout << GetParams().MessageStart() << blockundo_size;
-            pos.nPos += STORAGE_HEADER_BYTES;
-            {
-                // Calculate checksum
-                HashWriter hasher{};
-                hasher << block.pprev->GetBlockHash() << blockundo;
-                // Write undo data & checksum
-                fileout << blockundo << hasher.GetHash();
-            }
-            // BufferedWriter will flush pending data to file when fileout goes out of scope.
-        }
-
-        // Make sure that the file is closed before we call `FlushUndoFile`.
-        if (file.fclose() != 0) {
-            LogError("Failed to close block undo file %s: %s", pos.ToString(), SysErrorString(errno));
-            return FatalError(m_opts.notifications, state, _("Failed to close block undo file."));
-        }
-
-        // rev files are written in block height order, whereas blk files are written as blocks come in (often out of order)
-        // we want to flush the rev (undo) file once we've written the last block, which is indicated by the last height
-        // in the block file info as below; note that this does not catch the case where the undo writes are keeping up
-        // with the block writes (usually when a synced up node is getting newly mined blocks) -- this case is caught in
-        // the FindNextBlockPos function
         if (pos.nFile < cursor.file_num && static_cast<uint32_t>(block.nHeight) == m_blockfile_info[pos.nFile].nHeightLast) {
-            // Do not propagate the return code, a failed flush here should not
-            // be an indication for a failed write. If it were propagated here,
-            // the caller would assume the undo data not to be written, when in
-            // fact it is. Note though, that a failed flush might leave the data
-            // file untrimmed.
             if (!FlushUndoFile(pos.nFile, true)) {
                 LogWarning("Failed to flush undo file %05i\n", pos.nFile);
             }
         } else if (pos.nFile == cursor.file_num && block.nHeight > cursor.undo_height) {
             cursor.undo_height = block.nHeight;
         }
-        // update nUndoPos in block index
         block.nUndoPos = pos.nPos;
         block.nStatus |= BLOCK_HAVE_UNDO;
         m_dirty_blockindex.insert(&block);
     }
 
     return true;
+}
+
+bool BlockManager::QueueBlockUndo(std::shared_ptr<const CBlockUndo> blockundo, uint32_t blockundo_size, BlockValidationState& state, CBlockIndex& block)
+{
+    AssertLockHeld(::cs_main);
+    if (m_undo_write_failed.load(std::memory_order_acquire)) {
+        return state.Error("An earlier undo write failed");
+    }
+    if (!block.GetUndoPos().IsNull() || m_undo_pending.contains(&block)) {
+        return true;
+    }
+    const BlockfileType type = BlockfileTypeForHeight(block.nHeight);
+    auto& cursor = *Assert(m_blockfile_cursors[type]);
+
+    const FlatFilePos pos{FindUndoPos(block.nFile, blockundo_size + UNDO_DATA_DISK_OVERHEAD)};
+    std::optional<int> finishes;
+    if (pos.nFile < cursor.file_num && static_cast<uint32_t>(block.nHeight) == m_blockfile_info[pos.nFile].nHeightLast) {
+        finishes = pos.nFile;
+    } else if (pos.nFile == cursor.file_num && block.nHeight > cursor.undo_height) {
+        cursor.undo_height = block.nHeight;
+    }
+
+    m_undo_pending.insert(&block);
+    const uint256 prev_hash{block.pprev->GetBlockHash()};
+    const FlatFilePos undo_pos{pos.nFile, pos.nPos + STORAGE_HEADER_BYTES};
+
+    m_effects.Enqueue(
+        [this, blockundo = std::move(blockundo), blockundo_size, pos, prev_hash]() -> bool {
+            if (m_opts.test_crash_before_undo_write) {
+                LogError("Simulating a crash before writing undo data at %s", pos.ToString());
+                std::abort();
+            }
+            bool out_of_space{false};
+            bool ok{false};
+            try {
+                ok = WriteUndoBytes(*blockundo, blockundo_size, pos, prev_hash, out_of_space);
+            } catch (const std::exception& e) {
+                LogError("Exception while writing undo data at %s: %s\n", pos.ToString(), e.what());
+                ok = false;
+            }
+            if (!ok) {
+                m_undo_write_failed.store(true, std::memory_order_release);
+                m_opts.notifications.fatalError(out_of_space ? _("Disk space is too low!") : _("Failed to write undo data."));
+                return false;
+            }
+            return true;
+        },
+        [this, &block, undo_pos, finishes](bool ok) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) {
+            AssertLockHeld(::cs_main);
+            m_undo_pending.erase(&block);
+            if (!ok) return;
+            // The write was made off the lock, after FindUndoPos() claimed its position: a sync
+            // made in between did not cover these bytes, so mark the file unsynced again.
+            m_unsynced_undo_files.insert(undo_pos.nFile);
+            if (finishes && !FlushUndoFile(*finishes, /*finalize=*/true)) {
+                LogWarning("Failed to flush undo file %05i\n", *finishes);
+            }
+            block.nUndoPos = undo_pos.nPos;
+            block.nStatus |= BLOCK_HAVE_UNDO;
+            m_dirty_blockindex.insert(&block);
+        },
+        blockundo_size);
+
+    return !m_undo_write_failed.load(std::memory_order_acquire);
+}
+
+void BlockManager::SettleUndoWrites()
+{
+    m_effects.WaitForIO();
+    LOCK(::cs_main);
+    m_effects.ApplyCompletions();
+}
+
+void BlockManager::SettleUndoWriteOf(const CBlockIndex& block)
+{
+    AssertLockNotHeld(::cs_main);
+    if (WITH_LOCK(::cs_main, return m_undo_pending.contains(&block))) SettleUndoWrites();
 }
 
 bool BlockManager::ReadBlock(CBlock& block, const FlatFilePos& pos, const std::optional<uint256>& expected_hash) const
@@ -1418,6 +1505,13 @@ static auto InitBlocksdirXorKey(const BlockManager::Options& opts)
 
 BlockManager::~BlockManager()
 {
+    while (true) {
+        m_effects.WaitForIO();
+        if (!m_effects.HasPendingCompletions()) break;
+        LOCK(::cs_main);
+        m_effects.ApplyCompletions();
+    }
+    m_effects.Stop();
     // Runs what is still queued, on this thread as well.
     m_block_io.Stop();
 }
@@ -1428,10 +1522,15 @@ BlockManager::BlockManager(const util::SignalInterrupt& interrupt, Options opts)
       m_opts{std::move(opts)},
       m_block_file_seq{FlatFileSeq{m_opts.blocks_dir, "blk", m_opts.fast_prune ? 0x4000 /* 16kB */ : BLOCKFILE_CHUNK_SIZE}},
       m_undo_file_seq{FlatFileSeq{m_opts.blocks_dir, "rev", UNDOFILE_CHUNK_SIZE}},
-      m_interrupt{interrupt}
+      m_interrupt{interrupt},
+      m_effects{m_ledger[util::ByteAccountId::UndoBacklog], [this] {
+          TRY_LOCK(::cs_main, locked);
+          if (locked) m_effects.ApplyCompletions();
+      }, /*threaded=*/m_opts.block_io_threads > 0}
 {
     if (m_opts.block_io_threads > 0) {
         m_block_io.Start(m_opts.block_io_threads);
+        m_effects.Start();
     }
     m_block_tree_db = std::make_unique<BlockTreeDB>(m_opts.block_tree_db_params);
 

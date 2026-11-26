@@ -31,6 +31,8 @@ struct BlockManagerOpts {
     DBParams block_tree_db_params;
     //! Number of background threads for unordered block file I/O (0 runs inline).
     int block_io_threads{4};
+    //! Test only (-test=crash_before_undo_write): abort when the first queued undo write runs.
+    bool test_crash_before_undo_write{false};
 };
 
 } // namespace kernel

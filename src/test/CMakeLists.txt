@@ -30,6 +30,7 @@ add_executable(test_bitcoin
   bloom_tests.cpp
   bswap_tests.cpp
   btcsignals_tests.cpp
+  byte_ledger_tests.cpp
   caches_tests.cpp
   chain_tests.cpp
   chainstate_write_tests.cpp
@@ -48,6 +49,7 @@ add_executable(test_bitcoin
   denialofservice_tests.cpp
   descriptor_tests.cpp
   disconnected_transactions.cpp
+  effects_tests.cpp
   fees_util_tests.cpp
   feefrac_tests.cpp
   feerounder_tests.cpp
