@@ -300,17 +300,47 @@ void CCoinsViewCache::Reset() noexcept
     SetBestBlock(uint256::ZERO);
 }
 
+void CCoinsView::BatchWriteSorted(const SortedBatchProducer& produce, const uint256& block_hash, size_t, size_t)
+{
+    CCoinsMapMemoryResource resource;
+    CoinsCachePair sentinel;
+    sentinel.second.SelfRef(sentinel);
+    CCoinsMap map{0, SaltedCoinsCacheHasher{/*deterministic=*/true}, CCoinsMap::key_equal{}, &resource};
+    size_t dirty{0};
+    produce([&](std::span<const SortedCoinWrite> chunk) {
+        for (const SortedCoinWrite& w : chunk) {
+            auto [it, inserted]{map.try_emplace(*w.outpoint)};
+            if (w.out) {
+                it->second.coin = Coin{*w.out, static_cast<int>(w.code >> 1), (w.code & 1) != 0};
+            } else {
+                it->second.coin.Clear();
+            }
+            if (!it->second.IsDirty()) {
+                CCoinsCacheEntry::SetDirty(*it, sentinel);
+                ++dirty;
+            }
+        }
+    });
+    auto cursor{CoinsViewCacheCursor(dirty, sentinel, map, /*will_erase=*/true)};
+    BatchWrite(cursor, block_hash);
+}
+
+void CCoinsViewCache::TraceUncache(const COutPoint& hash, uint32_t height, CAmount value, bool coinbase)
+{
+    TRACEPOINT(utxocache, uncache,
+           hash.hash.data(),
+           (uint32_t)hash.n,
+           height,
+           (int64_t)value,
+           coinbase);
+}
+
 void CCoinsViewCache::Uncache(const COutPoint& hash)
 {
     CCoinsMap::iterator it = cacheCoins.find(hash);
     if (it != cacheCoins.end() && !it->second.IsDirty()) {
         Assume(TrySub(cachedCoinsUsage, it->second.coin.DynamicMemoryUsage()));
-        TRACEPOINT(utxocache, uncache,
-               hash.hash.data(),
-               (uint32_t)hash.n,
-               (uint32_t)it->second.coin.nHeight,
-               (int64_t)it->second.coin.out.nValue,
-               (bool)it->second.coin.IsCoinBase());
+        TraceUncache(hash, (uint32_t)it->second.coin.nHeight, it->second.coin.out.nValue, (bool)it->second.coin.IsCoinBase());
         cacheCoins.erase(it);
     }
 }

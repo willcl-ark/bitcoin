@@ -492,4 +492,32 @@ BOOST_AUTO_TEST_CASE(submit_range_of_tasks_complete_successfully)
     BOOST_CHECK_EQUAL(threadPool.WorkQueueSize(), 0);
 }
 
+// Test 15, SubmitFront preempts queued tasks
+BOOST_AUTO_TEST_CASE(submit_front_preempts_queued_tasks)
+{
+    ThreadPool threadPool{POOL_NAME};
+    threadPool.Start(1);
+
+    std::counting_semaphore<> blocker{0};
+    auto blocking{BlockWorkers(threadPool, blocker, 1)};
+
+    Mutex order_mutex;
+    std::vector<int> order;
+    auto f1{std::move(*Assert(threadPool.Submit([&] { LOCK(order_mutex); order.push_back(1); })))};
+    auto f2{std::move(*Assert(threadPool.Submit([&] { LOCK(order_mutex); order.push_back(2); })))};
+    auto f_front{std::move(*Assert(threadPool.SubmitFront([&] { LOCK(order_mutex); order.push_back(0); })))};
+
+    blocker.release(1);
+    WAIT_FOR(blocking);
+    f_front.get();
+    f1.get();
+    f2.get();
+
+    LOCK(order_mutex);
+    BOOST_REQUIRE_EQUAL(order.size(), 3U);
+    BOOST_CHECK_EQUAL(order[0], 0);
+    BOOST_CHECK_EQUAL(order[1], 1);
+    BOOST_CHECK_EQUAL(order[2], 2);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

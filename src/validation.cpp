@@ -5949,10 +5949,7 @@ bool Chainstate::ResizeCoinsCaches(size_t coinstip_size, size_t coinsdb_size)
     size_t old_coinstip_size = m_coinstip_cache_size_bytes;
     m_coinstip_cache_size_bytes = coinstip_size;
     m_coinsdb_cache_size_bytes = coinsdb_size;
-    CoinsDB().ResizeCache(coinsdb_size);
 
-    LogInfo("[%s] resized coinsdb cache to %.1f MiB",
-        this->ToString(), coinsdb_size / double(1_MiB));
     LogInfo("[%s] resized coinstip cache to %.1f MiB",
         this->ToString(), coinstip_size / double(1_MiB));
 

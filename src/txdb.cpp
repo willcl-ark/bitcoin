@@ -53,6 +53,19 @@ struct CoinEntry {
     SERIALIZE_METHODS(CoinEntry, obj) { READWRITE(obj.key, obj.outpoint->hash, VARINT(obj.outpoint->n)); }
 };
 
+struct CoinRef {
+    const CTxOut* out;
+    uint32_t code;
+
+    template <typename Stream>
+    void Serialize(Stream& s) const
+    {
+        assert(!out->IsNull());
+        ::Serialize(s, VARINT(code));
+        ::Serialize(s, Using<TxOutCompression>(*out));
+    }
+};
+
 } // namespace
 
 CCoinsViewDB::CCoinsViewDB(DBParams db_params, CoinsViewOptions options) :
@@ -67,21 +80,6 @@ CCoinsViewDB::~CCoinsViewDB()
             LogInfo("Waiting for background chainstate compaction of %s", fs::PathToString(m_db_params.path));
         }
         m_compaction.wait();
-    }
-}
-
-void CCoinsViewDB::ResizeCache(size_t new_cache_size)
-{
-    // We can't do this operation with an in-memory DB since we'll lose all the coins upon
-    // reset.
-    if (!m_db_params.memory_only) {
-        LOCK(m_db_mutex);
-        // Have to do a reset first to get the original `m_db` state to release its
-        // filesystem lock.
-        m_db.reset();
-        m_db_params.cache_bytes = new_cache_size;
-        m_db_params.wipe_data = false;
-        m_db = std::make_unique<CDBWrapper>(m_db_params);
     }
 }
 
@@ -198,6 +196,74 @@ void CCoinsViewDB::BatchWrite(CoinsViewCacheCursor& cursor, const uint256& block
     LogDebug(BCLog::COINDB, "Committed %u changed transaction outputs (out of %u) to coin database...", (unsigned int)dirty_count, (unsigned int)count);
 }
 
+void CCoinsViewDB::BatchWriteSorted(const SortedBatchProducer& produce, const uint256& block_hash, size_t dirty_count, size_t total_count)
+{
+    assert(!block_hash.IsNull());
+
+    uint256 old_tip = GetBestBlock();
+    if (old_tip.IsNull()) {
+        std::vector<uint256> old_heads = GetHeadBlocks();
+        if (old_heads.size() == 2) {
+            if (old_heads[0] != block_hash) {
+                LogError("The coins database detected an inconsistent state, likely due to a previous crash or shutdown. You will need to restart bitcoind with the -reindex-chainstate or -reindex configuration option.\n");
+            }
+            assert(old_heads[0] == block_hash);
+            old_tip = old_heads[1];
+        }
+    }
+
+    if (dirty_count > WARN_FLUSH_COINS_COUNT) LogWarning("Flushing large (%d entries) UTXO set to disk, it may take several minutes", dirty_count);
+    LOG_TIME_MILLIS_WITH_CATEGORY(strprintf("write coins cache to disk (%d out of %d cached coins)", dirty_count, total_count), BCLog::BENCH);
+
+    CDBBatch batch(*m_db);
+    batch.Erase(DB_BEST_BLOCK);
+    batch.Write(DB_HEAD_BLOCKS, Vector(block_hash, old_tip));
+    size_t written{0};
+
+    auto flush_partial{[&]() {
+        LogDebug(BCLog::COINDB, "Writing partial batch of %.2f MiB\n", batch.ApproximateSize() / double(1_MiB));
+        m_db->WriteBatch(batch);
+        batch.Clear();
+        if (m_options.simulate_crash_ratio) {
+            static FastRandomContext rng;
+            if (rng.randrange(m_options.simulate_crash_ratio) == 0) {
+                LogError("Simulating a crash. Goodbye.");
+                _Exit(0);
+            }
+        }
+    }};
+
+    produce([&](std::span<const SortedCoinWrite> chunk) {
+        if (chunk.empty()) return;
+        // Flush between disjoint shard chunks once we reach the configured batch budget to bound
+        // per-batch memory and keep consecutive memtable flushes localized in key range.
+        if (written > 0 && batch.ApproximateSize() >= m_options.batch_write_bytes) {
+            flush_partial();
+        }
+        for (const SortedCoinWrite& w : chunk) {
+            CoinEntry entry(w.outpoint);
+            if (!w.out || w.out->IsNull()) {
+                batch.Erase(entry);
+            } else {
+                batch.Write(entry, CoinRef{w.out, w.code});
+            }
+            ++written;
+            if (batch.ApproximateSize() > m_options.batch_write_bytes) {
+                flush_partial();
+            }
+        }
+    });
+
+    if (written == 0 && block_hash == old_tip) return;
+
+    batch.Erase(DB_HEAD_BLOCKS);
+    batch.Write(DB_BEST_BLOCK, block_hash);
+
+    LogDebug(BCLog::COINDB, "Writing final batch of %.2f MiB\n", batch.ApproximateSize() / double(1_MiB));
+    m_db->WriteBatch(batch);
+    LogDebug(BCLog::COINDB, "Committed %u changed transaction outputs (out of %u) to coin database...", (unsigned int)written, (unsigned int)total_count);
+}
+
 size_t CCoinsViewDB::EstimateSize() const
 {
     return m_db->EstimateSize(DB_COIN, uint8_t(DB_COIN + 1));
@@ -217,7 +283,6 @@ std::shared_future<void> CCoinsViewDB::CompactFullAsync()
     m_compaction = std::async(std::launch::async, [this]() noexcept {
         try {
             util::ThreadRename("utxocompact");
-            LOCK(m_db_mutex);
 
             m_db->CompactFull();
         } catch (const std::runtime_error& e) {

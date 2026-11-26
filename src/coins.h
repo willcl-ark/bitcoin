@@ -28,6 +28,7 @@
 #include <future>
 #include <memory>
 #include <optional>
+#include <span>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -383,6 +384,19 @@ public:
     //! The passed cursor is used to iterate through the coins.
     virtual void BatchWrite(CoinsViewCacheCursor& cursor, const uint256& block_hash) = 0;
 
+    //! A non-owning sorted coin write: `out == nullptr` erases `outpoint`, otherwise writes `(code, *out)`
+    //! using Coin's serialized layout `code = (nHeight << 1) | fCoinBase`.
+    struct SortedCoinWrite {
+        const COutPoint* outpoint;
+        const CTxOut* out;
+        uint32_t code;
+    };
+    //! Producer invoked by BatchWriteSorted() to emit disjoint sorted chunks of dirty coins.
+    using SortedBatchProducer = std::function<void(const std::function<void(std::span<const SortedCoinWrite>)>&)>;
+
+    //! Write pre-sorted disjoint coin batches with the same crash-recovery markers as BatchWrite().
+    virtual void BatchWriteSorted(const SortedBatchProducer& produce, const uint256& block_hash, size_t dirty_count, size_t total_count);
+
     //! Estimate database size
     virtual size_t EstimateSize() const = 0;
 };
@@ -428,6 +442,10 @@ public:
     uint256 GetBestBlock() const override { return base->GetBestBlock(); }
     std::vector<uint256> GetHeadBlocks() const override { return base->GetHeadBlocks(); }
     void BatchWrite(CoinsViewCacheCursor& cursor, const uint256& block_hash) override { base->BatchWrite(cursor, block_hash); }
+    void BatchWriteSorted(const SortedBatchProducer& produce, const uint256& block_hash, size_t dirty_count, size_t total_count) override
+    {
+        base->BatchWriteSorted(produce, block_hash, dirty_count, total_count);
+    }
     size_t EstimateSize() const override { return base->EstimateSize(); }
 };
 
@@ -555,6 +573,9 @@ public:
      * not modified.
      */
     void Uncache(const COutPoint &outpoint);
+
+    //! Emit the utxocache:uncache tracepoint (shared with CoinsStore).
+    static void TraceUncache(const COutPoint& outpoint, uint32_t height, CAmount value, bool coinbase);
 
     //! Size of the cache (in number of transaction outputs)
     unsigned int GetCacheSize() const;

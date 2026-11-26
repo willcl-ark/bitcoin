@@ -552,7 +552,7 @@ struct BlockValidationContext {
     //! When true, inputs are served from `input_coins` and outputs are not inserted into `view`.
     bool flat_inputs{false};
     //! Optional BIP30 duplicate-output check used in flat-input mode when no coins view is passed.
-    std::function<bool(const CBlock&)> have_any_output;
+    std::function<bool(const CBlock&)> have_any_output{};
 };
 
 /** Outputs of the pure ConnectBlock() besides the mutated coins view.
@@ -873,7 +873,8 @@ public:
     //! Destructs all objects related to accessing the UTXO set.
     void ResetCoinsViews() { m_coins_views.reset(); }
 
-    //! The cache size of the on-disk coins view.
+    //! The coins database cache this chainstate was opened with or last assigned; the database keeps the cache
+    //! it was opened with (ResizeCoinsCaches()).
     size_t m_coinsdb_cache_size_bytes{0};
 
     //! The cache size of the in-memory coins view.
