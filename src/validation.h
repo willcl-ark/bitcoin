@@ -19,6 +19,7 @@
 #include <kernel/chainparams.h>
 #include <kernel/chainstatemanager_opts.h>
 #include <kernel/cs_main.h> // IWYU pragma: export
+#include <node/block_connector.h>
 #include <node/blockstorage.h>
 #include <node/connect_window.h>
 #include <policy/feerate.h>
@@ -46,6 +47,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <list>
 #include <map>
 #include <memory>
 #include <optional>
@@ -55,6 +57,7 @@
 #include <span>
 #include <string>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -1173,9 +1176,30 @@ private:
     int m_connect_window{1};
     util::NotNullSharedPtr<ThreadPool> m_connect_pool{util::MakeNotNullShared<ThreadPool>("connect")};
     Mutex m_pool_lifecycle_mutex;
+    bool m_ibd_pools_released GUARDED_BY(m_pool_lifecycle_mutex){false};
     std::atomic<bool> m_ibd_resources_released{false};
     //! Bounds concurrent disk reads from the connect pool to avoid seek storms on spinning disks.
     std::counting_semaphore<4> m_block_read_sem{4};
+    node::BlockConnector m_connector;
+
+    //! Bounded FIFO cache of parsed IBD P2P blocks handed off asynchronously to BlockConnector,
+    //! avoiding re-reading and re-parsing them from blk*.dat in ConnectWindowStep/ConnectTip.
+    struct HandoffBlockEntry {
+        uint256 hash;
+        std::shared_ptr<const CBlock> block;
+        size_t bytes{0};
+    };
+    Mutex m_handoff_mutex;
+    std::list<HandoffBlockEntry> m_handoff_fifo GUARDED_BY(m_handoff_mutex);
+    std::unordered_map<uint256, std::list<HandoffBlockEntry>::iterator, SaltedUint256Hasher> m_handoff_index GUARDED_BY(m_handoff_mutex);
+    size_t m_handoff_bytes GUARDED_BY(m_handoff_mutex){0};
+    std::atomic<size_t> m_handoff_bytes_atomic{0};
+    size_t HandoffCacheLimit() const noexcept;
+    void CacheHandoffBlock(const uint256& hash, std::shared_ptr<const CBlock> block, size_t approx_bytes) EXCLUSIVE_LOCKS_REQUIRED(!m_handoff_mutex);
+    std::shared_ptr<const CBlock> TakeHandoffBlock(const uint256& hash) EXCLUSIVE_LOCKS_REQUIRED(!m_handoff_mutex);
+    void ClearHandoffBlocks() EXCLUSIVE_LOCKS_REQUIRED(!m_handoff_mutex);
+    size_t HandoffBlockBytes() const noexcept { return m_handoff_bytes_atomic.load(std::memory_order_relaxed); }
+
     std::atomic<size_t> m_pinned_block_bytes{0};
     std::atomic<size_t> m_window_active_bytes{0};
     std::atomic<uint64_t> m_window_blocks{0};
@@ -1240,9 +1264,22 @@ public:
     void LogConnectWindowSummary() const;
     int ConnectWindow() const { return m_connect_window; }
     ThreadPool* ConnectPool() const { return m_connect_pool.get().get(); }
-    //! Once IBD and any background snapshot validation have completed, stop the undo writer
-    //! and resize the connect pool down to prevoutfetch_threads_num.
+    //! Once IBD and any background snapshot validation have completed, stop the undo writer,
+    //! resize the connect pool down to prevoutfetch_threads_num, clear the handoff cache,
+    //! and stop BlockConnector when called off the connector thread.
     void MaybeReleaseIBDResources() LOCKS_EXCLUDED(::cs_main);
+    bool IsIBDResourcesReleased() const noexcept { return m_ibd_resources_released.load(std::memory_order_acquire); }
+
+    node::HandOffTicket LatestHandOff() const { return m_connector.Latest(); }
+    bool HandOffsDone(const node::HandOffTicket& ticket) const { return m_connector.Done(ticket); }
+    bool AnyHandOffPending() const noexcept { return m_connector.AnyActivePending(); }
+    void SetConnectorOnActiveDone(std::function<void()> cb) { m_connector.SetOnActiveDone(std::move(cb)); }
+    void WaitForPendingBlocks() LOCKS_EXCLUDED(::cs_main)
+    {
+        AssertLockNotHeld(::cs_main);
+        m_connector.WaitForPending();
+    }
+    void StopConnector() { m_connector.Stop(); }
 
     /**
      * Alias for ::cs_main.
@@ -1493,7 +1530,7 @@ public:
      * @param[out]  new_block A boolean which is set to indicate if the block was first received via this call
      * @returns     If the block was processed, independently of block validity
      */
-    bool ProcessNewBlock(const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked, bool* new_block) LOCKS_EXCLUDED(cs_main);
+    bool ProcessNewBlock(const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked, bool* new_block, bool activate_async = false) LOCKS_EXCLUDED(cs_main);
 
     /**
      * Process incoming block headers.
@@ -1568,7 +1605,7 @@ private:
     bool NewBlockFailed(NewBlockInProcess& in) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
     bool AcceptNewBlock(NewBlockInProcess& in, const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked) LOCKS_EXCLUDED(cs_main);
     void WriteNewBlock(NewBlockInProcess& in);
-    bool FinishNewBlock(NewBlockInProcess& in) LOCKS_EXCLUDED(cs_main);
+    bool FinishNewBlock(NewBlockInProcess& in, bool activate_async = false) LOCKS_EXCLUDED(cs_main);
 
 public:
     void ReceivedBlockTransactions(const CBlock& block, CBlockIndex* pindexNew, const FlatFilePos& pos) EXCLUSIVE_LOCKS_REQUIRED(cs_main);

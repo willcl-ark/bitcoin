@@ -2993,7 +2993,8 @@ CoinsCacheSizeState Chainstate::GetCoinsCacheSizeState()
     const size_t overhead{
         m_blockman.PendingUndoBytes() +
         m_chainman.m_pinned_block_bytes.load(std::memory_order_relaxed) +
-        m_chainman.m_window_active_bytes.load(std::memory_order_relaxed)};
+        m_chainman.m_window_active_bytes.load(std::memory_order_relaxed) +
+        m_chainman.HandoffBlockBytes()};
     const size_t min_cache{m_coinstip_cache_size_bytes / 2};
     const size_t effective_cache{
         m_coinstip_cache_size_bytes > overhead
@@ -3377,6 +3378,9 @@ bool Chainstate::ConnectTip(
     assert(pindexNew->pprev == m_chain.Tip());
     // Read block from disk.
     const auto time_1{SteadyClock::now()};
+    if (auto cached{m_chainman.TakeHandoffBlock(pindexNew->GetBlockHash())}; cached && !block_to_connect) {
+        block_to_connect = std::move(cached);
+    }
     if (!block_to_connect) {
         std::shared_ptr<CBlock> pblockNew = std::make_shared<CBlock>();
         if (!m_blockman.ReadBlock(*pblockNew, *pindexNew)) {
@@ -4023,8 +4027,8 @@ bool Chainstate::ConnectWindowStep(BlockValidationState& state, CBlockIndex*& pi
                 auto staged{std::make_unique<node::StagedConnect>()};
                 staged->time_start = SteadyClock::now();
                 staged->staged_bytes = static_cast<size_t>(std::max<unsigned int>(1, pindexConnect->nTx)) * node::WINDOW_BYTES_PER_ITEM;
-                std::shared_ptr<const CBlock> block;
-                if (pblock && pindexConnect == target && pblock->GetHash() == pindexConnect->GetBlockHash()) {
+                std::shared_ptr<const CBlock> block{m_chainman.TakeHandoffBlock(pindexConnect->GetBlockHash())};
+                if (!block && pblock && pindexConnect == target && pblock->GetHash() == pindexConnect->GetBlockHash()) {
                     block = pblock;
                 }
                 StageWindowBlock(pindexConnect, *staged, block_pos, std::move(block));
@@ -5421,7 +5425,7 @@ bool ChainstateManager::AcceptBlock(const std::shared_ptr<const CBlock>& pblock,
     return true;
 }
 
-bool ChainstateManager::ProcessNewBlock(const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked, bool* new_block)
+bool ChainstateManager::ProcessNewBlock(const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked, bool* new_block, bool activate_async)
 {
     AssertLockNotHeld(cs_main);
     // The three steps in a row on this thread.
@@ -5429,7 +5433,7 @@ bool ChainstateManager::ProcessNewBlock(const std::shared_ptr<const CBlock>& blo
     bool ret{false};
     if (AcceptNewBlock(in, block, force_processing, min_pow_checked)) {
         WriteNewBlock(in);
-        ret = FinishNewBlock(in);
+        ret = FinishNewBlock(in, activate_async);
     }
     if (new_block) *new_block = in.new_block;
     return ret;
@@ -5490,18 +5494,34 @@ void ChainstateManager::WriteNewBlock(NewBlockInProcess& in)
     }
 }
 
-bool ChainstateManager::FinishNewBlock(NewBlockInProcess& in)
+bool ChainstateManager::FinishNewBlock(NewBlockInProcess& in, bool activate_async)
 {
     AssertLockNotHeld(cs_main);
+    bool stored{false};
+    bool for_active{true};
     if (in.prepared.store) {
         LOCK(cs_main);
         if (!FinishAcceptBlock(*in.block, in.state, in.prepared, in.written, in.write_error)) {
             in.new_block = false;
             return NewBlockFailed(in);
         }
+        stored = true;
+        if (const CBlockIndex* base{CurrentChainstate().SnapshotBase()}; base && HistoricalChainstate()) {
+            for_active = in.prepared.pindex->nHeight > base->nHeight;
+        }
     }
 
     NotifyHeaderTip();
+
+    if (activate_async) {
+        if (stored) {
+            size_t inputs{0};
+            const size_t approx_bytes{node::ParsedBlockBytes(*in.block, in.prepared.block_size, inputs)};
+            CacheHandoffBlock(in.block->GetHash(), in.block, approx_bytes);
+            m_connector.Signal(in.block, for_active);
+        }
+        return true;
+    }
 
     BlockValidationState state; // Only used to report errors, not invalidity - ignore it
     if (!ActiveChainstate().ActivateBestChain(state, in.block)) {
@@ -7215,6 +7235,22 @@ static ChainstateManager::Options&& Flatten(ChainstateManager::Options&& opts)
 
 ChainstateManager::ChainstateManager(const util::SignalInterrupt& interrupt, Options options, node::BlockManager::Options blockman_options)
     : m_script_check_queue{/*batch_size=*/128, std::clamp(options.worker_threads_num, 0, MAX_SCRIPTCHECK_THREADS)},
+      m_connector{
+          [this](std::shared_ptr<const CBlock> block) {
+              BlockValidationState state;
+              if (!ActiveChainstate().ActivateBestChain(state, std::move(block))) {
+                  LogError("BlockConnector: ActivateBestChain failed (%s)\n", state.ToString());
+              }
+          },
+          [this]() {
+              Chainstate* bg_chain{WITH_LOCK(::cs_main, return HistoricalChainstate())};
+              BlockValidationState bg_state;
+              if (bg_chain && !bg_chain->ActivateBestChain(bg_state, nullptr)) {
+                  LogError("BlockConnector: [background] ActivateBestChain failed (%s)\n", bg_state.ToString());
+              }
+          },
+          [this]() { return bool{m_interrupt}; },
+      },
       m_interrupt{interrupt},
       m_options{Flatten(std::move(options))},
       m_blockman{interrupt, std::move(blockman_options)},
@@ -7245,6 +7281,8 @@ ChainstateManager::ChainstateManager(const util::SignalInterrupt& interrupt, Opt
 
 ChainstateManager::~ChainstateManager()
 {
+    m_connector.Stop();
+    ClearHandoffBlocks();
     {
         LOCK(m_pool_lifecycle_mutex);
         m_connect_pool->Stop();
@@ -7252,6 +7290,55 @@ ChainstateManager::~ChainstateManager()
     LOCK(::cs_main);
 
     m_versionbitscache.Clear();
+}
+
+size_t ChainstateManager::HandoffCacheLimit() const noexcept
+{
+    constexpr size_t MIN_HANDOFF_BYTES{4_MiB};
+    constexpr size_t MAX_HANDOFF_BYTES{32_MiB};
+    const size_t share{m_total_coinstip_cache / 32};
+    return std::clamp(share, MIN_HANDOFF_BYTES, MAX_HANDOFF_BYTES);
+}
+
+void ChainstateManager::CacheHandoffBlock(const uint256& hash, std::shared_ptr<const CBlock> block, size_t approx_bytes)
+{
+    const size_t limit{HandoffCacheLimit()};
+    if (!block || approx_bytes == 0 || approx_bytes > limit) return;
+    LOCK(m_handoff_mutex);
+    if (m_handoff_index.contains(hash)) return;
+    while (m_handoff_bytes + approx_bytes > limit && !m_handoff_fifo.empty()) {
+        const auto& oldest{m_handoff_fifo.front()};
+        m_handoff_bytes -= oldest.bytes;
+        m_handoff_index.erase(oldest.hash);
+        m_handoff_fifo.pop_front();
+    }
+    m_handoff_fifo.push_back(HandoffBlockEntry{.hash = hash, .block = std::move(block), .bytes = approx_bytes});
+    m_handoff_index.emplace(hash, std::prev(m_handoff_fifo.end()));
+    m_handoff_bytes += approx_bytes;
+    m_handoff_bytes_atomic.store(m_handoff_bytes, std::memory_order_relaxed);
+}
+
+std::shared_ptr<const CBlock> ChainstateManager::TakeHandoffBlock(const uint256& hash)
+{
+    if (m_handoff_bytes_atomic.load(std::memory_order_relaxed) == 0) return nullptr;
+    LOCK(m_handoff_mutex);
+    const auto it{m_handoff_index.find(hash)};
+    if (it == m_handoff_index.end()) return nullptr;
+    std::shared_ptr<const CBlock> block{std::move(it->second->block)};
+    m_handoff_bytes -= it->second->bytes;
+    m_handoff_fifo.erase(it->second);
+    m_handoff_index.erase(it);
+    m_handoff_bytes_atomic.store(m_handoff_bytes, std::memory_order_relaxed);
+    return block;
+}
+
+void ChainstateManager::ClearHandoffBlocks()
+{
+    LOCK(m_handoff_mutex);
+    m_handoff_index.clear();
+    m_handoff_fifo.clear();
+    m_handoff_bytes = 0;
+    m_handoff_bytes_atomic.store(0, std::memory_order_relaxed);
 }
 
 void ChainstateManager::MaybeReleaseIBDResources()
@@ -7263,18 +7350,26 @@ void ChainstateManager::MaybeReleaseIBDResources()
     if (IsInitialBlockDownload()) return;
     if (WITH_LOCK(::cs_main, return HistoricalChainstate() != nullptr)) return;
 
-    m_blockman.SettleUndoWrites();
-    m_blockman.StopUndoWriter();
+    if (!m_ibd_pools_released) {
+        m_blockman.SettleUndoWrites();
+        m_blockman.StopUndoWriter();
+        ClearHandoffBlocks();
 
-    const int target_workers{m_options.prevoutfetch_threads_num};
-    if (static_cast<int>(m_connect_pool->WorkersCount()) != target_workers) {
-        m_connect_pool->Stop();
-        if (target_workers > 0) {
-            m_connect_pool->Start(target_workers);
+        const int target_workers{m_options.prevoutfetch_threads_num};
+        if (static_cast<int>(m_connect_pool->WorkersCount()) != target_workers) {
+            m_connect_pool->Stop();
+            if (target_workers > 0) {
+                m_connect_pool->Start(target_workers);
+            }
+            LogInfo("Exited IBD: resized connect/prevout pool to %d threads", target_workers);
         }
-        LogInfo("Exited IBD: resized connect/prevout pool to %d threads", target_workers);
+        m_ibd_pools_released = true;
     }
-    m_ibd_resources_released.store(true, std::memory_order_release);
+
+    if (!m_connector.IsConnectorThread()) {
+        m_connector.StopForIdle();
+        m_ibd_resources_released.store(true, std::memory_order_release);
+    }
 }
 
 void ChainstateManager::CheckCoinsStore() const

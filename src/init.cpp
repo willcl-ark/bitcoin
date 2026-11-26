@@ -343,6 +343,7 @@ void Shutdown(NodeContext& node)
     // using the other before destroying them.
     if (node.peerman && node.validation_signals) node.validation_signals->UnregisterValidationInterface(node.peerman.get());
     if (node.connman) node.connman->Stop();
+    if (node.chainman) node.chainman->StopConnector();
 
     if (node.tor_controller) {
         node.tor_controller->Join();
@@ -1688,6 +1689,7 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     fDiscover = args.GetBoolArg("-discover", true);
 
     PeerManager::Options peerman_opts{};
+    peerman_opts.blocks_on_message_handler = false;
     ApplyArgsManOptions(args, peerman_opts);
     peerman_opts.get_block_filter_index = [&node](BlockFilterType filter_type) {
         return GetBlockFilterIndex(node, filter_type);

@@ -31,6 +31,7 @@ add_library(bitcoinkernel
   ../deploymentstatus.cpp
   ../flatfile.cpp
   ../hash.cpp
+  ../node/block_connector.cpp
   ../node/blockstorage.cpp
   ../node/connect_window.cpp
   ../node/window_outputs.cpp
