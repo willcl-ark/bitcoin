@@ -67,6 +67,7 @@
 #include <validationinterface.h>
 
 #include <algorithm>
+#include <bit>
 #include <cassert>
 #include <chrono>
 #include <deque>
@@ -2667,18 +2668,49 @@ bool ConnectBlock(const CBlock& block, const BlockValidationContext& ctx,
     int& nInputs{result.num_inputs};
     int64_t& nSigOpsCost{result.sigops_cost};
     blockundo.vtxundo.reserve(block.vtx.size() - 1);
+    const bool flat{!ctx.input_coins.empty() && ctx.inputs_for};
+    size_t next_input{0};
+    static thread_local std::vector<const COutPoint*> spent_table;
+    static thread_local const SaltedOutpointHasher slot_of;
+    size_t spent_mask{0};
+    if (flat) {
+        spent_mask = std::bit_ceil(std::max<size_t>(16, 2 * ctx.input_coins.size())) - 1;
+        spent_table.assign(spent_mask + 1, nullptr);
+    }
     for (unsigned int i = 0; i < block.vtx.size(); i++)
     {
         if (ctx.help_point) ctx.help_point();
         if (!state.IsValid()) break;
         const CTransaction &tx = *(block.vtx[i]);
+        if (ctx.implicit_creates) ctx.implicit_creates(i);
 
         nInputs += tx.vin.size();
 
+        std::span<const Coin> coins{};
+        if (flat && !tx.IsCoinBase()) {
+            coins = ctx.input_coins.subspan(next_input, tx.vin.size());
+            next_input += tx.vin.size();
+            bool again{false};
+            for (const CTxIn& in : tx.vin) {
+                for (size_t at{slot_of(in.prevout) & spent_mask}; spent_table[at]; at = (at + 1) & spent_mask) {
+                    if (*spent_table[at] == in.prevout) {
+                        again = true;
+                        break;
+                    }
+                }
+                if (again) break;
+            }
+            if (again) {
+                state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-txns-inputs-missingorspent",
+                              "CheckTxInputs: inputs missing/spent in transaction " + tx.GetHash().ToString());
+                break;
+            }
+        }
         if (!tx.IsCoinBase()) {
             const bool fCacheResults = just_check; /* Don't cache results if we're actually connecting blocks (still consult the cache, though) */
             std::vector<CScriptCheck> vChecks;
             PrecomputedTransactionData own_txdata;
+            if (flat) ctx.inputs_for(&tx, coins);
             if (!CheckBlockTransaction(tx, ctx, view, flags, nLockTimeFlags, fScriptChecks, fCacheResults, control ? txsdata[i] : own_txdata, validation_cache,
                                        control ? &vChecks : nullptr, prevheights, nFees, nSigOpsCost, state)) {
                 break;
@@ -2693,8 +2725,29 @@ bool ConnectBlock(const CBlock& block, const BlockValidationContext& ctx,
         if (i > 0) {
             blockundo.vtxundo.emplace_back();
         }
-        UpdateCoins(tx, view, i == 0 ? undoDummy : blockundo.vtxundo.back(), ctx.height);
+        if (ctx.implicit_creates) {
+            if (i > 0 && flat) {
+                CTxUndo& txundo{blockundo.vtxundo.back()};
+                txundo.vprevout.assign(coins.begin(), coins.end());
+                for (const CTxIn& in : tx.vin) {
+                    size_t at{slot_of(in.prevout) & spent_mask};
+                    while (spent_table[at]) at = (at + 1) & spent_mask;
+                    spent_table[at] = &in.prevout;
+                }
+            } else if (i > 0) {
+                CTxUndo& txundo{blockundo.vtxundo.back()};
+                txundo.vprevout.reserve(tx.vin.size());
+                for (const CTxIn& txin : tx.vin) {
+                    txundo.vprevout.emplace_back();
+                    bool is_spent = view.SpendCoin(txin.prevout, &txundo.vprevout.back());
+                    assert(is_spent);
+                }
+            }
+        } else {
+            UpdateCoins(tx, view, i == 0 ? undoDummy : blockundo.vtxundo.back(), ctx.height);
+        }
     }
+    if (flat) ctx.inputs_for(nullptr, {});
     result.time_connected = SteadyClock::now();
 
     const CAmount block_reward{nFees + GetBlockSubsidy(ctx.height, ctx.params)};
@@ -3685,11 +3738,17 @@ void Chainstate::RunWindowValidation(node::StagedConnect& s, node::WindowSync& s
             m_chainman.m_block_bins->EmptyMine();
             if (sync.job_open.load(std::memory_order_acquire)) node::RunCommitWork(sync);
         };
+        s.ctx->implicit_creates = [view = s.view](uint32_t position) { view->SetOwnLimit(position); };
         try {
             s.view->SetOverlay(&sync.outputs, s.pindex->nHeight);
-            s.view->Prefetch(*s.block);
+            static thread_local std::vector<Coin> input_coins;
+            s.view->ResolveInputs(*s.block, input_coins);
+            s.ctx->input_coins = input_coins;
+            s.ctx->inputs_for = [view = s.view](const CTransaction* tx, std::span<const Coin> coins) { view->SetInputs(tx, coins); };
             ok = ::ConnectBlock(*s.block, *s.ctx, *s.view, /*check_queue=*/nullptr,
                                 m_chainman.m_validation_cache, /*just_check=*/false, s.state, result);
+            s.ctx->input_coins = {};
+            s.ctx->inputs_for = {};
             if (ok) {
                 s.undo = std::make_shared<CBlockUndo>(std::move(result.undo));
                 node::PrepareCommit(s, *s.block, *s.undo);

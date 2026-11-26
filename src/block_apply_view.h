@@ -25,15 +25,32 @@ class WindowCoinSource
 public:
     virtual ~WindowCoinSource() = default;
 
-    //! Return true if an unpublished block below `viewer_height` defines `outpoint`'s txid, setting
-    //! `coin` to the spendable output (or nullopt if that txid has no such spendable output).
-    virtual bool FindCoin(const COutPoint& outpoint, int viewer_height, std::optional<Coin>& coin) const = 0;
+    //! Return true if an unpublished block below `viewer_height` (or an earlier tx `< own_limit` of
+    //! `viewer_height` itself) defines `outpoint`'s txid, setting `coin` to the spendable output
+    //! (or nullopt if that txid has no such spendable output).
+    virtual bool FindCoin(const COutPoint& outpoint, int viewer_height, std::optional<Coin>& coin, uint32_t own_limit = 0) const = 0;
 
     //! Batch version of FindCoin(): invokes `found` for every input created by a lower unpublished
     //! block, and compacts `outpoints` in place to the remaining inputs that must be fetched from the store.
     virtual void FindCoins(std::vector<COutPoint>& outpoints,
                            int viewer_height,
                            const std::function<void(const COutPoint&, Coin&&)>& found) const = 0;
+
+    //! Resolve each input by position into `coins`, setting `decided[i] = 1` when the window decides
+    //! input `i` (including outputs of earlier transactions `< positions[i]` in the same block).
+    virtual void FindInputs(std::span<const COutPoint> outpoints,
+                            std::span<const uint32_t> positions,
+                            int viewer_height,
+                            std::vector<uint8_t>& decided,
+                            std::vector<Coin>& coins) const
+    {
+        for (size_t i{0}; i < outpoints.size(); ++i) {
+            std::optional<Coin> coin;
+            if (!FindCoin(outpoints[i], viewer_height, coin, positions[i])) continue;
+            decided[i] = 1;
+            if (coin) coins[i] = std::move(*coin);
+        }
+    }
 
     //! Set `named[i] = 1` if an unpublished block below `viewer_height` may contain `txs[i]->GetHash()`.
     virtual void NamedIds(std::span<const CTransactionRef> txs, int viewer_height, std::vector<uint8_t>& named) const = 0;
@@ -64,9 +81,23 @@ public:
         m_overlay_height = height;
     }
 
+    void SetOwnLimit(uint32_t limit) { m_own_limit = limit; }
+
     //! Prefetch the block's inputs from the window overlay and CoinsStore in batched shard passes.
     void Prefetch(const CBlock& block);
 
+    //! Resolve each input of `block` (excluding coinbase) by position into `coins`, leaving the view's map untouched.
+    void ResolveInputs(const CBlock& block, std::vector<Coin>& coins);
+
+    //! Bind the transaction being checked and its resolved input coins for address-matched lookups.
+    void SetInputs(const CTransaction* tx, std::span<const Coin> coins)
+    {
+        m_inputs_tx = tx;
+        m_inputs_coins = coins;
+    }
+
+    const Coin& AccessCoin(const COutPoint& outpoint) const override;
+    bool HaveCoin(const COutPoint& outpoint) const override;
     bool SpendCoin(const COutPoint& outpoint, Coin* moveto = nullptr) override;
     bool HaveAnyOutput(const CBlock& block) const override;
 
@@ -98,11 +129,16 @@ protected:
     void Reset() noexcept override;
 
 private:
+    const Coin* InputCoin(const COutPoint& outpoint) const;
+
     CoinsStore& m_store;
     bool m_keep_base_reads{false};
     const WindowCoinSource* m_overlay{nullptr};
     int m_overlay_height{0};
+    uint32_t m_own_limit{0};
     int m_height{-1};
+    const CTransaction* m_inputs_tx{nullptr};
+    std::span<const Coin> m_inputs_coins{};
 };
 
 #endif // BITCOIN_BLOCK_APPLY_VIEW_H

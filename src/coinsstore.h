@@ -109,6 +109,12 @@ public:
     //! Batch lookup of outpoints currently cached as unspent in this store, taking each shard lock once.
     std::vector<std::pair<COutPoint, Coin>> Fetch(std::vector<COutPoint>&& outpoints) const;
 
+    //! Batch lookup for `outpoints` at indices `which`, writing found coins into `coins[w]` and setting `found[w] = 1`.
+    void FetchInto(std::span<const COutPoint> outpoints,
+                   std::span<const uint32_t> which,
+                   std::vector<Coin>& coins,
+                   std::vector<uint8_t>& found) const;
+
     //! Batch BIP30 check: sets `may[i] = 1` if outpoint `i` has an entry in the store or exists in `base`.
     void MayHave(std::span<const COutPoint> outpoints, std::vector<uint8_t>& may) const;
 
@@ -163,7 +169,6 @@ private:
 
     std::optional<Coin> Lookup(const COutPoint& outpoint) const;
     void SpendEntryLocked(Shard& shard, ShardMap::iterator it, Coin* moveto) EXCLUSIVE_LOCKS_REQUIRED(shard.mutex);
-    void CreateEntryLocked(Shard& shard, const COutPoint& outpoint, Coin&& coin, const CScript* script, bool possible_overwrite) EXCLUSIVE_LOCKS_REQUIRED(shard.mutex);
     void WriteDirtyToBase(const uint256& best) const;
 
     template <typename Work>

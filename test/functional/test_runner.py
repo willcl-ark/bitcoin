@@ -199,6 +199,7 @@ BASE_SCRIPTS = [
     'rpc_getchaintips.py',
     'feature_async_undo.py',
     'feature_connect_window.py',
+    'feature_connect_window_double_spend.py',
     'feature_io_errors.py',
     'rpc_misc.py',
     'p2p_1p1c_network.py',

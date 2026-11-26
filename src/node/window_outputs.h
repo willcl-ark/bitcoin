@@ -50,10 +50,15 @@ public:
     //! Sweep items of published blocks out of the table and release their CBlock references.
     void Sweep() EXCLUSIVE_LOCKS_REQUIRED(!m_released_mutex);
 
-    bool FindCoin(const COutPoint& outpoint, int viewer_height, std::optional<Coin>& coin) const override;
+    bool FindCoin(const COutPoint& outpoint, int viewer_height, std::optional<Coin>& coin, uint32_t own_limit = 0) const override;
     void FindCoins(std::vector<COutPoint>& outpoints,
                    int viewer_height,
                    const std::function<void(const COutPoint&, Coin&&)>& found) const override;
+    void FindInputs(std::span<const COutPoint> outpoints,
+                    std::span<const uint32_t> positions,
+                    int viewer_height,
+                    std::vector<uint8_t>& decided,
+                    std::vector<Coin>& coins) const override;
     void NamedIds(std::span<const CTransactionRef> txs, int viewer_height, std::vector<uint8_t>& named) const override;
 
 private:
@@ -94,7 +99,7 @@ private:
     static void Put(Shard& shard, const Slot& slot) EXCLUSIVE_LOCKS_REQUIRED(shard.mutex);
     static void Take(Shard& shard, const Slot& slot) EXCLUSIVE_LOCKS_REQUIRED(shard.mutex);
     bool EraseOne() EXCLUSIVE_LOCKS_REQUIRED(!m_released_mutex);
-    Found Probe(const Shard& shard, uint64_t tag, const Txid& txid, int published, int viewer) const EXCLUSIVE_LOCKS_REQUIRED(shard.mutex);
+    Found Probe(const Shard& shard, uint64_t tag, const Txid& txid, int published, int viewer, uint32_t own_limit) const EXCLUSIVE_LOCKS_REQUIRED(shard.mutex);
 
     const SaltedCoinsCacheHasher m_hasher;
     std::array<Shard, SHARDS> m_shards;

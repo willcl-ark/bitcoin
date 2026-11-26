@@ -150,29 +150,34 @@ bool WindowOutputs::EraseOne()
     return true;
 }
 
-WindowOutputs::Found WindowOutputs::Probe(const Shard& shard, uint64_t tag, const Txid& txid, int published, int viewer) const
+WindowOutputs::Found WindowOutputs::Probe(const Shard& shard, uint64_t tag, const Txid& txid, int published, int viewer, uint32_t own_limit) const
 {
     Found found;
     if (shard.count == 0) return found;
     for (size_t at{(tag >> 1) & shard.mask}; shard.slots[at].tag != 0; at = (at + 1) & shard.mask) {
         const Slot& slot{shard.slots[at]};
         if (slot.tag != tag) continue;
-        if (slot.height <= published || slot.height >= viewer || slot.height < found.height) continue;
+        if (slot.height == viewer) {
+            if (slot.pos >= own_limit) continue;
+        } else if (slot.height <= published || slot.height > viewer || slot.height < found.height) {
+            continue;
+        }
         const CTransaction& tx{*m_ring[slot.height % RING].at.load(std::memory_order_relaxed)->vtx[slot.pos]};
         if (tx.GetHash() != txid) continue;
         found = {&tx, slot.height};
+        if (slot.height == viewer) break;
     }
     return found;
 }
 
-bool WindowOutputs::FindCoin(const COutPoint& outpoint, int viewer_height, std::optional<Coin>& coin) const
+bool WindowOutputs::FindCoin(const COutPoint& outpoint, int viewer_height, std::optional<Coin>& coin, uint32_t own_limit) const
 {
     coin.reset();
     const int published{m_published.load(std::memory_order_acquire)};
     const uint64_t tag{Tag(outpoint.hash)};
     const Shard& shard{m_shards[ShardOf(tag)]};
     LOCK(shard.mutex);
-    const Found found{Probe(shard, tag, outpoint.hash, published, viewer_height)};
+    const Found found{Probe(shard, tag, outpoint.hash, published, viewer_height, own_limit)};
     if (found.maker == nullptr) return false;
     if (outpoint.n < found.maker->vout.size() && !found.maker->vout[outpoint.n].scriptPubKey.IsUnspendable()) {
         coin.emplace(found.maker->vout[outpoint.n], found.height, found.maker->IsCoinBase());
@@ -205,7 +210,7 @@ void WindowOutputs::FindCoins(std::vector<COutPoint>& outpoints,
                     PrefetchSlot(&shard.slots[(tags[order[k + AHEAD]] >> 1) & shard.mask]);
                 }
                 const uint32_t i{order[k]};
-                const Found hit{Probe(shard, tags[i], outpoints[i].hash, published, viewer_height)};
+                const Found hit{Probe(shard, tags[i], outpoints[i].hash, published, viewer_height, /*own_limit=*/0)};
                 if (hit.maker == nullptr) continue;
                 tags[i] = 0;
                 const uint32_t out{outpoints[i].n};
@@ -222,6 +227,41 @@ void WindowOutputs::FindCoins(std::vector<COutPoint>& outpoints,
         if (tags[i] != 0) outpoints[left++] = outpoints[i];
     }
     outpoints.resize(left);
+}
+
+void WindowOutputs::FindInputs(std::span<const COutPoint> outpoints,
+                               std::span<const uint32_t> positions,
+                               int viewer_height,
+                               std::vector<uint8_t>& decided,
+                               std::vector<Coin>& coins) const
+{
+    const int published{m_published.load(std::memory_order_acquire)};
+    const size_t count{outpoints.size()};
+    static thread_local std::vector<uint64_t> tags;
+    tags.resize(count);
+    for (size_t i{0}; i < count; ++i) tags[i] = Tag(outpoints[i].hash);
+    static thread_local std::vector<uint32_t> order;
+    std::array<uint32_t, SHARDS + 1> start;
+    Group(tags, order, start);
+    for (size_t n{0}; n < SHARDS; ++n) {
+        if (start[n] == start[n + 1]) continue;
+        const Shard& shard{m_shards[n]};
+        LOCK(shard.mutex);
+        if (shard.count == 0) continue;
+        for (uint32_t k{start[n]}; k < start[n + 1]; ++k) {
+            if (k + AHEAD < start[n + 1]) {
+                PrefetchSlot(&shard.slots[(tags[order[k + AHEAD]] >> 1) & shard.mask]);
+            }
+            const uint32_t i{order[k]};
+            const Found hit{Probe(shard, tags[i], outpoints[i].hash, published, viewer_height, positions[i])};
+            if (hit.maker == nullptr) continue;
+            decided[i] = 1;
+            const uint32_t out{outpoints[i].n};
+            if (out < hit.maker->vout.size() && !hit.maker->vout[out].scriptPubKey.IsUnspendable()) {
+                coins[i] = Coin{hit.maker->vout[out], hit.height, hit.maker->IsCoinBase()};
+            }
+        }
+    }
 }
 
 void WindowOutputs::NamedIds(std::span<const CTransactionRef> txs, int viewer_height, std::vector<uint8_t>& named) const

@@ -108,7 +108,7 @@ class SimpleWindowSource final : public WindowCoinSource
 public:
     std::map<COutPoint, std::pair<int, Coin>> entries;
 
-    bool FindCoin(const COutPoint& outpoint, int viewer_height, std::optional<Coin>& coin) const override
+    bool FindCoin(const COutPoint& outpoint, int viewer_height, std::optional<Coin>& coin, uint32_t own_limit = 0) const override
     {
         coin.reset();
         const auto it{entries.find(outpoint)};

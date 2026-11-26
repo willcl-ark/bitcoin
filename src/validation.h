@@ -549,6 +549,13 @@ struct BlockValidationContext {
     //! Optional callback invoked between transactions so a connect-window worker can help finish
     //! an active parallel commit job without waiting for the entire block to finish validating.
     std::function<void()> help_point{};
+    //! When set, outputs created by transactions in this block are served from WindowOutputs
+    //! rather than inserted into the per-block coins view. Called with each transaction's index.
+    std::function<void(uint32_t)> implicit_creates{};
+    //! Pre-resolved input coins by position (excluding coinbase) for flat connect-window validation.
+    std::span<const Coin> input_coins{};
+    //! Binds the current transaction and its slice of `input_coins` on the view (null after loop).
+    std::function<void(const CTransaction*, std::span<const Coin>)> inputs_for{};
 };
 
 /** Outputs of the pure ConnectBlock() besides the mutated coins view.

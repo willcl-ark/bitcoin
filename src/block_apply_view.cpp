@@ -21,6 +21,39 @@ BlockApplyView::~BlockApplyView()
     Reset();
 }
 
+void BlockApplyView::ResolveInputs(const CBlock& block, std::vector<Coin>& coins)
+{
+    static thread_local std::vector<COutPoint> outpoints;
+    static thread_local std::vector<uint32_t> positions;
+    outpoints.clear();
+    positions.clear();
+    for (size_t i{1}; i < block.vtx.size(); ++i) {
+        for (const CTxIn& in : block.vtx[i]->vin) {
+            outpoints.push_back(in.prevout);
+            positions.push_back(static_cast<uint32_t>(i));
+        }
+    }
+    coins.assign(outpoints.size(), Coin{});
+    if (outpoints.empty()) return;
+    static thread_local std::vector<uint8_t> decided;
+    decided.assign(outpoints.size(), 0);
+    if (m_overlay) {
+        m_overlay->FindInputs(outpoints, positions, m_overlay_height, decided, coins);
+    }
+    static thread_local std::vector<uint32_t> rest;
+    rest.clear();
+    for (uint32_t i{0}; i < outpoints.size(); ++i) {
+        if (!decided[i]) rest.push_back(i);
+    }
+    static thread_local std::vector<uint8_t> found;
+    m_store.FetchInto(outpoints, rest, coins, found);
+    for (const uint32_t i : rest) {
+        if (found[i]) continue;
+        std::optional<Coin> coin{m_keep_base_reads ? m_store.GetCoin(outpoints[i]) : m_store.PeekCoin(outpoints[i])};
+        if (coin) coins[i] = std::move(*coin);
+    }
+}
+
 void BlockApplyView::Prefetch(const CBlock& block)
 {
     size_t inputs{0};
@@ -135,11 +168,35 @@ void BlockApplyView::ConfirmCommitted()
     Reset();
 }
 
+const Coin* BlockApplyView::InputCoin(const COutPoint& outpoint) const
+{
+    if (!m_inputs_tx || m_inputs_tx->vin.empty()) return nullptr;
+    const std::vector<CTxIn>& vin{m_inputs_tx->vin};
+    const auto at{reinterpret_cast<uintptr_t>(&outpoint)};
+    const auto first{reinterpret_cast<uintptr_t>(&vin.front().prevout)};
+    if (at < first) return nullptr;
+    const size_t i{(at - first) / sizeof(CTxIn)};
+    if (i >= vin.size() || &vin[i].prevout != &outpoint) return nullptr;
+    return &m_inputs_coins[i];
+}
+
+const Coin& BlockApplyView::AccessCoin(const COutPoint& outpoint) const
+{
+    if (const Coin* coin{InputCoin(outpoint)}) return *coin;
+    return CoinsViewOverlay::AccessCoin(outpoint);
+}
+
+bool BlockApplyView::HaveCoin(const COutPoint& outpoint) const
+{
+    if (const Coin* coin{InputCoin(outpoint)}) return !coin->IsSpent();
+    return CoinsViewOverlay::HaveCoin(outpoint);
+}
+
 std::optional<Coin> BlockApplyView::ReadBase(const COutPoint& outpoint) const
 {
     if (m_overlay) {
         std::optional<Coin> coin;
-        if (m_overlay->FindCoin(outpoint, m_overlay_height, coin)) return coin;
+        if (m_overlay->FindCoin(outpoint, m_overlay_height, coin, m_own_limit)) return coin;
     }
     return m_keep_base_reads ? m_store.GetCoin(outpoint) : m_store.PeekCoin(outpoint);
 }
@@ -147,8 +204,11 @@ std::optional<Coin> BlockApplyView::ReadBase(const COutPoint& outpoint) const
 void BlockApplyView::Reset() noexcept
 {
     CoinsViewOverlay::Reset();
+    m_inputs_tx = nullptr;
+    m_inputs_coins = {};
     m_keep_base_reads = false;
     m_overlay = nullptr;
     m_overlay_height = 0;
+    m_own_limit = 0;
     m_height = -1;
 }

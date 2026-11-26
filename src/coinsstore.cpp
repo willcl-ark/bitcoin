@@ -263,26 +263,6 @@ void CoinsStore::SpendEntryLocked(Shard& shard, ShardMap::iterator it, Coin* mov
     MarkDirty(shard, entry);
 }
 
-void CoinsStore::CreateEntryLocked(Shard& shard, const COutPoint& outpoint, Coin&& coin, const CScript* script, bool possible_overwrite)
-{
-    AssertLockHeld(shard.mutex);
-    auto [it, inserted]{EnsureMap(shard).try_emplace(outpoint)};
-    Entry& entry{it->second};
-    Assert(inserted || entry.coin.IsSpent() || possible_overwrite);
-    const bool fresh{!possible_overwrite && !entry.dirty};
-    if (!inserted) {
-        SubUsage(shard, entry.coin.DynamicMemoryUsage());
-    }
-    entry.coin = std::move(coin);
-    if (script) {
-        entry.coin.out.scriptPubKey = *script;
-    }
-    entry.fresh = fresh;
-    MarkDirty(shard, entry);
-    AddUsage(shard, entry.coin.DynamicMemoryUsage());
-    if (inserted) Resized(shard);
-}
-
 bool CoinsStore::SpendCoin(const COutPoint& outpoint, Coin* moveto)
 {
     Shard& shard{ShardFor(outpoint)};
@@ -426,17 +406,28 @@ uint32_t CoinsStore::ApplyConfirmed(std::vector<Change>&& changes,
                 }
                 continue;
             }
-            const bool found{shard.map && shard.map->find(outpoint) != shard.map->end()};
-            const auto old{found ? shard.map->find(outpoint) : ShardMap::iterator{}};
-            const bool over{found && !old->second.coin.IsSpent()};
+            auto [it, inserted]{EnsureMap(shard).try_emplace(outpoint)};
+            Entry& entry{it->second};
+            const bool over{!inserted && !entry.coin.IsSpent()};
             if (over && !change.possible_overwrite) {
                 ++conflicts;
                 if (report) report->conflicted.push_back(change.outpoint);
                 continue;
             }
-            if (over && report) report->overwritten.emplace_back(change.outpoint, old->second.coin);
-            if (!found && change.possible_overwrite && report) report->unread.push_back(change.outpoint);
-            CreateEntryLocked(shard, outpoint, std::move(*change.coin), change.script, change.possible_overwrite);
+            if (over && report) report->overwritten.emplace_back(change.outpoint, entry.coin);
+            if (inserted && change.possible_overwrite && report) report->unread.push_back(change.outpoint);
+            const bool fresh{!change.possible_overwrite && !entry.dirty};
+            if (!inserted) {
+                SubUsage(shard, entry.coin.DynamicMemoryUsage());
+            }
+            entry.coin = std::move(*change.coin);
+            if (change.script) {
+                entry.coin.out.scriptPubKey = *change.script;
+            }
+            entry.fresh = fresh;
+            MarkDirty(shard, entry);
+            AddUsage(shard, entry.coin.DynamicMemoryUsage());
+            if (inserted) Resized(shard);
         }
     });
 
@@ -486,6 +477,30 @@ std::vector<std::pair<COutPoint, Coin>> CoinsStore::Fetch(std::vector<COutPoint>
         }
     });
     return found;
+}
+
+void CoinsStore::FetchInto(std::span<const COutPoint> outpoints,
+                           std::span<const uint32_t> which,
+                           std::vector<Coin>& coins,
+                           std::vector<uint8_t>& found) const
+{
+    found.assign(outpoints.size(), 0);
+    if (which.empty()) return;
+    std::vector<uint32_t> shard_of;
+    shard_of.reserve(which.size());
+    for (const uint32_t w : which) {
+        shard_of.push_back(static_cast<uint32_t>(ShardIndex(outpoints[w])));
+    }
+    VisitShards(shard_of, [&](Shard& shard, std::span<const uint32_t> items) EXCLUSIVE_LOCKS_REQUIRED(shard.mutex) {
+        if (!shard.map) return;
+        for (const uint32_t k : items) {
+            const uint32_t w{which[k]};
+            const auto it{shard.map->find(outpoints[w])};
+            if (it == shard.map->end() || it->second.coin.IsSpent()) continue;
+            coins[w] = it->second.coin;
+            found[w] = 1;
+        }
+    });
 }
 
 void CoinsStore::MayHave(std::span<const COutPoint> outpoints, std::vector<uint8_t>& may) const

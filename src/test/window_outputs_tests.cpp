@@ -90,4 +90,37 @@ BOOST_AUTO_TEST_CASE(visibility_release_and_fifo_sweep)
     BOOST_CHECK(!outputs.FindCoin(op12, 14, coin));
 }
 
+BOOST_AUTO_TEST_CASE(find_inputs_sees_earlier_txs_in_same_block)
+{
+    node::WindowOutputs outputs;
+    outputs.SetPublished(10);
+
+    auto block{std::make_shared<CBlock>()};
+    CMutableTransaction tx0;
+    tx0.vin.emplace_back(COutPoint{});
+    tx0.vout.emplace_back(5000, CScript() << OP_TRUE);
+    auto ref0{MakeTransactionRef(tx0)};
+
+    CMutableTransaction tx1;
+    tx1.vin.emplace_back(COutPoint{ref0->GetHash(), 0});
+    tx1.vout.emplace_back(4000, CScript() << OP_TRUE);
+    auto ref1{MakeTransactionRef(tx1)};
+
+    block->vtx = {ref0, ref1};
+    outputs.Index(11, block);
+
+    const std::vector<COutPoint> ops{COutPoint{ref0->GetHash(), 0}, COutPoint{ref1->GetHash(), 0}};
+    const std::vector<uint32_t> pos{1, 1};
+    std::vector<uint8_t> decided(2, 0);
+    std::vector<Coin> coins(2);
+    outputs.FindInputs(ops, pos, /*viewer_height=*/11, decided, coins);
+
+    // Position 1 sees tx 0 from the same block, but not tx 1 itself.
+    BOOST_CHECK_EQUAL(decided[0], 1U);
+    BOOST_CHECK_EQUAL(coins[0].out.nValue, 5000);
+    BOOST_CHECK_EQUAL(coins[0].nHeight, 11U);
+    BOOST_CHECK_EQUAL(decided[1], 0U);
+    BOOST_CHECK(coins[1].IsSpent());
+}
+
 BOOST_AUTO_TEST_SUITE_END()
