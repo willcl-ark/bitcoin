@@ -19,6 +19,7 @@
 #include <kernel/chainstatemanager_opts.h>
 #include <kernel/cs_main.h> // IWYU pragma: export
 #include <node/blockstorage.h>
+#include <node/tip_snapshot.h>
 #include <policy/feerate.h>
 #include <policy/packages.h>
 #include <policy/policy.h>
@@ -503,6 +504,69 @@ struct DeploymentFlags {
 };
 
 /**
+ * Ordering preconditions.
+ *
+ * Processing one block at a time under cs_main gives the rest of the node
+ * guarantees that no type or annotation states. They are listed here, and
+ * the code that relies on one says so with its number. Where the condition
+ * can be tested it is asserted (Assume, so that a debug build stops and a
+ * release build goes on as before).
+ *
+ *  O1  The only half-processed state a block can be seen in is "stored, not
+ *      yet activated", and calling ActivateBestChain() closes it.
+ *      ProcessNewBlock() opens it; ProcessGetBlockData() and the GETBLOCKS
+ *      handler in net_processing close it before they answer.
+ *  O2  When AcceptBlock() returns for a new block, its data, its position
+ *      and BLOCK_VALID_TRANSACTIONS are recorded together. Asserted there,
+ *      as the postcondition of ReceivedBlockTransactions().
+ *  O3  BlockChecked is delivered under cs_main before the tip moves: the
+ *      order of the statements in ConnectTip(), with O9's assertion above.
+ *  O4  NewPoWValidBlock is delivered under cs_main before the block is
+ *      written, and only for a block on top of the tip. Not asserted: both
+ *      conditions are the control flow of AcceptBlock().
+ *  O5  Message processing requests only blocks that are not stored, and
+ *      a block is "received, not stored" only inside the handling of the
+ *      one message that delivers it: BLOCK, or the BLOCKTXN or CMPCTBLOCK
+ *      that completes a compact block (O13). Not asserted: the
+ *      getblockfrompeer RPC checks and requests in two holds of cs_main
+ *      and may request a stored block.
+ *  O6  The tip is the fully connected frontier: its coins are in the tip
+ *      view and its transaction counts are known. Asserted in PublishTip(),
+ *      with O8's condition for the coins, which covers a write-out that
+ *      failed inside ConnectTip() or DisconnectTip().
+ *  O7  Signals are queued under cs_main in the order of connection, and
+ *      what they name is stored and connected. Asserted in part: that the
+ *      block is stored and is the tip, or has left the chain, is checked in
+ *      ConnectTip() and DisconnectTip().
+ *  O8  A flush never sees a half-applied block: the coins' best block is
+ *      the tip, its parent (inside DisconnectTip(), which writes before the
+ *      tip moves), or the one block on top of the tip that is being
+ *      connected, or was when a write-out failed. Asserted in
+ *      FlushStateToDisk().
+ *  O9  Connection is strictly sequential: a block is connected on top of
+ *      the tip, one ActivateBestChain() at a time. ConnectTip() asserts
+ *      the first; the second is m_chainstate_mutex.
+ *  O10 nSequenceId is assigned under cs_main when a block becomes linked
+ *      (ReceivedBlockTransactions()): its data and every ancestor's
+ *      transaction count are known. A block stored before its parent waits,
+ *      and is numbered with the descendants the link reaches, parent first;
+ *      so the order may differ from the order of arrival. Blocks loaded at
+ *      startup and preciousblock assign it otherwise.
+ *  O11 A file position copied under cs_main stays readable afterwards, or
+ *      the reader handles the failed read (node::BlockFacts).
+ *  O12 The block index invariants hold whenever cs_main is free.
+ *      CheckBlockIndex() checks them.
+ *  O13 Messages are processed on one thread, so a block request may be
+ *      removed before the block is stored and no message asks for the
+ *      block again in between. Asserted at the BLOCK message and in
+ *      ProcessCompactBlockTxns().
+ *  O14 InvalidateBlock() tolerates blocks arriving between its lock drops,
+ *      by going over the block index again at its end.
+ *  O15 The tip does not move while a block template or proposal is
+ *      checked: TestBlockValidity() runs under cs_main.
+ */
+
+/**
  * Everything a block validation function needs from the node besides the
  * block itself and the coins view. The node builds one under cs_main from
  * configuration and the header chain; the validation functions read it and
@@ -590,6 +654,22 @@ bool ConnectBlock(const CBlock& block, const BlockValidationContext& ctx,
                   BlockValidationState& state, ConnectBlockResult& result);
 
 struct ConnectedBlock;
+
+/**
+ * Placed in a scope right after cs_main is locked, when the scope may move a
+ * tip: publishes the tip (ChainstateManager::PublishTip()) as the last thing
+ * before the lock is released, on every way out of the scope.
+ */
+class TipPublisher
+{
+    ChainstateManager& m_chainman;
+
+public:
+    explicit TipPublisher(ChainstateManager& chainman) : m_chainman{chainman} {}
+    ~TipPublisher();
+    TipPublisher(const TipPublisher&) = delete;
+    TipPublisher& operator=(const TipPublisher&) = delete;
+};
 
 /** @see Chainstate::FlushStateToDisk */
 inline constexpr std::array FlushStateModeNames{"NONE", "IF_NEEDED", "PERIODIC", "FORCE_FLUSH", "FORCE_SYNC"};
@@ -1096,6 +1176,17 @@ private:
     /** The last header for which a headerTip notification was issued. */
     CBlockIndex* m_last_notified_header GUARDED_BY(GetMutex()){nullptr};
 
+    node::PublishedTip m_published_tip;
+    //! Counts the tip changes of the current chainstate, and the publications that
+    //! changed nothing but the initial block download state. The number a
+    //! published tip carries.
+    uint64_t m_tip_sequence GUARDED_BY(::cs_main){0};
+    //! A cs_main hold has moved the current chainstate's tip, or changed which
+    //! chainstate is the current one, and has not published yet.
+    std::atomic_bool m_tip_unpublished{false};
+    //! Builds the value for the current chainstate's tip as it is now.
+    node::TipSnapshot CurrentTipSnapshot() const EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+
     bool NotifyHeaderTip() LOCKS_EXCLUDED(GetMutex());
 
     //! Internal helper for ActivateSnapshot().
@@ -1215,6 +1306,50 @@ public:
      * enough work and is recent.
      */
     std::atomic_bool m_cached_is_ibd{true};
+
+    /**
+     * The tip of the current chainstate as one value, see node::TipSnapshot.
+     * For a reader that needs one fact about the tip. The value is what the
+     * reader would find under cs_main: while no hold of cs_main that moved
+     * the tip is open, it is a copy of the published value and cs_main is
+     * not taken; while one is open, the call takes cs_main and reads the
+     * chain. A caller that already holds cs_main inside such a hold
+     * therefore sees the tip of that moment.
+     */
+    node::TipSnapshot PublishedTip() const
+    {
+        if (m_tip_unpublished.load()) {
+            LOCK(::cs_main);
+            return CurrentTipSnapshot();
+        }
+        return m_published_tip.Get();
+    }
+
+    /**
+     * Publish the current chainstate's tip. Called at the end of a cs_main
+     * hold that moved a tip (TipPublisher), and directly wherever the choice
+     * of the current chainstate or the initial block download latch (after
+     * UpdateIBDStatus()) may have changed outside such a hold; does nothing
+     * if nothing changed. The tip being published is the fully connected
+     * frontier (precondition O6).
+     */
+    void PublishTip() EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+
+    /**
+     * Record that a tip is about to move or the current chainstate is
+     * about to change: the tip sequence number rises, and readers of
+     * PublishedTip() take cs_main until the next PublishTip(). Called
+     * before the change, so that no reader sees part of it without waiting
+     * for the hold; UpdateIBDStatus() sets the same flag before it ends
+     * initial block download. If a hold forgets to publish, readers keep
+     * taking cs_main, which is slower and never wrong.
+     */
+    void MarkTipChanged() EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
+    {
+        ++m_tip_sequence;
+        m_tip_unpublished.store(true);
+    }
+    bool TipUnpublished() const { return m_tip_unpublished.load(); }
 
     /**
      * Every received block is assigned a unique and increasing identifier, so we
