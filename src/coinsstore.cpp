@@ -22,7 +22,9 @@
 #include <utility>
 #include <vector>
 
-#ifndef WIN32
+#ifdef WIN32
+#include <windows.h>
+#else
 #include <sys/mman.h>
 #endif
 
@@ -65,6 +67,52 @@ void* CoinsStore::HintedRegion(size_t bytes)
     (void)madvise(region, bytes, MADV_HUGEPAGE);
 #endif
     return region;
+}
+
+void* CoinsStore::MapNodeRegion()
+{
+    constexpr size_t bytes{NODE_REGION_BYTES};
+    static_assert(std::has_single_bit(bytes));
+#ifdef WIN32
+    // A reservation of twice the size shows an aligned address; the region is reserved and committed there
+    // alone. Another thread may map the address in between, and then the search starts again.
+    while (true) {
+        void* const probe{VirtualAlloc(nullptr, 2 * bytes, MEM_RESERVE, PAGE_NOACCESS)};
+        if (!probe) throw std::bad_alloc{};
+        const uintptr_t aligned{(reinterpret_cast<uintptr_t>(probe) + bytes - 1) & ~uintptr_t{bytes - 1}};
+        VirtualFree(probe, 0, MEM_RELEASE);
+        if (void* region{VirtualAlloc(reinterpret_cast<void*>(aligned), bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE)}) return region;
+    }
+#else
+    // Twice the size is mapped, and what lies before and after the aligned part goes back.
+    void* const mapping{mmap(nullptr, 2 * bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0)};
+    if (mapping == MAP_FAILED) throw std::bad_alloc{};
+    const uintptr_t start{reinterpret_cast<uintptr_t>(mapping)};
+    const uintptr_t aligned{(start + bytes - 1) & ~uintptr_t{bytes - 1}};
+    if (aligned > start) munmap(mapping, aligned - start);
+    if (aligned + bytes < start + 2 * bytes) munmap(reinterpret_cast<void*>(aligned + bytes), start + bytes - aligned);
+    void* const region{reinterpret_cast<void*>(aligned)};
+#ifdef MADV_HUGEPAGE
+    (void)madvise(region, bytes, MADV_HUGEPAGE);
+#endif
+    return region;
+#endif
+}
+
+void CoinsStore::UnmapNodeRegion(void* region) noexcept
+{
+#ifdef WIN32
+    VirtualFree(region, 0, MEM_RELEASE);
+#else
+    munmap(region, NODE_REGION_BYTES);
+#endif
+}
+
+void CoinsStore::NodeNumbersExhausted(size_t regions, size_t region_bytes)
+{
+    LogError("The coins cache has used all %u node regions of %u MiB the process can number (%u GiB of nodes); it is not "
+             "given more memory than that.", regions, region_bytes >> 20, (uint64_t{regions} * region_bytes) >> 30);
+    std::abort();
 }
 
 int64_t CoinsStore::NodeBytes()
@@ -120,7 +168,7 @@ void CoinsStore::Resized(Shard& shard) const
     const int64_t delta{static_cast<int64_t>(entries) - static_cast<int64_t>(shard.entries)};
     int64_t bytes{NodeBytes() * delta};
     if (buckets != shard.buckets) {
-        bytes += static_cast<int64_t>(memusage::MallocUsage(sizeof(void*) * buckets)) - static_cast<int64_t>(memusage::MallocUsage(sizeof(void*) * shard.buckets));
+        bytes += static_cast<int64_t>(memusage::MallocUsage(Map::BUCKET_BYTES * buckets)) - static_cast<int64_t>(memusage::MallocUsage(Map::BUCKET_BYTES * shard.buckets));
     }
     Totals& totals{MyTotals()};
     totals.entries.fetch_add(delta, std::memory_order_relaxed);
@@ -363,14 +411,14 @@ void CoinsStore::EmplaceCoinInternalDANGER(const COutPoint& outpoint, Coin&& coi
 {
     Shard& shard{ShardFor(outpoint)};
     LOCK(shard.mutex);
-    const size_t usage{coin.DynamicMemoryUsage()};
     auto [it, inserted]{shard.map.try_emplace(outpoint)};
     if (inserted) Resized(shard);
     if (!inserted) return;
     Entry& entry{it->second};
     entry.coin = std::move(coin);
     Transit(entry, coins_entry::ABSENT, entry.coin.IsSpent() ? Event::ConfirmedSpend : Event::ConfirmedWrite, m_change_height);
-    AddUsage(shard, usage);
+    // As the entry holds the coin: a script a Coin keeps inline may be on the heap here, and the reverse.
+    AddUsage(shard, entry.coin.DynamicMemoryUsage());
     Attach(shard, *it);
 }
 
@@ -422,8 +470,11 @@ void CoinsStore::CreateLocked(Shard& shard, const COutPoint& outpoint, uint64_t 
         Detach(shard, *it);
         SubUsage(shard, entry.coin.DynamicMemoryUsage());
     }
-    entry.coin = std::move(coin);
-    if (script) entry.coin.out.scriptPubKey = *script;
+    if (script) {
+        entry.coin.AssignOutput(coin.out.nValue, coin.nHeight, coin.fCoinBase, *script);
+    } else {
+        entry.coin = std::move(coin);
+    }
     Transit(entry, from, owes ? Event::CoinOverErase : fresh ? Event::ConfirmedNew : Event::ConfirmedWrite, filed);
     AddUsage(shard, entry.coin.DynamicMemoryUsage());
     Attach(shard, *it);
@@ -471,7 +522,7 @@ uint32_t CoinsStore::ApplyConfirmed(std::vector<Change>&& changes, int height, C
                 if (report) report->conflicted.push_back(change.outpoint);
                 continue;
             }
-            if (over && report) report->overwritten.emplace_back(change.outpoint, old->second.coin);
+            if (over && report) report->overwritten.emplace_back(change.outpoint, old->second.coin.ToCoin());
             if (old == shard.map.end() && change.possible_overwrite && report) report->unread.push_back(change.outpoint);
             CreateLocked(shard, outpoint, hashes[i], std::move(*change.coin), change.script, change.possible_overwrite, height);
         }
@@ -554,7 +605,8 @@ void CoinsStore::Uncache(const COutPoint& outpoint)
     LOCK(shard.mutex);
     auto it{shard.map.find(outpoint)};
     if (it == shard.map.end() || it->second.dirty) return;
-    TraceUncache(outpoint, it->second.coin);
+    const StoredCoin& coin{it->second.coin};
+    TraceUncache(outpoint, coin.nHeight, coin.Amount(), coin.fCoinBase);
     EraseEntry(shard, it);
 }
 
@@ -877,7 +929,7 @@ void CoinsStore::CollectChunk(Shard& shard, WriteOutRun& run, uint64_t limit, ui
                 run.oldest_left = std::min<int>(run.oldest_left, created);
                 continue;
             }
-            writes.push_back({node->first, entry.coin.IsSpent() ? std::nullopt : std::make_optional(entry.coin)});
+            writes.push_back({node->first, entry.coin.IsSpent() ? std::nullopt : std::make_optional(entry.coin.ToCoin())});
             nodes.push_back(node);
             size += BatchBytes(writes.back());
             ++run.count;
@@ -1273,7 +1325,7 @@ void CoinsStore::SanityCheck() const
         assert(dirty == shard.dirty_count);
         assert(shard.map.size() == shard.entries);
         assert(shard.map.bucket_count() == shard.buckets);
-        total_bytes += NodeBytes() * shard.map.size() + memusage::MallocUsage(sizeof(void*) * shard.map.bucket_count()) + memusage::DynamicUsage(shard.dirty_spans) + usage;
+        total_bytes += NodeBytes() * shard.map.size() + memusage::MallocUsage(Map::BUCKET_BYTES * shard.map.bucket_count()) + memusage::DynamicUsage(shard.dirty_spans) + usage;
         total_entries += shard.map.size();
         total_dirty += dirty;
         // The lists hold exactly those entries, properly linked.
@@ -1323,6 +1375,61 @@ BlockApplyView::BlockApplyView(CoinsStore& store, util::NotNullSharedPtr<ThreadP
 BlockApplyView::~BlockApplyView()
 {
     StopFetching(); // the prefetch workers read the view
+}
+
+void CoinsStore::FetchInto(std::span<const COutPoint> outpoints, std::span<const uint32_t> which, std::vector<Coin>& coins, std::vector<uint8_t>& found) const
+{
+    found.assign(outpoints.size(), 0);
+    std::vector<uint32_t> shard_of;
+    std::vector<uint64_t> hashes;
+    shard_of.reserve(which.size());
+    hashes.reserve(which.size());
+    for (const uint32_t w : which) {
+        shard_of.push_back(ShardIndex(outpoints[w]));
+        hashes.push_back(KeyHash(outpoints[w]));
+    }
+    VisitShards(shard_of, [&](Shard& shard, std::span<const uint32_t> items) EXCLUSIVE_LOCKS_REQUIRED(shard.mutex) {
+        shard.map.PrefetchAll(hashes, items);
+        for (const uint32_t k : items) {
+            const uint32_t w{which[k]};
+            const auto it{shard.map.find(outpoints[w], hashes[k])};
+            if (it == shard.map.end() || it->second.coin.IsSpent()) continue;
+            Reference(it->second);
+            coins[w] = it->second.coin.ToCoin();
+            found[w] = 1;
+        }
+    });
+}
+
+void BlockApplyView::ResolveInputs(const CBlock& block, std::vector<Coin>& coins)
+{
+    static thread_local std::vector<COutPoint> outpoints;
+    static thread_local std::vector<uint32_t> positions;
+    outpoints.clear();
+    positions.clear();
+    for (size_t i{1}; i < block.vtx.size(); ++i) {
+        for (const CTxIn& in : block.vtx[i]->vin) {
+            outpoints.push_back(in.prevout);
+            positions.push_back(static_cast<uint32_t>(i));
+        }
+    }
+    coins.assign(outpoints.size(), Coin{});
+    static thread_local std::vector<uint8_t> decided;
+    decided.assign(outpoints.size(), 0);
+    if (m_overlay) m_overlay->FindInputs(outpoints, positions, m_overlay_height, decided, coins);
+    static thread_local std::vector<uint32_t> rest;
+    rest.clear();
+    for (uint32_t i{0}; i < outpoints.size(); ++i) {
+        if (!decided[i]) rest.push_back(i);
+    }
+    static thread_local std::vector<uint8_t> found;
+    m_store.FetchInto(outpoints, rest, coins, found);
+    for (const uint32_t i : rest) {
+        if (found[i]) continue;
+        // A window block's read leaves the coin in the tier, clean (SetKeepBaseReads()).
+        std::optional<Coin> coin{m_keep_base_reads ? m_store.GetCoin(outpoints[i]) : m_store.PeekCoin(outpoints[i])};
+        if (coin) coins[i] = std::move(*coin);
+    }
 }
 
 void BlockApplyView::Prefetch(const CBlock& block)
@@ -1472,9 +1579,35 @@ std::optional<Coin> BlockApplyView::ReadBase(const COutPoint& outpoint) const
     return m_keep_base_reads ? m_store.GetCoin(outpoint) : m_store.PeekCoin(outpoint);
 }
 
+const Coin* BlockApplyView::InputCoin(const COutPoint& outpoint) const
+{
+    if (!m_inputs_tx || m_inputs_tx->vin.empty()) return nullptr;
+    const std::vector<CTxIn>& vin{m_inputs_tx->vin};
+    const auto at{reinterpret_cast<uintptr_t>(&outpoint)};
+    const auto first{reinterpret_cast<uintptr_t>(&vin.front().prevout)};
+    if (at < first) return nullptr;
+    const size_t i{(at - first) / sizeof(CTxIn)};
+    if (i >= vin.size() || &vin[i].prevout != &outpoint) return nullptr;
+    return &m_inputs_coins[i];
+}
+
+const Coin& BlockApplyView::AccessCoin(const COutPoint& outpoint) const
+{
+    if (const Coin* coin{InputCoin(outpoint)}) return *coin;
+    return CoinsViewOverlay::AccessCoin(outpoint);
+}
+
+bool BlockApplyView::HaveCoin(const COutPoint& outpoint) const
+{
+    if (const Coin* coin{InputCoin(outpoint)}) return !coin->IsSpent();
+    return CoinsViewOverlay::HaveCoin(outpoint);
+}
+
 void BlockApplyView::Reset() noexcept
 {
     StopFetching(); // the prefetch workers read the view
+    m_inputs_tx = nullptr;
+    m_inputs_coins = {};
     m_keep_base_reads = false;
     m_overlay = nullptr;
     m_own_limit = 0;

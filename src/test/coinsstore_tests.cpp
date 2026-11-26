@@ -5,6 +5,8 @@
 #include <coins.h>
 #include <coinsstore.h>
 #include <dbwrapper.h>
+#include <kernel/coinstats.h>
+#include <node/blockstorage.h>
 #include <primitives/block.h>
 #include <script/script.h>
 #include <test/util/coinsstore.h>
@@ -14,21 +16,28 @@
 #include <undo.h>
 #include <util/threadpool.h>
 #include <util/byte_units.h>
+#include <validation.h>
 
 #include <boost/test/unit_test.hpp>
 
 #include <algorithm>
 #include <functional>
 #include <atomic>
+#include <fstream>
 #include <future>
 #include <limits>
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <utility>
 #include <vector>
+
+#ifdef __linux__
+#include <unistd.h>
+#endif
 
 //! Parameters of an in-memory LevelDB for a test, every field named.
 static DBParams MemoryDb(const char* name)
@@ -1360,6 +1369,131 @@ BOOST_AUTO_TEST_CASE(emptied_entries_count_no_script_bytes)
     store.SanityCheck();
 }
 
+//! A coin whose script the store keeps on the heap (over StoredCoin::INLINE bytes) goes through the tier as
+//! any other: read from it, written from it by a run, read back from the database, and freed by the
+//! spend, whose erase a run writes.
+BOOST_AUTO_TEST_CASE(long_script_coins_through_a_run_and_a_spend)
+{
+    CCoinsViewDB db{MemoryDb("store"), {}};
+    RunBase base{&db};
+    CoinsStore store{&base, 4, true};
+    store.SetBestBlock(uint256{1}, 1);
+    const auto big{[](int height, unsigned char fill) { return Coin{CTxOut{CAmount{1000 + fill}, CScript{} << std::vector<unsigned char>(100, fill)}, height, /*fCoinBaseIn=*/false}; }};
+    const COutPoint a{Txid::FromUint256(uint256{10}), 0};
+    const COutPoint b{Txid::FromUint256(uint256{11}), 0};
+    store.AddCoin(a, big(1, 0x41), false);
+    store.AddCoin(b, big(1, 0x42), false);
+
+    BOOST_CHECK(Same(store.PeekCoin(a), big(1, 0x41)));
+    auto run{WriteOut(store, /*bound_height=*/1, /*head_height=*/1, uint256{1})};
+    BOOST_CHECK_EQUAL(base.m_writes.size(), 2U);
+    for (const auto& w : base.m_writes) BOOST_CHECK(w.coin.has_value() && w.coin->out.scriptPubKey.size() > 100);
+    BOOST_CHECK(Same(db.PeekCoin(a), big(1, 0x41)));
+    store.SanityCheck();
+
+    // Dropped from the tier, b is read back as it was, script and all.
+    store.EvictClean(0);
+    BOOST_CHECK(Same(store.PeekCoin(b), big(1, 0x42)));
+
+    // Spent, one from the tier and one from the database: the spends are final and the erases written.
+    BOOST_CHECK(Same(store.GetCoin(a), big(1, 0x41)));
+    BOOST_CHECK_EQUAL(Spend(store, 2, a), 0U);
+    BOOST_CHECK_EQUAL(Spend(store, 2, b), 0U);
+    store.SetBestBlock(uint256{2}, 2);
+    BOOST_CHECK(!store.HaveCoin(a));
+    BOOST_CHECK(!store.HaveCoin(b));
+    store.SanityCheck();
+    store.Sync();
+    BOOST_CHECK(!db.HaveCoin(a));
+    BOOST_CHECK(!db.HaveCoin(b));
+    store.SanityCheck();
+}
+
+//! A window commit hands a create's script beside a coin that holds only its amount, height and flag
+//! (CoinsStore::Change::script). The store keeps it inline up to StoredCoin::INLINE bytes and on the heap above;
+//! either way the coin reads back whole, from the store and, after a write-out, from the database. A heap script's
+//! coin spent and made again over the dirty erase with an inline script reads back as the new coin.
+BOOST_AUTO_TEST_CASE(created_scripts_given_apart_from_their_coins)
+{
+    CCoinsViewDB db{MemoryDb("store"), {}};
+    RunBase base{&db};
+    CoinsStore store{&base, 4, true};
+    store.SetBestBlock(uint256{1}, 1);
+    // A push of 34 bytes is a 35-byte script, at the inline limit; one of 35 bytes is past it.
+    const CScript inline_script{CScript{} << std::vector<unsigned char>(34, 0x51)};
+    const CScript heap_script{CScript{} << std::vector<unsigned char>(35, 0x52)};
+    BOOST_REQUIRE_EQUAL(inline_script.size(), StoredCoin::INLINE);
+    BOOST_REQUIRE_EQUAL(heap_script.size(), StoredCoin::INLINE + 1);
+    const COutPoint a{Txid::FromUint256(uint256{10}), 0};
+    const COutPoint b{Txid::FromUint256(uint256{11}), 0};
+    // The changes of the block at `height`: each output's coin without its script, the script beside it.
+    const auto create{[&](int height, const std::vector<std::pair<COutPoint, const CScript*>>& outputs) {
+        std::vector<COutPoint> outpoints;
+        std::vector<Coin> coins;
+        outpoints.reserve(outputs.size());
+        coins.reserve(outputs.size());
+        std::vector<CoinsStore::Change> changes;
+        for (const auto& [outpoint, script] : outputs) {
+            outpoints.push_back(outpoint);
+            Coin& coin{coins.emplace_back()};
+            coin.out.nValue = 1000 + static_cast<CAmount>(outpoints.size());
+            coin.nHeight = height;
+            coin.fCoinBase = false;
+            changes.push_back({.outpoint = &outpoints.back(), .coin = &coin, .script = script});
+        }
+        return store.ApplyConfirmed(std::move(changes), height);
+    }};
+    const Coin a_coin{CTxOut{1001, inline_script}, 2, /*fCoinBaseIn=*/false};
+    const Coin b_coin{CTxOut{1002, heap_script}, 2, /*fCoinBaseIn=*/false};
+    BOOST_CHECK_EQUAL(create(2, {{a, &inline_script}, {b, &heap_script}}), 0U);
+    store.SetBestBlock(uint256{2}, 2);
+    BOOST_CHECK(Same(store.PeekCoin(a), a_coin));
+    BOOST_CHECK(Same(store.PeekCoin(b), b_coin));
+    store.SanityCheck();
+    WriteOut(store, /*bound_height=*/2, /*head_height=*/2, uint256{2});
+    BOOST_CHECK(Same(db.PeekCoin(a), a_coin));
+    BOOST_CHECK(Same(db.PeekCoin(b), b_coin));
+
+    // b spent (a written coin: the erase is owed), then made again over that erase with the inline script.
+    BOOST_CHECK_EQUAL(Spend(store, 3, b), 0U);
+    store.SetBestBlock(uint256{3}, 3);
+    BOOST_CHECK(!store.HaveCoin(b));
+    const Coin b_again{CTxOut{1001, inline_script}, 4, /*fCoinBaseIn=*/false};
+    BOOST_CHECK_EQUAL(create(4, {{b, &inline_script}}), 0U);
+    store.SetBestBlock(uint256{4}, 4);
+    BOOST_CHECK(Same(store.PeekCoin(b), b_again));
+    store.SanityCheck();
+    WriteOut(store, /*bound_height=*/4, /*head_height=*/4, uint256{4});
+    BOOST_CHECK(Same(db.PeekCoin(b), b_again));
+    store.SanityCheck();
+}
+
+//! A run collects a heap script's coin under its shard's lock and writes it with no lock held; a spend in between
+//! frees the entry's script. What the run collected is its own copy: the database gets the coin as it was, and
+//! the spend stays owed to the next run.
+BOOST_AUTO_TEST_CASE(collected_long_script_outlives_a_spend_during_the_write)
+{
+    CCoinsViewDB db{MemoryDb("store"), {}};
+    RunBase base{&db};
+    CoinsStore store{&base, 4, true};
+    store.SetBestBlock(uint256{1}, 1);
+    const Coin coin{CTxOut{CAmount{1234}, CScript{} << std::vector<unsigned char>(100, 0x5a)}, 1, /*fCoinBaseIn=*/false};
+    const COutPoint a{Txid::FromUint256(uint256{10}), 0};
+    store.AddCoin(a, Coin{coin}, false);
+    base.m_in_flight = [&] {
+        store.SetChangeHeight(2);
+        BOOST_CHECK(store.SpendCoin(a)); // collected, so no longer fresh: the erase is owed
+    };
+    WriteOut(store, 1, 1, uint256{1});
+    BOOST_REQUIRE_EQUAL(base.m_writes.size(), 1U);
+    BOOST_CHECK(Same(base.m_writes[0].coin, coin));
+    BOOST_CHECK(Same(db.PeekCoin(a), coin));
+    BOOST_CHECK_EQUAL(store.GetDirtyCount(), 1U);
+    store.Sync();
+    BOOST_CHECK(!db.PeekCoin(a));
+    store.SanityCheck();
+}
+
 //! Blocks the database holds are disconnected and connected again, past the written head. The erase the
 //! disconnect left is tagged with the fork height and the coin is made again above it: a run that stopped
 //! between the two would write the erase under a marker whose replay starts at the written head, where the
@@ -2061,6 +2195,180 @@ BOOST_AUTO_TEST_CASE(block_apply_view_takes_the_missed_coins_of_several_inputs_f
     for (const COutPoint& outpoint : outpoints) BOOST_CHECK(!store.HaveCoin(outpoint));
     store.Sync();
     for (const COutPoint& outpoint : outpoints) BOOST_CHECK(!db.HaveCoin(outpoint));
+}
+
+//! A StoredCoin gives back the coin it was made from, byte for byte, whatever the script's length: inline up to
+//! StoredCoin::INLINE bytes, on the heap beyond; copies, moves and assignments keep it, and it reports heap
+//! memory only for a script on the heap.
+BOOST_AUTO_TEST_CASE(stored_coin_round_trip)
+{
+    const auto make_coin{[](size_t script_size, CAmount value, uint32_t height, bool coinbase) {
+        CScript script;
+        for (size_t i{0}; i < script_size; ++i) script.push_back(static_cast<unsigned char>(i * 7 + script_size));
+        return Coin{CTxOut{value, script}, static_cast<int>(height), coinbase};
+    }};
+    const auto same{[](const Coin& a, const Coin& b) {
+        return a.out == b.out && a.nHeight == b.nHeight && a.fCoinBase == b.fCoinBase && a.IsSpent() == b.IsSpent();
+    }};
+    std::vector<size_t> sizes;
+    for (size_t size{0}; size <= 40; ++size) sizes.push_back(size);
+    sizes.push_back(255);
+    sizes.push_back(256);
+    sizes.push_back(10000);
+    for (const size_t size : sizes) {
+        for (const bool coinbase : {false, true}) {
+            const Coin coin{make_coin(size, 50 * COIN + static_cast<CAmount>(size), (1u << 31) - 1 - static_cast<uint32_t>(size), coinbase)};
+            const StoredCoin stored{coin};
+            BOOST_CHECK(same(stored.ToCoin(), coin));
+            BOOST_CHECK(!stored.IsSpent());
+            BOOST_CHECK_EQUAL(stored.nHeight, coin.nHeight);
+            BOOST_CHECK_EQUAL(stored.fCoinBase, coin.fCoinBase);
+            BOOST_CHECK_EQUAL(stored.DynamicMemoryUsage() == 0, size <= StoredCoin::INLINE);
+            // Copies and moves.
+            StoredCoin copy{stored};
+            BOOST_CHECK(same(copy.ToCoin(), coin));
+            StoredCoin moved{std::move(copy)};
+            BOOST_CHECK(same(moved.ToCoin(), coin));
+            BOOST_CHECK(copy.IsSpent()); // NOLINT(bugprone-use-after-move): the moved-from state is a spent coin
+            // Assignments over a coin with a script of the other kind, inline over heap and heap over inline.
+            StoredCoin other{make_coin(size <= StoredCoin::INLINE ? 100 : 10, 1, 1, false)};
+            other = stored;
+            BOOST_CHECK(same(other.ToCoin(), coin));
+            other = make_coin(size <= StoredCoin::INLINE ? 100 : 10, 2, 2, true);
+            BOOST_CHECK(same(other.ToCoin(), make_coin(size <= StoredCoin::INLINE ? 100 : 10, 2, 2, true)));
+            other = std::move(moved);
+            BOOST_CHECK(same(other.ToCoin(), coin));
+            other.Clear();
+            BOOST_CHECK(other.IsSpent());
+            BOOST_CHECK(same(other.ToCoin(), Coin{}));
+            BOOST_CHECK_EQUAL(other.DynamicMemoryUsage(), 0U);
+        }
+    }
+    // A spent coin, and the default.
+    BOOST_CHECK(StoredCoin{}.IsSpent());
+    BOOST_CHECK(same(StoredCoin{Coin{}}.ToCoin(), Coin{}));
+    // Every standard output script is inline.
+    for (const size_t standard : {size_t{22}, size_t{23}, size_t{25}, size_t{34}, size_t{35}}) {
+        BOOST_CHECK_EQUAL(StoredCoin{make_coin(standard, 1, 1, false)}.DynamicMemoryUsage(), 0U);
+    }
+}
+
+//! A node's links hold its number, not its address (CoinsStore::NodeAllocator::Number()): with more entries
+//! than one region of nodes holds, numbers of several regions are in the chains and on the lists, and every
+//! entry is still found, spent and listed where it belongs. About 80 MiB of nodes.
+BOOST_AUTO_TEST_CASE(node_numbers_span_regions)
+{
+    CCoinsViewDB db{MemoryDb("store"), {}};
+    CoinsStore store{&db, 4, true};
+    static constexpr uint32_t COINS{700'000};
+    const auto outpoint{[](uint32_t i) { return COutPoint{Txid::FromUint256(uint256{static_cast<uint8_t>(i % 251)}), i}; }};
+    for (uint32_t i{0}; i < COINS; ++i) {
+        const int height{static_cast<int>(1 + i / 100'000)};
+        if (i % 100'000 == 0) store.SetBestBlock(uint256{static_cast<uint8_t>(height)}, height);
+        store.AddCoin(outpoint(i), Coin{CTxOut{CAmount{i + 1}, CScript() << OP_TRUE}, height, false}, false);
+    }
+    BOOST_CHECK_EQUAL(store.GetCacheSize(), COINS);
+    store.SanityCheck();
+    // Written, the coins are no longer fresh: a spend keeps its entry as an erase owed to the database.
+    store.Sync();
+    BOOST_CHECK_EQUAL(store.GetDirtyCount(), 0U);
+    // Spends at a later height move entries from the clean list to the dirty lists of their heights.
+    store.SetBestBlock(uint256{100}, 100);
+    store.SetChangeHeight(100);
+    uint32_t spent{0};
+    for (uint32_t i{0}; i < COINS; i += 3) {
+        BOOST_REQUIRE(store.SpendCoin(outpoint(i)));
+        ++spent;
+    }
+    BOOST_CHECK_EQUAL(store.GetCacheSize(), COINS);
+    BOOST_CHECK_EQUAL(store.GetDirtyCount(), spent);
+    store.SanityCheck();
+    for (uint32_t i{0}; i < COINS; ++i) {
+        const Coin& coin{store.AccessCoin(outpoint(i))};
+        if (i % 3 == 0) {
+            BOOST_REQUIRE(coin.IsSpent());
+        } else {
+            BOOST_REQUIRE_EQUAL(coin.out.nValue, CAmount{i + 1});
+        }
+    }
+    // Written out and evicted, every node goes back: the erases leave the database, the clean list empties.
+    store.Sync();
+    store.SanityCheck();
+    BOOST_CHECK(!db.HaveCoin(outpoint(0)));
+    BOOST_CHECK(db.HaveCoin(outpoint(1)));
+    store.EvictClean(0);
+    BOOST_CHECK_EQUAL(store.GetCacheSize(), 0U);
+    store.SanityCheck();
+}
+
+//! A node region is aligned to its size, which NodeAllocator::Number() relies on, and holds no more address space than
+//! that size: an aligned operator new kept a mapping of twice the size for every region (glibc's does).
+BOOST_AUTO_TEST_CASE(node_regions_aligned_without_slack)
+{
+    constexpr size_t BYTES{CoinsStore::NodeRegionBytesForTest()};
+    constexpr size_t REGIONS{8};
+#ifdef __linux__
+    // The process's address space in pages, the first field of /proc/self/statm.
+    const auto address_space{[] {
+        std::ifstream statm{"/proc/self/statm"};
+        size_t pages{0};
+        statm >> pages;
+        return pages * size_t(sysconf(_SC_PAGESIZE));
+    }};
+    const size_t before{address_space()};
+#endif
+    std::vector<void*> regions;
+    for (size_t i{0}; i < REGIONS; ++i) {
+        auto* const region{static_cast<std::byte*>(CoinsStore::MapNodeRegionForTest())};
+        BOOST_REQUIRE_EQUAL(reinterpret_cast<uintptr_t>(region) % BYTES, 0U);
+        // Usable from the first byte to the last.
+        region[0] = std::byte{1};
+        region[BYTES - 1] = std::byte{2};
+        BOOST_CHECK(region[0] == std::byte{1} && region[BYTES - 1] == std::byte{2});
+        regions.push_back(region);
+    }
+#ifdef __linux__
+    const size_t grown{address_space() - before};
+    BOOST_CHECK_GE(grown, REGIONS * BYTES);
+    BOOST_CHECK_LT(grown, REGIONS * BYTES * 3 / 2);
+#endif
+    for (void* region : regions) CoinsStore::UnmapNodeRegionForTest(region);
+#ifdef __linux__
+    BOOST_CHECK_LT(address_space(), before + BYTES);
+#endif
+}
+
+//! A write-out run that is not final leaves the database without a best block until a later run closes its marker:
+//! there is then no block whose UTXO set the database holds, and the statistics are not given, for any hash type.
+//! Before the run opens the marker and after the final one closes it, they are.
+BOOST_FIXTURE_TEST_CASE(utxo_stats_refused_while_a_run_marker_is_open, TestChain100Setup)
+{
+    CCoinsViewDB db{MemoryDb("stats"), {}};
+    node::BlockManager& blockman{m_node.chainman->m_blockman};
+    const auto [tip_hash, tip_height]{WITH_LOCK(::cs_main, return std::pair(m_node.chainman->ActiveTip()->GetBlockHash(), m_node.chainman->ActiveHeight()))};
+    const auto write{[&](uint8_t txid, bool final) {
+        std::vector<CoinWrite> writes;
+        writes.push_back({COutPoint{Txid::FromUint256(uint256{txid}), 0}, Coin{CTxOut{CAmount{1000}, CScript{} << OP_TRUE}, 1, /*fCoinBaseIn=*/false}});
+        db.WriteRun(writes, tip_hash, tip_hash, final);
+    }};
+    const auto stats{[&](kernel::CoinStatsHashType type) { return kernel::ComputeUTXOStats(type, db, blockman); }};
+    write(10, /*final=*/true);
+    const auto before{stats(kernel::CoinStatsHashType::HASH_SERIALIZED)};
+    BOOST_REQUIRE(before);
+    BOOST_CHECK_EQUAL(before->nHeight, tip_height);
+    BOOST_CHECK_EQUAL(before->coins_count, 1U);
+
+    write(11, /*final=*/false);
+    BOOST_CHECK(db.GetBestBlock().IsNull());
+    for (const auto type : {kernel::CoinStatsHashType::HASH_SERIALIZED, kernel::CoinStatsHashType::MUHASH, kernel::CoinStatsHashType::NONE}) {
+        BOOST_CHECK(!stats(type));
+    }
+
+    db.WriteRun({}, tip_hash, tip_hash, /*final=*/true);
+    const auto after{stats(kernel::CoinStatsHashType::HASH_SERIALIZED)};
+    BOOST_REQUIRE(after);
+    BOOST_CHECK_EQUAL(after->nHeight, tip_height);
+    BOOST_CHECK_EQUAL(after->coins_count, 2U);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
