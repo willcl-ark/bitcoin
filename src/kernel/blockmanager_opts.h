@@ -29,6 +29,10 @@ struct BlockManagerOpts {
     const fs::path blocks_dir;
     Notifications& notifications;
     DBParams block_tree_db_params;
+    //! Whether undo writes and prune unlinks run on a background I/O thread (false runs inline).
+    bool async_undo_writes{true};
+    //! Test only (-test=crash_before_undo_write): abort when the first queued undo write runs.
+    bool test_crash_before_undo_write{false};
 };
 
 } // namespace kernel
