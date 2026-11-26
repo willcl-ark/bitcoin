@@ -44,6 +44,13 @@ bool IsFinalTx(const CTransaction &tx, int nBlockHeight, int64_t nBlockTime)
 
 std::pair<int, int64_t> CalculateSequenceLocks(const CTransaction &tx, int flags, std::vector<int>& prevHeights, const CBlockIndex& block)
 {
+    return CalculateSequenceLocks(tx, flags, prevHeights, [&block](int height) {
+        return Assert(block.GetAncestor(height))->GetMedianTimePast();
+    });
+}
+
+std::pair<int, int64_t> CalculateSequenceLocks(const CTransaction &tx, int flags, std::vector<int>& prevHeights, const std::function<int64_t(int)>& median_time_past_at)
+{
     assert(prevHeights.size() == tx.vin.size());
 
     // Will be set to the equivalent height- and time-based nLockTime
@@ -77,7 +84,7 @@ std::pair<int, int64_t> CalculateSequenceLocks(const CTransaction &tx, int flags
         int nCoinHeight = prevHeights[txinIndex];
 
         if (txin.nSequence & CTxIn::SEQUENCE_LOCKTIME_TYPE_FLAG) {
-            const int64_t nCoinTime{Assert(block.GetAncestor(std::max(nCoinHeight - 1, 0)))->GetMedianTimePast()};
+            const int64_t nCoinTime{median_time_past_at(std::max(nCoinHeight - 1, 0))};
             // NOTE: Subtract 1 to maintain nLockTime semantics
             // BIP 68 relative lock times have the semantics of calculating
             // the first block or time at which the transaction would be
@@ -103,8 +110,13 @@ std::pair<int, int64_t> CalculateSequenceLocks(const CTransaction &tx, int flags
 bool EvaluateSequenceLocks(const CBlockIndex& block, std::pair<int, int64_t> lockPair)
 {
     assert(block.pprev);
-    int64_t nBlockTime = block.pprev->GetMedianTimePast();
-    if (lockPair.first >= block.nHeight || lockPair.second >= nBlockTime)
+    return EvaluateSequenceLocks(block.nHeight, block.pprev->GetMedianTimePast(), lockPair);
+}
+
+bool EvaluateSequenceLocks(int height, int64_t prev_median_time_past, std::pair<int, int64_t> lockPair)
+{
+    int64_t nBlockTime = prev_median_time_past;
+    if (lockPair.first >= height || lockPair.second >= nBlockTime)
         return false;
 
     return true;
@@ -146,7 +158,10 @@ unsigned int GetP2SHSigOpCount(const CTransaction& tx, const CCoinsViewCache& in
     return nSigOps;
 }
 
-int64_t GetTransactionSigOpCost(const CTransaction& tx, const CCoinsViewCache& inputs, script_verify_flags flags)
+namespace {
+
+template <typename CoinAt>
+int64_t TransactionSigOpCost(const CTransaction& tx, CoinAt coin_at, script_verify_flags flags)
 {
     int64_t nSigOps = GetLegacySigOpCount(tx) * WITNESS_SCALE_FACTOR;
 
@@ -154,32 +169,35 @@ int64_t GetTransactionSigOpCost(const CTransaction& tx, const CCoinsViewCache& i
         return nSigOps;
 
     if (flags & SCRIPT_VERIFY_P2SH) {
-        nSigOps += GetP2SHSigOpCount(tx, inputs) * WITNESS_SCALE_FACTOR;
+        unsigned int p2sh_sigops = 0;
+        for (unsigned int i = 0; i < tx.vin.size(); i++) {
+            const Coin& coin = coin_at(i);
+            assert(!coin.IsSpent());
+            if (coin.out.scriptPubKey.IsPayToScriptHash()) {
+                p2sh_sigops += coin.out.scriptPubKey.GetSigOpCount(tx.vin[i].scriptSig);
+            }
+        }
+        nSigOps += p2sh_sigops * WITNESS_SCALE_FACTOR;
     }
 
-    for (unsigned int i = 0; i < tx.vin.size(); i++)
-    {
-        const Coin& coin = inputs.AccessCoin(tx.vin[i].prevout);
+    for (unsigned int i = 0; i < tx.vin.size(); i++) {
+        const Coin& coin = coin_at(i);
         assert(!coin.IsSpent());
-        const CTxOut &prevout = coin.out;
-        nSigOps += CountWitnessSigOps(tx.vin[i].scriptSig, prevout.scriptPubKey, tx.vin[i].scriptWitness, flags);
+        nSigOps += CountWitnessSigOps(tx.vin[i].scriptSig, coin.out.scriptPubKey, tx.vin[i].scriptWitness, flags);
     }
     return nSigOps;
 }
 
-bool Consensus::CheckTxInputs(const CTransaction& tx, TxValidationState& state, const CCoinsViewCache& inputs, int nSpendHeight, CAmount& txfee)
+template <typename CoinAt>
+bool CheckTxInputsImpl(const CTransaction& tx, TxValidationState& state, CoinAt coin_at, int nSpendHeight, CAmount& txfee)
 {
-    // are the actual inputs available?
-    if (!inputs.HaveInputs(tx)) {
-        return state.Invalid(TxValidationResult::TX_MISSING_INPUTS, "bad-txns-inputs-missingorspent",
-                         strprintf("%s: inputs missing/spent", __func__));
-    }
-
     CAmount nValueIn = 0;
     for (unsigned int i = 0; i < tx.vin.size(); ++i) {
-        const COutPoint &prevout = tx.vin[i].prevout;
-        const Coin& coin = inputs.AccessCoin(prevout);
-        assert(!coin.IsSpent());
+        const Coin& coin = coin_at(i);
+        if (coin.IsSpent()) {
+            return state.Invalid(TxValidationResult::TX_MISSING_INPUTS, "bad-txns-inputs-missingorspent",
+                             "CheckTxInputs: inputs missing/spent");
+        }
 
         // If prev is coinbase, check that it's matured
         if (coin.IsCoinBase() && nSpendHeight - coin.nHeight < COINBASE_MATURITY) {
@@ -207,14 +225,38 @@ bool Consensus::CheckTxInputs(const CTransaction& tx, TxValidationState& state, 
     // Tally transaction fees
     const CAmount txfee_aux = nValueIn - value_out;
     if (!MoneyRange(txfee_aux)) {
-        // Unreachable, given the following preconditions:
-        // * `value_out` comes from `tx.GetValueOut()`, which throws unless `MoneyRange(value_out)` and asserts `MoneyRange(nValueOut)` on return.
-        // * `MoneyRange(nValueIn)` was enforced in the input loop.
-        // * `nValueIn < value_out` was handled above, so `nValueIn >= value_out` here (and `txfee_aux >= 0`).
-        // Therefore `0 <= txfee_aux = nValueIn - value_out <= nValueIn <= MAX_MONEY`.
         return state.Invalid(TxValidationResult::TX_CONSENSUS, "bad-txns-fee-outofrange");
     }
 
     txfee = txfee_aux;
     return true;
+}
+
+} // namespace
+
+int64_t GetTransactionSigOpCost(const CTransaction& tx, const CCoinsViewCache& inputs, script_verify_flags flags)
+{
+    return TransactionSigOpCost(tx, [&](unsigned int i) -> const Coin& { return inputs.AccessCoin(tx.vin[i].prevout); }, flags);
+}
+
+int64_t GetTransactionSigOpCost(const CTransaction& tx, std::span<const Coin> input_coins, script_verify_flags flags)
+{
+    assert(tx.IsCoinBase() || input_coins.size() == tx.vin.size());
+    return TransactionSigOpCost(tx, [&](unsigned int i) -> const Coin& { return input_coins[i]; }, flags);
+}
+
+bool Consensus::CheckTxInputs(const CTransaction& tx, TxValidationState& state, const CCoinsViewCache& inputs, int nSpendHeight, CAmount& txfee)
+{
+    // are the actual inputs available?
+    if (!inputs.HaveInputs(tx)) {
+        return state.Invalid(TxValidationResult::TX_MISSING_INPUTS, "bad-txns-inputs-missingorspent",
+                         strprintf("%s: inputs missing/spent", __func__));
+    }
+    return CheckTxInputsImpl(tx, state, [&](unsigned int i) -> const Coin& { return inputs.AccessCoin(tx.vin[i].prevout); }, nSpendHeight, txfee);
+}
+
+bool Consensus::CheckTxInputs(const CTransaction& tx, TxValidationState& state, std::span<const Coin> input_coins, int nSpendHeight, CAmount& txfee)
+{
+    assert(input_coins.size() == tx.vin.size());
+    return CheckTxInputsImpl(tx, state, [&](unsigned int i) -> const Coin& { return input_coins[i]; }, nSpendHeight, txfee);
 }
