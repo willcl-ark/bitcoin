@@ -38,8 +38,6 @@ class CCoinsViewDB final : public CCoinsView
 protected:
     DBParams m_db_params;
     CoinsViewOptions m_options;
-    //! Prevents CompactFull() from using m_db while ResizeCache() replaces it.
-    Mutex m_db_mutex;
     std::unique_ptr<CDBWrapper> m_db;
     std::shared_future<void> m_compaction;
 public:
@@ -52,6 +50,7 @@ public:
     uint256 GetBestBlock() const override;
     std::vector<uint256> GetHeadBlocks() const override;
     void BatchWrite(CoinsViewCacheCursor& cursor, const uint256& block_hash) override;
+    void BatchWriteSorted(const SortedBatchProducer& produce, const uint256& block_hash, size_t dirty_count, size_t total_count) override;
     //! Get a cursor to iterate over the whole state.
     std::unique_ptr<CCoinsViewCursor> Cursor() const;
 
@@ -59,13 +58,10 @@ public:
     bool NeedsUpgrade();
     size_t EstimateSize() const override;
 
-    //! Dynamically alter the underlying leveldb cache size.
-    void ResizeCache(size_t new_cache_size) EXCLUSIVE_LOCKS_REQUIRED(cs_main, !m_db_mutex);
-
     bool IsMemoryOnly() const { return m_db_params.memory_only; }
 
     //! Perform a full compaction of the underlying LevelDB on a one-shot background thread.
-    std::shared_future<void> CompactFullAsync() EXCLUSIVE_LOCKS_REQUIRED(cs_main, !m_db_mutex);
+    std::shared_future<void> CompactFullAsync() EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
     //! Return an underlying LevelDB property value, if available.
     std::optional<std::string> GetDBProperty(const std::string& property);
