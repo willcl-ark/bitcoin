@@ -229,6 +229,8 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   node/chainstatemanager_args.cpp
   node/coin.cpp
   node/coins_view_args.cpp
+  node/connect_window.cpp
+  node/window_outputs.cpp
   node/connection_types.cpp
   node/context.cpp
   node/database_args.cpp

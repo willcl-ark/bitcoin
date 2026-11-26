@@ -13,6 +13,7 @@
 #include <ostream>
 
 class CCoinsViewCache;
+class CoinsStore;
 class FastRandomContext;
 
 /**
@@ -21,6 +22,7 @@ class FastRandomContext;
  * @returns the COutPoint of the created coin.
  */
 COutPoint AddTestCoin(FastRandomContext& rng, CCoinsViewCache& coins_view);
+COutPoint AddTestCoin(FastRandomContext& rng, CoinsStore& coins_view);
 
 //! Strict equality, including fields of spent coins
 inline bool operator==(const Coin& a, const Coin& b)

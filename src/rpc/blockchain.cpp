@@ -1271,7 +1271,7 @@ static RPCMethod gettxout()
     const bool fMempool{self.Arg<bool>("include_mempool")};
 
     Chainstate& active_chainstate = chainman.ActiveChainstate();
-    CCoinsViewCache* coins_view = &active_chainstate.CoinsTip();
+    CCoinsView* coins_view = &active_chainstate.CoinsTip();
 
     std::optional<Coin> coin;
     if (fMempool) {
@@ -2947,7 +2947,7 @@ static RPCMethod getdescriptoractivity()
         const CTxMemPool& mempool = EnsureMemPool(node);
         LOCK(::cs_main);
         LOCK(mempool.cs);
-        const CCoinsViewCache& coins_view = &active_chainstate.CoinsTip();
+        const CCoinsView& coins_view = active_chainstate.CoinsTip();
 
         for (const CTxMemPoolEntry& e : mempool.entryAll()) {
             const auto& tx = e.GetSharedTx();

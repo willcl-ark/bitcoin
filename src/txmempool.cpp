@@ -430,7 +430,7 @@ std::vector<RemovedMempoolTransactionInfo> CTxMemPool::removeForBlock(const std:
     return txs_removed_for_block;
 }
 
-void CTxMemPool::check(const CCoinsViewCache& active_coins_tip, int64_t spendheight) const
+void CTxMemPool::check(const CCoinsView& active_coins_tip, int64_t spendheight) const
 {
     if (m_opts.check_ratio == 0) return;
 
@@ -449,7 +449,7 @@ void CTxMemPool::check(const CCoinsViewCache& active_coins_tip, int64_t spendhei
     assert(!m_txgraph->IsOversized(TxGraph::Level::MAIN));
     m_txgraph->SanityCheck();
 
-    CCoinsViewCache mempoolDuplicate(const_cast<CCoinsViewCache*>(&active_coins_tip));
+    CCoinsViewCache mempoolDuplicate(const_cast<CCoinsView*>(&active_coins_tip));
 
     const auto score_with_topo{GetSortedScoreWithTopology()};
 

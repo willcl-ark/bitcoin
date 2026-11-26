@@ -817,6 +817,9 @@ void AddCoins(CCoinsViewCache& cache, const CTransaction& tx, int nHeight, bool 
 //! lookups to database, so it should be used with care.
 const Coin& AccessByTxid(const CCoinsViewCache& cache, const Txid& txid);
 
+//! Find any unspent output with a given txid in an arbitrary CCoinsView.
+std::optional<Coin> FindCoinByTxid(const CCoinsView& view, const Txid& txid);
+
 /**
  * This is a minimally invasive approach to shutdown on LevelDB read errors from the
  * chainstate, while keeping user interface out of the common library, which is shared

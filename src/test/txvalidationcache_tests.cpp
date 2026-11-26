@@ -112,9 +112,10 @@ BOOST_FIXTURE_TEST_CASE(tx_mempool_block_doublespend_one_in_mempool_other_in_blo
 // CHECKLOCKTIMEVERIFY (or CHECKSEQUENCEVERIFY), but the script does contain
 // OP_CHECKLOCKTIMEVERIFY (or OP_CHECKSEQUENCEVERIFY), then script execution
 // should fail.
-static void ValidateCheckInputsForAllFlags(const CTransaction &tx, script_verify_flags failing_flags, bool add_to_cache, CCoinsViewCache& active_coins_tip, ValidationCache& validation_cache) EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
+static void ValidateCheckInputsForAllFlags(const CTransaction &tx, script_verify_flags failing_flags, bool add_to_cache, CoinsStore& active_coins_tip, ValidationCache& validation_cache) EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
 {
     PrecomputedTransactionData txdata;
+    CCoinsViewCache view{&active_coins_tip};
 
     FastRandomContext insecure_rand(true);
 
@@ -138,7 +139,7 @@ static void ValidateCheckInputsForAllFlags(const CTransaction &tx, script_verify
             // WITNESS requires P2SH
             test_flags |= SCRIPT_VERIFY_P2SH;
         }
-        bool ret = CheckInputScripts(tx, state, &active_coins_tip, test_flags, CheckInputScriptsFor::Mempool, true, add_to_cache, txdata, validation_cache, nullptr);
+        bool ret = CheckInputScripts(tx, state, view, test_flags, CheckInputScriptsFor::Mempool, true, add_to_cache, txdata, validation_cache, nullptr);
         // CheckInputScripts should succeed iff test_flags doesn't intersect with
         // failing_flags
         bool expected_return_value = !(test_flags & failing_flags);
@@ -148,13 +149,13 @@ static void ValidateCheckInputsForAllFlags(const CTransaction &tx, script_verify
         if (ret && add_to_cache) {
             // Check that we get a cache hit if the tx was valid
             std::vector<CScriptCheck> scriptchecks;
-            BOOST_CHECK(CheckInputScripts(tx, state, &active_coins_tip, test_flags, CheckInputScriptsFor::Mempool, true, add_to_cache, txdata, validation_cache, &scriptchecks));
+            BOOST_CHECK(CheckInputScripts(tx, state, view, test_flags, CheckInputScriptsFor::Mempool, true, add_to_cache, txdata, validation_cache, &scriptchecks));
             BOOST_CHECK(scriptchecks.empty());
         } else {
             // Check that we get script executions to check, if the transaction
             // was invalid, or we didn't add to cache.
             std::vector<CScriptCheck> scriptchecks;
-            BOOST_CHECK(CheckInputScripts(tx, state, &active_coins_tip, test_flags, CheckInputScriptsFor::Mempool, true, add_to_cache, txdata, validation_cache, &scriptchecks));
+            BOOST_CHECK(CheckInputScripts(tx, state, view, test_flags, CheckInputScriptsFor::Mempool, true, add_to_cache, txdata, validation_cache, &scriptchecks));
             BOOST_CHECK_EQUAL(scriptchecks.size(), tx.vin.size());
         }
     }
@@ -268,7 +269,7 @@ BOOST_FIXTURE_TEST_CASE(checkinputs_test, Dersig100Setup)
         invalid_with_cltv_tx.vin[0].scriptSig = CScript() << vchSig << 100;
         TxValidationState state;
         PrecomputedTransactionData txdata;
-        BOOST_CHECK(CheckInputScripts(CTransaction(invalid_with_cltv_tx), state, m_node.chainman->ActiveChainstate().CoinsTip(), SCRIPT_VERIFY_CHECKLOCKTIMEVERIFY, CheckInputScriptsFor::Mempool, true, true, txdata, m_node.chainman->m_validation_cache, nullptr));
+        BOOST_CHECK(CheckInputScripts(CTransaction(invalid_with_cltv_tx), state, &m_node.chainman->ActiveChainstate().CoinsTip(), SCRIPT_VERIFY_CHECKLOCKTIMEVERIFY, CheckInputScriptsFor::Mempool, true, true, txdata, m_node.chainman->m_validation_cache, nullptr));
     }
 
     // TEST CHECKSEQUENCEVERIFY

@@ -460,6 +460,16 @@ const Coin& AccessByTxid(const CCoinsViewCache& view, const Txid& txid)
     return coinEmpty;
 }
 
+std::optional<Coin> FindCoinByTxid(const CCoinsView& view, const Txid& txid)
+{
+    COutPoint iter(txid, 0);
+    while (iter.n < MAX_OUTPUTS_PER_BLOCK) {
+        if (auto coin{view.GetCoin(iter)}) return coin;
+        ++iter.n;
+    }
+    return std::nullopt;
+}
+
 template <typename ReturnType, typename Func>
 static ReturnType ExecuteBackedWrapper(Func func, const std::vector<std::function<void()>>& err_callbacks)
 {
