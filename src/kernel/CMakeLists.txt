@@ -17,10 +17,12 @@ add_library(bitcoinkernel
   context.cpp
   cs_main.cpp
   disconnected_transactions.cpp
+  effects.cpp
   mempool_removal_reason.cpp
   ../arith_uint256.cpp
   ../chain.cpp
   ../coins.cpp
+  ../coinsstore.cpp
   ../compressor.cpp
   ../consensus/merkle.cpp
   ../consensus/tx_check.cpp

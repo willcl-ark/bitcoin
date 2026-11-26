@@ -31,13 +31,16 @@ add_executable(test_bitcoin
   bloom_tests.cpp
   bswap_tests.cpp
   btcsignals_tests.cpp
+  byte_ledger_tests.cpp
   caches_tests.cpp
   chain_tests.cpp
   chainstate_write_tests.cpp
   checkqueue_tests.cpp
   cluster_linearize_tests.cpp
   txhashing_tests.cpp
+  coins_entry_machine_tests.cpp
   coins_tests.cpp
+  coinsstore_tests.cpp
   coinscachepair_tests.cpp
   coinstatsindex_tests.cpp
   coinsviewoverlay_tests.cpp
@@ -48,6 +51,7 @@ add_executable(test_bitcoin
   dbwrapper_tests.cpp
   denialofservice_tests.cpp
   descriptor_tests.cpp
+  effects_tests.cpp
   disconnected_transactions.cpp
   durability_machine_tests.cpp
   fees_util_tests.cpp
@@ -63,6 +67,7 @@ add_executable(test_bitcoin
   interfaces_tests.cpp
   key_io_tests.cpp
   key_tests.cpp
+  lifecycle_tests.cpp
   logging_tests.cpp
   mempool_tests.cpp
   mempool_fee_estimator_tests.cpp
