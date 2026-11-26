@@ -20,6 +20,7 @@
 #include <kernel/chainparams.h>
 #include <kernel/chainstatemanager_opts.h>
 #include <kernel/cs_main.h> // IWYU pragma: export
+#include <node/block_connector.h>
 #include <node/blockstorage.h>
 #include <node/connect_window.h>
 #include <policy/feerate.h>
@@ -1179,6 +1180,9 @@ private:
     //! Connect window size (1 disables parallel block validation) and its worker pool.
     int m_connect_window{1};
     util::NotNullSharedPtr<ThreadPool> m_connect_pool{util::MakeNotNullShared<ThreadPool>("connect")};
+    //! Dedicated receive pool for asynchronous P2P block deserialization, checks, and disk writes.
+    util::NotNullSharedPtr<ThreadPool> m_receive_pool{util::MakeNotNullShared<ThreadPool>("blockrecv")};
+    node::BlockConnector m_connector;
     std::unique_ptr<node::BlockBins> m_block_bins{std::make_unique<node::BlockBins>()};
     util::ByteLedger m_bytes_in_flight;
     std::atomic<uint64_t> m_window_blocks{0};
@@ -1242,6 +1246,24 @@ public:
     void CheckCoinsStore() const;
     void LogConnectWindowSummary() const;
     int ConnectWindow() const { return m_connect_window; }
+
+    /** Allocate a block, optionally using the per-thread deferred-destruction pool for worker threads. */
+    std::shared_ptr<CBlock> NewBlock(bool on_pool = false) { return on_pool ? m_block_bins->NewBlock() : std::make_shared<CBlock>(); }
+    size_t ReceivePoolWorkers() const { return m_receive_pool->WorkersCount(); }
+    template <typename F>
+    bool SubmitReceiveTask(F&& fn)
+    {
+        return m_receive_pool->Submit(std::forward<F>(fn)).has_value();
+    }
+    node::HandOffTicket LatestHandOff() const { return m_connector.Latest(); }
+    bool HandOffsDone(const node::HandOffTicket& ticket) const { return m_connector.Done(ticket); }
+    bool AnyHandOffPending() const { return m_connector.AnyActivePending(); }
+    void WaitForPendingBlocks() LOCKS_EXCLUDED(::cs_main)
+    {
+        AssertLockNotHeld(::cs_main);
+        m_connector.WaitForPending();
+    }
+    void StopConnector() { m_connector.Stop(); }
 
     /**
      * Alias for ::cs_main.
@@ -1492,7 +1514,7 @@ public:
      * @param[out]  new_block A boolean which is set to indicate if the block was first received via this call
      * @returns     If the block was processed, independently of block validity
      */
-    bool ProcessNewBlock(const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked, bool* new_block) LOCKS_EXCLUDED(cs_main);
+    bool ProcessNewBlock(const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked, bool* new_block, bool activate_async = false) LOCKS_EXCLUDED(cs_main);
 
     //! A block between the steps of ProcessNewBlock().
     struct NewBlockInProcess;
@@ -1511,7 +1533,7 @@ public:
      */
     bool AcceptNewBlock(NewBlockInProcess& in, const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked) LOCKS_EXCLUDED(cs_main);
     void WriteNewBlock(NewBlockInProcess& in);
-    bool FinishNewBlock(NewBlockInProcess& in) LOCKS_EXCLUDED(cs_main);
+    bool FinishNewBlock(NewBlockInProcess& in, bool activate_async = false) LOCKS_EXCLUDED(cs_main);
 
     /**
      * Process incoming block headers.

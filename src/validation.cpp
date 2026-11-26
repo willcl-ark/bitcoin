@@ -5370,7 +5370,7 @@ bool ChainstateManager::AcceptBlock(const std::shared_ptr<const CBlock>& pblock,
     return true;
 }
 
-bool ChainstateManager::ProcessNewBlock(const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked, bool* new_block)
+bool ChainstateManager::ProcessNewBlock(const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked, bool* new_block, bool activate_async)
 {
     AssertLockNotHeld(cs_main);
     // The three steps in a row on this thread.
@@ -5378,7 +5378,7 @@ bool ChainstateManager::ProcessNewBlock(const std::shared_ptr<const CBlock>& blo
     bool ret{false};
     if (AcceptNewBlock(in, block, force_processing, min_pow_checked)) {
         WriteNewBlock(in);
-        ret = FinishNewBlock(in);
+        ret = FinishNewBlock(in, activate_async);
     }
     if (new_block) *new_block = in.new_block;
     return ret;
@@ -5439,18 +5439,29 @@ void ChainstateManager::WriteNewBlock(NewBlockInProcess& in)
     }
 }
 
-bool ChainstateManager::FinishNewBlock(NewBlockInProcess& in)
+bool ChainstateManager::FinishNewBlock(NewBlockInProcess& in, bool activate_async)
 {
     AssertLockNotHeld(cs_main);
+    bool stored{false};
+    bool for_active{true};
     if (in.prepared.store) {
         LOCK(cs_main);
         if (!FinishAcceptBlock(*in.block, in.state, in.prepared, in.written, in.write_error)) {
             in.new_block = false;
             return NewBlockFailed(in);
         }
+        stored = true;
+        if (const CBlockIndex* base{CurrentChainstate().SnapshotBase()}; base && HistoricalChainstate()) {
+            for_active = in.prepared.pindex->nHeight > base->nHeight;
+        }
     }
 
     NotifyHeaderTip();
+
+    if (activate_async) {
+        if (stored) m_connector.Signal(in.block, for_active);
+        return true;
+    }
 
     BlockValidationState state; // Only used to report errors, not invalidity - ignore it
     if (!ActiveChainstate().ActivateBestChain(state, in.block)) {
@@ -7167,6 +7178,22 @@ static ChainstateManager::Options&& Flatten(ChainstateManager::Options&& opts)
 
 ChainstateManager::ChainstateManager(const util::SignalInterrupt& interrupt, Options options, node::BlockManager::Options blockman_options)
     : m_script_check_queue{/*batch_size=*/128, std::clamp(options.worker_threads_num, 0, MAX_SCRIPTCHECK_THREADS)},
+      m_connector{
+          [this](std::shared_ptr<const CBlock> block) {
+              BlockValidationState state;
+              if (!ActiveChainstate().ActivateBestChain(state, std::move(block))) {
+                  LogError("BlockConnector: ActivateBestChain failed (%s)\n", state.ToString());
+              }
+          },
+          [this]() {
+              Chainstate* bg_chain{WITH_LOCK(::cs_main, return HistoricalChainstate())};
+              BlockValidationState bg_state;
+              if (bg_chain && !bg_chain->ActivateBestChain(bg_state, nullptr)) {
+                  LogError("BlockConnector: [background] ActivateBestChain failed (%s)\n", bg_state.ToString());
+              }
+          },
+          [this]() { return bool{m_interrupt}; },
+      },
       m_interrupt{interrupt},
       m_options{Flatten(std::move(options))},
       m_blockman{interrupt, std::move(blockman_options)},
@@ -7185,12 +7212,16 @@ ChainstateManager::ChainstateManager(const util::SignalInterrupt& interrupt, Opt
     if (m_connect_window > 1) {
         const int workers{std::clamp(std::max({m_options.worker_threads_num, m_options.prevoutfetch_threads_num, 2}), 2, std::min(m_connect_window, 16))};
         m_connect_pool->Start(workers);
-        LogInfo("Parallel block connect window uses %d worker threads (%d wide)", workers, m_connect_window);
+        const int recv_workers{std::clamp(workers / 2, 2, 4)};
+        m_receive_pool->Start(recv_workers);
+        LogInfo("Parallel block connect window uses %d worker threads (%d wide, %d receive threads)", workers, m_connect_window, recv_workers);
     }
 }
 
 ChainstateManager::~ChainstateManager()
 {
+    m_receive_pool->Stop();
+    m_connector.Stop();
     m_connect_pool->Stop();
     m_block_bins->Empty();
     LOCK(::cs_main);

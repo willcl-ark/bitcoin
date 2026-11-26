@@ -20,6 +20,7 @@ add_executable(test_bitcoin
   bip32_tests.cpp
   bip324_tests.cpp
   bip352_tests.cpp
+  block_connector_tests.cpp
   blockchain_tests.cpp
   blockencodings_tests.cpp
   blockfilter_index_tests.cpp
@@ -69,6 +70,7 @@ add_executable(test_bitcoin
   mempool_fee_estimator_tests.cpp
   merkle_tests.cpp
   merkleblock_tests.cpp
+  message_tip_rule_tests.cpp
   miner_tests.cpp
   miniminer_tests.cpp
   miniscript_tests.cpp
