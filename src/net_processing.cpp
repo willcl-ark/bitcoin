@@ -4601,10 +4601,19 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
 
         if (!block_pos.IsNull()) {
             CBlock block;
-            const bool ret{m_chainman.m_blockman.ReadBlock(block, block_pos, req.blockhash)};
-            // If height is above MAX_BLOCKTXN_DEPTH then this block cannot get
-            // pruned after we release cs_main above, so this read should never fail.
-            assert(ret);
+            if (!m_chainman.m_blockman.ReadBlock(block, block_pos, req.blockhash)) {
+                const bool pruned{WITH_LOCK(cs_main,
+                    const CBlockIndex* pindex{m_chainman.m_blockman.LookupBlockIndex(req.blockhash)};
+                    return pindex && !(pindex->nStatus & BLOCK_HAVE_DATA);
+                )};
+                if (pruned) {
+                    LogDebug(BCLog::NET, "Block was pruned before it could be read, %s", pfrom.DisconnectMsg());
+                } else {
+                    LogError("Cannot load block from disk, %s", pfrom.DisconnectMsg());
+                }
+                pfrom.fDisconnect = true;
+                return;
+            }
 
             SendBlockTransactions(pfrom, peer, block, req);
             return;
