@@ -323,8 +323,13 @@ void BlockManager::FindFilesToPruneManual(
         if (fileinfo.nSize == 0 || fileinfo.nHeightLast > (unsigned)last_block_can_prune || fileinfo.nHeightFirst < (unsigned)min_block_to_prune) {
             continue;
         }
+        // a block is being written to the file with cs_main released
+        if (m_blockfiles_being_written.contains(fileNumber)) continue;
 
         PruneOneBlockFile(fileNumber);
+        // a write position in the file moves to an unclaimed number (m_blockfile_info may grow): the files
+        // of a prune are removed later (UnlinkPrunedFiles() on a block I/O thread)
+        LeaveCursorFile(fileNumber);
         setFilesToPrune.insert(fileNumber);
         count++;
     }
@@ -398,8 +403,13 @@ void BlockManager::FindFilesToPrune(
             if (fileinfo.nHeightLast > (unsigned)last_block_can_prune || fileinfo.nHeightFirst < (unsigned)min_block_to_prune) {
                 continue;
             }
+            // a block is being written to the file with cs_main released
+            if (m_blockfiles_being_written.contains(fileNumber)) continue;
 
             PruneOneBlockFile(fileNumber);
+            // a write position in the file moves to an unclaimed number (m_blockfile_info may grow): the files
+            // of a prune are removed later (UnlinkPrunedFiles() on a block I/O thread)
+            LeaveCursorFile(fileNumber);
             // Queue up the files for removal
             setFilesToPrune.insert(fileNumber);
             nCurrentUsage -= nBytesToPrune;
@@ -568,13 +578,12 @@ bool BlockManager::SyncWrittenFiles()
     if (m_sync_failed) return false;
     // Iterate over copies: a successful sync takes the file out of its set.
     for (const int file : std::set<int>{m_unsynced_block_files}) {
-        if (m_block_file_seq.Flush(FlatFilePos(file, m_blockfile_info.at(file).nSize), /*finalize=*/false)) {
-            m_unsynced_block_files.erase(file);
-        } else {
+        if (!CloseBlockWriteHandle(file) || !m_block_file_seq.Flush(FlatFilePos(file, m_blockfile_info.at(file).nSize), /*finalize=*/false)) {
             m_sync_failed = true;
             m_opts.notifications.flushError(_("Flushing block file to disk failed. This is likely the result of an I/O error."));
             return false;
         }
+        m_unsynced_block_files.erase(file);
     }
     for (const int file : std::set<int>{m_unsynced_undo_files}) {
         if (!FlushUndoFile(file, /*finalize=*/false)) return false;
@@ -644,7 +653,7 @@ bool BlockManager::LoadBlockIndexDB(const std::optional<uint256>& snapshot_block
     return true;
 }
 
-void BlockManager::ScanAndUnlinkAlreadyPrunedFiles()
+void BlockManager::ScanAndUnlinkAlreadyPrunedFiles(const std::set<int>& exclude)
 {
     AssertLockHeld(::cs_main);
     int max_blockfile{this->MaxBlockfileNum()};
@@ -654,7 +663,7 @@ void BlockManager::ScanAndUnlinkAlreadyPrunedFiles()
 
     std::set<int> block_files_to_prune;
     for (int file_number = 0; file_number < max_blockfile; file_number++) {
-        if (m_blockfile_info[file_number].nSize == 0) {
+        if (m_blockfile_info[file_number].nSize == 0 && !exclude.contains(file_number)) {
             block_files_to_prune.insert(file_number);
         }
     }
@@ -813,8 +822,13 @@ bool BlockManager::FlushBlockFile(int blockfile_num, bool fFinalize, bool finali
     }
     assert(static_cast<int>(m_blockfile_info.size()) > blockfile_num);
 
+    // Do not create or fsync a brand-new file whose first block write is still in flight.
+    if (m_blockfile_info[blockfile_num].nBlocks == 0 && !m_unsynced_block_files.contains(blockfile_num)) {
+        return true;
+    }
+
     FlatFilePos block_pos_old(blockfile_num, m_blockfile_info[blockfile_num].nSize);
-    if (!m_block_file_seq.Flush(block_pos_old, fFinalize)) {
+    if (!CloseBlockWriteHandle(blockfile_num) || !m_block_file_seq.Flush(block_pos_old, fFinalize)) {
         m_sync_failed = true;
         m_opts.notifications.flushError(_("Flushing block file to disk failed. This is likely the result of an I/O error."));
         success = false;
@@ -829,6 +843,69 @@ bool BlockManager::FlushBlockFile(int blockfile_num, bool fFinalize, bool finali
         }
     }
     return success;
+}
+
+void BlockManager::TrimBlockFile(int blockfile_num)
+{
+    AssertLockHeld(::cs_main);
+    (void)CloseBlockWriteHandle(blockfile_num);
+    // A failed trim leaves pre-allocated bytes in the file and nothing else: its data and its sync are untouched.
+    if (!m_block_file_seq.Truncate(FlatFilePos(blockfile_num, m_blockfile_info[blockfile_num].nSize))) {
+        LogWarning("Failed to trim block file %05i", blockfile_num);
+    }
+}
+
+void BlockManager::TrimUndoFile(int blockfile_num)
+{
+    AssertLockHeld(::cs_main);
+    if (!m_undo_file_seq.Truncate(FlatFilePos(blockfile_num, m_blockfile_info[blockfile_num].nUndoSize))) {
+        LogWarning("Failed to trim undo file %05i", blockfile_num);
+    }
+}
+
+bool BlockManager::ClaimChunks(Preallocation& prealloc, const FlatFileSeq& seq, const FlatFilePos& pos, uint64_t add_size)
+{
+    AssertLockHeld(::cs_main);
+    const uint64_t old_chunks{seq.Chunks(pos.nPos)};
+    // Positions are claimed in rising order: a file's first claim since the start finds it allocated up to
+    // the chunk its position is in, as FlatFileSeq::Allocate() takes it to be.
+    WITH_LOCK(prealloc.mutex, prealloc.chunks.try_emplace(pos.nFile, old_chunks));
+    return seq.Chunks(pos.nPos + add_size) > old_chunks;
+}
+
+bool BlockManager::NeedsPreallocate(Preallocation& prealloc, const FlatFileSeq& seq, const FlatFilePos& pos, uint64_t size) const
+{
+    const uint64_t need{seq.Chunks(pos.nPos + size)};
+    LOCK(prealloc.mutex);
+    const auto it{prealloc.chunks.find(pos.nFile)};
+    return it != prealloc.chunks.end() && it->second < need;
+}
+
+bool BlockManager::Preallocate(Preallocation& prealloc, const FlatFileSeq& seq, const FlatFilePos& pos, uint64_t size, bool& out_of_space)
+{
+    out_of_space = false;
+    const uint64_t need{seq.Chunks(pos.nPos + size)};
+    // The allocated end of the file, or nothing to do. Entries are never removed.
+    const auto allocated{[&]() -> std::optional<uint64_t> {
+        LOCK(prealloc.mutex);
+        const auto it{prealloc.chunks.find(pos.nFile)};
+        if (it == prealloc.chunks.end() || it->second >= need) return std::nullopt;
+        return it->second;
+    }};
+    if (!allocated()) return true;
+    LOCK(prealloc.allocating);
+    // Again: an allocation that finished meanwhile may cover these bytes.
+    const std::optional<uint64_t> from{allocated()};
+    if (!from) return true;
+    // From the end of what is allocated, which is past every byte written: each writer comes through here
+    // before it writes, and one whose bytes lie past the recorded end waits for `allocating`.
+    const uint64_t allocated_bytes{seq.AllocateChunks(pos.nFile, *from, need, out_of_space)};
+    if (out_of_space || allocated_bytes == 0) return false;
+    {
+        LOCK(prealloc.mutex);
+        prealloc.chunks.at(pos.nFile) = need;
+    }
+    return true;
 }
 
 BlockfileType BlockManager::BlockfileTypeForHeight(int height)
@@ -865,6 +942,7 @@ uint64_t BlockManager::CalculateCurrentUsage()
 
 void BlockManager::UnlinkPrunedFiles(const std::set<int>& setFilesToPrune) const
 {
+    CloseBlockWriteHandleIfIn(setFilesToPrune);
     std::error_code ec;
     for (std::set<int>::iterator it = setFilesToPrune.begin(); it != setFilesToPrune.end(); ++it) {
         FlatFilePos pos(*it, 0);
@@ -948,38 +1026,31 @@ FlatFilePos BlockManager::FindNextBlockPos(uint64_t nAddSize, unsigned int nHeig
         LogDebug(BCLog::BLOCKSTORAGE, "Leaving block file %i: %s (onto %i) (height %i)\n",
                  last_blockfile, m_blockfile_info[last_blockfile].ToString(), nFile, nHeight);
 
-        // Do not propagate the return code. The flush concerns a previous block
-        // and undo file that has already been written to. If a flush fails
-        // here, and we crash, there is no expected additional block data
-        // inconsistency arising from the flush failure here. However, the undo
-        // data may be inconsistent after a crash if the flush is called during
-        // a reindex. A flush error might also leave some of the data files
-        // untrimmed.
-        if (!FlushBlockFile(last_blockfile, /*fFinalize=*/true, finalize_undo)) {
-            LogWarning(
-                          "Failed to flush previous block file %05i (finalize=1, finalize_undo=%i) before opening new block file %05i\n",
-                          last_blockfile, finalize_undo, nFile);
+        // The file is trimmed, not synced. It stays marked unsynced (m_unsynced_block_files, its undo file in
+        // m_unsynced_undo_files), and whatever records its blocks in the block index syncs it first
+        // (SyncWrittenFiles()). A sync here would be made under cs_main, holding every block being stored behind
+        // it, for a durability nothing reads yet.
+        // The block file's trim waits until no write is in flight for it (UnpinBlockFile()).
+        if (finalize_undo) TrimUndoFile(last_blockfile);
+        if (m_blockfiles_being_written.contains(last_blockfile)) {
+            m_blockfiles_to_trim.insert(last_blockfile);
+        } else {
+            TrimBlockFile(last_blockfile);
         }
         // No undo data yet in the new file, so reset our undo-height tracking.
         m_blockfile_cursors[chain_type] = BlockfileCursor{nFile};
     }
 
-    m_blockfile_info[nFile].AddBlock(nHeight, nTime);
+    // Reserve the byte range under cs_main; CBlockFileInfo block counts/bounds and
+    // m_unsynced_block_files are recorded in CommitBlockPos() once WriteBlockAt() succeeds.
     m_blockfile_info[nFile].nSize += nAddSize;
 
-    bool out_of_space;
-    uint64_t bytes_allocated{m_block_file_seq.Allocate(pos, nAddSize, out_of_space)};
-    if (out_of_space) {
-        m_opts.notifications.fatalError(_("Disk space is too low!"));
-        return {};
-    }
-    // The position is claimed: the file holds bytes its last sync did not cover.
-    m_unsynced_block_files.insert(nFile);
-    if (bytes_allocated != 0 && IsPruneMode()) {
+    // Arithmetic only: the chunk is allocated, and the disk's room for it checked, by the write
+    // (WriteBlockAt()), not here under cs_main.
+    const bool new_chunk{ClaimChunks(m_block_prealloc, m_block_file_seq, pos, nAddSize)};
+    if (new_chunk && IsPruneMode()) {
         m_check_for_pruning = true;
     }
-
-    m_dirty_fileinfo.insert(nFile);
     return pos;
 }
 
@@ -1004,27 +1075,25 @@ void BlockManager::UpdateBlockInfo(const CBlock& block, unsigned int nHeight, co
     m_dirty_fileinfo.insert(nFile);
 }
 
-bool BlockManager::FindUndoPos(BlockValidationState& state, int nFile, FlatFilePos& pos, uint64_t nAddSize)
+FlatFilePos BlockManager::FindUndoPos(int nFile, uint64_t nAddSize)
 {
     AssertLockHeld(::cs_main);
+    FlatFilePos pos;
     pos.nFile = nFile;
 
     pos.nPos = m_blockfile_info[nFile].nUndoSize;
     m_blockfile_info[nFile].nUndoSize += nAddSize;
     m_dirty_fileinfo.insert(nFile);
 
-    bool out_of_space;
-    uint64_t bytes_allocated{m_undo_file_seq.Allocate(pos, nAddSize, out_of_space)};
-    if (out_of_space) {
-        return FatalError(m_opts.notifications, state, _("Disk space is too low!"));
-    }
+    // Arithmetic only, as for a block's position: the write allocates (WriteBlockUndo()).
+    const bool new_chunk{ClaimChunks(m_undo_prealloc, m_undo_file_seq, pos, nAddSize)};
     // The position is claimed: the file holds bytes its last sync did not cover.
     m_unsynced_undo_files.insert(nFile);
-    if (bytes_allocated != 0 && IsPruneMode()) {
+    if (new_chunk && IsPruneMode()) {
         m_check_for_pruning = true;
     }
 
-    return true;
+    return pos;
 }
 
 bool BlockManager::WriteBlockUndo(const CBlockUndo& blockundo, BlockValidationState& state, CBlockIndex& block)
@@ -1035,11 +1104,11 @@ bool BlockManager::WriteBlockUndo(const CBlockUndo& blockundo, BlockValidationSt
 
     // Write undo information to disk
     if (block.GetUndoPos().IsNull()) {
-        FlatFilePos pos;
         const auto blockundo_size{static_cast<uint32_t>(GetSerializeSize(blockundo))};
-        if (!FindUndoPos(state, block.nFile, pos, blockundo_size + UNDO_DATA_DISK_OVERHEAD)) {
-            LogError("FindUndoPos failed for %s while writing block undo", pos.ToString());
-            return false;
+        FlatFilePos pos{FindUndoPos(block.nFile, blockundo_size + UNDO_DATA_DISK_OVERHEAD)};
+        bool out_of_space{false};
+        if (!Preallocate(m_undo_prealloc, m_undo_file_seq, pos, blockundo_size + UNDO_DATA_DISK_OVERHEAD, out_of_space)) {
+            return FatalError(m_opts.notifications, state, out_of_space ? _("Disk space is too low!") : _("Failed to write undo data."));
         }
 
         // Open history file to append
@@ -1098,19 +1167,32 @@ bool BlockManager::WriteBlockUndo(const CBlockUndo& blockundo, BlockValidationSt
 
 bool BlockManager::ReadBlock(CBlock& block, const FlatFilePos& pos, const std::optional<uint256>& expected_hash) const
 {
-    block.SetNull();
-
-    // Open history file to read. Every byte of the buffer is read from the file before one is parsed (a short
-    // read fails), so the buffer is not zeroed first: a write pass over the block's size saved.
-    std::unique_ptr<std::byte[]> buffer;
-    std::span<const std::byte> block_data;
-    if (!ReadRawBlockInto(pos, std::nullopt, [&](size_t size) {
-            buffer = std::make_unique_for_overwrite<std::byte[]>(size);
-            block_data = {buffer.get(), size};
-            return std::span<std::byte>{buffer.get(), size};
-        })) {
+    const BlockBytes bytes{ReadBlockBytes(pos)};
+    if (!bytes.data) {
+        block.SetNull();
         return false;
     }
+    return ParseBlock(block, {bytes.data.get(), bytes.size}, pos, expected_hash);
+}
+
+BlockManager::BlockBytes BlockManager::ReadBlockBytes(const FlatFilePos& pos) const
+{
+    // Open history file to read. Every byte of the buffer is read from the file before one is parsed (a short
+    // read fails), so the buffer is not zeroed first: a write pass over the block's size saved.
+    BlockBytes bytes;
+    if (!ReadRawBlockInto(pos, std::nullopt, [&](size_t size) {
+            bytes.data = std::make_unique_for_overwrite<std::byte[]>(size);
+            bytes.size = size;
+            return std::span<std::byte>{bytes.data.get(), size};
+        })) {
+        return {};
+    }
+    return bytes;
+}
+
+bool BlockManager::ParseBlock(CBlock& block, std::span<const std::byte> block_data, const FlatFilePos& pos, const std::optional<uint256>& expected_hash) const
+{
+    block.SetNull();
 
     try {
         // Read block
@@ -1211,37 +1293,148 @@ util::Expected<void, ReadRawError> BlockManager::ReadRawBlockInto(const FlatFile
     }
 }
 
-FlatFilePos BlockManager::WriteBlock(const CBlock& block, int nHeight)
+bool BlockManager::CloseBlockWriteHandleLocked() const
+{
+    AssertLockHeld(m_block_write_mutex);
+    if (!m_open_block_handle) return true;
+    const int file_num{m_open_block_file};
+    const int rc{m_open_block_handle->fclose()};
+    m_open_block_handle.reset();
+    m_open_block_file = -1;
+    if (rc != 0) {
+        LogError("Failed to close block file %05i: %s", file_num, SysErrorString(errno));
+        return false;
+    }
+    return true;
+}
+
+bool BlockManager::CloseBlockWriteHandle(std::optional<int> only_file) const
+{
+    LOCK(m_block_write_mutex);
+    if (only_file && m_open_block_file != *only_file) return true;
+    return CloseBlockWriteHandleLocked();
+}
+
+void BlockManager::CloseBlockWriteHandleIfIn(const std::set<int>& files) const
+{
+    LOCK(m_block_write_mutex);
+    if (m_open_block_handle && files.contains(m_open_block_file)) {
+        (void)CloseBlockWriteHandleLocked();
+    }
+}
+
+FlatFilePos BlockManager::AllocateBlockPos(const CBlock& block, int nHeight, unsigned int* block_size_out)
 {
     AssertLockHeld(::cs_main);
     const unsigned int block_size{static_cast<unsigned int>(GetSerializeSize(TX_WITH_WITNESS(block)))};
-    FlatFilePos pos{FindNextBlockPos(block_size + STORAGE_HEADER_BYTES, nHeight, block.GetBlockTime())};
-    if (pos.IsNull()) {
-        LogError("FindNextBlockPos failed for %s while writing block", pos.ToString());
-        return FlatFilePos();
+    if (block_size_out) *block_size_out = block_size;
+    return FindNextBlockPos(block_size + STORAGE_HEADER_BYTES, nHeight, block.GetBlockTime());
+}
+
+void BlockManager::PinBlockFile(int file)
+{
+    AssertLockHeld(::cs_main);
+    ++m_blockfiles_being_written[file];
+}
+
+void BlockManager::UnpinBlockFile(int file, bool written)
+{
+    AssertLockHeld(::cs_main);
+    const auto it{m_blockfiles_being_written.find(file)};
+    if (!Assume(it != m_blockfiles_being_written.end())) return;
+    if (--it->second == 0) {
+        m_blockfiles_being_written.erase(it);
+        // Left by the write position meanwhile: its last write is in, so it is trimmed now.
+        if (m_blockfiles_to_trim.erase(file) && (written || m_blockfile_info[file].nBlocks > 0)) {
+            TrimBlockFile(file);
+        }
     }
-    AutoFile file{OpenBlockFile(pos, /*fReadOnly=*/false)};
-    if (file.IsNull()) {
-        LogError("OpenBlockFile failed for %s while writing block", pos.ToString());
-        m_opts.notifications.fatalError(_("Failed to write block."));
-        return FlatFilePos();
-    }
+    // The write was made off the lock, after its position was claimed: a sync made in between did not
+    // cover its bytes, also where the cursor left the file meanwhile and finalized it. The file is marked
+    // again, and whatever writes the block index next syncs it first (SyncWrittenFiles()).
+    if (written) m_unsynced_block_files.insert(file);
+}
+
+bool BlockManager::WriteBlockAt(const CBlock& block, FlatFilePos& pos, std::optional<unsigned int> precomputed_block_size)
+{
+    const unsigned int block_size{precomputed_block_size.value_or(static_cast<unsigned int>(GetSerializeSize(TX_WITH_WITNESS(block))))};
+    bool out_of_space{false};
+    bool close_failed{false};
+    bool write_failed{false};
     {
-        BufferedWriter fileout{file};
-
-        // Write index header
-        fileout << GetParams().MessageStart() << block_size;
-        pos.nPos += STORAGE_HEADER_BYTES;
-        // Write block
-        fileout << TX_WITH_WITNESS(block);
+        LOCK(m_block_write_mutex);
+        if (m_open_block_handle && m_open_block_file != pos.nFile) {
+            if (!CloseBlockWriteHandleLocked()) close_failed = true;
+        }
+        if (!close_failed && NeedsPreallocate(m_block_prealloc, m_block_file_seq, pos, block_size + STORAGE_HEADER_BYTES)) {
+            if (!CloseBlockWriteHandleLocked()) {
+                close_failed = true;
+            } else if (!Preallocate(m_block_prealloc, m_block_file_seq, pos, block_size + STORAGE_HEADER_BYTES, out_of_space)) {
+                write_failed = true;
+            }
+        }
+        if (!close_failed && !write_failed) {
+            if (!m_open_block_handle) {
+                std::FILE* fp{m_block_file_seq.Open(pos, /*fReadOnly=*/false)};
+                if (!fp) {
+                    LogError("OpenBlockFile failed for %s while writing block", pos.ToString());
+                    write_failed = true;
+                } else {
+                    m_open_block_handle.emplace(fp, m_obfuscation);
+                    m_open_block_file = pos.nFile;
+                }
+            } else if (m_open_block_handle->tell() != static_cast<int64_t>(pos.nPos)) {
+                m_open_block_handle->seek(static_cast<int64_t>(pos.nPos), SEEK_SET);
+            }
+        }
+        if (!close_failed && !write_failed) {
+            try {
+                {
+                    BufferedWriter fileout{*m_open_block_handle};
+                    // Write index header
+                    fileout << GetParams().MessageStart() << block_size;
+                    // Write block
+                    fileout << TX_WITH_WITNESS(block);
+                }
+                if (m_open_block_handle->fflush() != 0) {
+                    LogError("Failed to flush block file %s: %s", pos.ToString(), SysErrorString(errno));
+                    (void)CloseBlockWriteHandleLocked();
+                    write_failed = true;
+                }
+            } catch (...) {
+                (void)CloseBlockWriteHandleLocked();
+                throw;
+            }
+        }
     }
-
-    if (file.fclose() != 0) {
-        LogError("Failed to close block file %s: %s", pos.ToString(), SysErrorString(errno));
+    if (close_failed) {
         m_opts.notifications.fatalError(_("Failed to close file when writing block."));
-        return FlatFilePos();
+        return false;
     }
+    if (write_failed) {
+        m_opts.notifications.fatalError(out_of_space ? _("Disk space is too low!") : _("Failed to write block."));
+        return false;
+    }
+    pos.nPos += STORAGE_HEADER_BYTES;
+    return true;
+}
 
+void BlockManager::CommitBlockPos(const CBlock& block, int nHeight, const FlatFilePos& pos)
+{
+    AssertLockHeld(::cs_main);
+    assert(static_cast<int>(m_blockfile_info.size()) > pos.nFile);
+    m_blockfile_info[pos.nFile].AddBlock(nHeight, block.GetBlockTime());
+    m_unsynced_block_files.insert(pos.nFile);
+    m_dirty_fileinfo.insert(pos.nFile);
+}
+
+FlatFilePos BlockManager::WriteBlock(const CBlock& block, int nHeight)
+{
+    AssertLockHeld(::cs_main);
+    unsigned int block_size{0};
+    FlatFilePos pos{AllocateBlockPos(block, nHeight, &block_size)};
+    if (!WriteBlockAt(block, pos, block_size)) return FlatFilePos();
+    CommitBlockPos(block, nHeight, pos);
     return pos;
 }
 
@@ -1294,6 +1487,11 @@ static auto InitBlocksdirXorKey(const BlockManager::Options& opts)
     }
     LogInfo("Using obfuscation key for blocksdir *.dat files (%s): '%s'\n", fs::PathToString(opts.blocks_dir), HexStr(obfuscation));
     return Obfuscation{obfuscation};
+}
+
+BlockManager::~BlockManager()
+{
+    (void)CloseBlockWriteHandle();
 }
 
 BlockManager::BlockManager(const util::SignalInterrupt& interrupt, Options opts)
