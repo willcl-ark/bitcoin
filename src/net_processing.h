@@ -115,6 +115,9 @@ public:
         unsigned int tx_send_rate{DEFAULT_TX_SEND_RATE};
         //! Return the running block filter index for a filter type, if enabled.
         std::function<BlockFilterIndex*(BlockFilterType)> get_block_filter_index{[](BlockFilterType) { return nullptr; }};
+        //! Keep block processing and chain activation synchronous on the message handler
+        //! (used by unit tests that inspect tip state immediately after processing a message).
+        bool blocks_on_message_handler{true};
     };
 
     static std::unique_ptr<PeerManager> make(CConnman& connman, AddrMan& addrman,
@@ -132,6 +135,9 @@ public:
 
     /** Begin running background tasks, should only be called once */
     virtual void StartScheduledTasks(CScheduler& scheduler) = 0;
+
+    /** Wait for any in-flight asynchronous block receive tasks to finish. Must be called after CConnman::Stop(). */
+    virtual void FinishBlockTasks() = 0;
 
     /** Get statistics from node state */
     virtual bool GetNodeStateStats(NodeId nodeid, CNodeStateStats& stats) const = 0;
