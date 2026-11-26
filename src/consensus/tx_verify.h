@@ -9,11 +9,14 @@
 #include <script/verify_flags.h>
 
 #include <cstdint>
+#include <functional>
+#include <span>
 #include <utility>
 #include <vector>
 
 class CBlockIndex;
 class CCoinsViewCache;
+class Coin;
 class CTransaction;
 class TxValidationState;
 
@@ -27,6 +30,7 @@ namespace Consensus {
  * Preconditions: tx.IsCoinBase() is false.
  */
 [[nodiscard]] bool CheckTxInputs(const CTransaction& tx, TxValidationState& state, const CCoinsViewCache& inputs, int nSpendHeight, CAmount& txfee);
+[[nodiscard]] bool CheckTxInputs(const CTransaction& tx, TxValidationState& state, std::span<const Coin> input_coins, int nSpendHeight, CAmount& txfee);
 } // namespace Consensus
 
 /** Auxiliary functions for transaction validation (ideally should not be exposed) */
@@ -55,6 +59,7 @@ unsigned int GetP2SHSigOpCount(const CTransaction& tx, const CCoinsViewCache& ma
  * @return Total signature operation cost of tx
  */
 int64_t GetTransactionSigOpCost(const CTransaction& tx, const CCoinsViewCache& inputs, script_verify_flags flags);
+int64_t GetTransactionSigOpCost(const CTransaction& tx, std::span<const Coin> input_coins, script_verify_flags flags);
 
 /**
  * Check if transaction is final and can be included in a block with the
@@ -69,8 +74,16 @@ bool IsFinalTx(const CTransaction &tx, int nBlockHeight, int64_t nBlockTime);
  * prevHeights are set to 0 as they do not affect the calculation.
  */
 std::pair<int, int64_t> CalculateSequenceLocks(const CTransaction &tx, int flags, std::vector<int>& prevHeights, const CBlockIndex& block);
+/**
+ * The same calculation for a caller that holds no block index entry:
+ * `median_time_past_at(h)` is the median time past of the block's ancestor at
+ * height h, asked only for heights below the block's own.
+ */
+std::pair<int, int64_t> CalculateSequenceLocks(const CTransaction &tx, int flags, std::vector<int>& prevHeights, const std::function<int64_t(int)>& median_time_past_at);
 
 bool EvaluateSequenceLocks(const CBlockIndex& block, std::pair<int, int64_t> lockPair);
+/** The same evaluation from the block's height and its previous block's median time past. */
+bool EvaluateSequenceLocks(int height, int64_t prev_median_time_past, std::pair<int, int64_t> lockPair);
 /**
  * Check if transaction is final per BIP 68 sequence numbers and can be included in a block.
  * Consensus critical. Takes as input a list of heights at which tx's inputs (in order) confirmed.
