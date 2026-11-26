@@ -8,9 +8,11 @@
 
 #include <arith_uint256.h>
 #include <attributes.h>
+#include <block_apply_view.h>
 #include <chain.h>
 #include <checkqueue.h>
 #include <coins.h>
+#include <coinsstore.h>
 #include <consensus/amount.h>
 #include <cuckoocache.h>
 #include <deploymentstatus.h>
@@ -19,6 +21,7 @@
 #include <kernel/chainstatemanager_opts.h>
 #include <kernel/cs_main.h> // IWYU pragma: export
 #include <node/blockstorage.h>
+#include <node/connect_window.h>
 #include <policy/feerate.h>
 #include <policy/packages.h>
 #include <policy/policy.h>
@@ -45,7 +48,9 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <semaphore>
 #include <set>
 #include <shared_mutex>
 #include <span>
@@ -629,23 +634,29 @@ public:
     CCoinsViewErrorCatcher m_catcherview GUARDED_BY(cs_main);
 
     //! This is the top layer of the cache hierarchy - it keeps as many coins in memory as
-    //! can fit per the dbcache setting.
-    std::unique_ptr<CCoinsViewCache> m_cacheview GUARDED_BY(cs_main);
+    //! can fit per the dbcache setting, sharded for concurrent lookups and commits.
+    std::unique_ptr<CoinsStore> m_cacheview GUARDED_BY(cs_main);
 
-    //! Reused CoinsViewOverlay layered on top of m_cacheview and passed to ConnectBlock().
-    //! Reset between calls and flushed only on success, so invalid blocks don't pollute the underlying cache.
-    std::unique_ptr<CoinsViewOverlay> m_connect_block_view GUARDED_BY(cs_main);
+    //! Thread pool used for serial prevout prefetching (shared with ChainstateManager's connect pool).
+    std::shared_ptr<ThreadPool> m_prefetch_pool;
+
+    //! Reusable BlockApplyView instances layered on top of m_cacheview.
+    //! Slot 0 is reserved for serial/tip validation (TipView()); slots 1..N serve window workers.
+    std::vector<std::unique_ptr<BlockApplyView>> m_apply_views GUARDED_BY(cs_main);
 
     //! This constructor initializes CCoinsViewDB and CCoinsViewErrorCatcher instances, but it
-    //! *does not* create a CCoinsViewCache instance by default. This is done separately because the
+    //! *does not* create a CoinsStore instance by default. This is done separately because the
     //! presence of the cache has implications on whether or not we're allowed to flush the cache's
     //! state to disk, which should not be done until the health of the database is verified.
     //!
     //! All arguments forwarded onto CCoinsViewDB.
     CoinsViews(DBParams db_params, CoinsViewOptions options);
 
-    //! Initialize the CCoinsViewCache member.
-    void InitCache(int32_t prevoutfetch_threads) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    //! Initialize the CoinsStore and TipView().
+    void InitCache(util::NotNullSharedPtr<ThreadPool> prefetch_pool) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+
+    BlockApplyView& TipView() EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    BlockApplyView* FreeApplyView() EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 };
 
 enum class CoinsCacheSizeState
@@ -841,6 +852,13 @@ public:
         return *Assert(m_coins_views->m_cacheview);
     }
 
+    CoinsStore& CoinsStoreTip() EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
+    {
+        AssertLockHeld(::cs_main);
+        Assert(m_coins_views);
+        return *Assert(m_coins_views->m_cacheview);
+    }
+
     //! @returns A reference to the on-disk UTXO set database.
     CCoinsViewDB& CoinsDB() EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
     {
@@ -1004,6 +1022,31 @@ public:
     std::pair<int, int> GetPruneRange(int last_height_can_prune) const EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
 protected:
+    bool m_window_retry_serial{false};
+
+    const char* ScriptCheckReason(const CBlockIndex& pindex) const EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    bool FinishConnectBlock(const CBlock& block, BlockValidationState& state, CBlockIndex* pindex,
+                            const char* script_check_reason, bool ok, ConnectBlockResult& result,
+                            bool fJustCheck, bool async_undo,
+                            std::vector<unsigned char>* pre_serialized_undo = nullptr) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+
+    void StageWindowBlock(CBlockIndex* pindexNew, node::StagedConnect& staged, const FlatFilePos& pos,
+                          std::shared_ptr<const CBlock> block) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    void RunConnectTask(node::StagedConnect& staged) noexcept;
+    void OnWindowBlockIndexed(node::StagedConnect& staged);
+    void RunWindowValidation(node::StagedConnect& staged, node::WindowSync& sync) noexcept;
+    bool PublishWindowBlock(BlockValidationState& state, node::StagedConnect& staged,
+                            const kernel::ChainstateRole& role, DisconnectedBlockTransactions& disconnectpool,
+                            bool may_flush)
+        EXCLUSIVE_LOCKS_REQUIRED(cs_main, m_mempool->cs);
+    bool NotifyTipAdvanced(CBlockIndex* pindexNewTip, const CBlockIndex* pindexFork, bool still_in_ibd)
+        EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    bool ConnectWindowStep(BlockValidationState& state, CBlockIndex*& pindexMostWork,
+                           const std::shared_ptr<const CBlock>& pblock, CBlockIndex*& pindexNewTip,
+                           bool& exited_ibd, bool& interrupted)
+        EXCLUSIVE_LOCKS_REQUIRED(m_chainstate_mutex)
+        LOCKS_EXCLUDED(::cs_main);
+
     bool ActivateBestChainStep(BlockValidationState& state, CBlockIndex& index_most_work, const std::shared_ptr<const CBlock>& pblock, bool& fInvalidFound, std::vector<ConnectedBlock>& connected_blocks) EXCLUSIVE_LOCKS_REQUIRED(cs_main, m_mempool->cs);
     bool ConnectTip(
         BlockValidationState& state,
@@ -1131,6 +1174,16 @@ private:
     //! A queue for script verifications that have to be performed by worker threads.
     CCheckQueue<CScriptCheck> m_script_check_queue;
 
+    //! Connect window size (1 disables parallel block validation) and its worker pool.
+    int m_connect_window{1};
+    util::NotNullSharedPtr<ThreadPool> m_connect_pool{util::MakeNotNullShared<ThreadPool>("connect")};
+    //! Bounds concurrent disk reads from the connect pool to avoid seek storms on spinning disks.
+    std::counting_semaphore<4> m_block_read_sem{4};
+    std::atomic<size_t> m_pinned_block_bytes{0};
+    std::atomic<uint64_t> m_window_blocks{0};
+    std::atomic<uint64_t> m_window_conflicts{0};
+    std::atomic<uint64_t> m_window_retries{0};
+
     //! Blocks whose data is being written to disk with cs_main released
     //! (see PreparedBlock). A second arrival of such a block is treated
     //! as already stored, so it is written once.
@@ -1185,6 +1238,9 @@ public:
      * By default this only executes fully when using the Regtest chain; see: m_options.check_block_index.
      */
     void CheckBlockIndex() const;
+    void CheckCoinsStore() const;
+    void LogConnectWindowSummary() const;
+    int ConnectWindow() const { return m_connect_window; }
 
     /**
      * Alias for ::cs_main.
@@ -1475,6 +1531,8 @@ public:
     //! Whether another thread is writing the block to disk right now (it is indexed once the write is done).
     bool IsBlockBeingStored(const CBlockIndex& index) const EXCLUSIVE_LOCKS_REQUIRED(::cs_main) { return m_blocks_being_stored.contains(&index); }
 
+    void ReceivedBlockTransactions(const CBlock& block, CBlockIndex* pindexNew, const FlatFilePos& pos) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+
 private:
     /**
      * AcceptBlock() split around stateless/contextual checks and the disk write
@@ -1512,7 +1570,6 @@ private:
     bool FinishNewBlock(NewBlockInProcess& in) LOCKS_EXCLUDED(cs_main);
 
 public:
-    void ReceivedBlockTransactions(const CBlock& block, CBlockIndex* pindexNew, const FlatFilePos& pos) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
     /**
      * Try to add a transaction to the memory pool.
