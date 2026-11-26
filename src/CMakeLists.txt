@@ -100,10 +100,12 @@ add_library(bitcoin_common STATIC EXCLUDE_FROM_ALL
   addresstype.cpp
   base58.cpp
   bech32.cpp
+  block_apply_view.cpp
   chain.cpp
   chainparams.cpp
   chainparamsbase.cpp
   coins.cpp
+  coinsstore.cpp
   common/args.cpp
   common/bloom.cpp
   common/bip352.cpp
