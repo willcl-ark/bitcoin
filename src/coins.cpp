@@ -398,6 +398,7 @@ CCoinsViewCache::ResetGuard CoinsViewOverlay::StartFetching(const CBlock& block 
         constexpr size_t LOOKUPS_PER_TASK{8};
         if (const auto task_count{std::min<size_t>(workers_count, (m_inputs.size() + LOOKUPS_PER_TASK - 1) / LOOKUPS_PER_TASK)}; task_count > 0) {
             std::vector<std::function<void()>> tasks(task_count, [this] {
+                WAITED_FOR_UNDER_LOCK("a block's input prefetch"); // the tip's connect waits with cs_main held
                 while (ProcessInput()) {}
             });
             if (auto futures{m_thread_pool->Submit(std::move(tasks))}) {
