@@ -49,6 +49,8 @@ struct ChainstateManagerOpts {
     int worker_threads_num{0};
     //! Number of worker threads used for prefetching block input prevouts. Zero means no parallel fetching.
     int32_t prevoutfetch_threads_num{DEFAULT_PREVOUTFETCH_THREADS};
+    //! Maximum blocks validated concurrently in IBD (1 disables window; 0 selects a default from worker_threads_num).
+    int connect_window{0};
     size_t script_execution_cache_bytes{DEFAULT_SCRIPT_EXECUTION_CACHE_BYTES};
     size_t signature_cache_bytes{DEFAULT_SIGNATURE_CACHE_BYTES};
 };

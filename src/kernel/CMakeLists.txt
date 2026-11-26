@@ -35,7 +35,9 @@ add_library(bitcoinkernel
   ../hash.cpp
   ../node/blockstorage.cpp
   ../node/chainstate.cpp
+  ../node/connect_window.cpp
   ../node/utxo_snapshot.cpp
+  ../node/window_outputs.cpp
   ../policy/ephemeral_policy.cpp
   ../policy/feerate.cpp
   ../policy/packages.cpp

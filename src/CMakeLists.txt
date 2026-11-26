@@ -231,6 +231,7 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   node/chainstatemanager_args.cpp
   node/coin.cpp
   node/coins_view_args.cpp
+  node/connect_window.cpp
   node/connection_types.cpp
   node/context.cpp
   node/database_args.cpp
@@ -255,6 +256,7 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   node/txreconciliation.cpp
   node/utxo_snapshot.cpp
   node/warnings.cpp
+  node/window_outputs.cpp
   noui.cpp
   policy/ephemeral_policy.cpp
   policy/fees/block_policy_estimator.cpp
