@@ -192,6 +192,28 @@ enum class ReadRawError {
 };
 
 /**
+ * The check of the rule for block and undo file work (validation.h, "File I/O"). With DEBUG_LOCKORDER the
+ * block manager's file functions that take no lock themselves stop the node if their thread holds cs_main:
+ * the opening of a block or undo file, which every read and write makes, the allocation of file space, the
+ * sync of a batch's files, the finish of an undo file, the removal of pruned files and the release of files
+ * that were read. Without DEBUG_LOCKORDER nothing is checked.
+ *
+ * A caller that makes such work under cs_main on purpose, and waits for it there, says so with
+ * BLOCK_FILE_WORK_UNDER_CS_MAIN(why) in the scope of the work: the scopes are the list of the rule's
+ * exceptions. The functions that require cs_main, the syncs of a forced flush, are exceptions by their
+ * annotation and carry no check. Scopes nest.
+ */
+class BlockFileWorkUnderMain
+{
+public:
+    explicit BlockFileWorkUnderMain(const char* why);
+    ~BlockFileWorkUnderMain();
+    BlockFileWorkUnderMain(const BlockFileWorkUnderMain&) = delete;
+    BlockFileWorkUnderMain& operator=(const BlockFileWorkUnderMain&) = delete;
+};
+#define BLOCK_FILE_WORK_UNDER_CS_MAIN(why) const node::BlockFileWorkUnderMain BITCOIN_UNIQUE_NAME(file_work_under_main){why}
+
+/**
  * Maintains a tree of blocks (stored in `m_block_index`) which is consulted
  * to determine where the most-work tip is.
  *
@@ -765,7 +787,17 @@ private:
     //! Read a block's bytes (or the part of them) into the buffer `buffer_for` returns for their number.
     util::Expected<void, ReadRawError> ReadRawBlockInto(const FlatFilePos& pos, std::optional<std::pair<size_t, size_t>> block_part,
                                                         const std::function<std::span<std::byte>(size_t)>& buffer_for) const;
+    //! The files below this one were released.
+    mutable std::atomic<int> m_block_files_released{0};
 public:
+    //! How many block files behind the one a sync reads from the files are released (ReleaseBlockFilesBelow()):
+    //! blocks are stored as they arrived, so a chain read in height order comes from a band of files, and a
+    //! file released too early is only read from the disk again.
+    static constexpr int BLOCK_FILE_RELEASE_LAG{16};
+    //! Tell the system that the block files below `file` will not be read again soon, so that it need not
+    //! keep them in its page cache. Each file is named once, by whichever thread first passes it. Advice
+    //! only: nothing depends on it, and where the system has no such call nothing is done.
+    void ReleaseBlockFilesBelow(int file) const noexcept;
 
     bool ReadBlockUndo(CBlockUndo& blockundo, const CBlockIndex& index) const;
     //! The undo data at `pos` of the block whose parent is `prev_hash`. Takes no lock: for a reader that

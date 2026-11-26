@@ -77,6 +77,7 @@
 #include <deque>
 #include <exception>
 #include <future>
+#include <latch>
 #include <optional>
 #include <ranges>
 #include <span>
@@ -2422,6 +2423,7 @@ int ApplyTxInUndo(Coin&& undo, CCoinsViewCache& view, const COutPoint& out)
 DisconnectResult Chainstate::DisconnectBlock(const CBlock& block, const CBlockIndex* pindex, CCoinsViewCache& view)
 {
     AssertLockHeld(::cs_main);
+    BLOCK_FILE_WORK_UNDER_CS_MAIN("the undo data of a block disconnected under the lock, where it was not read before");
 
     CBlockUndo blockUndo;
     if (!m_blockman.ReadBlockUndo(blockUndo, *pindex)) {
@@ -3532,6 +3534,7 @@ bool Chainstate::FlushStateToDisk(
                 step(node::FlushStep::Unlink);
                 if (nManualPruneHeight > 0) {
                     // A request (pruneblockchain) returns once its files are gone.
+                    BLOCK_FILE_WORK_UNDER_CS_MAIN("pruneblockchain waits for its files to be removed");
                     m_blockman.UnlinkPrunedFiles(setFilesToPrune);
                 } else {
                     // Nothing waits for the files to go: removed on a block I/O thread, not under cs_main.
@@ -3669,7 +3672,7 @@ void Chainstate::UpdateTip(const CBlockIndex* pindexNew)
   * disconnectpool (note that the caller is responsible for mempool consistency
   * in any case).
   */
-bool Chainstate::DisconnectTip(BlockValidationState& state, DisconnectedBlockTransactions* disconnectpool)
+bool Chainstate::DisconnectTip(BlockValidationState& state, DisconnectedBlockTransactions* disconnectpool, DisconnectRead read)
 {
     AssertLockHeld(cs_main);
     if (m_mempool) AssertLockHeld(m_mempool->cs);
@@ -3677,19 +3680,25 @@ bool Chainstate::DisconnectTip(BlockValidationState& state, DisconnectedBlockTra
     CBlockIndex *pindexDelete = m_chain.Tip();
     assert(pindexDelete);
     assert(pindexDelete->pprev);
-    // Read block from disk.
-    std::shared_ptr<CBlock> pblock = std::make_shared<CBlock>();
-    CBlock& block = *pblock;
-    if (!m_blockman.ReadBlock(block, *pindexDelete)) {
-        LogError("DisconnectTip(): Failed to read block\n");
-        return false;
+    // Read block from disk, unless it was read before the hold.
+    std::shared_ptr<CBlock> pblock{std::move(read.block)};
+    if (!pblock) {
+        BLOCK_FILE_WORK_UNDER_CS_MAIN("a block to disconnect that was not read before the hold");
+        pblock = std::make_shared<CBlock>();
+        if (!m_blockman.ReadBlock(*pblock, *pindexDelete)) {
+            LogError("DisconnectTip(): Failed to read block\n");
+            return false;
+        }
     }
+    CBlock& block = *pblock;
     // Apply the block atomically to the chain state.
     const auto time_start{SteadyClock::now()};
     {
         CCoinsViewCache view(&CoinsTip());
         assert(view.GetBestBlock() == pindexDelete->GetBlockHash());
-        if (DisconnectBlock(block, pindexDelete, view) != DISCONNECT_OK) {
+        const DisconnectResult result{read.undo ? ::DisconnectBlock(block, std::move(*read.undo), pindexDelete->GetBlockHash(), pindexDelete->nHeight, view)
+                                                : DisconnectBlock(block, pindexDelete, view)};
+        if (result != DISCONNECT_OK) {
             LogError("DisconnectTip(): DisconnectBlock %s failed\n", pindexDelete->GetBlockHash().ToString());
             return false;
         }
@@ -4245,6 +4254,10 @@ struct StagedConnect {
     //! Whether the block's undo data is to be written: not for a block connected before, which has it on
     //! disk (every block of a -reindex-chainstate). Decided at staging.
     bool write_undo{true};
+    //! Whether the read of the block lets the files behind it go (BlockManager::ReleaseBlockFilesBelow()):
+    //! not while a historical chainstate syncs, whose blocks lie far behind the active one's, in files the
+    //! active chainstate's reads would let go before the historical one reads them. Decided at staging.
+    bool release_files{false};
 
     std::variant<std::monostate, connect_phase::Staged, connect_phase::ReadFailed, connect_phase::Validated> at;
     //! The phase the block is in; anything else is a defect of the caller.
@@ -4296,6 +4309,7 @@ void Chainstate::StageConnectTip(CBlockIndex* pindexNew, StagedConnect& staged, 
     assert(std::holds_alternative<std::monostate>(staged.at));
     staged.pindex = pindexNew;
     staged.write_undo = pindexNew->GetUndoPos().IsNull();
+    staged.release_files = staged.windowed && !m_chainman.HistoricalChainstate();
 
     BlockApplyView* view{staged.windowed ? m_coins_views->FreeApplyView() : &m_coins_views->TipView()};
     Assert(view);
@@ -4387,6 +4401,8 @@ void Chainstate::ReadForConnectTask(StagedConnect& staged, std::shared_ptr<std::
     WAITED_FOR_UNDER_LOCK("a window block's read");
     const FlatFilePos pos{staged.In<connect_phase::Staged>().ctx.block_pos};
     auto read{std::make_shared<node::BlockManager::BlockBytes>(m_blockman.ReadBlockBytes(pos))};
+    // Decided before the task is handed on, which may free `staged` and moves the bytes.
+    const bool release{read->data && staged.release_files};
     // `staged` is the connector's to free once the task has marked the block indexed: the promise is kept
     // beside it, not in it.
     const auto task{[this, &staged, read, done] {
@@ -4395,6 +4411,10 @@ void Chainstate::ReadForConnectTask(StagedConnect& staged, std::shared_ptr<std::
     }};
     // A pool without workers: here, on the connector, which called this itself.
     if (!m_chainman.m_connect_pool->Submit(task)) task();
+    // The pages the system keeps of block files already read are memory the store's huge pages are then
+    // not granted from. The files well behind this block's are let go, after the block's task is on its way:
+    // the first release of a pass may walk many files, and the lowest block in flight must not wait for it.
+    if (release) m_blockman.ReleaseBlockFilesBelow(pos.nFile - node::BlockManager::BLOCK_FILE_RELEASE_LAG);
 }
 
 void Chainstate::RunConnectTask(StagedConnect& staged, node::BlockManager::BlockBytes read) noexcept
@@ -5275,6 +5295,52 @@ void Chainstate::PruneBlockIndexCandidates() {
     assert(!setBlockIndexCandidates.empty());
 }
 
+//! How many blocks a reorganisation reads ahead on each of its sides (ReorgReads). They are in memory
+//! together; a deeper reorganisation reads the rest as it comes to them, under its hold.
+static constexpr size_t REORG_READ_AHEAD{16};
+
+/**
+ * What a reorganisation reads before its hold of cs_main (File I/O, validation.h): the blocks it disconnects
+ * with their undo data, from the tip down, and the blocks of the new branch it connects, from the fork up
+ * to the first that gives the tip more work than it had, where the step and its hold end. Planned under
+ * cs_main (Chainstate::PlanReorgReads()), read with no lock held (Chainstate::ReadForReorg()), and used by
+ * the step planned for the same tip and target. A block that is not here, or whose read failed, is read
+ * where it is needed.
+ */
+struct ReorgReads {
+    const CBlockIndex* tip{nullptr};
+    const CBlockIndex* target{nullptr};
+    struct Disconnect {
+        const CBlockIndex* index;
+        FlatFilePos block_pos;
+        //! Null while the undo write is queued (ReadForReorg() settles it).
+        FlatFilePos undo_pos;
+        DisconnectRead read;
+    };
+    std::vector<Disconnect> disconnects;
+    struct Connect {
+        const CBlockIndex* index;
+        FlatFilePos pos;
+        std::shared_ptr<const CBlock> block;
+    };
+    std::vector<Connect> connects;
+
+    DisconnectRead TakeDisconnect(const CBlockIndex& index)
+    {
+        for (Disconnect& disconnect : disconnects) {
+            if (disconnect.index == &index) return std::exchange(disconnect.read, {});
+        }
+        return {};
+    }
+    std::shared_ptr<const CBlock> TakeConnect(const CBlockIndex& index)
+    {
+        for (Connect& connect : connects) {
+            if (connect.index == &index) return std::exchange(connect.block, nullptr);
+        }
+        return nullptr;
+    }
+};
+
 /**
  * One step of ActivateBestChain(): the blocks disconnected to reach the fork
  * with the target and the blocks connected towards it, in batches. Lives
@@ -5283,6 +5349,8 @@ void Chainstate::PruneBlockIndexCandidates() {
 struct ConnectStep {
     CBlockIndex* target{nullptr};
     const CBlockIndex* old_tip{nullptr};
+    //! What was read for the step before its hold, if it is a reorganisation.
+    std::optional<ReorgReads> reads;
     DisconnectedBlockTransactions disconnectpool{MAX_DISCONNECTED_TX_POOL_BYTES};
     bool blocks_disconnected{false};
     //! Height up to which blocks towards the target have been placed in a batch.
@@ -5401,7 +5469,7 @@ bool Chainstate::PlanConnectStep(BlockValidationState& state, ConnectStep& step)
         CoinsStoreTip().SetChangeHeight(pindexFork ? pindexFork->nHeight : 0);
     }
     while (m_chain.Tip() && m_chain.Tip() != pindexFork) {
-        if (!DisconnectTip(state, &step.disconnectpool)) {
+        if (!DisconnectTip(state, &step.disconnectpool, step.reads ? step.reads->TakeDisconnect(*m_chain.Tip()) : DisconnectRead{})) {
             // This is likely a fatal error, but keep the mempool consistent,
             // just in case. Only remove from the mempool in this case.
             MaybeUpdateMempoolForReorg(step.disconnectpool, false);
@@ -5416,6 +5484,79 @@ bool Chainstate::PlanConnectStep(BlockValidationState& state, ConnectStep& step)
     }
     step.planned_height = pindexFork ? pindexFork->nHeight : -1;
     return true;
+}
+
+std::optional<ReorgReads> Chainstate::PlanReorgReads(const CBlockIndex& target, const CBlock* passed_in) const
+{
+    AssertLockHeld(cs_main);
+    const CBlockIndex* tip{m_chain.Tip()};
+    const CBlockIndex* fork{m_chain.FindFork(target)};
+    if (!tip || tip == fork) return std::nullopt;
+
+    ReorgReads reads;
+    reads.tip = tip;
+    reads.target = &target;
+    for (const CBlockIndex* index{tip}; index != fork && reads.disconnects.size() < REORG_READ_AHEAD; index = index->pprev) {
+        reads.disconnects.push_back({.index = index, .block_pos = index->GetBlockPos(), .undo_pos = index->GetUndoPos(), .read = {}});
+    }
+    // The step ends with the first block that gives the tip more work than it had (ActivateBestChain()).
+    const uint256 passed_in_hash{passed_in ? passed_in->GetHash() : uint256{}};
+    for (int height{fork ? fork->nHeight + 1 : 0}; height <= target.nHeight && reads.connects.size() < REORG_READ_AHEAD; ++height) {
+        const CBlockIndex* index{target.GetAncestor(height)};
+        // A block in memory is taken from there.
+        const bool in_memory{(passed_in && index == &target && passed_in_hash == index->GetBlockHash()) ||
+                             m_chainman.m_block_cache.Has(index->nHeight, index->GetBlockHash())};
+        if (!in_memory) reads.connects.push_back({.index = index, .pos = index->GetBlockPos(), .block = nullptr});
+        if (index->nChainWork > tip->nChainWork) break;
+    }
+    return reads;
+}
+
+DisconnectRead Chainstate::ReadForDisconnect(const CBlockIndex& index, const FlatFilePos& block_pos, const FlatFilePos& undo_pos) const
+{
+    DisconnectRead read;
+    if (block_pos.IsNull() || undo_pos.IsNull() || !index.pprev) return read;
+    auto block{std::make_shared<CBlock>()};
+    if (!m_blockman.ReadBlock(*block, block_pos, index.GetBlockHash())) return read;
+    read.block = std::move(block);
+    CBlockUndo undo;
+    if (m_blockman.ReadBlockUndo(undo, undo_pos, index.pprev->GetBlockHash())) read.undo = std::move(undo);
+    return read;
+}
+
+void Chainstate::ReadForReorg(ReorgReads& reads) noexcept
+{
+    AssertLockNotHeld(::cs_main);
+    // The undo data of a block connected a moment ago may still be queued: its position is recorded once
+    // it is written.
+    if (std::ranges::any_of(reads.disconnects, [](const ReorgReads::Disconnect& disconnect) { return disconnect.undo_pos.IsNull(); })) {
+        m_blockman.SettleUndoWrites();
+        LOCK(::cs_main);
+        for (ReorgReads::Disconnect& disconnect : reads.disconnects) disconnect.undo_pos = disconnect.index->GetUndoPos();
+    }
+    // Each read is a task of its own on the block I/O threads, which take no cs_main; this thread, which
+    // holds none, waits for them all. A task writes its own entry only. The latch is shared: the last
+    // task may still be inside count_down() when the wait returns.
+    AssertMayWait("a reorganisation's reads");
+    const auto done{std::make_shared<std::latch>(static_cast<std::ptrdiff_t>(reads.disconnects.size() + reads.connects.size()))};
+    for (ReorgReads::Disconnect& disconnect : reads.disconnects) {
+        m_blockman.RunBlockIO([this, &disconnect, done]() noexcept {
+            disconnect.read = ReadForDisconnect(*disconnect.index, disconnect.block_pos, disconnect.undo_pos);
+            done->count_down();
+        });
+    }
+    for (ReorgReads::Connect& connect : reads.connects) {
+        m_blockman.RunBlockIO([this, &connect, done]() noexcept {
+            auto block{m_chainman.NewBlock()};
+            if (!connect.pos.IsNull() && m_blockman.ReadBlock(*block, connect.pos, connect.index->GetBlockHash())) connect.block = std::move(block);
+            done->count_down();
+        });
+    }
+    done->wait();
+    LogDebug(BCLog::VALIDATION, "Read %d blocks to disconnect and %d blocks to connect ahead of a reorganisation from %s to %s",
+             std::ranges::count_if(reads.disconnects, [](const ReorgReads::Disconnect& disconnect) { return disconnect.read.block != nullptr; }),
+             std::ranges::count_if(reads.connects, [](const ReorgReads::Connect& connect) { return connect.block != nullptr; }),
+             reads.tip->GetBlockHash().ToString(), reads.target->GetBlockHash().ToString());
 }
 
 bool Chainstate::PlanNextBatch(ConnectStep& step)
@@ -5679,6 +5820,10 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
         bool pass_done{false};
         bool interrupted{false};
         std::optional<ConnectStep> step;
+        // What is read for a reorganisation before its step is planned (ReorgReads), and whether the hold
+        // below ended for those reads to be made.
+        std::optional<ReorgReads> reorg_reads;
+        bool read_for_reorg{false};
         // A step that disconnected blocks keeps both locks from the disconnects until FinishConnectStep():
         // meanwhile the tip is behind, the candidate set reflects a chain that is only half switched, and the
         // mempool is inconsistent with the tip, none of which may be observed. Only the common case,
@@ -5755,11 +5900,35 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                             break;
                         }
 
+                        // A reorganisation's blocks are read before its hold, with no lock held (File I/O,
+                        // validation.h): this hold ends without a step, and the next one plans the step with
+                        // what was read. The tip is this thread's to move (m_chainstate_mutex); the target is
+                        // found again in that hold, as a step's is, and where it is another one its own reads
+                        // are planned: each block read is taken by its index entry, so none is used for a
+                        // block it is not. A target that only extends the one read for keeps the reads (the
+                        // blocks stored meanwhile above it are read in the step), so that blocks arriving during
+                        // the reads do not start them over. Not where the tip is behind the one the pass started
+                        // from: the locks are not released then (see below), and the step reads its blocks under them.
+                        const bool reads_hold{reorg_reads && reorg_reads->tip == m_chain.Tip() &&
+                                              pindexMostWork->GetAncestor(reorg_reads->target->nHeight) == reorg_reads->target};
+                        if (!reads_hold) {
+                            reorg_reads.reset();
+                            if (!(starting_tip && m_chain.Tip() && CBlockIndexWorkComparator()(m_chain.Tip(), starting_tip))) {
+                                reorg_reads = PlanReorgReads(*pindexMostWork, pblock.get());
+                            }
+                            if (reorg_reads) {
+                                read_for_reorg = true;
+                                pindexMostWork = nullptr;
+                                break;
+                            }
+                        }
+
                         // A step is about to run; the pass will notify of the tip it ends with, even if the step
                         // only disconnected blocks (invalidateblock) or found its target chain invalid.
                         blocks_connected = true;
                         step.emplace();
                         step->target = pindexMostWork;
+                        step->reads = std::exchange(reorg_reads, std::nullopt);
                         if (!PlanConnectStep(state, *step)) {
                             // A system error occurred
                             return false;
@@ -5811,6 +5980,10 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                 }
             } // release cs_main
             if (pass_done) break;
+            if (std::exchange(read_for_reorg, false)) {
+                ReadForReorg(*reorg_reads);
+                continue;
+            }
 
             // Connect the batch. At the tip one block at a time: read with no lock held (unless the
             // step is a reorg), then staged and validated under one hold of both locks and published
@@ -5890,8 +6063,17 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                         block = std::move(from_cache);
                         staged->staged_bytes = std::max(staged->staged_bytes, block_bytes);
                         LogDebug(BCLog::BENCH, "  - Using block from the cache");
+                    } else if (std::shared_ptr<const CBlock> read_ahead{step->reads ? step->reads->TakeConnect(*pindexConnect) : nullptr}) {
+                        // Read before the reorganisation's hold (ReadForReorg()).
+                        block = std::move(read_ahead);
+                        LogDebug(BCLog::BENCH, "  - Using block read ahead of the reorganisation");
                     } else if (!staged->windowed) {
-                        if (!reorg_lock_main) AssertLockNotHeld(::cs_main);
+                        std::optional<node::BlockFileWorkUnderMain> under_hold;
+                        if (reorg_lock_main) {
+                            under_hold.emplace("a reorganisation's block to connect that was not read before the hold");
+                        } else {
+                            AssertLockNotHeld(::cs_main);
+                        }
                         std::shared_ptr<CBlock> pblockNew{m_chainman.NewBlock()};
                         if (!m_blockman.ReadBlock(*pblockNew, block_pos, pindexConnect->GetBlockHash())) {
                             LOCK(cs_main);
@@ -6384,6 +6566,23 @@ bool Chainstate::InvalidateBlock(BlockValidationState& state, CBlockIndex* const
         // Make sure the queue of validation callbacks doesn't grow unboundedly.
         if (m_chainman.m_options.signals) LimitValidationInterfaceQueue(*m_chainman.m_options.signals);
 
+        // The tip's block and undo data are read before the hold that disconnects it (File I/O,
+        // validation.h), here, where only this caller waits. The tip is this thread's to move
+        // (m_chainstate_mutex). Its undo write may still be queued.
+        m_blockman.SettleUndoWrites();
+        const CBlockIndex* read_tip{nullptr};
+        FlatFilePos read_block_pos, read_undo_pos;
+        {
+            LOCK(cs_main);
+            if (m_chain.Contains(*pindex)) {
+                read_tip = m_chain.Tip();
+                read_block_pos = read_tip->GetBlockPos();
+                read_undo_pos = read_tip->GetUndoPos();
+            }
+        }
+        DisconnectRead read;
+        if (read_tip) read = ReadForDisconnect(*read_tip, read_block_pos, read_undo_pos);
+
         LOCK(cs_main);
         const TipPublisher publish_at_end{m_chainman};
         // Lock for as long as disconnectpool is in scope to make sure MaybeUpdateMempoolForReorg is
@@ -6402,7 +6601,7 @@ bool Chainstate::InvalidateBlock(BlockValidationState& state, CBlockIndex* const
         m_blockman.SettleUndoWrites();
         DisconnectedBlockTransactions disconnectpool{MAX_DISCONNECTED_TX_POOL_BYTES};
         CoinsStoreTip().SetChangeHeight(pindex->pprev ? pindex->pprev->nHeight : 0);
-        bool ret = DisconnectTip(state, &disconnectpool);
+        bool ret = DisconnectTip(state, &disconnectpool, disconnected_tip == read_tip ? std::move(read) : DisconnectRead{});
         // DisconnectTip will add transactions to disconnectpool.
         // Adjust the mempool to be consistent with the new tip, adding
         // transactions back to the mempool if disconnecting was successful,
@@ -7345,6 +7544,7 @@ bool ChainstateManager::AcceptBlock(const std::shared_ptr<const CBlock>& pblock,
     if (!prepared.store) return true;
     bool written{true};
     if (prepared.write) {
+        BLOCK_FILE_WORK_UNDER_CS_MAIN("a block accepted in one call: the external block loader and tests");
         try {
             written = m_blockman.WriteBlockAt(*pblock, prepared.pos);
         } catch (const std::runtime_error& e) {
@@ -7770,6 +7970,7 @@ VerifyDBResult CVerifyDB::VerifyDB(
     int nCheckLevel, int nCheckDepth)
 {
     AssertLockHeld(cs_main);
+    BLOCK_FILE_WORK_UNDER_CS_MAIN("verifying at the start and for verifychain");
     chainstate.m_blockman.SettleUndoWrites();
 
     if (chainstate.m_chain.Tip() == nullptr || chainstate.m_chain.Tip()->pprev == nullptr) {
@@ -7932,6 +8133,7 @@ bool Chainstate::RollforwardBlock(const CBlockIndex* pindex, CCoinsViewCache& in
 bool Chainstate::ReplayBlocks()
 {
     LOCK(cs_main);
+    BLOCK_FILE_WORK_UNDER_CS_MAIN("replaying an interrupted write-out at the start");
 
     CCoinsView& db = this->CoinsDB();
     CCoinsViewCache cache(&db);
