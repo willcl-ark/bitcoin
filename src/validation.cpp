@@ -2977,7 +2977,10 @@ bool Chainstate::FlushStateToDisk(
 
             // Ensure we can write block index
             if (!CheckDiskSpace(m_blockman.m_opts.blocks_dir)) {
-                return FatalError(m_chainman.GetNotifications(), state, _("Disk space is too low!"));
+                m_blockman.ScanAndUnlinkAlreadyPrunedFiles(setFilesToPrune);
+                if (!CheckDiskSpace(m_blockman.m_opts.blocks_dir)) {
+                    return FatalError(m_chainman.GetNotifications(), state, _("Disk space is too low!"));
+                }
             }
             {
                 LOG_TIME_MILLIS_WITH_CATEGORY("write block and undo data to disk", BCLog::BENCH);
@@ -3001,7 +3004,13 @@ bool Chainstate::FlushStateToDisk(
             if (fFlushForPrune) {
                 LOG_TIME_MILLIS_WITH_CATEGORY("unlink pruned files", BCLog::BENCH);
 
-                m_blockman.UnlinkPrunedFiles(setFilesToPrune);
+                if (nManualPruneHeight > 0) {
+                    // A request (pruneblockchain) returns once its files are gone.
+                    m_blockman.UnlinkPrunedFiles(setFilesToPrune);
+                } else {
+                    // Nothing waits for the files to go: removed on a block I/O thread, not under cs_main.
+                    m_blockman.RunBlockIO([&blockman = m_blockman, files = std::move(setFilesToPrune)] { blockman.UnlinkPrunedFiles(files); });
+                }
             }
 
             if (!CoinsTip().GetBestBlock().IsNull()) {
@@ -3010,8 +3019,12 @@ bool Chainstate::FlushStateToDisk(
                 // twice (once in the log, and once in the tables). This is already
                 // an overestimation, as most will delete an existing entry or
                 // overwrite one. Still, use a conservative safety factor of 2.
-                if (!CheckDiskSpace(m_chainman.m_options.datadir, 48 * 2 * 2 * CoinsTip().GetDirtyCount())) {
-                    return FatalError(m_chainman.GetNotifications(), state, _("Disk space is too low!"));
+                const auto needed_bytes{48 * 2 * 2 * CoinsTip().GetDirtyCount()};
+                if (!CheckDiskSpace(m_chainman.m_options.datadir, needed_bytes)) {
+                    m_blockman.ScanAndUnlinkAlreadyPrunedFiles();
+                    if (!CheckDiskSpace(m_chainman.m_options.datadir, needed_bytes)) {
+                        return FatalError(m_chainman.GetNotifications(), state, _("Disk space is too low!"));
+                    }
                 }
                 // Flush the chainstate (which may refer to block index entries).
                 empty_cache ? CoinsTip().Flush() : CoinsTip().Sync();
@@ -4505,12 +4518,13 @@ void ChainstateManager::ReportHeadersPresync(int64_t height, int64_t timestamp)
 }
 
 /** Store block on disk. If dbp is non-nullptr, the file is known to already reside on disk */
-bool ChainstateManager::AcceptBlock(const std::shared_ptr<const CBlock>& pblock, BlockValidationState& state, CBlockIndex** ppindex, bool fRequested, const FlatFilePos* dbp, bool* fNewBlock, bool min_pow_checked)
+bool ChainstateManager::PrepareAcceptBlockHeader(const CBlock& block, BlockValidationState& state, CBlockIndex** ppindex, bool fRequested, bool* fNewBlock, bool min_pow_checked, PreparedBlock& prepared)
 {
-    const CBlock& block = *pblock;
-
     if (fNewBlock) *fNewBlock = false;
     AssertLockHeld(cs_main);
+    prepared.pindex = nullptr;
+    prepared.pos = FlatFilePos{};
+    prepared.store = prepared.write = prepared.check = false;
 
     CBlockIndex *pindexDummy = nullptr;
     CBlockIndex *&pindex = ppindex ? *ppindex : pindexDummy;
@@ -4525,7 +4539,8 @@ bool ChainstateManager::AcceptBlock(const std::shared_ptr<const CBlock>& pblock,
     // save them to disk. Skip processing of unrequested blocks as an anti-DoS
     // measure, unless the blocks have more work than the active chain tip, and
     // aren't too far ahead of it, so are likely to be attached soon.
-    bool fAlreadyHave = pindex->nStatus & BLOCK_HAVE_DATA;
+    // A block another thread is writing right now counts as stored: it will be indexed when that write finishes.
+    bool fAlreadyHave = (pindex->nStatus & BLOCK_HAVE_DATA) || m_blocks_being_stored.contains(pindex);
     bool fHasMoreOrSameWork = (ActiveTip() ? pindex->nChainWork >= ActiveTip()->nChainWork : true);
     // Blocks that are too out-of-order needlessly limit the effectiveness of
     // pruning, because pruning will not delete block files that contain any
@@ -4555,10 +4570,40 @@ bool ChainstateManager::AcceptBlock(const std::shared_ptr<const CBlock>& pblock,
         if (pindex->nChainWork < MinimumChainWork()) return true;
     }
 
-    const CChainParams& params{GetParams()};
+    // The block is wanted: its checks follow, with no lock needed, against these copied fields.
+    prepared.pindex = pindex;
+    prepared.check = true;
+    prepared.deployments = EvaluateDeploymentFlags(pindex->pprev, *this);
+    prepared.height = pindex->nHeight;
+    prepared.prev_median_time_past = pindex->pprev ? pindex->pprev->GetMedianTimePast() : 0;
+    return true;
+}
 
-    if (!CheckBlock(block, state, params.GetConsensus()) ||
-        !ContextualCheckBlock(block, state, EvaluateDeploymentFlags(pindex->pprev, *this), pindex->nHeight, pindex->pprev ? pindex->pprev->GetMedianTimePast() : 0)) {
+static bool FailedMeanwhile(const CBlockIndex& pindex, BlockValidationState& state) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+{
+    AssertLockHeld(cs_main);
+    if (!(pindex.nStatus & BLOCK_FAILED_VALID)) return false;
+    return !state.Invalid(BlockValidationResult::BLOCK_CACHED_INVALID, "duplicate-invalid",
+                          strprintf("block %s was marked invalid meanwhile", pindex.GetBlockHash().ToString()));
+}
+
+bool ChainstateManager::CheckAcceptBlock(const CBlock& block, BlockValidationState& state, PreparedBlock& prepared) const
+{
+    Assert(prepared.check);
+    prepared.check = false;
+    Assert(prepared.pindex);
+    if (!CheckBlock(block, state, GetConsensus())) return false;
+    return ContextualCheckBlock(block, state, prepared.deployments, prepared.height, prepared.prev_median_time_past);
+}
+
+bool ChainstateManager::PrepareAcceptBlockStorage(const std::shared_ptr<const CBlock>& pblock, BlockValidationState& state, bool checks_ok, const FlatFilePos* dbp, bool* fNewBlock, PreparedBlock& prepared)
+{
+    AssertLockHeld(cs_main);
+    const CBlock& block = *pblock;
+    CBlockIndex* pindex{Assert(prepared.pindex)};
+    Assert(!prepared.check);
+
+    if (!checks_ok) {
         if (Assume(state.IsInvalid())) {
             ActiveChainstate().InvalidBlockFound(pindex, state);
         }
@@ -4566,27 +4611,62 @@ bool ChainstateManager::AcceptBlock(const std::shared_ptr<const CBlock>& pblock,
         return false;
     }
 
+    // Another thread may have stored the block while the checks ran without the lock.
+    if ((pindex->nStatus & BLOCK_HAVE_DATA) || m_blocks_being_stored.contains(pindex)) return true;
+    if (FailedMeanwhile(*pindex, state)) return false;
+
+    // Claim the block's place in the history file; the write itself may happen without the lock.
+    if (fNewBlock) *fNewBlock = true;
+    prepared.store = true;
+    try {
+        if (dbp) {
+            prepared.pos = *dbp;
+            m_blockman.UpdateBlockInfo(block, pindex->nHeight, prepared.pos);
+        } else {
+            prepared.pos = m_blockman.AllocateBlockPos(block, pindex->nHeight);
+            prepared.write = true;
+            m_blocks_being_stored.insert(pindex);
+            m_blockman.PinBlockFile(prepared.pos.nFile);
+        }
+    } catch (const std::runtime_error& e) {
+        prepared.store = false;
+        if (fNewBlock) *fNewBlock = false;
+        return FatalError(GetNotifications(), state, strprintf(_("System error while saving block to disk: %s"), e.what()));
+    }
+
     // Header is valid/has work, merkle tree and segwit merkle tree are good...RELAY NOW
-    // (but if it does not build on our best tip, let the SendMessages loop relay it)
+    // (but if it does not build on our best tip, let the SendMessages loop relay it),
+    // before the write.
     if (!IsInitialBlockDownload() && ActiveTip() == pindex->pprev && m_options.signals) {
         m_options.signals->NewPoWValidBlock(pindex, pblock);
     }
+    return true;
+}
 
-    // Write block to history file
-    if (fNewBlock) *fNewBlock = true;
+bool ChainstateManager::FinishAcceptBlock(const CBlock& block, BlockValidationState& state, PreparedBlock& prepared, bool written, const std::optional<std::string>& write_error)
+{
+    AssertLockHeld(cs_main);
+    Assert(prepared.store);
+    prepared.store = false;
+    CBlockIndex* pindex{Assert(prepared.pindex)};
+    if (prepared.write) {
+        m_blocks_being_stored.erase(pindex);
+        m_blockman.UnpinBlockFile(prepared.pos.nFile, written);
+    }
+    if (write_error) {
+        return FatalError(GetNotifications(), state, strprintf(_("System error while saving block to disk: %s"), *write_error));
+    }
+    if (!written) {
+        // WriteBlockAt() reported the fatal error already; the claimed space stays unused.
+        return state.Error(strprintf("%s: Failed to write block to disk", __func__));
+    }
+    if (FailedMeanwhile(*pindex, state)) return false;
     try {
-        FlatFilePos blockPos{};
-        if (dbp) {
-            blockPos = *dbp;
-            m_blockman.UpdateBlockInfo(block, pindex->nHeight, blockPos);
-        } else {
-            blockPos = m_blockman.WriteBlock(block, pindex->nHeight);
-            if (blockPos.IsNull()) {
-                state.Error(strprintf("%s: Failed to find position to write new block to disk", __func__));
-                return false;
-            }
+        if (prepared.write) {
+            m_blockman.CommitBlockPos(block, pindex->nHeight, prepared.pos);
         }
-        ReceivedBlockTransactions(block, pindex, blockPos);
+        ReceivedBlockTransactions(block, pindex, prepared.pos);
+        Assume((pindex->nStatus & BLOCK_HAVE_DATA) && pindex->IsValid(BLOCK_VALID_TRANSACTIONS) && !pindex->GetBlockPos().IsNull());
     } catch (const std::runtime_error& e) {
         return FatalError(GetNotifications(), state, strprintf(_("System error while saving block to disk: %s"), e.what()));
     }
@@ -4612,50 +4692,124 @@ bool ChainstateManager::AcceptBlock(const std::shared_ptr<const CBlock>& pblock,
     return true;
 }
 
+bool ChainstateManager::AcceptBlock(const std::shared_ptr<const CBlock>& pblock, BlockValidationState& state, CBlockIndex** ppindex, bool fRequested, const FlatFilePos* dbp, bool* fNewBlock, bool min_pow_checked)
+{
+    AssertLockHeld(cs_main);
+    PreparedBlock prepared;
+    if (!PrepareAcceptBlockHeader(*pblock, state, ppindex, fRequested, fNewBlock, min_pow_checked, prepared)) return false;
+    if (!prepared.check) return true;
+    const bool checks_ok{CheckAcceptBlock(*pblock, state, prepared)};
+    if (!PrepareAcceptBlockStorage(pblock, state, checks_ok, dbp, fNewBlock, prepared)) return false;
+    if (!prepared.store) return true;
+    bool written{true};
+    std::optional<std::string> write_error;
+    if (prepared.write) {
+        try {
+            written = m_blockman.WriteBlockAt(*pblock, prepared.pos);
+        } catch (const std::exception& e) {
+            written = false;
+            write_error = e.what();
+        }
+    }
+    if (!FinishAcceptBlock(*pblock, state, prepared, written, write_error)) {
+        if (fNewBlock) *fNewBlock = false;
+        return false;
+    }
+    return true;
+}
+
 bool ChainstateManager::ProcessNewBlock(const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked, bool* new_block)
 {
     AssertLockNotHeld(cs_main);
+    // The three steps in a row on this thread.
+    NewBlockInProcess in;
+    bool ret{false};
+    if (AcceptNewBlock(in, block, force_processing, min_pow_checked)) {
+        WriteNewBlock(in);
+        ret = FinishNewBlock(in);
+    }
+    if (new_block) *new_block = in.new_block;
+    return ret;
+}
 
-    {
-        CBlockIndex *pindex = nullptr;
-        if (new_block) *new_block = false;
-        BlockValidationState state;
+bool ChainstateManager::NewBlockFailed(NewBlockInProcess& in)
+{
+    AssertLockHeld(cs_main);
+    if (m_options.signals) {
+        m_options.signals->BlockChecked(in.block, in.state);
+    }
+    LogError("ProcessNewBlock: AcceptBlock FAILED (%s)\n", in.state.ToString());
+    return false;
+}
 
-        // CheckBlock() does not support multi-threaded block validation because CBlock::fChecked can cause data race.
-        // Therefore, the following critical section must include the CheckBlock() call as well.
+bool ChainstateManager::AcceptNewBlock(NewBlockInProcess& in, const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked)
+{
+    AssertLockNotHeld(cs_main);
+    in.block = block;
+    CBlockIndex *pindex = nullptr;
+
+    // The block's own checks come first, before anything of the header is accepted: their verdict is
+    // the block's, whatever its header, and they need only the consensus parameters, so they run
+    // without the lock. (Two calls may be given one block object: the flags the checks memoise in,
+    // CBlock::fChecked and its two siblings, are atomic.)
+    if (!CheckBlock(*block, in.state, GetConsensus())) {
         LOCK(cs_main);
+        return NewBlockFailed(in);
+    }
+    {
+        LOCK(cs_main);
+        // Accept the header and decide whether the block is wanted; the contextual checks run below,
+        // without the lock, against the context built here.
+        if (!PrepareAcceptBlockHeader(*block, in.state, &pindex, force_processing, &in.new_block, min_pow_checked, in.prepared)) return NewBlockFailed(in);
+    }
+    if (in.prepared.check) {
+        // Not marking a block invalid when CheckBlock() fails is protective against consensus failure if
+        // there are any unknown forms of block malleability that cause CheckBlock() to fail; see e.g.
+        // CVE-2012-2459 and https://lists.linuxfoundation.org/pipermail/bitcoin-dev/2019-February/016697.html.
+        // Because CheckBlock() is not very expensive, the anti-DoS benefits of caching failure (of a
+        // definitely-invalid block) are not substantial.
+        const bool checks_ok{CheckAcceptBlock(*block, in.state, in.prepared)};
+        LOCK(cs_main);
+        if (!PrepareAcceptBlockStorage(block, in.state, checks_ok, nullptr, &in.new_block, in.prepared)) return NewBlockFailed(in);
+    }
+    return true;
+}
 
-        // Skipping AcceptBlock() for CheckBlock() failures means that we will never mark a block as invalid if
-        // CheckBlock() fails.  This is protective against consensus failure if there are any unknown forms of block
-        // malleability that cause CheckBlock() to fail; see e.g. CVE-2012-2459 and
-        // https://lists.linuxfoundation.org/pipermail/bitcoin-dev/2019-February/016697.html.  Because CheckBlock() is
-        // not very expensive, the anti-DoS benefits of caching failure (of a definitely-invalid block) are not substantial.
-        bool ret = CheckBlock(*block, state, GetConsensus());
-        if (ret) {
-            // Store to disk
-            ret = AcceptBlock(block, state, &pindex, force_processing, nullptr, new_block, min_pow_checked);
-        }
-        if (!ret) {
-            if (m_options.signals) {
-                m_options.signals->BlockChecked(block, state);
-            }
-            LogError("%s: AcceptBlock FAILED (%s)\n", __func__, state.ToString());
-            return false;
+void ChainstateManager::WriteNewBlock(NewBlockInProcess& in)
+{
+    // No lock held, and none taken.
+    if (!in.prepared.store || !in.prepared.write) return;
+    try {
+        in.written = m_blockman.WriteBlockAt(*in.block, in.prepared.pos);
+    } catch (const std::exception& e) {
+        in.written = false;
+        in.write_error = e.what();
+    }
+}
+
+bool ChainstateManager::FinishNewBlock(NewBlockInProcess& in)
+{
+    AssertLockNotHeld(cs_main);
+    if (in.prepared.store) {
+        LOCK(cs_main);
+        if (!FinishAcceptBlock(*in.block, in.state, in.prepared, in.written, in.write_error)) {
+            in.new_block = false;
+            return NewBlockFailed(in);
         }
     }
 
     NotifyHeaderTip();
 
     BlockValidationState state; // Only used to report errors, not invalidity - ignore it
-    if (!ActiveChainstate().ActivateBestChain(state, block)) {
-        LogError("%s: ActivateBestChain failed (%s)\n", __func__, state.ToString());
+    if (!ActiveChainstate().ActivateBestChain(state, in.block)) {
+        LogError("ProcessNewBlock: ActivateBestChain failed (%s)\n", state.ToString());
         return false;
     }
 
     Chainstate* bg_chain{WITH_LOCK(cs_main, return HistoricalChainstate())};
     BlockValidationState bg_state;
-    if (bg_chain && !bg_chain->ActivateBestChain(bg_state, block)) {
-        LogError("%s: [background] ActivateBestChain failed (%s)\n", __func__, bg_state.ToString());
+    if (bg_chain && !bg_chain->ActivateBestChain(bg_state, in.block)) {
+        LogError("ProcessNewBlock: [background] ActivateBestChain failed (%s)\n", bg_state.ToString());
         return false;
      }
 
@@ -4683,9 +4837,8 @@ BlockValidationState TestBlockValidity(
     const bool check_pow,
     const bool check_merkle_root)
 {
-    // Lock must be held throughout this function for two reasons:
-    // 1. We don't want the tip to change during several of the validation steps
-    // 2. To prevent a CheckBlock() race condition for fChecked, see ProcessNewBlock()
+    // Lock must be held throughout this function: we don't want the tip to change during several of the
+    // validation steps.
     AssertLockHeld(chainstate.m_chainman.GetMutex());
 
     BlockValidationState state;

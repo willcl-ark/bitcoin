@@ -1122,6 +1122,11 @@ private:
     //! A queue for script verifications that have to be performed by worker threads.
     CCheckQueue<CScriptCheck> m_script_check_queue;
 
+    //! Blocks whose data is being written to disk with cs_main released
+    //! (see PreparedBlock). A second arrival of such a block is treated
+    //! as already stored, so it is written once.
+    std::set<const CBlockIndex*> m_blocks_being_stored GUARDED_BY(::cs_main);
+
     //! Timers and counters used for benchmarking validation in both background
     //! and active chainstates.
     SteadyClock::duration GUARDED_BY(::cs_main) time_check{};
@@ -1423,6 +1428,25 @@ public:
      */
     bool ProcessNewBlock(const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked, bool* new_block) LOCKS_EXCLUDED(cs_main);
 
+    //! A block between the steps of ProcessNewBlock().
+    struct NewBlockInProcess;
+    /**
+     * ProcessNewBlock() in its three steps, for a caller that makes the block's write on another thread.
+     *
+     *  - AcceptNewBlock(): the block's checks, its header, and the claim of its place on disk. False if
+     *    the block failed, which is ProcessNewBlock()'s result then and has been reported; the other
+     *    steps are not made.
+     *  - WriteNewBlock(): the block's bytes to the place claimed, if there is anything to write. It
+     *    takes no lock.
+     *  - FinishNewBlock(): the block is recorded as stored and activated. Returns ProcessNewBlock()'s
+     *    result.
+     *
+     * `in.new_block` is ProcessNewBlock()'s `new_block` once the last step made has returned.
+     */
+    bool AcceptNewBlock(NewBlockInProcess& in, const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked) LOCKS_EXCLUDED(cs_main);
+    void WriteNewBlock(NewBlockInProcess& in);
+    bool FinishNewBlock(NewBlockInProcess& in) LOCKS_EXCLUDED(cs_main);
+
     /**
      * Process incoming block headers.
      *
@@ -1457,6 +1481,41 @@ public:
      * @returns   False if the block or header is invalid, or if saving to disk fails (likely a fatal error); true otherwise.
      */
     bool AcceptBlock(const std::shared_ptr<const CBlock>& pblock, BlockValidationState& state, CBlockIndex** ppindex, bool fRequested, const FlatFilePos* dbp, bool* fNewBlock, bool min_pow_checked) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+
+    /**
+     * AcceptBlock() split around stateless/contextual checks and the disk write
+     * so ProcessNewBlock() can check and write the block with cs_main released.
+     */
+    struct PreparedBlock {
+        CBlockIndex* pindex{nullptr};
+        FlatFilePos pos;
+        //! Storage is pending: FinishAcceptBlock() must be called.
+        bool store{false};
+        //! The block must be written at pos before FinishAcceptBlock().
+        bool write{false};
+        //! The block's checks are pending: CheckAcceptBlock() then PrepareAcceptBlockStorage() must be called.
+        bool check{false};
+        //! Lightweight contextual-check inputs copied under cs_main.
+        DeploymentFlags deployments{};
+        int height{0};
+        int64_t prev_median_time_past{0};
+    };
+    bool PrepareAcceptBlockHeader(const CBlock& block, BlockValidationState& state, CBlockIndex** ppindex, bool fRequested, bool* fNewBlock, bool min_pow_checked, PreparedBlock& prepared) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    bool CheckAcceptBlock(const CBlock& block, BlockValidationState& state, PreparedBlock& prepared) const;
+    bool PrepareAcceptBlockStorage(const std::shared_ptr<const CBlock>& pblock, BlockValidationState& state, bool checks_ok, const FlatFilePos* dbp, bool* fNewBlock, PreparedBlock& prepared) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    bool FinishAcceptBlock(const CBlock& block, BlockValidationState& state, PreparedBlock& prepared, bool written, const std::optional<std::string>& write_error = std::nullopt) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    struct NewBlockInProcess {
+        std::shared_ptr<const CBlock> block;
+        BlockValidationState state;
+        PreparedBlock prepared;
+        bool new_block{false};
+        bool written{true};
+        std::optional<std::string> write_error;
+    };
+    bool NewBlockFailed(NewBlockInProcess& in) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+
+    //! Whether another thread is writing the block to disk right now (it is indexed once the write is done).
+    bool IsBlockBeingStored(const CBlockIndex& index) const EXCLUSIVE_LOCKS_REQUIRED(::cs_main) { return m_blocks_being_stored.contains(&index); }
 
     void ReceivedBlockTransactions(const CBlock& block, CBlockIndex* pindexNew, const FlatFilePos& pos) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 

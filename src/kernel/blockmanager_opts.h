@@ -29,6 +29,8 @@ struct BlockManagerOpts {
     const fs::path blocks_dir;
     Notifications& notifications;
     DBParams block_tree_db_params;
+    //! Number of background threads for unordered block file I/O (0 runs inline).
+    int block_io_threads{4};
 };
 
 } // namespace kernel
