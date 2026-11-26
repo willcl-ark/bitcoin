@@ -64,6 +64,31 @@ BOOST_FIXTURE_TEST_CASE(durability_follows_the_files, TestChain100Setup)
     }
 }
 
+// A block is written with cs_main released, between the claim of its position and the end of the
+// write (PinBlockFile(), UnpinBlockFile()). A sync made in between did not cover its bytes: the
+// file is Unsynced again when the write ends, until the next sync.
+BOOST_FIXTURE_TEST_CASE(write_off_the_lock_marks_the_file_again, TestChain100Setup)
+{
+    auto& chainman{*Assert(m_node.chainman)};
+    auto& blockman{static_cast<TestBlockManager&>(chainman.m_blockman)};
+
+    CreateAndProcessBlock({}, CScript() << OP_TRUE);
+    const CBlockIndex* tip{WITH_LOCK(cs_main, return chainman.ActiveChain().Tip())};
+    BOOST_REQUIRE(tip);
+    LOCK(cs_main);
+    BOOST_REQUIRE(blockman.SyncWrittenFiles());
+    BOOST_REQUIRE(blockman.IsBlockDataSynced(*tip));
+
+    blockman.PinBlockFile(tip->nFile); // a position in the file is claimed
+    BOOST_REQUIRE(blockman.SyncWrittenFiles()); // a sync before the write
+    BOOST_CHECK(blockman.IsBlockDataSynced(*tip));
+    blockman.UnpinBlockFile(tip->nFile); // the write ended
+    BOOST_CHECK(!blockman.IsBlockDataSynced(*tip));
+
+    BOOST_CHECK(blockman.SyncWrittenFiles());
+    BOOST_CHECK(blockman.IsBlockDataSynced(*tip));
+}
+
 namespace {
 void InjectOpenFailure(const fs::path& file)
 {
@@ -217,6 +242,57 @@ BOOST_FIXTURE_TEST_CASE(undo_in_a_left_file_is_synced, FastPruneChain100Setup)
     }
 }
 
+BOOST_FIXTURE_TEST_CASE(left_block_file_synced_by_the_write_out, FastPruneChain100Setup)
+{
+    auto& chainman{*Assert(m_node.chainman)};
+    auto& chainstate{chainman.ActiveChainstate()};
+    auto& blockman{chainman.m_blockman};
+    const auto& params{chainman.GetConsensus()};
+    BlockValidationState baseline;
+    BOOST_REQUIRE(chainstate.FlushStateToDisk(baseline, FlushStateMode::FORCE_FLUSH));
+    const CBlockIndex* flushed{WITH_LOCK(cs_main, return chainstate.GetLastFlushedBlock())};
+    const CBlockHeader tip_header{WITH_LOCK(cs_main, return chainman.ActiveChain().Tip()->GetBlockHeader())};
+    const int height{WITH_LOCK(cs_main, return chainman.ActiveChain().Height())};
+
+    const auto small{ChildBlock(tip_header, height + 1, 50 * COIN, 1, params)};
+    const auto large{ChildBlock(*small, height + 2, 50 * COIN, 70'000, params)};
+    CBlockIndex* small_index{nullptr};
+    CBlockIndex* large_index{nullptr};
+    {
+        LOCK(cs_main);
+        BlockValidationState state;
+        BOOST_REQUIRE(chainman.AcceptBlock(small, state, &small_index, /*fRequested=*/true, nullptr, nullptr, /*min_pow_checked=*/true));
+        BOOST_REQUIRE(chainman.AcceptBlock(large, state, &large_index, /*fRequested=*/true, nullptr, nullptr, /*min_pow_checked=*/true));
+        BOOST_REQUIRE(small_index && large_index);
+        BOOST_REQUIRE_EQUAL(small_index->nFile, flushed->nFile);
+        BOOST_REQUIRE_LT(small_index->nFile, large_index->nFile);
+    }
+    BlockValidationState connected;
+    BOOST_REQUIRE(chainstate.ActivateBestChain(connected));
+    const fs::path left{WITH_LOCK(cs_main, return blockman.GetBlockPosFilename(small_index->GetBlockPos()))};
+    {
+        LOCK(cs_main);
+        BOOST_REQUIRE(chainman.ActiveChain().Tip() == large_index);
+        BOOST_CHECK(!blockman.IsBlockDataSynced(*small_index));
+    }
+
+    InjectOpenFailure(left);
+    BlockValidationState state;
+    BOOST_CHECK(!chainstate.FlushStateToDisk(state, FlushStateMode::FORCE_FLUSH));
+    BOOST_CHECK(state.IsError());
+
+    RemoveOpenFailure(left);
+    BlockValidationState later;
+    BOOST_CHECK(!chainstate.FlushStateToDisk(later, FlushStateMode::FORCE_FLUSH));
+    BOOST_CHECK(later.IsError());
+
+    LOCK(cs_main);
+    BOOST_CHECK(chainstate.GetLastFlushedBlock() == flushed);
+    kernel::CBlockFileInfo file_info;
+    BOOST_REQUIRE(blockman.m_block_tree_db->ReadBlockFileInfo(small_index->nFile, file_info));
+    BOOST_CHECK_EQUAL(file_info.nHeightLast, static_cast<unsigned int>(flushed->nHeight));
+    BOOST_CHECK(!blockman.m_block_tree_db->ReadBlockFileInfo(large_index->nFile, file_info));
+}
 BOOST_FIXTURE_TEST_CASE(other_cursor_file_synced_by_the_write_out, TestChain100Setup)
 {
     auto& chainman{*Assert(m_node.chainman)};

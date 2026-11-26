@@ -19,6 +19,7 @@
 #include <sync.h>
 #include <uint256.h>
 #include <util/byte_units.h>
+#include <util/check.h>
 #include <util/expected.h>
 #include <util/fs.h>
 #include <util/hasher.h>
@@ -209,21 +210,51 @@ private:
     /** Return false if block file or undo file flushing fails. */
     [[nodiscard]] bool FlushBlockFile(int blockfile_num, bool fFinalize, bool finalize_undo) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
+    /** Trim a block file the write position has left and no write is in flight for, or its undo file where
+     *  that is finished too, without a sync: both stay marked unsynced until whatever records their blocks in
+     *  the block index syncs them. */
+    void TrimBlockFile(int blockfile_num) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    void TrimUndoFile(int blockfile_num) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+
+    /**
+     * How far the files of one sequence are pre-allocated, in chunks, by file. A position is claimed under
+     * cs_main with arithmetic alone (ClaimChunks(), which enters a file at the chunks its first claim found,
+     * holding `mutex` for that only); whoever writes there allocates what its bytes need first
+     * (Preallocate()). Allocations run one at a time under `allocating`, from the end of what is allocated,
+     * and the new end is recorded only once the allocation is done: writes in one file run on several
+     * threads in no order, and an allocation must not cover bytes that are written already
+     * (AllocateFileRange() may write zeros, or set the file's end). `mutex` is never held over the system
+     * calls, so a claim under cs_main does not wait for them; `allocating` is taken before `mutex`.
+     */
+    struct Preallocation {
+        Mutex allocating;
+        Mutex mutex;
+        std::map<int, uint64_t> chunks GUARDED_BY(mutex);
+    };
+    Preallocation m_block_prealloc;
+    Preallocation m_undo_prealloc;
+    //! Note a claim of `add_size` bytes at `pos`. Whether it reaches a chunk that no earlier claim did.
+    bool ClaimChunks(Preallocation& prealloc, const FlatFileSeq& seq, const FlatFilePos& pos, uint64_t add_size) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    //! Allocate the chunks that `size` bytes at the claimed `pos` need, before they are written. No lock
+    //! needed. False if the disk has no room for them.
+    [[nodiscard]] bool Preallocate(Preallocation& prealloc, const FlatFileSeq& seq, const FlatFilePos& pos, uint64_t size, bool& out_of_space);
+
     /** Return false if undo file flushing fails. */
     [[nodiscard]] bool FlushUndoFile(int block_file, bool finalize = false) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     /**
      * Helper function performing various preparations before a block can be saved to disk:
      * Returns the correct position for the block to be saved, which may be in the current or a new
-     * block file depending on nAddSize. May flush the previous blockfile to disk if full, updates
-     * blockfile info, and checks if there is enough disk space to save the block.
+     * block file depending on nAddSize. May trim the previous blockfile if full (TrimBlockFile()), updates
+     * blockfile info, and notes the chunks the position reaches (ClaimChunks()): the write allocates them and checks the
+     * disk's room (Preallocate()). Does not fail.
      *
      * The nAddSize argument passed to this function should include not just the size of the serialized CBlock, but also the size of
      * separator fields (STORAGE_HEADER_BYTES).
      */
     [[nodiscard]] FlatFilePos FindNextBlockPos(uint64_t nAddSize, unsigned int nHeight, uint64_t nTime) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
     [[nodiscard]] bool FlushChainstateBlockFile(int tip_height) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
-    [[nodiscard]] bool FindUndoPos(BlockValidationState& state, int nFile, FlatFilePos& pos, uint64_t nAddSize) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    [[nodiscard]] FlatFilePos FindUndoPos(int nFile, uint64_t nAddSize) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     AutoFile OpenUndoFile(const FlatFilePos& pos, bool fReadOnly = false) const;
 
@@ -278,6 +309,18 @@ private:
         const auto& assumed = m_blockfile_cursors[BlockfileType::ASSUMED].value_or(empty_cursor);
         return std::max(normal.file_num, assumed.file_num);
     }
+    //! Move each write position that is in the file to an unclaimed file number. A file is pruned after this,
+    //! so a file number that was pruned is never claimed again: its removal and its chunks (Preallocation)
+    //! need no order with a claim.
+    void LeaveCursorFile(int file_num) EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
+    {
+        AssertLockHeld(::cs_main);
+        for (auto& cursor : m_blockfile_cursors) {
+            if (!cursor || cursor->file_num != file_num) continue;
+            cursor = BlockfileCursor{MaxBlockfileNum() + 1};
+            if (static_cast<int>(m_blockfile_info.size()) <= cursor->file_num) m_blockfile_info.resize(cursor->file_num + 1);
+        }
+    }
 
     /** Global flag to indicate we should check to see if there are
      *  block/undo files that should be deleted.  Set on startup
@@ -323,11 +366,19 @@ protected:
     //! Latched once any block or undo file flush/sync fails; never reset.
     bool m_sync_failed GUARDED_BY(::cs_main){false};
 
+    /** Block files with a block write in flight outside cs_main, by the number of such writes. Pruning
+     *  leaves them alone. */
+    std::map<int, int> m_blockfiles_being_written GUARDED_BY(::cs_main);
+    /** Block files the write position left while a write was in flight: trimmed when the last one is in
+     *  (UnpinBlockFile()), as a write allocates what it needs and would extend a trimmed file again. */
+    std::set<int> m_blockfiles_to_trim GUARDED_BY(::cs_main);
+
 public:
     using Options = kernel::BlockManagerOpts;
     using ReadRawBlockResult = util::Expected<std::vector<std::byte>, ReadRawError>;
 
     explicit BlockManager(const util::SignalInterrupt& interrupt, Options opts);
+    ~BlockManager();
 
     const util::SignalInterrupt& m_interrupt;
     std::atomic<bool> m_importing{false};
@@ -386,7 +437,7 @@ public:
      * This could happen on some systems if the file was still being read while unlinked,
      * or if we crash before unlinking.
      */
-    void ScanAndUnlinkAlreadyPrunedFiles() EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    void ScanAndUnlinkAlreadyPrunedFiles(const std::set<int>& exclude = {}) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     CBlockIndex* AddToBlockIndex(const CBlockHeader& block, CBlockIndex*& best_header) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
     /** Create a new block index entry for a given block hash */
@@ -414,6 +465,27 @@ public:
      */
     FlatFilePos WriteBlock(const CBlock& block, int nHeight) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
+    /**
+     * A block write in two steps, for callers that want the file write
+     * outside cs_main: AllocateBlockPos() claims the space (and does the
+     * file bookkeeping) under the lock, WriteBlockAt() writes the block
+     * there without it. On success pos is advanced past the storage header
+     * to the block's data position, as WriteBlock() returns it. The
+     * allocated space is lost if the write fails, which is a fatal error.
+     */
+    FlatFilePos AllocateBlockPos(const CBlock& block, int nHeight) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    [[nodiscard]] bool WriteBlockAt(const CBlock& block, FlatFilePos& pos);
+    //! Record CBlockFileInfo metadata and unsynced status once WriteBlockAt() has written the block.
+    void CommitBlockPos(const CBlock& block, int nHeight, const FlatFilePos& pos) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    /**
+     * Between the two steps the caller keeps the block's file from being
+     * pruned: the file's heights may all be prunable (a block of the pruned
+     * past, stored again), and a file unlinked under the write would leave
+     * the index pointing at lost bytes. Unpinned under the hold of cs_main
+     * that records the block, or gives it up.
+     */
+    void PinBlockFile(int file) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    void UnpinBlockFile(int file, bool written = true) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
     /** Update blockfile info while processing a block during reindex. The block must be available on disk.
      *
      * @param[in]  block        the block being processed
@@ -494,6 +566,15 @@ public:
     /** Functions for disk access for blocks */
     bool ReadBlock(CBlock& block, const FlatFilePos& pos, const std::optional<uint256>& expected_hash) const;
     bool ReadBlock(CBlock& block, const CBlockIndex& index) const;
+    //! A block's serialization as read from its file: the I/O half of ReadBlock(), for a caller that makes
+    //! the two halves on different threads. Without data if the read failed.
+    struct BlockBytes {
+        std::unique_ptr<std::byte[]> data;
+        size_t size{0};
+    };
+    BlockBytes ReadBlockBytes(const FlatFilePos& pos) const;
+    //! The other half of ReadBlock(): parse and check the block read from `pos`.
+    bool ParseBlock(CBlock& block, std::span<const std::byte> block_data, const FlatFilePos& pos, const std::optional<uint256>& expected_hash) const;
     ReadRawBlockResult ReadRawBlock(const FlatFilePos& pos, std::optional<std::pair<size_t, size_t>> block_part = std::nullopt) const;
 private:
     //! Read a block's bytes (or the part of them) into the buffer `buffer_for` returns for their number.
