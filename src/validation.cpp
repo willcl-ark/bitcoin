@@ -2046,12 +2046,16 @@ ValidationCache::ValidationCache(const size_t script_execution_cache_bytes, cons
  * which are matched. This is useful for checking blocks where we will likely never need the cache
  * entry again.
  */
-bool CheckInputScripts(const CTransaction& tx, TxValidationState& state,
-                       const CCoinsViewCache& inputs, script_verify_flags flags, CheckInputScriptsFor check_for,
-                       bool cacheSigStore,
-                       bool cacheFullScriptStore, PrecomputedTransactionData& txdata,
-                       ValidationCache& validation_cache,
-                       std::vector<CScriptCheck>* pvChecks)
+namespace {
+
+template <typename GetCoinFn>
+bool CheckInputScriptsImpl(const CTransaction& tx, TxValidationState& state,
+                           script_verify_flags flags, CheckInputScriptsFor check_for,
+                           bool cacheSigStore,
+                           bool cacheFullScriptStore, PrecomputedTransactionData& txdata,
+                           ValidationCache& validation_cache,
+                           std::vector<CScriptCheck>* pvChecks,
+                           GetCoinFn&& get_coin)
 {
     if (tx.IsCoinBase()) return true;
 
@@ -2075,9 +2079,8 @@ bool CheckInputScripts(const CTransaction& tx, TxValidationState& state,
         std::vector<CTxOut> spent_outputs;
         spent_outputs.reserve(tx.vin.size());
 
-        for (const auto& txin : tx.vin) {
-            const COutPoint& prevout = txin.prevout;
-            const Coin& coin = inputs.AccessCoin(prevout);
+        for (size_t i = 0; i < tx.vin.size(); ++i) {
+            const Coin& coin = get_coin(i);
             assert(!coin.IsSpent());
             spent_outputs.emplace_back(coin.out);
         }
@@ -2121,6 +2124,33 @@ bool CheckInputScripts(const CTransaction& tx, TxValidationState& state,
     }
 
     return true;
+}
+
+} // namespace
+
+bool CheckInputScripts(const CTransaction& tx, TxValidationState& state,
+                       const CCoinsViewCache& inputs, script_verify_flags flags, CheckInputScriptsFor check_for,
+                       bool cacheSigStore,
+                       bool cacheFullScriptStore, PrecomputedTransactionData& txdata,
+                       ValidationCache& validation_cache,
+                       std::vector<CScriptCheck>* pvChecks)
+{
+    return CheckInputScriptsImpl(
+        tx, state, flags, check_for, cacheSigStore, cacheFullScriptStore, txdata, validation_cache, pvChecks,
+        [&](size_t i) -> const Coin& { return inputs.AccessCoin(tx.vin[i].prevout); });
+}
+
+bool CheckInputScripts(const CTransaction& tx, TxValidationState& state,
+                       std::span<const Coin> inputs, script_verify_flags flags, CheckInputScriptsFor check_for,
+                       bool cacheSigStore,
+                       bool cacheFullScriptStore, PrecomputedTransactionData& txdata,
+                       ValidationCache& validation_cache,
+                       std::vector<CScriptCheck>* pvChecks)
+{
+    assert(tx.IsCoinBase() || inputs.size() == tx.vin.size());
+    return CheckInputScriptsImpl(
+        tx, state, flags, check_for, cacheSigStore, cacheFullScriptStore, txdata, validation_cache, pvChecks,
+        [&](size_t i) -> const Coin& { return inputs[i]; });
 }
 
 bool FatalError(Notifications& notifications, BlockValidationState& state, const bilingual_str& message)
@@ -2361,6 +2391,357 @@ script_verify_flags GetBlockScriptFlags(const CBlockIndex& block_index, const Ch
 }
 
 
+bool ShouldEnforceBIP30(const CBlockIndex& pindex, const Consensus::Params& params)
+{
+    // Do not allow blocks that contain transactions which 'overwrite' older transactions,
+    // unless those are already completely spent.
+    // If such overwrites are allowed, coinbases and transactions depending upon those
+    // can be duplicated to remove the ability to spend the first instance -- even after
+    // being sent to another address.
+    // See BIP30, CVE-2012-1909, and https://r6.ca/blog/20120206T005236Z.html for more information.
+    // This rule was originally applied to all blocks with a timestamp after March 15, 2012, 0:00 UTC.
+    // Now that the whole chain is irreversibly beyond that time it is applied to all blocks except the
+    // two in the chain that violate it. This prevents exploiting the issue against nodes during their
+    // initial block download.
+    //
+    // Once BIP34 activated it was not possible to create new duplicate coinbases and thus other than starting
+    // with the 2 existing duplicate coinbase pairs, not possible to create overwriting txs. But by the
+    // time BIP34 activated, in each of the existing pairs the duplicate coinbase had overwritten the first
+    // before the first had been spent. Since those coinbases are sufficiently buried it's no longer possible
+    // to create further duplicate transactions descending from the known pairs either.
+    //
+    // BIP34 requires that a block at height X has its coinbase scriptSig start with CScriptNum(X).
+    // That implication is flawed if a pre-BIP34 block X has an indicated height Y > X that could collide
+    // at height Y. Exhaustive search of mainnet coinbases before BIP34 found the first possible collision
+    // is at height 1,983,702, so BIP30 is unconditionally enforced from that height onward.
+    static constexpr int BIP34_IMPLIES_BIP30_LIMIT = 1983702;
+    if (pindex.nHeight >= BIP34_IMPLIES_BIP30_LIMIT) return true;
+    if (IsBIP30Repeat(pindex)) return false;
+    assert(pindex.pprev);
+    const CBlockIndex* pindexBIP34height = pindex.pprev->GetAncestor(params.BIP34Height);
+    return !pindexBIP34height || pindexBIP34height->GetBlockHash() != params.BIP34Hash;
+}
+
+const char* GetScriptCheckReason(const CBlockIndex& pindex, const ChainstateManager& chainman)
+{
+    AssertLockHeld(::cs_main);
+    if (chainman.AssumedValidBlock().IsNull()) {
+        return "assumevalid=0 (always verify)";
+    }
+    constexpr int64_t TWO_WEEKS_IN_SECONDS{60 * 60 * 24 * 7 * 2};
+    // We've been configured with the hash of a block which has been externally verified to have a valid history.
+    // A suitable default value is included with the software and updated from time to time. Because validity
+    // relative to a piece of software is an objective fact these defaults can be easily reviewed.
+    // This setting doesn't force the selection of any particular chain but makes validating some faster by
+    // effectively caching the result of part of the verification.
+    BlockMap::const_iterator it{chainman.m_blockman.m_block_index.find(chainman.AssumedValidBlock())};
+    if (it == chainman.m_blockman.m_block_index.end()) {
+        return "assumevalid hash not in headers";
+    } else if (it->second.GetAncestor(pindex.nHeight) != &pindex) {
+        return (pindex.nHeight > it->second.nHeight) ? "block height above assumevalid height" : "block not in assumevalid chain";
+    } else if (chainman.m_best_header->GetAncestor(pindex.nHeight) != &pindex) {
+        return "block not in best header chain";
+    } else if (chainman.m_best_header->nChainWork < chainman.MinimumChainWork()) {
+        return "best header chainwork below minimumchainwork";
+    } else if (GetBlockProofEquivalentTime(*chainman.m_best_header, pindex, *chainman.m_best_header, chainman.GetConsensus()) <= TWO_WEEKS_IN_SECONDS) {
+        return "block too recent relative to best header";
+    } else {
+        // This block is a member of the assumed verified chain and an ancestor of the best header.
+        // Script verification is skipped when connecting blocks under the assumevalid block.
+        // Assuming the assumevalid block is valid this is safe because block merkle hashes are still
+        // computed and checked. Of course, if an assumed valid block is invalid due to false scriptSigs
+        // this optimization would allow an invalid chain to be accepted.
+        // The equivalent time check discourages hash power from extorting the network via DoS attack
+        // into accepting an invalid block through telling users they must manually set assumevalid.
+        // The test against the minimum chain work prevents skipping when denied access to any chain
+        // at least as good as the expected chain.
+        return nullptr;
+    }
+}
+
+namespace {
+
+/** Single consensus-critical block validation core shared by serial ConnectBlock
+ *  and parallel IBD validation workers. Pure with respect to Chainstate and CCoinsView. */
+template <typename InputsAdapter>
+bool ValidateBlockCore(const CBlock& block,
+                       const BlockValidationContext& ctx,
+                       BlockValidationState& state,
+                       BlockValidationResultData& result,
+                       InputsAdapter& adapter)
+{
+    const CBlockIndex* pindex = Assert(ctx.pindex);
+    const Consensus::Params& consensus_params = *Assert(ctx.consensus_params);
+    const uint256 block_hash{block.GetHash()};
+
+    if (ctx.run_check_block) {
+        const auto check_start{SteadyClock::now()};
+        if (!CheckBlock(block, state, consensus_params, ctx.check_pow_and_merkle, ctx.check_pow_and_merkle)) {
+            return false;
+        }
+        result.time_check = SteadyClock::now() - check_start;
+    }
+
+    // Special case for the genesis block, skipping connection of its transactions
+    // (its coinbase is unspendable).
+    if (block_hash == consensus_params.hashGenesisBlock) {
+        return true;
+    }
+
+    if (ctx.enforce_bip30) {
+        for (const auto& tx : block.vtx) {
+            for (size_t o = 0; o < tx->vout.size(); o++) {
+                if (adapter.HaveCoinForBIP30(COutPoint(tx->GetHash(), o))) {
+                    state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-txns-BIP30",
+                                  "tried to overwrite transaction");
+                    break;
+                }
+            }
+            if (!state.IsValid()) break;
+        }
+    }
+
+    const auto time_connect_start{SteadyClock::now()};
+
+    // Precomputed transaction data pointers must not be invalidated
+    // until after `control` has run the script checks (potentially
+    // in multiple threads). Preallocate the vector size so a new allocation
+    // doesn't invalidate pointers into the vector, and keep txsdata in scope
+    // for as long as `control`.
+    std::vector<PrecomputedTransactionData> txsdata(ctx.script_checks ? block.vtx.size() : 0);
+    std::optional<CCheckQueueControl<CScriptCheck>> control;
+    if (ctx.check_queue && ctx.check_queue->HasThreads() && ctx.script_checks) {
+        control.emplace(*ctx.check_queue);
+    }
+
+    std::vector<int> prevheights;
+    CAmount nFees = 0;
+    int nInputs = 0;
+    int64_t nSigOpsCost = 0;
+    result.blockundo.vtxundo.clear();
+    if (ctx.build_undo) {
+        result.blockundo.vtxundo.reserve(block.vtx.size() - 1);
+    }
+
+    for (unsigned int i = 0; i < block.vtx.size(); i++) {
+        if (!state.IsValid()) break;
+        const CTransaction& tx = *(block.vtx[i]);
+
+        nInputs += tx.vin.size();
+
+        if (!tx.IsCoinBase()) {
+            CAmount txfee = 0;
+            TxValidationState tx_state;
+            if (!adapter.CheckTxInputs(tx, i, tx_state, pindex->nHeight, txfee)) {
+                // Any transaction validation failure in ConnectBlock is a block consensus failure
+                state.Invalid(BlockValidationResult::BLOCK_CONSENSUS,
+                              tx_state.GetRejectReason(),
+                              tx_state.GetDebugMessage() + " in transaction " + tx.GetHash().ToString());
+                break;
+            }
+            nFees += txfee;
+            if (!MoneyRange(nFees)) {
+                state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-txns-accumulated-fee-outofrange",
+                              "accumulated fee in the block out of range");
+                break;
+            }
+
+            // Check that transaction is BIP68 final
+            // BIP68 lock checks (as opposed to nLockTime checks) must
+            // be in ConnectBlock because they require the UTXO set
+            prevheights.resize(tx.vin.size());
+            adapter.FillPrevHeights(tx, i, prevheights);
+
+            if (!SequenceLocks(tx, ctx.locktime_flags, prevheights, *pindex)) {
+                state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-txns-nonfinal",
+                              "contains a non-BIP68-final transaction " + tx.GetHash().ToString());
+                break;
+            }
+        }
+
+        // GetTransactionSigOpCost counts 3 types of sigops:
+        // * legacy (always)
+        // * p2sh (when P2SH enabled in flags and excludes coinbase)
+        // * witness (when witness enabled in flags and excludes coinbase)
+        nSigOpsCost += adapter.GetTxSigOpCost(tx, i, ctx.script_flags);
+        if (nSigOpsCost > MAX_BLOCK_SIGOPS_COST) {
+            state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-blk-sigops", "too many sigops");
+            break;
+        }
+
+        if (!tx.IsCoinBase() && ctx.script_checks) {
+            bool tx_ok;
+            TxValidationState tx_state;
+            // If CheckInputScripts is called with a pointer to a checks vector, the resulting checks are appended to it. In that case
+            // they need to be added to control which runs them asynchronously. Otherwise, CheckInputScripts runs the checks before returning.
+            if (control) {
+                std::vector<CScriptCheck> vChecks;
+                tx_ok = adapter.CheckTxInputScripts(tx, i, tx_state, ctx.script_flags, ctx.cache_script_results, txsdata[i], *Assert(ctx.validation_cache), &vChecks);
+                if (tx_ok) control->Add(std::move(vChecks));
+            } else {
+                tx_ok = adapter.CheckTxInputScripts(tx, i, tx_state, ctx.script_flags, ctx.cache_script_results, txsdata[i], *Assert(ctx.validation_cache), nullptr);
+            }
+            if (!tx_ok) {
+                // Any transaction validation failure in ConnectBlock is a block consensus failure
+                state.Invalid(BlockValidationResult::BLOCK_CONSENSUS,
+                              tx_state.GetRejectReason(), tx_state.GetDebugMessage());
+                break;
+            }
+        }
+
+        CTxUndo* txundo = nullptr;
+        if (i > 0 && ctx.build_undo) {
+            txundo = &result.blockundo.vtxundo.emplace_back();
+        }
+        adapter.CommitTxToUndoAndView(tx, i, txundo, pindex->nHeight);
+    }
+
+    const auto time_connect_end{SteadyClock::now()};
+    result.time_connect = time_connect_end - time_connect_start;
+    result.fees = nFees;
+    result.inputs_count = nInputs;
+    result.sigops_cost = nSigOpsCost;
+
+    CAmount blockReward = nFees + GetBlockSubsidy(pindex->nHeight, consensus_params);
+    if (block.vtx[0]->GetValueOut() > blockReward && state.IsValid()) {
+        state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-cb-amount",
+                      strprintf("coinbase pays too much (actual=%d vs limit=%d)", block.vtx[0]->GetValueOut(), blockReward));
+    }
+    if (control) {
+        auto parallel_result = control->Complete();
+        if (parallel_result.has_value() && state.IsValid()) {
+            state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, strprintf("block-script-verify-flag-failed (%s)", ScriptErrorString(parallel_result->first)), parallel_result->second);
+        }
+    }
+    if (!state.IsValid()) {
+        return false;
+    }
+    result.time_verify = SteadyClock::now() - time_connect_start;
+    return true;
+}
+
+struct CoinsViewCacheAdapter {
+    CCoinsViewCache& view;
+
+    bool HaveCoinForBIP30(const COutPoint& outpoint) const
+    {
+        return view.HaveCoin(outpoint);
+    }
+
+    bool CheckTxInputs(const CTransaction& tx, size_t, TxValidationState& tx_state, int height, CAmount& txfee) const
+    {
+        return Consensus::CheckTxInputs(tx, tx_state, view, height, txfee);
+    }
+
+    void FillPrevHeights(const CTransaction& tx, size_t, std::vector<int>& prevheights) const
+    {
+        for (size_t j = 0; j < tx.vin.size(); ++j) {
+            prevheights[j] = view.AccessCoin(tx.vin[j].prevout).nHeight;
+        }
+    }
+
+    int64_t GetTxSigOpCost(const CTransaction& tx, size_t, script_verify_flags flags) const
+    {
+        return GetTransactionSigOpCost(tx, view, flags);
+    }
+
+    bool CheckTxInputScripts(const CTransaction& tx, size_t, TxValidationState& tx_state,
+                             script_verify_flags flags, bool cache_results,
+                             PrecomputedTransactionData& txdata, ValidationCache& validation_cache,
+                             std::vector<CScriptCheck>* pvChecks) const
+    {
+        return CheckInputScripts(tx, tx_state, view, flags, CheckInputScriptsFor::Block,
+                                 cache_results, cache_results, txdata, validation_cache, pvChecks);
+    }
+
+    void CommitTxToUndoAndView(const CTransaction& tx, size_t, CTxUndo* txundo, int height)
+    {
+        CTxUndo undo_dummy;
+        UpdateCoins(tx, view, txundo ? *txundo : undo_dummy, height);
+    }
+};
+
+struct FlatInputsAdapter {
+    std::span<Coin> resolved_inputs;
+    std::span<const uint32_t> tx_input_offsets;
+    const std::function<bool(const COutPoint&)>& bip30_have_coin;
+
+    std::span<const Coin> TxInputs(const CTransaction& tx, size_t tx_idx) const
+    {
+        if (tx.IsCoinBase()) return {};
+        return resolved_inputs.subspan(tx_input_offsets[tx_idx], tx.vin.size());
+    }
+
+    std::span<Coin> MutableTxInputs(const CTransaction& tx, size_t tx_idx)
+    {
+        if (tx.IsCoinBase()) return {};
+        return resolved_inputs.subspan(tx_input_offsets[tx_idx], tx.vin.size());
+    }
+
+    bool HaveCoinForBIP30(const COutPoint& outpoint) const
+    {
+        return bip30_have_coin ? bip30_have_coin(outpoint) : false;
+    }
+
+    bool CheckTxInputs(const CTransaction& tx, size_t tx_idx, TxValidationState& tx_state, int height, CAmount& txfee) const
+    {
+        return Consensus::CheckTxInputs(tx, tx_state, TxInputs(tx, tx_idx), height, txfee);
+    }
+
+    void FillPrevHeights(const CTransaction& tx, size_t tx_idx, std::vector<int>& prevheights) const
+    {
+        auto inputs = TxInputs(tx, tx_idx);
+        for (size_t j = 0; j < tx.vin.size(); ++j) {
+            prevheights[j] = inputs[j].nHeight;
+        }
+    }
+
+    int64_t GetTxSigOpCost(const CTransaction& tx, size_t tx_idx, script_verify_flags flags) const
+    {
+        return GetTransactionSigOpCost(tx, TxInputs(tx, tx_idx), flags);
+    }
+
+    bool CheckTxInputScripts(const CTransaction& tx, size_t tx_idx, TxValidationState& tx_state,
+                             script_verify_flags flags, bool cache_results,
+                             PrecomputedTransactionData& txdata, ValidationCache& validation_cache,
+                             std::vector<CScriptCheck>* pvChecks) const
+    {
+        return CheckInputScripts(tx, tx_state, TxInputs(tx, tx_idx), flags, CheckInputScriptsFor::Block,
+                                 cache_results, cache_results, txdata, validation_cache, pvChecks);
+    }
+
+    void CommitTxToUndoAndView(const CTransaction& tx, size_t tx_idx, CTxUndo* txundo, int)
+    {
+        if (txundo) {
+            auto inputs = MutableTxInputs(tx, tx_idx);
+            txundo->vprevout.reserve(inputs.size());
+            for (Coin& coin : inputs) {
+                assert(!coin.IsSpent());
+                txundo->vprevout.emplace_back(std::move(coin));
+            }
+        }
+    }
+};
+
+} // namespace
+
+bool ValidateBlockWithFlatInputs(
+    const CBlock& block,
+    const BlockValidationContext& ctx,
+    std::span<Coin> resolved_inputs,
+    std::span<const uint32_t> tx_input_offsets,
+    const std::function<bool(const COutPoint&)>& bip30_have_coin,
+    BlockValidationState& state,
+    BlockValidationResultData& result)
+{
+    if (!block.vtx.empty()) {
+        Assert(tx_input_offsets.size() == block.vtx.size() + 1);
+        Assert(tx_input_offsets.back() == resolved_inputs.size());
+    }
+    FlatInputsAdapter adapter{resolved_inputs, tx_input_offsets, bip30_have_coin};
+    return ValidateBlockCore(block, ctx, state, result, adapter);
+}
+
 /** Apply the effects of this block (with given index) on the UTXO set represented by coins.
  *  Validity checks that depend on the UTXO set are also done; ConnectBlock()
  *  can fail if those validity checks fail (among other reasons). */
@@ -2414,45 +2795,7 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
         return true;
     }
 
-    const char* script_check_reason;
-    if (m_chainman.AssumedValidBlock().IsNull()) {
-        script_check_reason = "assumevalid=0 (always verify)";
-    } else {
-        constexpr int64_t TWO_WEEKS_IN_SECONDS{60 * 60 * 24 * 7 * 2};
-        // We've been configured with the hash of a block which has been externally verified to have a valid history.
-        // A suitable default value is included with the software and updated from time to time.  Because validity
-        //  relative to a piece of software is an objective fact these defaults can be easily reviewed.
-        // This setting doesn't force the selection of any particular chain but makes validating some faster by
-        //  effectively caching the result of part of the verification.
-        BlockMap::const_iterator it{m_blockman.m_block_index.find(m_chainman.AssumedValidBlock())};
-        if (it == m_blockman.m_block_index.end()) {
-            script_check_reason = "assumevalid hash not in headers";
-        } else if (it->second.GetAncestor(pindex->nHeight) != pindex) {
-            script_check_reason = (pindex->nHeight > it->second.nHeight) ? "block height above assumevalid height" : "block not in assumevalid chain";
-        } else if (m_chainman.m_best_header->GetAncestor(pindex->nHeight) != pindex) {
-            script_check_reason = "block not in best header chain";
-        } else if (m_chainman.m_best_header->nChainWork < m_chainman.MinimumChainWork()) {
-            script_check_reason = "best header chainwork below minimumchainwork";
-        } else if (GetBlockProofEquivalentTime(*m_chainman.m_best_header, *pindex, *m_chainman.m_best_header, params.GetConsensus()) <= TWO_WEEKS_IN_SECONDS) {
-            script_check_reason = "block too recent relative to best header";
-        } else {
-            // This block is a member of the assumed verified chain and an ancestor of the best header.
-            // Script verification is skipped when connecting blocks under the
-            //  assumevalid block. Assuming the assumevalid block is valid this
-            //  is safe because block merkle hashes are still computed and checked,
-            // Of course, if an assumed valid block is invalid due to false scriptSigs
-            //  this optimization would allow an invalid chain to be accepted.
-            // The equivalent time check discourages hash power from extorting the network via DOS attack
-            //  into accepting an invalid block through telling users they must manually set assumevalid.
-            //  Requiring a software change or burying the invalid block, regardless of the setting, makes
-            //  it hard to hide the implication of the demand. This also avoids having release candidates
-            //  that are hardly doing any signature verification at all in testing without having to
-            //  artificially set the default assumed verified block further back.
-            // The test against the minimum chain work prevents the skipping when denied access to any chain at
-            //  least as good as the expected chain.
-            script_check_reason = nullptr;
-        }
-    }
+    const char* script_check_reason = GetScriptCheckReason(*pindex, m_chainman);
 
     const auto time_1{SteadyClock::now()};
     m_chainman.time_check += time_1 - time_start;
@@ -2461,91 +2804,7 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
              Ticks<SecondsDouble>(m_chainman.time_check),
              Ticks<MillisecondsDouble>(m_chainman.time_check) / m_chainman.num_blocks_total);
 
-    // Do not allow blocks that contain transactions which 'overwrite' older transactions,
-    // unless those are already completely spent.
-    // If such overwrites are allowed, coinbases and transactions depending upon those
-    // can be duplicated to remove the ability to spend the first instance -- even after
-    // being sent to another address.
-    // See BIP30, CVE-2012-1909, and https://r6.ca/blog/20120206T005236Z.html for more information.
-    // This rule was originally applied to all blocks with a timestamp after March 15, 2012, 0:00 UTC.
-    // Now that the whole chain is irreversibly beyond that time it is applied to all blocks except the
-    // two in the chain that violate it. This prevents exploiting the issue against nodes during their
-    // initial block download.
-    bool fEnforceBIP30 = !IsBIP30Repeat(*pindex);
-
-    // Once BIP34 activated it was not possible to create new duplicate coinbases and thus other than starting
-    // with the 2 existing duplicate coinbase pairs, not possible to create overwriting txs.  But by the
-    // time BIP34 activated, in each of the existing pairs the duplicate coinbase had overwritten the first
-    // before the first had been spent.  Since those coinbases are sufficiently buried it's no longer possible to create further
-    // duplicate transactions descending from the known pairs either.
-    // If we're on the known chain at height greater than where BIP34 activated, we can save the db accesses needed for the BIP30 check.
-
-    // BIP34 requires that a block at height X (block X) has its coinbase
-    // scriptSig start with a CScriptNum of X (indicated height X).  The above
-    // logic of no longer requiring BIP30 once BIP34 activates is flawed in the
-    // case that there is a block X before the BIP34 height of 227,931 which has
-    // an indicated height Y where Y is greater than X.  The coinbase for block
-    // X would also be a valid coinbase for block Y, which could be a BIP30
-    // violation.  An exhaustive search of all mainnet coinbases before the
-    // BIP34 height which have an indicated height greater than the block height
-    // reveals many occurrences. The 3 lowest indicated heights found are
-    // 209,921, 490,897, and 1,983,702 and thus coinbases for blocks at these 3
-    // heights would be the first opportunity for BIP30 to be violated.
-
-    // The search reveals a great many blocks which have an indicated height
-    // greater than 1,983,702, so we simply remove the optimization to skip
-    // BIP30 checking for blocks at height 1,983,702 or higher.  Before we reach
-    // that block in another 25 years or so, we should take advantage of a
-    // future consensus change to do a new and improved version of BIP34 that
-    // will actually prevent ever creating any duplicate coinbases in the
-    // future.
-    static constexpr int BIP34_IMPLIES_BIP30_LIMIT = 1983702;
-
-    // There is no potential to create a duplicate coinbase at block 209,921
-    // because this is still before the BIP34 height and so explicit BIP30
-    // checking is still active.
-
-    // The final case is block 176,684 which has an indicated height of
-    // 490,897. Unfortunately, this issue was not discovered until about 2 weeks
-    // before block 490,897 so there was not much opportunity to address this
-    // case other than to carefully analyze it and determine it would not be a
-    // problem. Block 490,897 was, in fact, mined with a different coinbase than
-    // block 176,684, but it is important to note that even if it hadn't been or
-    // is remined on an alternate fork with a duplicate coinbase, we would still
-    // not run into a BIP30 violation.  This is because the coinbase for 176,684
-    // is spent in block 185,956 in transaction
-    // d4f7fbbf92f4a3014a230b2dc70b8058d02eb36ac06b4a0736d9d60eaa9e8781.  This
-    // spending transaction can't be duplicated because it also spends coinbase
-    // 0328dd85c331237f18e781d692c92de57649529bd5edf1d01036daea32ffde29.  This
-    // coinbase has an indicated height of over 4.2 billion, and wouldn't be
-    // duplicatable until that height, and it's currently impossible to create a
-    // chain that long. Nevertheless we may wish to consider a future soft fork
-    // which retroactively prevents block 490,897 from creating a duplicate
-    // coinbase. The two historical BIP30 violations often provide a confusing
-    // edge case when manipulating the UTXO and it would be simpler not to have
-    // another edge case to deal with.
-
-    // testnet3 has no blocks before the BIP34 height with indicated heights
-    // post BIP34 before approximately height 486,000,000. After block
-    // 1,983,702 testnet3 starts doing unnecessary BIP30 checking again.
-    assert(pindex->pprev);
-    CBlockIndex* pindexBIP34height = pindex->pprev->GetAncestor(params.GetConsensus().BIP34Height);
-    //Only continue to enforce if we're below BIP34 activation height or the block hash at that height doesn't correspond.
-    fEnforceBIP30 = fEnforceBIP30 && (!pindexBIP34height || !(pindexBIP34height->GetBlockHash() == params.GetConsensus().BIP34Hash));
-
-    // TODO: Remove BIP30 checking from block height 1,983,702 on, once we have a
-    // consensus change that ensures coinbases at those heights cannot
-    // duplicate earlier coinbases.
-    if (fEnforceBIP30 || pindex->nHeight >= BIP34_IMPLIES_BIP30_LIMIT) {
-        for (const auto& tx : block.vtx) {
-            for (size_t o = 0; o < tx->vout.size(); o++) {
-                if (view.HaveCoin(COutPoint(tx->GetHash(), o))) {
-                    state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-txns-BIP30",
-                                  "tried to overwrite transaction");
-                }
-            }
-        }
-    }
+    const bool enforce_bip30 = ShouldEnforceBIP30(*pindex, params.GetConsensus());
 
     // Enforce BIP68 (sequence locks)
     int nLockTimeFlags = 0;
@@ -2576,128 +2835,39 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
         m_last_script_check_reason_logged = script_check_reason;
     }
 
-    CBlockUndo blockundo;
+    BlockValidationContext ctx{
+        .pindex = pindex,
+        .consensus_params = &params.GetConsensus(),
+        .script_flags = flags,
+        .locktime_flags = nLockTimeFlags,
+        .enforce_bip30 = enforce_bip30,
+        .script_checks = fScriptChecks,
+        .run_check_block = false,
+        .check_pow_and_merkle = !fJustCheck,
+        .cache_script_results = fJustCheck,
+        .validation_cache = &m_chainman.m_validation_cache,
+        .check_queue = &m_chainman.GetCheckQueue(),
+    };
+    BlockValidationResultData result;
+    CoinsViewCacheAdapter adapter{view};
+    const bool valid = ValidateBlockCore(block, ctx, state, result, adapter);
 
-    // Precomputed transaction data pointers must not be invalidated
-    // until after `control` has run the script checks (potentially
-    // in multiple threads). Preallocate the vector size so a new allocation
-    // doesn't invalidate pointers into the vector, and keep txsdata in scope
-    // for as long as `control`.
-    std::vector<PrecomputedTransactionData> txsdata(block.vtx.size());
-    std::optional<CCheckQueueControl<CScriptCheck>> control;
-    if (auto& queue = m_chainman.GetCheckQueue(); queue.HasThreads() && fScriptChecks) control.emplace(queue);
-
-    std::vector<int> prevheights;
-    CAmount nFees = 0;
-    int nInputs = 0;
-    int64_t nSigOpsCost = 0;
-    blockundo.vtxundo.reserve(block.vtx.size() - 1);
-    for (unsigned int i = 0; i < block.vtx.size(); i++)
-    {
-        if (!state.IsValid()) break;
-        const CTransaction &tx = *(block.vtx[i]);
-
-        nInputs += tx.vin.size();
-
-        if (!tx.IsCoinBase())
-        {
-            CAmount txfee = 0;
-            TxValidationState tx_state;
-            if (!Consensus::CheckTxInputs(tx, tx_state, view, pindex->nHeight, txfee)) {
-                // Any transaction validation failure in ConnectBlock is a block consensus failure
-                state.Invalid(BlockValidationResult::BLOCK_CONSENSUS,
-                              tx_state.GetRejectReason(),
-                              tx_state.GetDebugMessage() + " in transaction " + tx.GetHash().ToString());
-                break;
-            }
-            nFees += txfee;
-            if (!MoneyRange(nFees)) {
-                state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-txns-accumulated-fee-outofrange",
-                              "accumulated fee in the block out of range");
-                break;
-            }
-
-            // Check that transaction is BIP68 final
-            // BIP68 lock checks (as opposed to nLockTime checks) must
-            // be in ConnectBlock because they require the UTXO set
-            prevheights.resize(tx.vin.size());
-            for (size_t j = 0; j < tx.vin.size(); j++) {
-                prevheights[j] = view.AccessCoin(tx.vin[j].prevout).nHeight;
-            }
-
-            if (!SequenceLocks(tx, nLockTimeFlags, prevheights, *pindex)) {
-                state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-txns-nonfinal",
-                              "contains a non-BIP68-final transaction " + tx.GetHash().ToString());
-                break;
-            }
-        }
-
-        // GetTransactionSigOpCost counts 3 types of sigops:
-        // * legacy (always)
-        // * p2sh (when P2SH enabled in flags and excludes coinbase)
-        // * witness (when witness enabled in flags and excludes coinbase)
-        nSigOpsCost += GetTransactionSigOpCost(tx, view, flags);
-        if (nSigOpsCost > MAX_BLOCK_SIGOPS_COST) {
-            state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-blk-sigops", "too many sigops");
-            break;
-        }
-
-        if (!tx.IsCoinBase() && fScriptChecks)
-        {
-            bool fCacheResults = fJustCheck; /* Don't cache results if we're actually connecting blocks (still consult the cache, though) */
-            bool tx_ok;
-            TxValidationState tx_state;
-            // If CheckInputScripts is called with a pointer to a checks vector, the resulting checks are appended to it. In that case
-            // they need to be added to control which runs them asynchronously. Otherwise, CheckInputScripts runs the checks before returning.
-            if (control) {
-                std::vector<CScriptCheck> vChecks;
-                tx_ok = CheckInputScripts(tx, tx_state, view, flags, CheckInputScriptsFor::Block, fCacheResults, fCacheResults, txsdata[i], m_chainman.m_validation_cache, &vChecks);
-                if (tx_ok) control->Add(std::move(vChecks));
-            } else {
-                tx_ok = CheckInputScripts(tx, tx_state, view, flags, CheckInputScriptsFor::Block, fCacheResults, fCacheResults, txsdata[i], m_chainman.m_validation_cache);
-            }
-            if (!tx_ok) {
-                // Any transaction validation failure in ConnectBlock is a block consensus failure
-                state.Invalid(BlockValidationResult::BLOCK_CONSENSUS,
-                              tx_state.GetRejectReason(), tx_state.GetDebugMessage());
-                break;
-            }
-        }
-
-        CTxUndo undoDummy;
-        if (i > 0) {
-            blockundo.vtxundo.emplace_back();
-        }
-        UpdateCoins(tx, view, i == 0 ? undoDummy : blockundo.vtxundo.back(), pindex->nHeight);
-    }
-    const auto time_3{SteadyClock::now()};
-    m_chainman.time_connect += time_3 - time_2;
+    m_chainman.time_connect += result.time_connect;
     LogDebug(BCLog::BENCH, "      - Connect %u transactions: %.2fms (%.3fms/tx, %.3fms/txin) [%.2fs (%.2fms/blk)]\n", (unsigned)block.vtx.size(),
-             Ticks<MillisecondsDouble>(time_3 - time_2), Ticks<MillisecondsDouble>(time_3 - time_2) / block.vtx.size(),
-             nInputs <= 1 ? 0 : Ticks<MillisecondsDouble>(time_3 - time_2) / (nInputs - 1),
+             Ticks<MillisecondsDouble>(result.time_connect), Ticks<MillisecondsDouble>(result.time_connect) / block.vtx.size(),
+             result.inputs_count <= 1 ? 0 : Ticks<MillisecondsDouble>(result.time_connect) / (result.inputs_count - 1),
              Ticks<SecondsDouble>(m_chainman.time_connect),
              Ticks<MillisecondsDouble>(m_chainman.time_connect) / m_chainman.num_blocks_total);
 
-    CAmount blockReward = nFees + GetBlockSubsidy(pindex->nHeight, params.GetConsensus());
-    if (block.vtx[0]->GetValueOut() > blockReward && state.IsValid()) {
-        state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-cb-amount",
-                      strprintf("coinbase pays too much (actual=%d vs limit=%d)", block.vtx[0]->GetValueOut(), blockReward));
-    }
-    if (control) {
-        auto parallel_result = control->Complete();
-        if (parallel_result.has_value() && state.IsValid()) {
-            state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, strprintf("block-script-verify-flag-failed (%s)", ScriptErrorString(parallel_result->first)), parallel_result->second);
-        }
-    }
-    if (!state.IsValid()) {
+    if (!valid) {
         LogWarning("Block validation error: %s", state.ToString());
         return false;
     }
     const auto time_4{SteadyClock::now()};
-    m_chainman.time_verify += time_4 - time_2;
-    LogDebug(BCLog::BENCH, "    - Verify %u txins: %.2fms (%.3fms/txin) [%.2fs (%.2fms/blk)]\n", nInputs - 1,
-             Ticks<MillisecondsDouble>(time_4 - time_2),
-             nInputs <= 1 ? 0 : Ticks<MillisecondsDouble>(time_4 - time_2) / (nInputs - 1),
+    m_chainman.time_verify += result.time_verify;
+    LogDebug(BCLog::BENCH, "    - Verify %u txins: %.2fms (%.3fms/txin) [%.2fs (%.2fms/blk)]\n", result.inputs_count - 1,
+             Ticks<MillisecondsDouble>(result.time_verify),
+             result.inputs_count <= 1 ? 0 : Ticks<MillisecondsDouble>(result.time_verify) / (result.inputs_count - 1),
              Ticks<SecondsDouble>(m_chainman.time_verify),
              Ticks<MillisecondsDouble>(m_chainman.time_verify) / m_chainman.num_blocks_total);
 
@@ -2705,7 +2875,7 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
         return true;
     }
 
-    if (!m_blockman.WriteBlockUndo(blockundo, state, *pindex)) {
+    if (!m_blockman.WriteBlockUndo(result.blockundo, state, *pindex)) {
         return false;
     }
 
@@ -2735,8 +2905,8 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
         block_hash.data(),
         pindex->nHeight,
         block.vtx.size(),
-        nInputs,
-        nSigOpsCost,
+        result.inputs_count,
+        result.sigops_cost,
         Ticks<std::chrono::nanoseconds>(time_5 - time_start)
     );
 

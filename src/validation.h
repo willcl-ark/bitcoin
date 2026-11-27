@@ -29,6 +29,7 @@
 #include <txdb.h>
 #include <txmempool.h>
 #include <uint256.h>
+#include <undo.h>
 #include <util/byte_units.h>
 #include <util/check.h>
 #include <util/fs.h>
@@ -1467,6 +1468,71 @@ inline constexpr script_verify_flags CONSENSUS_SCRIPT_VERIFY_FLAGS{
 // (a subset of CONSENSUS_SCRIPT_VERIFY_FLAGS)
 script_verify_flags GetBlockScriptFlags(const CBlockIndex& block_index, const ChainstateManager& chainman);
 
+/** Determine whether BIP30 duplicate-txid checks must be enforced for pindex. */
+bool ShouldEnforceBIP30(const CBlockIndex& pindex, const Consensus::Params& params);
+
+/** Return the reason script checks are required for pindex, or nullptr if assumevalid skips them. */
+const char* GetScriptCheckReason(const CBlockIndex& pindex, const ChainstateManager& chainman) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+
+/** Immutable context needed by the pure block validation core. */
+struct BlockValidationContext {
+    const CBlockIndex* pindex{nullptr};
+    const Consensus::Params* consensus_params{nullptr};
+    script_verify_flags script_flags{SCRIPT_VERIFY_NONE};
+    int locktime_flags{0};
+    bool enforce_bip30{false};
+    bool script_checks{true};
+    bool run_check_block{true};
+    bool check_pow_and_merkle{true};
+    bool build_undo{true};
+    bool cache_script_results{false};
+    ValidationCache* validation_cache{nullptr};
+    CCheckQueue<CScriptCheck>* check_queue{nullptr};
+};
+
+/** Outputs produced by the pure block validation core. */
+struct BlockValidationResultData {
+    CBlockUndo blockundo;
+    CAmount fees{0};
+    int inputs_count{0};
+    int64_t sigops_cost{0};
+    SteadyClock::duration time_check{};
+    SteadyClock::duration time_connect{};
+    SteadyClock::duration time_verify{};
+};
+
+/**
+ * Block validation over flat pre-resolved inputs in block spend order, read-only with
+ * respect to chainstate and UTXO storage.
+ * Shares the same consensus-critical validation core as Chainstate::ConnectBlock.
+ * Safe to invoke concurrently off cs_main with no ChainstateManager, UTXO store, or thread pool.
+ *
+ * Contract:
+ * - Input layout: `resolved_inputs` holds one Coin per input of every non-coinbase transaction
+ *   in `block`, where `tx_input_offsets[i]` gives the start index for `block.vtx[i]` (i >= 1)
+ *   and `tx_input_offsets[block.vtx.size()] == resolved_inputs.size()`. Missing/spent inputs
+ *   must be represented as empty/spent Coin entries (`coin.IsSpent() == true`). Outputs created
+ *   by an earlier transaction in `block` carry `nHeight == ctx.pindex->nHeight`.
+ * - Enforced by this function: CheckBlock (when `ctx.run_check_block`), per-tx consensus checks,
+ *   sigops cost limits, BIP68 / sequence locks, coinbase maturity, fee/subsidy bounds, script
+ *   verification (when `ctx.script_checks`), CBlockUndo assembly (when `ctx.build_undo`, moving
+ *   coins out of `resolved_inputs` into `result.blockundo`), and rejecting any spent/empty slot.
+ * - Queried via callback: when `ctx.enforce_bip30` is true, `bip30_have_coin` is consulted to
+ *   detect unspent duplicate-txid outputs created prior to `block`.
+ * - Trusted from the caller/resolver: that external Coin entries actually exist unspent in the
+ *   chainstate UTXO set (confirmed later when the block's delta is committed), and that any
+ *   same-height Coin originated from an earlier transaction in `block` without intra-block
+ *   double-spends.
+ */
+bool ValidateBlockWithFlatInputs(
+    const CBlock& block,
+    const BlockValidationContext& ctx,
+    std::span<Coin> resolved_inputs,
+    std::span<const uint32_t> tx_input_offsets,
+    const std::function<bool(const COutPoint&)>& bip30_have_coin,
+    BlockValidationState& state,
+    BlockValidationResultData& result);
+
 /** The context CheckInputScripts is called in, which decides how a
  *  script failure is reported: as a consensus failure for blocks,
  *  or as a standardness failure for the mempool. The flags alone can't
@@ -1485,7 +1551,15 @@ bool CheckInputScripts(const CTransaction& tx, TxValidationState& state,
                        bool cacheSigStore,
                        bool cacheFullScriptStore, PrecomputedTransactionData& txdata,
                        ValidationCache& validation_cache,
-                       std::vector<CScriptCheck>* pvChecks = nullptr)
-                       EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+                       std::vector<CScriptCheck>* pvChecks = nullptr);
+
+bool CheckInputScripts(const CTransaction& tx, TxValidationState& state,
+                       std::span<const Coin> inputs,
+                       script_verify_flags flags,
+                       CheckInputScriptsFor check_for,
+                       bool cacheSigStore,
+                       bool cacheFullScriptStore, PrecomputedTransactionData& txdata,
+                       ValidationCache& validation_cache,
+                       std::vector<CScriptCheck>* pvChecks = nullptr);
 
 #endif // BITCOIN_VALIDATION_H

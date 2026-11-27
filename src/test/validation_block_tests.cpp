@@ -424,4 +424,342 @@ BOOST_FIXTURE_TEST_CASE(switch_block_parent_coinbase, RegTestingSetup)
     }
     BOOST_CHECK_EQUAL(WITH_LOCK(::cs_main, return chainman.ActiveChain().Height()), length);
 }
+
+BOOST_FIXTURE_TEST_CASE(validate_block_with_flat_inputs_standalone, BasicTestingSetup)
+{
+    // Validate a block purely from (block, ctx, flat spent coins) with no ChainstateManager,
+    // no UTXO store, no BlockManager, and no worker ThreadPool.
+    const auto params{CreateChainParams(ArgsManager{}, ChainType::REGTEST)};
+    const Consensus::Params& consensus{params->GetConsensus()};
+    const CBlock& genesis{params->GenesisBlock()};
+    const uint256 genesis_hash{genesis.GetHash()};
+
+    CBlockIndex genesis_index{genesis};
+    genesis_index.phashBlock = &genesis_hash;
+    genesis_index.nHeight = 0;
+
+    const CScript anyone_can_spend{CScript() << OP_TRUE};
+    const CAmount subsidy{GetBlockSubsidy(1, consensus)};
+
+    auto make_block = [&](CAmount coinbase_value) {
+        CBlock block;
+        block.nVersion = 0x20000000;
+        block.hashPrevBlock = genesis_hash;
+        block.nTime = genesis.nTime + 1;
+        block.nBits = genesis.nBits;
+        block.nNonce = 0;
+
+        CMutableTransaction cb;
+        cb.vin.resize(1);
+        cb.vin[0].scriptSig = CScript() << 1 << OP_0;
+        cb.vout.emplace_back(coinbase_value, anyone_can_spend);
+
+        CMutableTransaction tx1;
+        tx1.vin.emplace_back(COutPoint{Txid::FromUint256(uint256::ONE), 0});
+        tx1.vout.emplace_back(9000, anyone_can_spend);
+        const CTransactionRef tx1_ref{MakeTransactionRef(std::move(tx1))};
+
+        CMutableTransaction tx2;
+        tx2.vin.emplace_back(COutPoint{tx1_ref->GetHash(), 0});
+        tx2.vout.emplace_back(8500, anyone_can_spend);
+        const CTransactionRef tx2_ref{MakeTransactionRef(std::move(tx2))};
+
+        block.vtx = {MakeTransactionRef(std::move(cb)), tx1_ref, tx2_ref};
+        block.hashMerkleRoot = BlockMerkleRoot(block);
+        while (!CheckProofOfWork(block.GetHash(), block.nBits, consensus)) {
+            ++block.nNonce;
+        }
+        return block;
+    };
+
+    const CBlock valid_block{make_block(subsidy + 1500)};
+    const uint256 valid_hash{valid_block.GetHash()};
+    CBlockIndex tip_index{valid_block};
+    tip_index.phashBlock = &valid_hash;
+    tip_index.pprev = &genesis_index;
+    tip_index.nHeight = 1;
+
+    ValidationCache val_cache{1 << 20, 1 << 20};
+    const std::vector<uint32_t> offsets{0, 0, 1, 2};
+    auto make_inputs = [&](const CScript& ext_script) {
+        return std::vector<Coin>{
+            Coin{CTxOut{10000, ext_script}, /*nHeightIn=*/0, /*fCoinBaseIn=*/false},
+            Coin{valid_block.vtx[1]->vout[0], /*nHeightIn=*/1, /*fCoinBaseIn=*/false},
+        };
+    };
+
+    BlockValidationContext ctx{
+        .pindex = &tip_index,
+        .consensus_params = &consensus,
+        .script_flags = SCRIPT_VERIFY_P2SH | SCRIPT_VERIFY_WITNESS,
+        .locktime_flags = 0,
+        .enforce_bip30 = false,
+        .script_checks = true,
+        .run_check_block = true,
+        .check_pow_and_merkle = true,
+        .build_undo = true,
+        .cache_script_results = false,
+        .validation_cache = &val_cache,
+        .check_queue = nullptr,
+    };
+
+    // 1. Valid block with external spend + intra-block spend chain and CBlockUndo assembly.
+    {
+        auto inputs{make_inputs(anyone_can_spend)};
+        BlockValidationState state;
+        BlockValidationResultData res;
+        BOOST_REQUIRE(ValidateBlockWithFlatInputs(valid_block, ctx, inputs, offsets, {}, state, res));
+        BOOST_CHECK(state.IsValid());
+        BOOST_CHECK_EQUAL(res.fees, 1500);
+        BOOST_CHECK_EQUAL(res.inputs_count, 3);
+        BOOST_REQUIRE_EQUAL(res.blockundo.vtxundo.size(), 2U);
+        BOOST_CHECK_EQUAL(res.blockundo.vtxundo[0].vprevout[0].out.nValue, 10000);
+        BOOST_CHECK_EQUAL(res.blockundo.vtxundo[1].vprevout[0].out.nValue, 9000);
+    }
+
+    // 2. Skipping CBlockUndo construction leaves blockundo empty while validating identically.
+    {
+        BlockValidationContext no_undo_ctx{ctx};
+        no_undo_ctx.build_undo = false;
+        auto inputs{make_inputs(anyone_can_spend)};
+        BlockValidationState state;
+        BlockValidationResultData res;
+        BOOST_REQUIRE(ValidateBlockWithFlatInputs(valid_block, no_undo_ctx, inputs, offsets, {}, state, res));
+        BOOST_CHECK_EQUAL(res.fees, 1500);
+        BOOST_CHECK(res.blockundo.vtxundo.empty());
+    }
+
+    // 3. Missing/spent input slot fails consensus validation.
+    {
+        auto inputs{make_inputs(anyone_can_spend)};
+        inputs[0] = Coin{};
+        BlockValidationState state;
+        BlockValidationResultData res;
+        BOOST_CHECK(!ValidateBlockWithFlatInputs(valid_block, ctx, inputs, offsets, {}, state, res));
+        BOOST_CHECK_EQUAL(state.GetRejectReason(), "bad-txns-inputs-missingorspent");
+    }
+
+    // 4. BIP30 callback conflict is rejected when enforce_bip30 is true.
+    {
+        BlockValidationContext bip30_ctx{ctx};
+        bip30_ctx.enforce_bip30 = true;
+        auto inputs{make_inputs(anyone_can_spend)};
+        const COutPoint dup{valid_block.vtx[1]->GetHash(), 0};
+        BlockValidationState state;
+        BlockValidationResultData res;
+        BOOST_CHECK(!ValidateBlockWithFlatInputs(
+            valid_block, bip30_ctx, inputs, offsets,
+            [&](const COutPoint& op) { return op == dup; },
+            state, res));
+        BOOST_CHECK_EQUAL(state.GetRejectReason(), "bad-txns-BIP30");
+    }
+
+    // 5. Script failure is rejected when script_checks is enabled.
+    {
+        auto inputs{make_inputs(CScript() << OP_FALSE)};
+        BlockValidationState state;
+        BlockValidationResultData res;
+        BOOST_CHECK(!ValidateBlockWithFlatInputs(valid_block, ctx, inputs, offsets, {}, state, res));
+        BOOST_CHECK(state.GetRejectReason().starts_with("block-script-verify-flag-failed"));
+    }
+
+    // 6. Overpaying coinbase reward fails bad-cb-amount.
+    {
+        const CBlock bad_cb_block{make_block(subsidy + 1501)};
+        const uint256 bad_cb_hash{bad_cb_block.GetHash()};
+        CBlockIndex bad_tip{bad_cb_block};
+        bad_tip.phashBlock = &bad_cb_hash;
+        bad_tip.pprev = &genesis_index;
+        bad_tip.nHeight = 1;
+        BlockValidationContext bad_ctx{ctx};
+        bad_ctx.pindex = &bad_tip;
+        auto inputs{make_inputs(anyone_can_spend)};
+        BlockValidationState state;
+        BlockValidationResultData res;
+        BOOST_CHECK(!ValidateBlockWithFlatInputs(bad_cb_block, bad_ctx, inputs, offsets, {}, state, res));
+        BOOST_CHECK_EQUAL(state.GetRejectReason(), "bad-cb-amount");
+    }
+
+    // 7. Immature coinbase input fails bad-txns-premature-spend-of-coinbase.
+    {
+        auto inputs{make_inputs(anyone_can_spend)};
+        inputs[0] = Coin{CTxOut{10000, anyone_can_spend}, /*nHeightIn=*/0, /*fCoinBaseIn=*/true};
+        BlockValidationState state;
+        BlockValidationResultData res;
+        BOOST_CHECK(!ValidateBlockWithFlatInputs(valid_block, ctx, inputs, offsets, {}, state, res));
+        BOOST_CHECK_EQUAL(state.GetRejectReason(), "bad-txns-premature-spend-of-coinbase");
+    }
+
+    // 8. Input value below output value fails bad-txns-in-belowout.
+    {
+        auto inputs{make_inputs(anyone_can_spend)};
+        inputs[0] = Coin{CTxOut{8999, anyone_can_spend}, /*nHeightIn=*/0, /*fCoinBaseIn=*/false};
+        BlockValidationState state;
+        BlockValidationResultData res;
+        BOOST_CHECK(!ValidateBlockWithFlatInputs(valid_block, ctx, inputs, offsets, {}, state, res));
+        BOOST_CHECK_EQUAL(state.GetRejectReason(), "bad-txns-in-belowout");
+    }
+
+    // 9. Bad script is skipped when script_checks=false (assumevalid behavior), rejected when true.
+    {
+        BlockValidationContext skip_ctx{ctx};
+        skip_ctx.script_checks = false;
+        auto inputs{make_inputs(CScript() << OP_FALSE)};
+        BlockValidationState state;
+        BlockValidationResultData res;
+        BOOST_CHECK(ValidateBlockWithFlatInputs(valid_block, skip_ctx, inputs, offsets, {}, state, res));
+        BOOST_CHECK(state.IsValid());
+    }
+
+    // 10. cache_script_results=true populates ValidationCache and validates cleanly on repeat + concurrently.
+    {
+        BlockValidationContext cache_ctx{ctx};
+        cache_ctx.cache_script_results = true;
+        std::atomic<int> passed{0};
+        std::vector<std::thread> threads;
+        for (int t = 0; t < 4; ++t) {
+            threads.emplace_back([&] {
+                CBlock blk_copy{valid_block};
+                auto inputs{make_inputs(anyone_can_spend)};
+                BlockValidationState state;
+                BlockValidationResultData res;
+                if (ValidateBlockWithFlatInputs(blk_copy, cache_ctx, inputs, offsets, {}, state, res) && res.fees == 1500) {
+                    passed.fetch_add(1, std::memory_order_relaxed);
+                }
+            });
+        }
+        for (auto& th : threads) th.join();
+        BOOST_CHECK_EQUAL(passed.load(), 4);
+    }
+
+    // 11. Corrupted merkle root fails CheckBlock() when run_check_block=true.
+    {
+        CBlock bad_merkle{valid_block};
+        bad_merkle.fChecked = false;
+        bad_merkle.m_checked_merkle_root = false;
+        bad_merkle.hashMerkleRoot = uint256::ONE;
+        while (!CheckProofOfWork(bad_merkle.GetHash(), bad_merkle.nBits, consensus)) {
+            ++bad_merkle.nNonce;
+        }
+        const uint256 bad_hash{bad_merkle.GetHash()};
+        CBlockIndex bad_idx{bad_merkle};
+        bad_idx.phashBlock = &bad_hash;
+        bad_idx.pprev = &genesis_index;
+        bad_idx.nHeight = 1;
+        BlockValidationContext bad_ctx{ctx};
+        bad_ctx.pindex = &bad_idx;
+        auto inputs{make_inputs(anyone_can_spend)};
+        BlockValidationState state;
+        BlockValidationResultData res;
+        BOOST_CHECK(!ValidateBlockWithFlatInputs(bad_merkle, bad_ctx, inputs, offsets, {}, state, res));
+        BOOST_CHECK_EQUAL(state.GetRejectReason(), "bad-txnmrklroot");
+    }
+
+    // 12. Excessive sigops fails bad-blk-sigops.
+    {
+        CBlock sigop_block;
+        sigop_block.nVersion = 0x20000000;
+        sigop_block.hashPrevBlock = genesis_hash;
+        sigop_block.nTime = genesis.nTime + 1;
+        sigop_block.nBits = genesis.nBits;
+        sigop_block.nNonce = 0;
+
+        CMutableTransaction cb;
+        cb.vin.resize(1);
+        cb.vin[0].scriptSig = CScript() << 1 << OP_0;
+        cb.vout.emplace_back(subsidy, anyone_can_spend);
+
+        // Each OP_CHECKMULTISIG counts as 20 legacy sigops * WITNESS_SCALE_FACTOR (4) = 80 sigop cost.
+        // Put 100 OP_CHECKMULTISIG in a P2SH redeemScript inside 11 transactions -> 11 * 100 * 80 = 88,000 > MAX_BLOCK_SIGOPS_COST (80,000).
+        CScript heavy_script;
+        for (int k = 0; k < 100; ++k) heavy_script << OP_CHECKMULTISIG;
+        CMutableTransaction spam_tx;
+        spam_tx.vin.emplace_back(COutPoint{Txid::FromUint256(uint256::ONE), 0});
+        for (int o = 0; o < 11; ++o) {
+            spam_tx.vout.emplace_back(100, heavy_script);
+        }
+        sigop_block.vtx = {MakeTransactionRef(std::move(cb)), MakeTransactionRef(std::move(spam_tx))};
+        sigop_block.hashMerkleRoot = BlockMerkleRoot(sigop_block);
+        while (!CheckProofOfWork(sigop_block.GetHash(), sigop_block.nBits, consensus)) {
+            ++sigop_block.nNonce;
+        }
+        const uint256 sigop_hash{sigop_block.GetHash()};
+        CBlockIndex sigop_idx{sigop_block};
+        sigop_idx.phashBlock = &sigop_hash;
+        sigop_idx.pprev = &genesis_index;
+        sigop_idx.nHeight = 1;
+        BlockValidationContext sigop_ctx{ctx};
+        sigop_ctx.pindex = &sigop_idx;
+        sigop_ctx.script_checks = false;
+        std::vector<Coin> sigop_inputs{Coin{CTxOut{2000, anyone_can_spend}, 0, false}};
+        std::vector<uint32_t> sigop_offsets{0, 0, 1};
+        BlockValidationState state;
+        BlockValidationResultData res;
+        BOOST_CHECK(!ValidateBlockWithFlatInputs(sigop_block, sigop_ctx, sigop_inputs, sigop_offsets, {}, state, res));
+        BOOST_CHECK_EQUAL(state.GetRejectReason(), "bad-blk-sigops");
+    }
+
+    // 13. ShouldEnforceBIP30() boundary matrix on mainnet consensus params.
+    {
+        const auto mainnet{CreateChainParams(ArgsManager{}, ChainType::MAIN)};
+        const auto& mp{mainnet->GetConsensus()};
+        const uint256 dummy_hash{uint256::ONE};
+        const uint256 bip30_91842{"00000000000a4d0a398161ffc163c503763b1f4360639393e0e4c8e300e0caec"};
+        const uint256 bip30_91880{"00000000000743f190a18c5577a3c2d2a1f610ae9601ac046a38084ccb7cd721"};
+
+        CBlockIndex bip34_good;
+        bip34_good.nHeight = mp.BIP34Height;
+        bip34_good.phashBlock = &mp.BIP34Hash;
+
+        CBlockIndex bip34_bad;
+        bip34_bad.nHeight = mp.BIP34Height;
+        bip34_bad.phashBlock = &dummy_hash;
+
+        auto check_bip30 = [&](int height, CBlockIndex* parent, const uint256& hash) {
+            CBlockIndex idx;
+            idx.pprev = parent;
+            idx.pskip = parent;
+            idx.nHeight = height;
+            idx.phashBlock = &hash;
+            return ShouldEnforceBIP30(idx, mp);
+        };
+
+        CBlockIndex pre_bip34_parent;
+        pre_bip34_parent.nHeight = 99;
+        pre_bip34_parent.phashBlock = &dummy_hash;
+        BOOST_CHECK(check_bip30(100, &pre_bip34_parent, dummy_hash));
+        BOOST_CHECK(!check_bip30(91842, &pre_bip34_parent, bip30_91842));
+        BOOST_CHECK(!check_bip30(91880, &pre_bip34_parent, bip30_91880));
+
+        // Block at BIP34Height itself still enforces BIP30 (parent is below BIP34Height).
+        CBlockIndex bip34_minus_one;
+        bip34_minus_one.nHeight = mp.BIP34Height - 1;
+        bip34_minus_one.phashBlock = &dummy_hash;
+        BOOST_CHECK(check_bip30(mp.BIP34Height, &bip34_minus_one, mp.BIP34Hash));
+
+        // After BIP34Height: skipped iff ancestor at BIP34Height matches BIP34Hash.
+        BOOST_CHECK(!check_bip30(mp.BIP34Height + 1, &bip34_good, dummy_hash));
+        BOOST_CHECK(check_bip30(mp.BIP34Height + 1, &bip34_bad, dummy_hash));
+
+        // Verify the 1,983,701 vs 1,983,702 BIP34_IMPLIES_BIP30_LIMIT boundary directly.
+        Consensus::Params limit_params{mp};
+        limit_params.BIP34Height = 1983700;
+        CBlockIndex bip34_at_limit;
+        bip34_at_limit.nHeight = 1983700;
+        bip34_at_limit.phashBlock = &limit_params.BIP34Hash;
+        {
+            CBlockIndex at_1983701;
+            at_1983701.pprev = &bip34_at_limit;
+            at_1983701.nHeight = 1983701;
+            at_1983701.phashBlock = &dummy_hash;
+            BOOST_CHECK(!ShouldEnforceBIP30(at_1983701, limit_params));
+
+            CBlockIndex at_1983702;
+            at_1983702.pprev = &at_1983701;
+            at_1983702.nHeight = 1983702;
+            at_1983702.phashBlock = &dummy_hash;
+            BOOST_CHECK(ShouldEnforceBIP30(at_1983702, limit_params));
+        }
+    }
+}
 BOOST_AUTO_TEST_SUITE_END()

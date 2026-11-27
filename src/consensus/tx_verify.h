@@ -9,11 +9,13 @@
 #include <script/verify_flags.h>
 
 #include <cstdint>
+#include <span>
 #include <utility>
 #include <vector>
 
 class CBlockIndex;
 class CCoinsViewCache;
+class Coin;
 class CTransaction;
 class TxValidationState;
 
@@ -27,6 +29,7 @@ namespace Consensus {
  * Preconditions: tx.IsCoinBase() is false.
  */
 [[nodiscard]] bool CheckTxInputs(const CTransaction& tx, TxValidationState& state, const CCoinsViewCache& inputs, int nSpendHeight, CAmount& txfee);
+[[nodiscard]] bool CheckTxInputs(const CTransaction& tx, TxValidationState& state, std::span<const Coin> inputs, int nSpendHeight, CAmount& txfee);
 } // namespace Consensus
 
 /** Auxiliary functions for transaction validation (ideally should not be exposed) */
@@ -55,6 +58,7 @@ unsigned int GetP2SHSigOpCount(const CTransaction& tx, const CCoinsViewCache& ma
  * @return Total signature operation cost of tx
  */
 int64_t GetTransactionSigOpCost(const CTransaction& tx, const CCoinsViewCache& inputs, script_verify_flags flags);
+int64_t GetTransactionSigOpCost(const CTransaction& tx, std::span<const Coin> inputs, script_verify_flags flags);
 
 /**
  * Check if transaction is final and can be included in a block with the
