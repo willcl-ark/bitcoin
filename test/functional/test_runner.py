@@ -124,6 +124,7 @@ BASE_SCRIPTS = [
     'wallet_avoidreuse.py',
     'feature_abortnode.py',
     'feature_async_undo.py',
+    'feature_connect_window.py',
     'p2p_orphan_handling.py',
     'wallet_basic.py',
     'wallet_multiwallet.py',
