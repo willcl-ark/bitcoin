@@ -1534,7 +1534,13 @@ void PeerManagerImpl::FindNextBlocksToDownload(const Peer& peer, unsigned int co
     // Never fetch further than the best block we know the peer has, or more than BLOCK_DOWNLOAD_WINDOW + 1 beyond the last
     // linked block we have in common with this peer. The +1 is so we can detect stalling, namely if we would be able to
     // download that next block if the window were 1 larger.
-    int nWindowEnd = state->pindexLastCommonBlock->nHeight + BLOCK_DOWNLOAD_WINDOW;
+    int nWindowEnd = state->pindexLastCommonBlock->nHeight + static_cast<int>(BLOCK_DOWNLOAD_WINDOW);
+    if (m_chainman.IsInitialBlockDownload() || m_chainman.m_blockman.IsPruneMode()) {
+        // Bound download lookahead relative to the active chain tip during IBD
+        // (while msghand stores blocks asynchronously ahead of ibdconnect) and
+        // in prune mode. Leave post-IBD non-pruning fork downloads unchanged.
+        nWindowEnd = std::min(nWindowEnd, m_chainman.ActiveHeight() + static_cast<int>(BLOCK_DOWNLOAD_WINDOW));
+    }
 
     FindNextBlocks(vBlocks, peer, state, pindexWalk, count, nWindowEnd, &m_chainman.ActiveChain(), &nodeStaller);
 }
@@ -1620,7 +1626,12 @@ void PeerManagerImpl::FindNextBlocks(std::vector<const CBlockIndex*>& vBlocks, c
             // The block is not already downloaded, and not yet in flight.
             if (pindex->nHeight > nWindowEnd) {
                 // We reached the end of the window.
-                if (vBlocks.size() == 0 && waitingfor != peer.m_id) {
+                // Do not accuse a remote peer of stalling if the window was locally
+                // bounded behind state->pindexLastCommonBlock (for example, while
+                // ibdconnect catches up to already-stored blocks).
+                const bool peer_blocks_window = !activeChain ||
+                    pindex->nHeight > state->pindexLastCommonBlock->nHeight + static_cast<int>(BLOCK_DOWNLOAD_WINDOW);
+                if (vBlocks.size() == 0 && waitingfor != peer.m_id && peer_blocks_window) {
                     // We aren't able to fetch anything, but we would be if the download window was one larger.
                     if (nodeStaller) *nodeStaller = waitingfor;
                 }

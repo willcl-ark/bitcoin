@@ -290,6 +290,7 @@ BASE_SCRIPTS = [
     'p2p_outbound_eviction.py',
     'p2p_ibd_stalling.py --v1transport',
     'p2p_ibd_stalling.py --v2transport',
+    'p2p_ibd_lookahead_and_stalling.py',
     'p2p_net_deadlock.py --v1transport',
     'p2p_net_deadlock.py --v2transport',
     'wallet_signmessagewithaddress.py',
