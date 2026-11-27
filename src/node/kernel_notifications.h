@@ -60,6 +60,8 @@ public:
 
     void fatalError(const bilingual_str& message) override;
 
+    int stopAtHeight() const override { return m_stop_at_height; }
+
     void setChainstateLoaded(bool chainstate_loaded) EXCLUSIVE_LOCKS_REQUIRED(!m_tip_block_mutex) {
         LOCK(m_tip_block_mutex);
         if (!chainstate_loaded) m_state = {};

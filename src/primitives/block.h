@@ -11,6 +11,7 @@
 #include <uint256.h>
 #include <util/time.h>
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -73,13 +74,37 @@ public:
 class CBlock : public CBlockHeader
 {
 public:
+    /** Copyable atomic boolean flag for caching expensive checks safely off cs_main. */
+    struct AtomicBoolFlag {
+        std::atomic<bool> value{false};
+
+        AtomicBoolFlag() noexcept = default;
+        constexpr AtomicBoolFlag(bool v) noexcept : value{v} {}
+        AtomicBoolFlag(const AtomicBoolFlag& other) noexcept
+            : value{other.value.load(std::memory_order_acquire)} {}
+        AtomicBoolFlag& operator=(const AtomicBoolFlag& other) noexcept
+        {
+            value.store(other.value.load(std::memory_order_acquire), std::memory_order_release);
+            return *this;
+        }
+        AtomicBoolFlag& operator=(bool v) noexcept
+        {
+            value.store(v, std::memory_order_release);
+            return *this;
+        }
+        operator bool() const noexcept
+        {
+            return value.load(std::memory_order_acquire);
+        }
+    };
+
     // network and disk
     std::vector<CTransactionRef> vtx;
 
     // Memory-only flags for caching expensive checks
-    mutable bool fChecked;                            // CheckBlock()
-    mutable bool m_checked_witness_commitment{false}; // CheckWitnessMalleation()
-    mutable bool m_checked_merkle_root{false};        // CheckMerkleRoot()
+    mutable AtomicBoolFlag fChecked{false};                     // CheckBlock()
+    mutable AtomicBoolFlag m_checked_witness_commitment{false}; // CheckWitnessMalleation()
+    mutable AtomicBoolFlag m_checked_merkle_root{false};        // CheckMerkleRoot()
 
     CBlock()
     {

@@ -41,10 +41,13 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
+#include <shared_mutex>
 #include <span>
 #include <string>
 #include <type_traits>
@@ -371,9 +374,10 @@ class ValidationCache
 private:
     //! Pre-initialized hasher to avoid having to recreate it for every hash calculation.
     CSHA256 m_script_execution_cache_hasher;
+    mutable std::shared_mutex m_script_execution_cache_mutex;
+    CuckooCache::cache<uint256, SignatureCacheHasher> m_script_execution_cache;
 
 public:
-    CuckooCache::cache<uint256, SignatureCacheHasher> m_script_execution_cache;
     SignatureCache m_signature_cache;
 
     ValidationCache(size_t script_execution_cache_bytes, size_t signature_cache_bytes);
@@ -383,6 +387,24 @@ public:
 
     //! Return a copy of the pre-initialized hasher.
     CSHA256 ScriptExecutionCacheHasher() const { return m_script_execution_cache_hasher; }
+
+    bool ScriptExecutionCacheContains(const uint256& entry, bool erase)
+    {
+        std::shared_lock lock{m_script_execution_cache_mutex};
+        return m_script_execution_cache.contains(entry, erase);
+    }
+
+    void ScriptExecutionCacheInsert(const uint256& entry)
+    {
+        std::unique_lock lock{m_script_execution_cache_mutex};
+        m_script_execution_cache.insert(entry);
+    }
+
+    void ScriptExecutionCacheTestOnlyReset()
+    {
+        std::unique_lock lock{m_script_execution_cache_mutex};
+        m_script_execution_cache.TestOnlyReset();
+    }
 };
 
 /** Functions for validating blocks and updating the block tree */

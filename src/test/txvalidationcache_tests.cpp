@@ -2,8 +2,11 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <chainparams.h>
+#include <common/args.h>
 #include <consensus/validation.h>
 #include <key.h>
+#include <node/kernel_notifications.h>
 #include <random.h>
 #include <script/sigcache.h>
 #include <script/sign.h>
@@ -12,6 +15,9 @@
 #include <txmempool.h>
 #include <util/chaintype.h>
 #include <validation.h>
+
+#include <thread>
+#include <vector>
 
 #include <boost/test/unit_test.hpp>
 
@@ -383,6 +389,88 @@ BOOST_FIXTURE_TEST_CASE(checkinputs_test, Dersig100Setup)
         // Should get 2 script checks back -- caching is on a whole-transaction basis.
         BOOST_CHECK_EQUAL(scriptchecks.size(), 2U);
     }
+}
+
+BOOST_FIXTURE_TEST_CASE(validation_cache_concurrent_access_and_cblock_flags, BasicTestingSetup)
+{
+    ValidationCache cache{/*script_execution_cache_bytes=*/1 << 20, /*signature_cache_bytes=*/1 << 20};
+    FastRandomContext rng(/*fDeterministic=*/true);
+
+    constexpr size_t NUM_KEYS = 256;
+    std::vector<uint256> keys;
+    keys.reserve(NUM_KEYS);
+    for (size_t i = 0; i < NUM_KEYS; ++i) {
+        keys.push_back(rng.rand256());
+    }
+
+    // Single-threaded insert + contains round-trip.
+    BOOST_CHECK(!cache.ScriptExecutionCacheContains(keys[0], /*erase=*/false));
+    cache.ScriptExecutionCacheInsert(keys[0]);
+    BOOST_CHECK(cache.ScriptExecutionCacheContains(keys[0], /*erase=*/false));
+
+    // Concurrent off-cs_main readers and writers across 8 threads.
+    constexpr size_t NUM_THREADS = 8;
+    std::vector<std::thread> threads;
+    threads.reserve(NUM_THREADS);
+    for (size_t t = 0; t < NUM_THREADS; ++t) {
+        threads.emplace_back([&, t] {
+            for (size_t round = 0; round < 4; ++round) {
+                for (size_t i = t; i < NUM_KEYS; i += NUM_THREADS) {
+                    cache.ScriptExecutionCacheInsert(keys[i]);
+                    (void)cache.ScriptExecutionCacheContains(keys[(i + 1) % NUM_KEYS], /*erase=*/(round == 3));
+                }
+            }
+        });
+    }
+    for (auto& th : threads) th.join();
+
+    // Re-insert all keys and confirm they remain queryable.
+    for (const auto& k : keys) cache.ScriptExecutionCacheInsert(k);
+    size_t hits{0};
+    for (const auto& k : keys) {
+        if (cache.ScriptExecutionCacheContains(k, /*erase=*/false)) ++hits;
+    }
+    BOOST_CHECK_EQUAL(hits, NUM_KEYS);
+
+    // Verify CBlock::AtomicBoolFlag copy/assign semantics and concurrent CheckBlock() calls.
+    const auto params{CreateChainParams(ArgsManager{}, ChainType::REGTEST)};
+    const CBlock genesis{params->GenesisBlock()};
+    CBlock copied{genesis};
+    copied.fChecked = true;
+    copied.m_checked_witness_commitment = true;
+    copied.m_checked_merkle_root = true;
+    CBlock copy2{copied};
+    BOOST_CHECK(copy2.fChecked);
+    BOOST_CHECK(copy2.m_checked_witness_commitment);
+    BOOST_CHECK(copy2.m_checked_merkle_root);
+    copy2.SetNull();
+    BOOST_CHECK(!copy2.fChecked);
+    BOOST_CHECK(!copy2.m_checked_witness_commitment);
+    BOOST_CHECK(!copy2.m_checked_merkle_root);
+
+    CBlock shared_block{genesis};
+    std::atomic<size_t> valid_checks{0};
+    threads.clear();
+    for (size_t t = 0; t < NUM_THREADS; ++t) {
+        threads.emplace_back([&] {
+            BlockValidationState state;
+            if (CheckBlock(shared_block, state, params->GetConsensus(), /*fCheckPOW=*/true, /*fCheckMerkleRoot=*/true)) {
+                valid_checks.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+    }
+    for (auto& th : threads) th.join();
+    BOOST_CHECK_EQUAL(valid_checks.load(), NUM_THREADS);
+    BOOST_CHECK(shared_block.fChecked);
+    BOOST_CHECK(shared_block.m_checked_merkle_root);
+
+    // Verify kernel::Notifications::stopAtHeight() default and configured value.
+    kernel::Notifications base_notif;
+    BOOST_CHECK_EQUAL(base_notif.stopAtHeight(), 0);
+    node::KernelNotifications kn{Assert(m_node.shutdown_request), m_node.exit_status, *Assert(m_node.warnings)};
+    BOOST_CHECK_EQUAL(kn.stopAtHeight(), 0);
+    kn.m_stop_at_height = 420;
+    BOOST_CHECK_EQUAL(kn.stopAtHeight(), 420);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

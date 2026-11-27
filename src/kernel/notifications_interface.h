@@ -59,6 +59,9 @@ public:
     //! the user, or triggering an early shutdown as a precaution against
     //! causing more errors.
     virtual void fatalError(const bilingual_str& message) {}
+
+    //! Return configured stop-at-height limit (>0 if enabled, 0 if disabled).
+    virtual int stopAtHeight() const { return 0; }
 };
 } // namespace kernel
 
