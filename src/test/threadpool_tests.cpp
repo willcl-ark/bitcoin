@@ -492,4 +492,162 @@ BOOST_AUTO_TEST_CASE(submit_range_of_tasks_complete_successfully)
     BOOST_CHECK_EQUAL(threadPool.WorkQueueSize(), 0);
 }
 
+// Test 15, SubmitPriority (single and range) preempts normal queued tasks and preserves range order
+BOOST_AUTO_TEST_CASE(submit_priority_preempts_normal_queue)
+{
+    ThreadPool threadPool{POOL_NAME};
+    const auto noop = [] {};
+
+    // Inactive pool rejects both single and range SubmitPriority.
+    {
+        auto single_res = threadPool.SubmitPriority(noop);
+        BOOST_CHECK(!single_res);
+        BOOST_CHECK_EQUAL(SubmitErrorString(single_res.error()), "No active workers");
+
+        std::vector<std::function<void()>> empty_tasks;
+        auto range_res = threadPool.SubmitPriority(std::move(empty_tasks));
+        BOOST_CHECK(!range_res);
+        BOOST_CHECK_EQUAL(SubmitErrorString(range_res.error()), "No active workers");
+    }
+
+    // Use a single worker so execution order is strictly deterministic.
+    threadPool.Start(1);
+    std::counting_semaphore<> blocker{0};
+    auto blocking_tasks = BlockWorkers(threadPool, blocker, 1);
+
+    std::vector<int> order;
+    std::vector<std::future<void>> normal_futures;
+    for (int i = 1; i <= 4; ++i) {
+        normal_futures.push_back(Submit(threadPool, [&order, i] { order.push_back(i); }));
+    }
+
+    // Submit a priority range [10, 11, 12], then a single priority task 20 on top.
+    std::vector<std::function<void()>> prio_range;
+    for (int i = 10; i <= 12; ++i) {
+        prio_range.emplace_back([&order, i] { order.push_back(i); });
+    }
+    auto prio_range_futures = std::move(*Assert(threadPool.SubmitPriority(std::move(prio_range))));
+    auto prio_single_future = std::move(*Assert(threadPool.SubmitPriority([&order] { order.push_back(20); })));
+
+    blocker.release(1);
+    WAIT_FOR(blocking_tasks);
+    WAIT_FOR(prio_range_futures);
+    BOOST_REQUIRE(prio_single_future.wait_for(TEST_WAIT_TIMEOUT) == std::future_status::ready);
+    WAIT_FOR(normal_futures);
+
+    const std::vector<int> expected{20, 10, 11, 12, 1, 2, 3, 4};
+    BOOST_CHECK_EQUAL_COLLECTIONS(order.begin(), order.end(), expected.begin(), expected.end());
+
+    // Interrupted pool rejects SubmitPriority with Interrupted.
+    std::counting_semaphore<> blocker2{0};
+    auto blocking_tasks2 = BlockWorkers(threadPool, blocker2, 1);
+    threadPool.Interrupt();
+    {
+        auto res = threadPool.SubmitPriority(noop);
+        BOOST_CHECK(!res);
+        BOOST_CHECK_EQUAL(SubmitErrorString(res.error()), "Interrupted");
+
+        std::vector<std::function<void()>> range_tasks;
+        range_tasks.emplace_back(noop);
+        auto range_res = threadPool.SubmitPriority(std::move(range_tasks));
+        BOOST_CHECK(!range_res);
+        BOOST_CHECK_EQUAL(SubmitErrorString(range_res.error()), "Interrupted");
+    }
+    blocker2.release(1);
+    WAIT_FOR(blocking_tasks2);
+    threadPool.Stop();
+}
+
+// Test 16, Resize grows, shrinks, no-ops on same size, and stops at 0
+BOOST_AUTO_TEST_CASE(resize_pool_grow_shrink_and_stop)
+{
+    ThreadPool threadPool{POOL_NAME};
+    BOOST_CHECK_EQUAL(threadPool.WorkersCount(), 0U);
+
+    threadPool.Resize(3);
+    BOOST_CHECK_EQUAL(threadPool.WorkersCount(), 3U);
+
+    // No-op when worker count matches.
+    threadPool.Resize(3);
+    BOOST_CHECK_EQUAL(threadPool.WorkersCount(), 3U);
+
+    auto run_batch = [&](int count) {
+        std::atomic<int> done{0};
+        std::vector<std::future<void>> futs;
+        futs.reserve(count);
+        for (int i = 0; i < count; ++i) {
+            futs.push_back(Submit(threadPool, [&done] { done.fetch_add(1, std::memory_order_relaxed); }));
+        }
+        WAIT_FOR(futs);
+        BOOST_CHECK_EQUAL(done.load(), count);
+    };
+
+    run_batch(12);
+
+    // Shrink and verify pool still runs cleanly.
+    threadPool.Resize(1);
+    BOOST_CHECK_EQUAL(threadPool.WorkersCount(), 1U);
+    run_batch(6);
+
+    // Resize to 0 stops all workers and rejects submissions.
+    threadPool.Resize(0);
+    BOOST_CHECK_EQUAL(threadPool.WorkersCount(), 0U);
+    auto inactive_res = threadPool.Submit([] {});
+    BOOST_CHECK(!inactive_res);
+    BOOST_CHECK_EQUAL(SubmitErrorString(inactive_res.error()), "No active workers");
+
+    // Growing back from 0 restarts cleanly.
+    threadPool.Resize(2);
+    BOOST_CHECK_EQUAL(threadPool.WorkersCount(), 2U);
+    run_batch(8);
+    threadPool.Stop();
+}
+
+// Test 17, task captures are destroyed on the worker thread outside ThreadPool::m_mutex
+BOOST_AUTO_TEST_CASE(task_destructor_runs_off_pool_mutex)
+{
+    ThreadPool threadPool{POOL_NAME};
+    threadPool.Start(1);
+
+    const std::thread::id main_tid = std::this_thread::get_id();
+    std::counting_semaphore<> release_task{0};
+    std::latch task_started{1};
+    std::atomic<bool> destroyed{false};
+    std::atomic<bool> destroyed_on_worker{false};
+
+    struct LockProbingCapture {
+        ThreadPool* pool;
+        std::thread::id main_tid;
+        std::atomic<bool>* flag;
+        std::atomic<bool>* on_worker;
+        ~LockProbingCapture()
+        {
+            if (pool) {
+                // WorkQueueSize() acquires m_mutex; if task teardown ran while holding
+                // m_mutex this would self-deadlock on the non-recursive Mutex.
+                (void)pool->WorkQueueSize();
+                on_worker->store(std::this_thread::get_id() != main_tid, std::memory_order_release);
+                flag->store(true, std::memory_order_release);
+            }
+        }
+    };
+
+    {
+        auto capture = std::make_shared<LockProbingCapture>(&threadPool, main_tid, &destroyed, &destroyed_on_worker);
+        auto fut = Submit(threadPool, [c = std::move(capture), &task_started, &release_task] {
+            task_started.count_down();
+            release_task.acquire();
+        });
+        task_started.wait();
+        // Drop the future while the worker is still running the task so the worker's
+        // `task = {};` owns the last reference to the shared state and runs ~LockProbingCapture.
+        (void)fut;
+    }
+
+    release_task.release();
+    threadPool.Stop();
+    BOOST_CHECK(destroyed.load(std::memory_order_acquire));
+    BOOST_CHECK(destroyed_on_worker.load(std::memory_order_acquire));
+}
+
 BOOST_AUTO_TEST_SUITE_END()
