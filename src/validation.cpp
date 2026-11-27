@@ -2954,6 +2954,10 @@ bool Chainstate::FlushStateToDisk(
 
         CoinsCacheSizeState cache_state = GetCoinsCacheSizeState();
         if (m_blockman.IsPruneMode() && (m_blockman.m_check_for_pruning || nManualPruneHeight > 0) && m_chainman.m_blockman.m_blockfiles_indexed) {
+            if (m_blockman.HasPendingUndoWrites() && !m_blockman.SettlePendingUndoWrites()) {
+                m_chainman.GetNotifications().flushError(_("Flushing undo file to disk failed. This is likely the result of an I/O error."));
+                return state.Error("Failed to flush block or undo file");
+            }
             // make sure we don't prune above any of the prune locks bestblocks
             // pruning is height-based
             int last_prune{m_chain.Height()}; // last height we can prune
@@ -3009,33 +3013,46 @@ bool Chainstate::FlushStateToDisk(
             LogDebug(BCLog::COINDB, "Writing chainstate to disk: flush mode=%s, prune=%d, large=%d, critical=%d, periodic=%d",
                      FlushStateModeNames[size_t(mode)], fFlushForPrune, fCacheLarge, fCacheCritical, fPeriodicWrite);
 
+            if (m_blockman.HasStorageIOError()) {
+                m_chainman.GetNotifications().flushError(_("Flushing block or undo file to disk failed. This is likely the result of an I/O error."));
+                return state.Error("Storage I/O error previously occurred; refusing to flush chainstate");
+            }
+
             // Ensure we can write block index
             if (!CheckDiskSpace(m_blockman.m_opts.blocks_dir)) {
                 return FatalError(m_chainman.GetNotifications(), state, _("Disk space is too low!"));
             }
+
+            // Strict 5-step durability order:
+            // 1. Settle all pending undo writes, close any open rev*.dat handle, and apply undo metadata under cs_main.
+            // 2. Close any open blk*.dat write handle and fsync every modified block and undo file tracked as unsynced.
             {
                 LOG_TIME_MILLIS_WITH_CATEGORY("write block and undo data to disk", BCLog::BENCH);
 
-                // First make sure all block and undo data is flushed to disk.
-                if (!m_blockman.FlushChainstateBlockFile(m_chain.Height())) {
-                    // FlushChainstateBlockFile() already reported the specific error through flushError()
+                if (!m_blockman.SettlePendingUndoWrites()) {
+                    m_chainman.GetNotifications().flushError(_("Flushing undo file to disk failed. This is likely the result of an I/O error."));
+                    return state.Error("Failed to flush block or undo file");
+                }
+                if (!m_blockman.FlushUnsyncedFiles(m_chain.Height())) {
+                    // FlushUnsyncedFiles() already reported the specific error through flushError()
                     return state.Error("Failed to flush block or undo file");
                 }
             }
 
-            // Then update all block file information (which may refer to block and undo files).
+            // 3. Persist block index and file metadata to the block index database synchronously.
             {
                 LOG_TIME_MILLIS_WITH_CATEGORY("write block index to disk", BCLog::BENCH);
 
                 m_blockman.WriteBlockIndexDB();
             }
-            // Finally remove any pruned files
+            // 4. Unlink pruned files only after step 3 records the prune.
             if (fFlushForPrune) {
                 LOG_TIME_MILLIS_WITH_CATEGORY("unlink pruned files", BCLog::BENCH);
 
                 m_blockman.UnlinkPrunedFiles(setFilesToPrune);
             }
 
+            // 5. Flush or sync the UTXO cache to LevelDB.
             if (!CoinsTip().GetBestBlock().IsNull()) {
                 // Typical Coin structures on disk are around 48 bytes in size.
                 // Pushing a new one to the database can cause it to be written
@@ -4657,39 +4674,191 @@ bool ChainstateManager::AcceptBlock(const std::shared_ptr<const CBlock>& pblock,
     return true;
 }
 
-bool ChainstateManager::ProcessNewBlock(const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked, bool* new_block)
+bool ChainstateManager::StoreNewBlock(
+    const std::shared_ptr<const CBlock>& pblock,
+    bool force_processing,
+    bool min_pow_checked,
+    BlockValidationState& state,
+    CBlockIndex** ppindex,
+    bool* new_block)
 {
     AssertLockNotHeld(cs_main);
+    if (new_block) *new_block = false;
+    const CBlock& block = *pblock;
 
-    {
-        CBlockIndex *pindex = nullptr;
-        if (new_block) *new_block = false;
-        BlockValidationState state;
-
-        // CheckBlock() does not support multi-threaded block validation because CBlock::fChecked can cause data race.
-        // Therefore, the following critical section must include the CheckBlock() call as well.
-        LOCK(cs_main);
-
-        // Skipping AcceptBlock() for CheckBlock() failures means that we will never mark a block as invalid if
-        // CheckBlock() fails.  This is protective against consensus failure if there are any unknown forms of block
-        // malleability that cause CheckBlock() to fail; see e.g. CVE-2012-2459 and
-        // https://lists.linuxfoundation.org/pipermail/bitcoin-dev/2019-February/016697.html.  Because CheckBlock() is
-        // not very expensive, the anti-DoS benefits of caching failure (of a definitely-invalid block) are not substantial.
-        bool ret = CheckBlock(*block, state, GetConsensus());
-        if (ret) {
-            // Store to disk
-            ret = AcceptBlock(block, state, &pindex, force_processing, nullptr, new_block, min_pow_checked);
+    // 1. Run context-independent checks off cs_main (CBlock check flags are atomic).
+    // Skipping AcceptBlockHeader on CheckBlock failure preserves CVE-2012-2459 protection.
+    if (!CheckBlock(block, state, GetConsensus())) {
+        if (m_options.signals) {
+            m_options.signals->BlockChecked(pblock, state);
         }
-        if (!ret) {
+        LogError("%s: AcceptBlock FAILED (%s)\n", __func__, state.ToString());
+        return false;
+    }
+
+    CBlockIndex* pindex = nullptr;
+    const CBlockIndex* pindexPrev = nullptr;
+    int block_height = 0;
+
+    // 2. Accept header and apply anti-DoS filters under brief cs_main lock.
+    {
+        LOCK(cs_main);
+        bool accepted_header{AcceptBlockHeader(block, state, &pindex, min_pow_checked)};
+        CheckBlockIndex();
+        if (!accepted_header) {
             if (m_options.signals) {
-                m_options.signals->BlockChecked(block, state);
+                m_options.signals->BlockChecked(pblock, state);
             }
             LogError("%s: AcceptBlock FAILED (%s)\n", __func__, state.ToString());
             return false;
         }
+        if (ppindex) *ppindex = pindex;
+
+        const bool fAlreadyHave = (pindex->nStatus & BLOCK_HAVE_DATA) != 0;
+        const bool fHasMoreOrSameWork = (ActiveTip() ? pindex->nChainWork >= ActiveTip()->nChainWork : true);
+        const bool fTooFarAhead{pindex->nHeight > ActiveHeight() + int(MIN_BLOCKS_TO_KEEP)};
+
+        if (fAlreadyHave || (!force_processing && (pindex->nTx != 0 || !fHasMoreOrSameWork || fTooFarAhead || pindex->nChainWork < MinimumChainWork()))) {
+            // Nothing to store; notify header tip off cs_main below.
+            pindex = nullptr;
+        } else {
+            pindexPrev = pindex->pprev;
+            block_height = pindex->nHeight;
+        }
+    }
+    if (!pindex) {
+        NotifyHeaderTip();
+        return true;
+    }
+
+    // 3. Run contextual checks (thread-safe VersionBitsCache + immutable header ancestry) off cs_main.
+    if (!ContextualCheckBlock(block, state, *this, pindexPrev)) {
+        {
+            LOCK(cs_main);
+            if (Assume(state.IsInvalid())) {
+                ActiveChainstate().InvalidBlockFound(pindex, state);
+            }
+        }
+        if (m_options.signals) {
+            m_options.signals->BlockChecked(pblock, state);
+        }
+        LogError("%s: AcceptBlock FAILED (%s)\n", __func__, state.ToString());
+        return false;
+    }
+
+    // 4. Serialize block once off cs_main (with 8-byte disk storage header).
+    std::vector<unsigned char> raw_block;
+    try {
+        raw_block = m_blockman.SerializeBlockForDisk(block);
+    } catch (const std::runtime_error& e) {
+        FatalError(GetNotifications(), state, strprintf(_("System error while serializing block: %s"), e.what()));
+        if (m_options.signals) {
+            m_options.signals->BlockChecked(pblock, state);
+        }
+        LogError("%s: AcceptBlock FAILED (%s)\n", __func__, state.ToString());
+        return false;
+    }
+
+    // 5. Reserve blk*.dat position under brief cs_main lock.
+    node::BlockManager::BlockWriteReservation write_reservation;
+    bool keep_blk_handle = false;
+    bool already_have = false;
+    {
+        LOCK(cs_main);
+        if (pindex->nStatus & BLOCK_HAVE_DATA) {
+            already_have = true;
+        } else if (pindex->nStatus & BLOCK_FAILED_VALID) {
+            state.Invalid(BlockValidationResult::BLOCK_CACHED_INVALID, "duplicate-invalid",
+                          strprintf("block %s was previously marked invalid", block.GetHash().ToString()));
+            if (m_options.signals) {
+                m_options.signals->BlockChecked(pblock, state);
+            }
+            LogError("%s: AcceptBlock FAILED (%s)\n", __func__, state.ToString());
+            return false;
+        } else {
+            try {
+                write_reservation = m_blockman.ReserveBlockPos(raw_block.size(), block_height, block.GetBlockTime());
+            } catch (const std::runtime_error& e) {
+                FatalError(GetNotifications(), state, strprintf(_("System error while saving block to disk: %s"), e.what()));
+                if (m_options.signals) {
+                    m_options.signals->BlockChecked(pblock, state);
+                }
+                LogError("%s: AcceptBlock FAILED (%s)\n", __func__, state.ToString());
+                return false;
+            }
+            if (write_reservation.pos.IsNull()) {
+                state.Error(strprintf("%s: Failed to find position to write new block to disk", __func__));
+                if (m_options.signals) {
+                    m_options.signals->BlockChecked(pblock, state);
+                }
+                LogError("%s: AcceptBlock FAILED (%s)\n", __func__, state.ToString());
+                return false;
+            }
+            keep_blk_handle = IsInitialBlockDownload();
+        }
+    }
+    if (already_have) {
+        NotifyHeaderTip();
+        return true;
+    }
+
+    // 6. Write pre-serialized block bytes to blk*.dat off cs_main using persistent write handle.
+    const FlatFilePos data_pos{write_reservation.pos.nFile, write_reservation.pos.nPos + node::STORAGE_HEADER_BYTES};
+    const bool write_ok = m_blockman.WriteRawBlockToDisk(write_reservation.pos, raw_block, keep_blk_handle);
+    write_reservation.Release();
+    if (!write_ok) {
+        FatalError(GetNotifications(), state, _("Failed to write block."));
+        if (m_options.signals) {
+            m_options.signals->BlockChecked(pblock, state);
+        }
+        LogError("%s: AcceptBlock FAILED (%s)\n", __func__, state.ToString());
+        return false;
+    }
+
+    // 7. Record block position, relay at tip, and trigger pruning check under brief cs_main lock.
+    bool failed_concurrently = false;
+    {
+        LOCK(cs_main);
+        if (pindex->nStatus & BLOCK_FAILED_VALID) {
+            failed_concurrently = true;
+        } else if (!(pindex->nStatus & BLOCK_HAVE_DATA)) {
+            if (new_block) *new_block = true;
+            ReceivedBlockTransactions(block, pindex, data_pos);
+
+            // Header is valid/has work, merkle tree and segwit merkle tree are good...RELAY NOW.
+            // Relay only after ReceivedBlockTransactions so peers replying immediately with
+            // GETDATA/GETBLOCKTXN always observe BLOCK_HAVE_DATA and HaveNumChainTxs() under cs_main.
+            if (!IsInitialBlockDownload() && ActiveTip() == pindex->pprev && m_options.signals) {
+                m_options.signals->NewPoWValidBlock(pindex, pblock);
+            }
+
+            BlockValidationState flush_state_ignore;
+            (void)ActiveChainstate().FlushStateToDisk(flush_state_ignore, FlushStateMode::NONE);
+            CheckBlockIndex();
+        }
+    }
+    if (failed_concurrently) {
+        state.Invalid(BlockValidationResult::BLOCK_CACHED_INVALID, "duplicate-invalid",
+                      strprintf("block %s was previously marked invalid", block.GetHash().ToString()));
+        if (m_options.signals) {
+            m_options.signals->BlockChecked(pblock, state);
+        }
+        LogError("%s: AcceptBlock FAILED (%s)\n", __func__, state.ToString());
+        return false;
     }
 
     NotifyHeaderTip();
+    return true;
+}
+
+bool ChainstateManager::ProcessNewBlock(const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked, bool* new_block)
+{
+    AssertLockNotHeld(cs_main);
+
+    BlockValidationState store_state;
+    if (!StoreNewBlock(block, force_processing, min_pow_checked, store_state, /*ppindex=*/nullptr, new_block)) {
+        return false;
+    }
 
     BlockValidationState state; // Only used to report errors, not invalidity - ignore it
     if (!ActiveChainstate().ActivateBestChain(state, block)) {
@@ -4702,7 +4871,7 @@ bool ChainstateManager::ProcessNewBlock(const std::shared_ptr<const CBlock>& blo
     if (bg_chain && !bg_chain->ActivateBestChain(bg_state, block)) {
         LogError("%s: [background] ActivateBestChain failed (%s)\n", __func__, bg_state.ToString());
         return false;
-     }
+    }
 
     return true;
 }

@@ -217,12 +217,6 @@ private:
     bool LoadBlockIndex(const std::optional<uint256>& snapshot_blockhash)
         EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
-    /** Return false if block file or undo file flushing fails. */
-    [[nodiscard]] bool FlushBlockFile(int blockfile_num, bool fFinalize, bool finalize_undo) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
-
-    /** Return false if undo file flushing fails. */
-    [[nodiscard]] bool FlushUndoFile(int block_file, bool finalize = false);
-
     /**
      * Helper function performing various preparations before a block can be saved to disk:
      * Returns the correct position for the block to be saved, which may be in the current or a new
@@ -234,7 +228,6 @@ private:
      */
     [[nodiscard]] FlatFilePos FindNextBlockPos(uint64_t nAddSize, unsigned int nHeight, uint64_t nTime, bool update_block_stats = true)
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main, !m_blk_handle_mutex, !m_undo_queue_mutex);
-    [[nodiscard]] bool FlushChainstateBlockFile(int tip_height) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
     [[nodiscard]] bool FlushUnsyncedFiles(int tip_height)
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main, !m_blk_handle_mutex);
     [[nodiscard]] bool FindUndoPos(BlockValidationState& state, int nFile, FlatFilePos& pos, uint64_t nAddSize)

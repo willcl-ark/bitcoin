@@ -9,6 +9,7 @@
 #include <consensus/params.h>
 #include <consensus/validation.h>
 #include <node/block_template_manager.h>
+#include <node/kernel_notifications.h>
 #include <node/blockstorage.h>
 #include <node/miner.h>
 #include <pow.h>
@@ -761,5 +762,90 @@ BOOST_FIXTURE_TEST_CASE(validate_block_with_flat_inputs_standalone, BasicTesting
             BOOST_CHECK(ShouldEnforceBIP30(at_1983702, limit_params));
         }
     }
+}
+
+BOOST_FIXTURE_TEST_CASE(store_new_block_idempotent_failed_valid_and_io_latch, TestChain100Setup)
+{
+    auto& chainman{*Assert(m_node.chainman)};
+    auto& chainstate{chainman.ActiveChainstate()};
+    const Consensus::Params& consensus{chainman.GetConsensus()};
+    m_node.notifications->m_shutdown_on_fatal_error = false;
+
+    const CBlockIndex* tip{WITH_LOCK(::cs_main, return chainstate.m_chain.Tip())};
+    const auto make_next_block = [&](const CBlockIndex* parent, uint32_t time_delta) {
+        CBlock blk;
+        blk.nVersion = 0x20000000;
+        blk.hashPrevBlock = parent->GetBlockHash();
+        blk.nTime = parent->GetBlockTime() + time_delta;
+        blk.nBits = GetNextWorkRequired(parent, &blk, consensus);
+        blk.nNonce = 0;
+
+        CMutableTransaction cb;
+        cb.vin.resize(1);
+        cb.vin[0].scriptSig = CScript() << (parent->nHeight + 1) << OP_0;
+        cb.vout.emplace_back(GetBlockSubsidy(parent->nHeight + 1, consensus), CScript() << OP_TRUE);
+        blk.vtx = {MakeTransactionRef(std::move(cb))};
+        chainman.GenerateCoinbaseCommitment(blk, parent);
+        blk.hashMerkleRoot = BlockMerkleRoot(blk);
+        while (!CheckProofOfWork(blk.GetHash(), blk.nBits, consensus)) {
+            ++blk.nNonce;
+        }
+        return std::make_shared<const CBlock>(std::move(blk));
+    };
+
+    // 1. StoreNewBlock writes block data off cs_main without advancing active tip, and is idempotent.
+    const auto blk1{make_next_block(tip, 1)};
+    {
+        BlockValidationState state;
+        CBlockIndex* pindex{nullptr};
+        bool new_block{false};
+        BOOST_REQUIRE(chainman.StoreNewBlock(blk1, /*force_processing=*/true, /*min_pow_checked=*/true, state, &pindex, &new_block));
+        BOOST_REQUIRE(pindex != nullptr);
+        BOOST_CHECK(new_block);
+        LOCK(::cs_main);
+        BOOST_CHECK((pindex->nStatus & BLOCK_HAVE_DATA) != 0);
+        BOOST_CHECK_EQUAL(chainstate.m_chain.Tip(), tip);
+    }
+    {
+        BlockValidationState state;
+        CBlockIndex* pindex{nullptr};
+        bool new_block{true};
+        BOOST_REQUIRE(chainman.StoreNewBlock(blk1, /*force_processing=*/true, /*min_pow_checked=*/true, state, &pindex, &new_block));
+        BOOST_CHECK(!new_block);
+    }
+
+    // 2. A block whose header is already marked BLOCK_FAILED_VALID is rejected without setting BLOCK_HAVE_DATA.
+    const auto blk2{make_next_block(tip, 2)};
+    CBlockIndex* failed_idx{nullptr};
+    {
+        BlockValidationState hdr_state;
+        const std::array<CBlockHeader, 1> hdrs{*blk2};
+        BOOST_REQUIRE(chainman.ProcessNewBlockHeaders(hdrs, /*min_pow_checked=*/true, hdr_state));
+        LOCK(::cs_main);
+        failed_idx = chainman.m_blockman.LookupBlockIndex(blk2->GetHash());
+        BOOST_REQUIRE(failed_idx != nullptr);
+        failed_idx->nStatus |= BLOCK_FAILED_VALID;
+    }
+    {
+        BlockValidationState state;
+        CBlockIndex* pindex{nullptr};
+        bool new_block{true};
+        BOOST_CHECK(!chainman.StoreNewBlock(blk2, /*force_processing=*/true, /*min_pow_checked=*/true, state, &pindex, &new_block));
+        BOOST_CHECK_EQUAL(state.GetResult(), BlockValidationResult::BLOCK_CACHED_INVALID);
+        BOOST_CHECK_EQUAL(state.GetRejectReason(), "duplicate-invalid");
+        LOCK(::cs_main);
+        BOOST_CHECK((failed_idx->nStatus & BLOCK_HAVE_DATA) == 0);
+    }
+
+    // 3. Once storage I/O error is latched, FlushStateToDisk refuses to flush and fires fatal flushError.
+    chainman.m_blockman.LatchStorageIOError();
+    m_node.exit_status.store(EXIT_SUCCESS);
+    {
+        LOCK(::cs_main);
+        BlockValidationState flush_state;
+        BOOST_CHECK(!chainstate.FlushStateToDisk(flush_state, FlushStateMode::FORCE_FLUSH));
+        BOOST_CHECK_EQUAL(m_node.exit_status.load(), EXIT_FAILURE);
+    }
+    m_node.exit_status.store(EXIT_SUCCESS);
 }
 BOOST_AUTO_TEST_SUITE_END()

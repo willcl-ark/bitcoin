@@ -778,57 +778,12 @@ bool BlockManager::ReadBlockUndo(CBlockUndo& blockundo, const CBlockIndex& index
     return true;
 }
 
-bool BlockManager::FlushUndoFile(int block_file, bool finalize)
-{
-    FlatFilePos undo_pos_old(block_file, m_blockfile_info[block_file].nUndoSize);
-    if (!m_undo_file_seq.Flush(undo_pos_old, finalize)) {
-        m_opts.notifications.flushError(_("Flushing undo file to disk failed. This is likely the result of an I/O error."));
-        return false;
-    }
-    return true;
-}
-
-bool BlockManager::FlushBlockFile(int blockfile_num, bool fFinalize, bool finalize_undo)
-{
-    AssertLockHeld(::cs_main);
-    bool success = true;
-
-    if (m_blockfile_info.size() < 1) {
-        // Return if we haven't loaded any blockfiles yet. This happens during
-        // chainstate init, when we call ChainstateManager::MaybeRebalanceCaches() (which
-        // then calls FlushStateToDisk()), resulting in a call to this function before we
-        // have populated `m_blockfile_info` via LoadBlockIndexDB().
-        return true;
-    }
-    assert(static_cast<int>(m_blockfile_info.size()) > blockfile_num);
-
-    FlatFilePos block_pos_old(blockfile_num, m_blockfile_info[blockfile_num].nSize);
-    if (!m_block_file_seq.Flush(block_pos_old, fFinalize)) {
-        m_opts.notifications.flushError(_("Flushing block file to disk failed. This is likely the result of an I/O error."));
-        success = false;
-    }
-    // we do not always flush the undo file, as the chain tip may be lagging behind the incoming blocks,
-    // e.g. during IBD or a sync after a node going offline
-    if (!fFinalize || finalize_undo) {
-        if (!FlushUndoFile(blockfile_num, finalize_undo)) {
-            success = false;
-        }
-    }
-    return success;
-}
-
 BlockfileType BlockManager::BlockfileTypeForHeight(int height)
 {
     if (!m_snapshot_height) {
         return BlockfileType::NORMAL;
     }
     return (height >= *m_snapshot_height) ? BlockfileType::ASSUMED : BlockfileType::NORMAL;
-}
-
-bool BlockManager::FlushChainstateBlockFile(int tip_height)
-{
-    AssertLockHeld(::cs_main);
-    return FlushUnsyncedFiles(tip_height);
 }
 
 bool BlockManager::FlushUnsyncedFiles(int tip_height)

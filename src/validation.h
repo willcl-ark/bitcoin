@@ -1316,6 +1316,18 @@ public:
     bool ProcessNewBlock(const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked, bool* new_block) LOCKS_EXCLUDED(cs_main);
 
     /**
+     * Validate and store an incoming block to blk*.dat with stateless/contextual checks,
+     * serialization, and disk writes executed off cs_main. Does not run ActivateBestChain.
+     */
+    bool StoreNewBlock(
+        const std::shared_ptr<const CBlock>& pblock,
+        bool force_processing,
+        bool min_pow_checked,
+        BlockValidationState& state,
+        CBlockIndex** ppindex = nullptr,
+        bool* new_block = nullptr) LOCKS_EXCLUDED(cs_main);
+
+    /**
      * Process incoming block headers.
      *
      * May not be called in a
