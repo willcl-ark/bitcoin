@@ -42,7 +42,9 @@
 #include <shared_mutex>
 #include <span>
 #include <string>
+#include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -187,6 +189,11 @@ enum class ReadRawError {
     BadPartRange,
 };
 
+/** Pre-serialized undo record: [4B magic][4B payload_size][CBlockUndo][32B checksum]. */
+struct SerializedBlockUndo {
+    std::vector<unsigned char> data;
+};
+
 /**
  * Maintains a tree of blocks (stored in `m_block_index`) which is consulted
  * to determine where the most-work tip is.
@@ -225,10 +232,13 @@ private:
      * The nAddSize argument passed to this function should include not just the size of the serialized CBlock, but also the size of
      * separator fields (STORAGE_HEADER_BYTES).
      */
-    [[nodiscard]] FlatFilePos FindNextBlockPos(uint64_t nAddSize, unsigned int nHeight, uint64_t nTime) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    [[nodiscard]] FlatFilePos FindNextBlockPos(uint64_t nAddSize, unsigned int nHeight, uint64_t nTime, bool update_block_stats = true)
+        EXCLUSIVE_LOCKS_REQUIRED(::cs_main, !m_blk_handle_mutex, !m_undo_queue_mutex);
     [[nodiscard]] bool FlushChainstateBlockFile(int tip_height) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
-    [[nodiscard]] bool FlushUnsyncedFiles(int tip_height) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
-    [[nodiscard]] bool FindUndoPos(BlockValidationState& state, int nFile, FlatFilePos& pos, uint64_t nAddSize) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    [[nodiscard]] bool FlushUnsyncedFiles(int tip_height)
+        EXCLUSIVE_LOCKS_REQUIRED(::cs_main, !m_blk_handle_mutex);
+    [[nodiscard]] bool FindUndoPos(BlockValidationState& state, int nFile, FlatFilePos& pos, uint64_t nAddSize)
+        EXCLUSIVE_LOCKS_REQUIRED(::cs_main, !m_undo_queue_mutex);
 
     AutoFile OpenUndoFile(const FlatFilePos& pos, bool fReadOnly = false) const;
 
@@ -241,13 +251,22 @@ private:
     mutable uint64_t m_blk_handle_pos GUARDED_BY(m_blk_handle_mutex){0};
     mutable size_t m_inflight_blk_writes GUARDED_BY(m_blk_handle_mutex){0};
 
-    void FinishInflightBlockWrite() const noexcept;
+    void FinishInflightBlockWrite() const noexcept EXCLUSIVE_LOCKS_REQUIRED(!m_blk_handle_mutex);
+
+    /** Serializes concurrent off-cs_main disk stores of the same CBlockIndex to avoid duplicate writes.
+     *  Leaf mutex: never acquires cs_main or any other BlockManager mutex while held. */
+    mutable Mutex m_inflight_store_mutex;
+    mutable std::condition_variable m_inflight_store_cv;
+    mutable std::unordered_set<const CBlockIndex*> m_inflight_store_blocks GUARDED_BY(m_inflight_store_mutex);
+
+    void ReleaseInflightBlockStore(const CBlockIndex* pindex) const noexcept EXCLUSIVE_LOCKS_REQUIRED(!m_inflight_store_mutex);
 
     /** Platform-agnostic concurrent read handle cache for parallel blk*.dat reads during IBD.
      *  Never acquires cs_main; starts empty with zero open descriptors or threads. */
 #ifndef WIN32
     struct ReadFd {
         int fd{-1};
+        bool drop_cache_on_close{false};
         explicit ReadFd(int f) noexcept : fd{f} {}
         ~ReadFd();
         ReadFd(const ReadFd&) = delete;
@@ -266,7 +285,7 @@ private:
         uint64_t next_seq{0};
 
         std::shared_ptr<ReadFd> GetOrOpen(int file_num, const fs::path& path);
-        void Clear();
+        void Clear(bool drop_cache = false);
     };
     mutable BlockReadFdCache m_read_fd_cache;
 #else
@@ -280,8 +299,70 @@ private:
     std::set<int> m_unsynced_block_files GUARDED_BY(::cs_main);
     mutable std::set<int> m_unsynced_undo_files GUARDED_BY(::cs_main);
 
+    /** Pin block files that have reserved-but-not-yet-published off-cs_main writes so pruning
+     *  never deletes a file before its block is published or aborted. */
+    std::unordered_map<int, size_t> m_unpublished_block_files GUARDED_BY(::cs_main);
+
     /** Permanently latched on any block/undo write or sync I/O failure. */
     mutable std::atomic<bool> m_storage_io_error{false};
+
+    /** Optional fault-injection hook invoked before writing undo data (both inline and async paths). */
+    std::atomic<bool> m_has_undo_fault_hook{false};
+    mutable Mutex m_fault_hook_mutex;
+    std::function<bool(const uint256& block_hash, int height)> m_undo_write_fault_hook GUARDED_BY(m_fault_hook_mutex);
+    bool ShouldInjectUndoWriteFault(const uint256& block_hash, int height) const
+        EXCLUSIVE_LOCKS_REQUIRED(!m_fault_hook_mutex);
+
+    /** Lazy, stoppable background writer for async IBD undo writes, undo trims, and prune unlinks.
+     *  Lock order: cs_main -> m_undo_lifecycle_mutex -> m_undo_queue_mutex.
+     *  The worker thread never acquires cs_main. */
+    struct UndoJob {
+        enum class Type : uint8_t {
+            WRITE_UNDO,
+            TRIM_UNDO,
+            UNLINK_FILES,
+            CLOSE_HANDLE,
+        };
+        Type type{Type::WRITE_UNDO};
+        CBlockIndex* pindex{nullptr};
+        uint256 block_hash;
+        int block_height{0};
+        FlatFilePos pos;
+        SerializedBlockUndo payload;
+        size_t budgeted_bytes{0};
+        FlatFilePos trim_pos;
+        std::set<int> files_to_unlink;
+    };
+
+    struct CompletedUndo {
+        CBlockIndex* pindex{nullptr};
+        int file_num{-1};
+        uint64_t undo_pos{0};
+    };
+
+    mutable Mutex m_undo_lifecycle_mutex;
+    mutable Mutex m_undo_queue_mutex;
+    mutable std::condition_variable m_undo_cv;
+    mutable std::condition_variable m_undo_settled_cv;
+    mutable std::deque<UndoJob> m_undo_queue GUARDED_BY(m_undo_queue_mutex);
+    mutable std::vector<CompletedUndo> m_completed_undos GUARDED_BY(m_undo_queue_mutex);
+    mutable bool m_undo_worker_busy GUARDED_BY(m_undo_queue_mutex){false};
+    mutable bool m_undo_stop GUARDED_BY(m_undo_queue_mutex){false};
+    std::thread m_undo_thread GUARDED_BY(m_undo_lifecycle_mutex);
+    mutable std::atomic<bool> m_undo_thread_running{false};
+    std::atomic<bool> m_undo_stopping{false};
+    mutable std::atomic<size_t> m_pending_undo_work{0};
+    std::atomic<size_t>* m_pending_undo_budget_bytes{nullptr};
+
+    [[nodiscard]] bool EnsureAsyncUndoWriterStarted()
+        EXCLUSIVE_LOCKS_REQUIRED(!m_undo_lifecycle_mutex, !m_undo_queue_mutex);
+    void StopAsyncUndoWriterImpl()
+        EXCLUSIVE_LOCKS_REQUIRED(!m_undo_lifecycle_mutex, !m_undo_queue_mutex, !m_blk_handle_mutex);
+    void AsyncUndoWorkerLoop()
+        EXCLUSIVE_LOCKS_REQUIRED(!m_undo_queue_mutex, !m_fault_hook_mutex);
+    void UnlinkFilesNow(const std::set<int>& setFilesToPrune) const;
+    bool WriteSerializedBlockUndoInline(SerializedBlockUndo& serialized, BlockValidationState& state, CBlockIndex& block)
+        EXCLUSIVE_LOCKS_REQUIRED(::cs_main, !m_undo_queue_mutex, !m_fault_hook_mutex);
 
     /* Calculate the block/rev files to delete based on height specified by user with RPC command pruneblockchain */
     void FindFilesToPruneManual(
@@ -403,6 +484,51 @@ public:
         }
     };
 
+    /** RAII guard serializing concurrent off-cs_main disk writes for the same CBlockIndex. */
+    class InflightBlockStoreGuard {
+        const BlockManager* m_blockman{nullptr};
+        const CBlockIndex* m_pindex{nullptr};
+    public:
+        InflightBlockStoreGuard() = default;
+        InflightBlockStoreGuard(const BlockManager* bm, const CBlockIndex* pindex) noexcept
+            : m_blockman{bm}, m_pindex{pindex} {}
+        InflightBlockStoreGuard(const InflightBlockStoreGuard&) = delete;
+        InflightBlockStoreGuard& operator=(const InflightBlockStoreGuard&) = delete;
+        InflightBlockStoreGuard(InflightBlockStoreGuard&& other) noexcept
+            : m_blockman{std::exchange(other.m_blockman, nullptr)},
+              m_pindex{std::exchange(other.m_pindex, nullptr)} {}
+        InflightBlockStoreGuard& operator=(InflightBlockStoreGuard&& other) noexcept
+        {
+            if (this != &other) {
+                Release();
+                m_blockman = std::exchange(other.m_blockman, nullptr);
+                m_pindex = std::exchange(other.m_pindex, nullptr);
+            }
+            return *this;
+        }
+        ~InflightBlockStoreGuard() { Release(); }
+        void Release() noexcept
+        {
+            if (m_blockman && m_pindex) {
+                m_blockman->ReleaseInflightBlockStore(m_pindex);
+                m_blockman = nullptr;
+                m_pindex = nullptr;
+            }
+        }
+    };
+
+    /** Pre-reserved undo write slot for atomic batch IBD commits. */
+    struct PreparedUndoWrite {
+        CBlockIndex* pindex{nullptr};
+        FlatFilePos pos;
+        std::optional<FlatFilePos> trim_after;
+        BlockfileType file_type{BlockfileType::NORMAL};
+        int prev_cursor_undo_height{0};
+        bool updated_cursor{false};
+        uint64_t prev_undo_size{0};
+        bool needs_write{false};
+    };
+
     explicit BlockManager(const util::SignalInterrupt& interrupt, Options opts);
     ~BlockManager();
 
@@ -452,7 +578,8 @@ public:
      * This could happen on some systems if the file was still being read while unlinked,
      * or if we crash before unlinking.
      */
-    void ScanAndUnlinkAlreadyPrunedFiles() EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    void ScanAndUnlinkAlreadyPrunedFiles()
+        EXCLUSIVE_LOCKS_REQUIRED(::cs_main, !m_blk_handle_mutex, !m_undo_queue_mutex);
 
     CBlockIndex* AddToBlockIndex(const CBlockHeader& block, CBlockIndex*& best_header) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
     /** Create a new block index entry for a given block hash */
@@ -468,24 +595,84 @@ public:
     CBlockFileInfo* GetBlockFileInfo(size_t n) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     bool WriteBlockUndo(const CBlockUndo& blockundo, BlockValidationState& state, CBlockIndex& block)
+        EXCLUSIVE_LOCKS_REQUIRED(::cs_main, !m_undo_queue_mutex, !m_fault_hook_mutex);
+
+    /** Single-pass undo serialization helper shared by inline tip writes and async IBD writes. */
+    SerializedBlockUndo SerializeBlockUndoPayload(const CBlockUndo& blockundo, const uint256& prev_block_hash) const;
+
+    /** Enqueue a pre-serialized undo record for lazy background writing during IBD. */
+    bool EnqueueBlockUndoWrite(SerializedBlockUndo&& serialized, BlockValidationState& state, CBlockIndex& block)
+        EXCLUSIVE_LOCKS_REQUIRED(::cs_main, !m_undo_lifecycle_mutex, !m_undo_queue_mutex);
+
+    /** Pre-reserve undo file positions and ensure async writer is ready for an IBD commit batch. */
+    [[nodiscard]] bool PrepareBatchUndoWrites(
+        std::span<CBlockIndex* const> blocks,
+        std::span<const size_t> serialized_sizes,
+        std::vector<PreparedUndoWrite>& prepared,
+        BlockValidationState& state)
+        EXCLUSIVE_LOCKS_REQUIRED(::cs_main, !m_undo_lifecycle_mutex, !m_undo_queue_mutex);
+
+    /** Roll back pre-reserved undo file positions from `from_index` to the end of `prepared`. */
+    void RollbackPreparedBatchUndoWrites(std::span<const PreparedUndoWrite> prepared, size_t from_index)
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+
+    /** Enqueue a pre-reserved undo write for background persistence during an IBD batch commit. */
+    void EnqueuePreparedUndoWrite(const PreparedUndoWrite& prep, SerializedBlockUndo&& serialized)
+        EXCLUSIVE_LOCKS_REQUIRED(::cs_main, !m_undo_lifecycle_mutex, !m_undo_queue_mutex);
+
+    /** Apply any completed async undo metadata to CBlockIndex entries under cs_main. */
+    void ApplyCompletedUndos() const EXCLUSIVE_LOCKS_REQUIRED(::cs_main, !m_undo_queue_mutex);
+
+    /** Drain all pending async undo writes, close any open rev*.dat handle, and apply metadata.
+     *  Returns false if a storage I/O error is latched. */
+    [[nodiscard]] bool SettlePendingUndoWrites() const EXCLUSIVE_LOCKS_REQUIRED(::cs_main, !m_undo_queue_mutex);
+
+    /** Stop and join the async undo writer thread and close persistent file handles (off cs_main). */
+    void StopAsyncUndoWriter()
+        LOCKS_EXCLUDED(::cs_main)
+        EXCLUSIVE_LOCKS_REQUIRED(!m_undo_lifecycle_mutex, !m_undo_queue_mutex, !m_blk_handle_mutex);
+
+    /** Fast lock-free check whether any async undo jobs or unapplied completions are pending. */
+    bool HasPendingUndoWrites() const noexcept { return m_pending_undo_work.load(std::memory_order_acquire) > 0; }
+
+    /** Return whether the lazy async undo writer thread is currently active. */
+    bool IsAsyncUndoWriterRunning() const noexcept { return m_undo_thread_running.load(std::memory_order_acquire); }
+
+    /** Attach external IBD memory budget counter for pending serialized undo bytes. */
+    void SetPendingUndoBudgetCounter(std::atomic<size_t>* counter) noexcept { m_pending_undo_budget_bytes = counter; }
 
     /** Latch or query permanent storage I/O failure state. */
     void LatchStorageIOError() const noexcept { m_storage_io_error.store(true, std::memory_order_release); }
     bool HasStorageIOError() const noexcept { return m_storage_io_error.load(std::memory_order_acquire); }
+
+    /** Test-only fault-injection hook invoked before writing undo data on both inline and async paths. */
+    void SetUndoWriteFaultHookForTest(std::function<bool(const uint256& block_hash, int height)> hook)
+        EXCLUSIVE_LOCKS_REQUIRED(!m_fault_hook_mutex);
+
+    /** Serialize concurrent off-cs_main disk stores of the same CBlockIndex. */
+    [[nodiscard]] InflightBlockStoreGuard AcquireInflightBlockStore(const CBlockIndex* pindex) const
+        LOCKS_EXCLUDED(::cs_main) EXCLUSIVE_LOCKS_REQUIRED(!m_inflight_store_mutex);
 
     /** Single-pass serialization of a block plus its 8-byte disk storage header (safe off cs_main). */
     std::vector<unsigned char> SerializeBlockForDisk(const CBlock& block) const;
 
     /** Reserve space in blk*.dat under cs_main and track an in-flight off-cs_main write. */
     BlockWriteReservation ReserveBlockPos(uint64_t total_size, unsigned int nHeight, uint64_t nTime)
+        EXCLUSIVE_LOCKS_REQUIRED(::cs_main, !m_blk_handle_mutex, !m_undo_queue_mutex);
+
+    /** Publish a previously reserved block write into CBlockFileInfo and unpin the block file. */
+    void PublishReservedBlockPos(int nFile, unsigned int nHeight, uint64_t nTime)
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
+    /** Release the pruning pin for a previously reserved block write that was aborted before publication. */
+    void AbortReservedBlockPos(int nFile) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+
     /** Write a pre-serialized block payload at `pos` off cs_main using a persistent file handle. */
-    [[nodiscard]] bool WriteRawBlockToDisk(const FlatFilePos& pos, std::vector<unsigned char>& raw_data, bool keep_handle_open) const;
+    [[nodiscard]] bool WriteRawBlockToDisk(const FlatFilePos& pos, std::vector<unsigned char>& raw_data, bool keep_handle_open) const
+        EXCLUSIVE_LOCKS_REQUIRED(!m_blk_handle_mutex);
 
     /** Wait for in-flight block writes and close any open persistent blk*.dat write handle. */
-    bool CloseBlockWriteHandle() const;
+    bool CloseBlockWriteHandle() const EXCLUSIVE_LOCKS_REQUIRED(!m_blk_handle_mutex);
 
     /** Store block on disk and update block file statistics.
      *
@@ -495,7 +682,8 @@ public:
      * @returns in case of success, the position to which the block was written to
      *          in case of an error, an empty FlatFilePos
      */
-    FlatFilePos WriteBlock(const CBlock& block, int nHeight) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    FlatFilePos WriteBlock(const CBlock& block, int nHeight)
+        EXCLUSIVE_LOCKS_REQUIRED(::cs_main, !m_blk_handle_mutex, !m_undo_queue_mutex);
 
     /** Update blockfile info while processing a block during reindex. The block must be available on disk.
      *
@@ -521,7 +709,8 @@ public:
     //! defined by the status mask.
     //! The caller is responsible for ensuring that lower_block is an ancestor of upper_block
     //! (part of the same chain).
-    bool CheckBlockDataAvailability(const CBlockIndex& upper_block, const CBlockIndex& lower_block, BlockStatus block_status = BLOCK_HAVE_DATA) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    bool CheckBlockDataAvailability(const CBlockIndex& upper_block, const CBlockIndex& lower_block, BlockStatus block_status = BLOCK_HAVE_DATA)
+        EXCLUSIVE_LOCKS_REQUIRED(::cs_main, !m_undo_queue_mutex);
 
     /**
      * @brief Returns the earliest block with specified `status_mask` flags set after
@@ -549,7 +738,7 @@ public:
         const CBlockIndex& upper_block LIFETIMEBOUND,
         uint32_t status_mask,
         const CBlockIndex* lower_block LIFETIMEBOUND = nullptr
-    ) const EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    ) const EXCLUSIVE_LOCKS_REQUIRED(::cs_main, !m_undo_queue_mutex);
 
     /** True if any block files have ever been pruned. */
     bool m_have_pruned = false;
@@ -572,21 +761,27 @@ public:
     /**
      *  Actually unlink the specified files
      */
-    void UnlinkPrunedFiles(const std::set<int>& setFilesToPrune) const;
+    void UnlinkPrunedFiles(const std::set<int>& setFilesToPrune) const
+        EXCLUSIVE_LOCKS_REQUIRED(!m_blk_handle_mutex, !m_undo_queue_mutex);
 
     /** Functions for disk access for blocks */
     bool DeserializeAndCheckBlock(CBlock& block, std::span<const std::byte> block_data, const FlatFilePos& pos, const std::optional<uint256>& expected_hash) const;
     bool ReadBlock(CBlock& block, const FlatFilePos& pos, const std::optional<uint256>& expected_hash) const;
     bool ReadBlock(CBlock& block, const CBlockIndex& index) const;
     /** Concurrent lock-free block read/decode safe for parallel IBD workers off cs_main. */
-    bool ReadBlockConcurrent(CBlock& block, const FlatFilePos& pos, const std::optional<uint256>& expected_hash) const;
+    bool ReadBlockConcurrent(CBlock& block, const FlatFilePos& pos, const std::optional<uint256>& expected_hash) const
+#ifdef WIN32
+        EXCLUSIVE_LOCKS_REQUIRED(!m_concurrent_read_mutex)
+#endif
+        ;
     /** Best-effort OS readahead hint for a contiguous byte range in a blk*.dat file (safe off cs_main). */
     void AdviseBlockRange(const FlatFilePos& pos, uint64_t offset, uint64_t length) const;
     /** Release any cached concurrent blk*.dat read handles. */
-    void CloseConcurrentReadHandles() const;
+    void CloseConcurrentReadHandles(bool drop_cache = false) const;
     ReadRawBlockResult ReadRawBlock(const FlatFilePos& pos, std::optional<std::pair<size_t, size_t>> block_part = std::nullopt) const;
 
-    bool ReadBlockUndo(CBlockUndo& blockundo, const CBlockIndex& index) const;
+    bool ReadBlockUndo(CBlockUndo& blockundo, const CBlockIndex& index) const
+        EXCLUSIVE_LOCKS_REQUIRED(!m_undo_queue_mutex);
 
     void CleanupBlockRevFiles() const;
 };

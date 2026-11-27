@@ -5,12 +5,14 @@
 #include <chain.h>
 #include <chainparams.h>
 #include <clientversion.h>
+#include <consensus/validation.h>
 #include <node/blockstorage.h>
 #include <node/context.h>
 #include <node/kernel_notifications.h>
 #include <pow.h>
 #include <script/solver.h>
 #include <primitives/block.h>
+#include <undo.h>
 #include <util/chaintype.h>
 #include <validation.h>
 
@@ -441,6 +443,100 @@ BOOST_AUTO_TEST_CASE(blockmanager_off_cs_main_write_and_concurrent_reads)
     // Storage I/O latch transitions from false to true and sticks.
     blockman.LatchStorageIOError();
     BOOST_CHECK(blockman.HasStorageIOError());
+}
+
+BOOST_FIXTURE_TEST_CASE(blockmanager_async_undo_roundtrip_and_stop_race, TestChain100Setup)
+{
+    auto& chainman{*Assert(m_node.chainman)};
+    auto& blockman{chainman.m_blockman};
+    m_node.notifications->m_shutdown_on_fatal_error = false;
+
+    // Async undo writer starts lazily (not running until first EnqueueBlockUndoWrite).
+    BOOST_CHECK(!blockman.IsAsyncUndoWriterRunning());
+
+    // Prepare a synthetic CBlockUndo containing a real spent Coin and write it asynchronously
+    // for 8 existing blocks (heights 93..100) while another thread concurrently stops the writer.
+    std::vector<CBlockIndex*> targets;
+    std::vector<uint256> prev_hashes;
+    {
+        LOCK(::cs_main);
+        for (int h = 93; h <= 100; ++h) {
+            CBlockIndex* idx = chainman.ActiveChain()[h];
+            BOOST_REQUIRE(idx != nullptr);
+            idx->nStatus &= ~BLOCK_HAVE_UNDO;
+            idx->nUndoPos = 0;
+            targets.push_back(idx);
+            prev_hashes.push_back(idx->pprev->GetBlockHash());
+        }
+    }
+
+    auto make_undo = [](int h) {
+        CBlockUndo undo;
+        CTxUndo txundo;
+        txundo.vprevout.emplace_back(CTxOut{static_cast<CAmount>(10'000 + h), CScript() << OP_TRUE}, h - 1, false);
+        undo.vtxundo.push_back(std::move(txundo));
+        return undo;
+    };
+
+    // Race EnqueueBlockUndoWrite() under cs_main against concurrent StopAsyncUndoWriter() off cs_main.
+    std::atomic<bool> stop_stopper{false};
+    std::thread stopper([&] {
+        while (!stop_stopper.load(std::memory_order_acquire)) {
+            blockman.StopAsyncUndoWriter();
+            std::this_thread::yield();
+        }
+    });
+
+    for (size_t i = 0; i < targets.size(); ++i) {
+        auto serialized = blockman.SerializeBlockUndoPayload(make_undo(targets[i]->nHeight), prev_hashes[i]);
+        LOCK(::cs_main);
+        BlockValidationState state;
+        BOOST_REQUIRE(blockman.EnqueueBlockUndoWrite(std::move(serialized), state, *targets[i]));
+    }
+
+    stop_stopper.store(true, std::memory_order_release);
+    stopper.join();
+
+    // Every enqueued undo must settle cleanly and round-trip identically via ReadBlockUndo().
+    {
+        LOCK(::cs_main);
+        BOOST_REQUIRE(blockman.SettlePendingUndoWrites());
+        BOOST_CHECK(!blockman.HasPendingUndoWrites());
+        BOOST_CHECK(!blockman.HasStorageIOError());
+        for (CBlockIndex* idx : targets) {
+            BOOST_CHECK((idx->nStatus & BLOCK_HAVE_UNDO) != 0);
+            CBlockUndo read_back;
+            BOOST_REQUIRE(blockman.ReadBlockUndo(read_back, *idx));
+            BOOST_REQUIRE_EQUAL(read_back.vtxundo.size(), 1U);
+            BOOST_REQUIRE_EQUAL(read_back.vtxundo[0].vprevout.size(), 1U);
+            BOOST_CHECK_EQUAL(read_back.vtxundo[0].vprevout[0].out.nValue, static_cast<CAmount>(10'000 + idx->nHeight));
+            BOOST_CHECK_EQUAL(read_back.vtxundo[0].vprevout[0].nHeight, static_cast<uint32_t>(idx->nHeight - 1));
+        }
+    }
+
+    // Injecting an async undo write fault must fail SettlePendingUndoWrites() and latch HasStorageIOError().
+    std::atomic<int> hook_hits{0};
+    blockman.SetUndoWriteFaultHookForTest([&](const uint256& hash, int height) {
+        if (height == targets.back()->nHeight && hash == targets.back()->GetBlockHash()) {
+            ++hook_hits;
+            return true;
+        }
+        return false;
+    });
+    {
+        auto serialized = blockman.SerializeBlockUndoPayload(make_undo(targets.back()->nHeight), prev_hashes.back());
+        LOCK(::cs_main);
+        targets.back()->nStatus &= ~BLOCK_HAVE_UNDO;
+        targets.back()->nUndoPos = 0;
+        BlockValidationState state;
+        BOOST_REQUIRE(blockman.EnqueueBlockUndoWrite(std::move(serialized), state, *targets.back()));
+        BOOST_CHECK(!blockman.SettlePendingUndoWrites());
+        BOOST_CHECK_EQUAL(hook_hits.load(), 1);
+        BOOST_CHECK(blockman.HasStorageIOError());
+    }
+    blockman.SetUndoWriteFaultHookForTest({});
+    blockman.StopAsyncUndoWriter();
+    BOOST_CHECK(!blockman.IsAsyncUndoWriterRunning());
 }
 
 BOOST_AUTO_TEST_SUITE_END()

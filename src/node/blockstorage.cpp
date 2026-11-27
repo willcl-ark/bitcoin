@@ -39,6 +39,7 @@
 #include <util/signalinterrupt.h>
 #include <util/strencodings.h>
 #include <util/syserror.h>
+#include <util/thread.h>
 #include <util/time.h>
 #include <util/translation.h>
 #include <validation.h>
@@ -327,6 +328,9 @@ void BlockManager::FindFilesToPruneManual(
         if (fileinfo.nSize == 0 || fileinfo.nHeightLast > (unsigned)last_block_can_prune || fileinfo.nHeightFirst < (unsigned)min_block_to_prune) {
             continue;
         }
+        if (auto it = m_unpublished_block_files.find(fileNumber); it != m_unpublished_block_files.end() && it->second > 0) {
+            continue;
+        }
 
         PruneOneBlockFile(fileNumber);
         setFilesToPrune.insert(fileNumber);
@@ -398,8 +402,11 @@ void BlockManager::FindFilesToPrune(
             }
 
             // don't prune files that could have a block that's not within the allowable
-            // prune range for the chain being pruned.
+            // prune range for the chain being pruned, or files with unpublished off-cs_main writes.
             if (fileinfo.nHeightLast > (unsigned)last_block_can_prune || fileinfo.nHeightFirst < (unsigned)min_block_to_prune) {
+                continue;
+            }
+            if (auto it = m_unpublished_block_files.find(fileNumber); it != m_unpublished_block_files.end() && it->second > 0) {
                 continue;
             }
 
@@ -645,6 +652,9 @@ bool BlockManager::IsBlockPruned(const CBlockIndex& block) const
 const CBlockIndex& BlockManager::GetFirstBlock(const CBlockIndex& upper_block, uint32_t status_mask, const CBlockIndex* lower_block) const
 {
     AssertLockHeld(::cs_main);
+    if ((status_mask & BLOCK_HAVE_UNDO) && HasPendingUndoWrites()) {
+        (void)SettlePendingUndoWrites();
+    }
     const CBlockIndex* last_block = &upper_block;
     assert((last_block->nStatus & status_mask) == status_mask); // 'upper_block' must satisfy the status mask
     while (last_block->pprev && ((last_block->pprev->nStatus & status_mask) == status_mask)) {
@@ -663,6 +673,9 @@ const CBlockIndex& BlockManager::GetFirstBlock(const CBlockIndex& upper_block, u
 
 bool BlockManager::CheckBlockDataAvailability(const CBlockIndex& upper_block, const CBlockIndex& lower_block, BlockStatus block_status)
 {
+    if ((block_status & BLOCK_HAVE_UNDO) && HasPendingUndoWrites()) {
+        (void)SettlePendingUndoWrites();
+    }
     if (!(upper_block.nStatus & block_status)) return false;
     const auto& first_block = GetFirstBlock(upper_block, block_status, &lower_block);
     // Special case: the genesis block has no undo data
@@ -725,7 +738,14 @@ CBlockFileInfo* BlockManager::GetBlockFileInfo(size_t n)
 
 bool BlockManager::ReadBlockUndo(CBlockUndo& blockundo, const CBlockIndex& index) const
 {
-    const FlatFilePos pos{WITH_LOCK(::cs_main, return index.GetUndoPos())};
+    FlatFilePos pos;
+    {
+        LOCK(::cs_main);
+        if (HasPendingUndoWrites()) {
+            (void)SettlePendingUndoWrites();
+        }
+        pos = index.GetUndoPos();
+    }
 
     // Open history file to read
     AutoFile file{OpenUndoFile(pos, true)};
@@ -887,15 +907,8 @@ uint64_t BlockManager::CalculateCurrentUsage()
     return retval;
 }
 
-void BlockManager::UnlinkPrunedFiles(const std::set<int>& setFilesToPrune) const
+void BlockManager::UnlinkFilesNow(const std::set<int>& setFilesToPrune) const
 {
-    if (setFilesToPrune.empty()) return;
-
-    // Close persistent blk*.dat write handle and cached concurrent read handles
-    // deterministically before unlinking (required on Windows and avoids open deleted files).
-    (void)CloseBlockWriteHandle();
-    CloseConcurrentReadHandles();
-
     std::error_code ec;
     for (int file_num : setFilesToPrune) {
         FlatFilePos pos(file_num, 0);
@@ -905,6 +918,41 @@ void BlockManager::UnlinkPrunedFiles(const std::set<int>& setFilesToPrune) const
             LogDebug(BCLog::BLOCKSTORAGE, "Prune: %s deleted blk/rev (%05u)\n", __func__, file_num);
         }
     }
+}
+
+void BlockManager::UnlinkPrunedFiles(const std::set<int>& setFilesToPrune) const
+{
+    if (setFilesToPrune.empty()) return;
+
+    // Close persistent blk*.dat write handle and cached concurrent read handles
+    // deterministically before unlinking (required on Windows and avoids open deleted files).
+    (void)CloseBlockWriteHandle();
+    CloseConcurrentReadHandles();
+
+    // While the async undo writer is active, serialize prune unlinks through its queue so
+    // rev*.dat handle operations never race on Windows or POSIX. Once stopped, run inline.
+    if (IsAsyncUndoWriterRunning()) {
+        WAIT_LOCK(m_undo_queue_mutex, lock);
+        if (IsAsyncUndoWriterRunning() && !m_undo_stop) {
+            UndoJob job;
+            job.type = UndoJob::Type::UNLINK_FILES;
+            job.files_to_unlink = setFilesToPrune;
+            m_pending_undo_work.fetch_add(1, std::memory_order_release);
+            m_undo_queue.push_back(std::move(job));
+            m_undo_cv.notify_one();
+            m_undo_settled_cv.wait(lock, [&]() EXCLUSIVE_LOCKS_REQUIRED(m_undo_queue_mutex) {
+                return m_undo_queue.empty() && !m_undo_worker_busy;
+            });
+            return;
+        }
+        if (IsAsyncUndoWriterRunning()) {
+            m_undo_settled_cv.wait(lock, [&]() EXCLUSIVE_LOCKS_REQUIRED(m_undo_queue_mutex) {
+                return !IsAsyncUndoWriterRunning();
+            });
+        }
+    }
+
+    UnlinkFilesNow(setFilesToPrune);
 }
 
 AutoFile BlockManager::OpenBlockFile(const FlatFilePos& pos, bool fReadOnly) const
@@ -923,7 +971,7 @@ fs::path BlockManager::GetBlockPosFilename(const FlatFilePos& pos) const
     return m_block_file_seq.FileName(pos);
 }
 
-FlatFilePos BlockManager::FindNextBlockPos(uint64_t nAddSize, unsigned int nHeight, uint64_t nTime)
+FlatFilePos BlockManager::FindNextBlockPos(uint64_t nAddSize, unsigned int nHeight, uint64_t nTime, bool update_block_stats)
 {
     AssertLockHeld(::cs_main);
     const BlockfileType chain_type = BlockfileTypeForHeight(nHeight);
@@ -988,9 +1036,32 @@ FlatFilePos BlockManager::FindNextBlockPos(uint64_t nAddSize, unsigned int nHeig
         }
         m_unsynced_block_files.insert(last_blockfile);
 
+        // Do not trim rev*.dat prematurely if the rotated block file still has unpublished
+        // off-cs_main writes whose block heights have not yet been recorded in CBlockFileInfo.
+        if (m_unpublished_block_files.contains(last_blockfile)) {
+            finalize_undo = false;
+        }
+
         if (finalize_undo && m_blockfile_info[last_blockfile].nUndoSize > 0) {
             FlatFilePos undo_pos_old(last_blockfile, m_blockfile_info[last_blockfile].nUndoSize);
-            if (!m_undo_file_seq.Trim(undo_pos_old)) {
+            bool queued_trim = false;
+            if (IsAsyncUndoWriterRunning()) {
+                WAIT_LOCK(m_undo_queue_mutex, lock);
+                if (IsAsyncUndoWriterRunning() && !m_undo_stop) {
+                    UndoJob trim_job;
+                    trim_job.type = UndoJob::Type::TRIM_UNDO;
+                    trim_job.trim_pos = undo_pos_old;
+                    m_pending_undo_work.fetch_add(1, std::memory_order_release);
+                    m_undo_queue.push_back(std::move(trim_job));
+                    m_undo_cv.notify_one();
+                    queued_trim = true;
+                } else if (IsAsyncUndoWriterRunning()) {
+                    m_undo_settled_cv.wait(lock, [&]() EXCLUSIVE_LOCKS_REQUIRED(m_undo_queue_mutex) {
+                        return !IsAsyncUndoWriterRunning();
+                    });
+                }
+            }
+            if (!queued_trim && !m_undo_file_seq.Trim(undo_pos_old)) {
                 LogWarning("Failed to trim previous undo file %05i\n", last_blockfile);
             }
             m_unsynced_undo_files.insert(last_blockfile);
@@ -999,7 +1070,9 @@ FlatFilePos BlockManager::FindNextBlockPos(uint64_t nAddSize, unsigned int nHeig
         m_blockfile_cursors[chain_type] = BlockfileCursor{nFile};
     }
 
-    m_blockfile_info[nFile].AddBlock(nHeight, nTime);
+    if (update_block_stats) {
+        m_blockfile_info[nFile].AddBlock(nHeight, nTime);
+    }
     m_blockfile_info[nFile].nSize += nAddSize;
 
     // Close persistent handle before preallocating a new chunk (required on Windows).
@@ -1048,6 +1121,13 @@ bool BlockManager::FindUndoPos(BlockValidationState& state, int nFile, FlatFileP
     pos.nFile = nFile;
     pos.nPos = m_blockfile_info[nFile].nUndoSize;
 
+    // Close persistent rev*.dat handle before extending file chunks (required on Windows).
+    if (m_undo_file_seq.WillAllocate(pos, nAddSize) && (IsAsyncUndoWriterRunning() || HasPendingUndoWrites())) {
+        if (!SettlePendingUndoWrites()) {
+            return FatalError(m_opts.notifications, state, _("Failed to write undo data."));
+        }
+    }
+
     m_blockfile_info[nFile].nUndoSize += nAddSize;
     m_dirty_fileinfo.insert(nFile);
 
@@ -1063,62 +1143,561 @@ bool BlockManager::FindUndoPos(BlockValidationState& state, int nFile, FlatFileP
     return true;
 }
 
-bool BlockManager::WriteBlockUndo(const CBlockUndo& blockundo, BlockValidationState& state, CBlockIndex& block)
+void BlockManager::SetUndoWriteFaultHookForTest(std::function<bool(const uint256& block_hash, int height)> hook)
+{
+    LOCK(m_fault_hook_mutex);
+    m_undo_write_fault_hook = std::move(hook);
+    m_has_undo_fault_hook.store(static_cast<bool>(m_undo_write_fault_hook), std::memory_order_release);
+}
+
+bool BlockManager::ShouldInjectUndoWriteFault(const uint256& block_hash, int height) const
+{
+    if (!m_has_undo_fault_hook.load(std::memory_order_acquire)) return false;
+    LOCK(m_fault_hook_mutex);
+    return m_undo_write_fault_hook && m_undo_write_fault_hook(block_hash, height);
+}
+
+SerializedBlockUndo BlockManager::SerializeBlockUndoPayload(const CBlockUndo& blockundo, const uint256& prev_block_hash) const
+{
+    SerializedBlockUndo result;
+    VectorWriter writer{result.data, 0};
+    writer << GetParams().MessageStart() << uint32_t{0};
+    writer << blockundo;
+
+    const size_t payload_bytes = result.data.size() - STORAGE_HEADER_BYTES;
+    Assert(payload_bytes <= std::numeric_limits<uint32_t>::max());
+    WriteLE32(result.data.data() + std::tuple_size_v<MessageStartChars>, static_cast<uint32_t>(payload_bytes));
+
+    HashWriter hasher{};
+    hasher << prev_block_hash;
+    hasher.write(std::as_bytes(std::span{result.data}.subspan(STORAGE_HEADER_BYTES, payload_bytes)));
+    const uint256 checksum = hasher.GetHash();
+    writer << checksum;
+    return result;
+}
+
+bool BlockManager::EnsureAsyncUndoWriterStarted()
+{
+    if (m_undo_thread_running.load(std::memory_order_acquire) && !m_undo_stopping.load(std::memory_order_acquire)) {
+        return true;
+    }
+    LOCK(m_undo_lifecycle_mutex);
+    if (m_undo_thread.joinable()) return true;
+    {
+        LOCK(m_undo_queue_mutex);
+        m_undo_stop = false;
+        m_undo_thread_running.store(true, std::memory_order_release);
+    }
+    try {
+        m_undo_thread = std::thread(&util::TraceThread, "undowrite", [this] { AsyncUndoWorkerLoop(); });
+    } catch (const std::exception& e) {
+        LogError("Failed to start async undo writer thread: %s\n", e.what());
+        {
+            LOCK(m_undo_queue_mutex);
+            m_undo_thread_running.store(false, std::memory_order_release);
+            m_undo_settled_cv.notify_all();
+        }
+        LatchStorageIOError();
+        return false;
+    }
+    return true;
+}
+
+void BlockManager::AsyncUndoWorkerLoop()
+{
+    FILE* rev_handle{nullptr};
+    int rev_file{-1};
+    uint64_t rev_pos{0};
+
+    auto close_rev_handle = [&]() {
+        if (rev_handle) {
+            FILE* f = rev_handle;
+            rev_handle = nullptr;
+            rev_file = -1;
+            rev_pos = 0;
+            if (std::fclose(f) != 0) {
+                LogError("Failed to close persistent undo file handle: %s\n", SysErrorString(errno));
+                LatchStorageIOError();
+            }
+        }
+    };
+
+    for (;;) {
+        UndoJob job;
+        {
+            WAIT_LOCK(m_undo_queue_mutex, lock);
+            m_undo_cv.wait(lock, [&]() EXCLUSIVE_LOCKS_REQUIRED(m_undo_queue_mutex) {
+                return m_undo_stop || !m_undo_queue.empty();
+            });
+            if (m_undo_queue.empty() && m_undo_stop) {
+                break;
+            }
+            job = std::move(m_undo_queue.front());
+            m_undo_queue.pop_front();
+            m_undo_worker_busy = true;
+        }
+
+        switch (job.type) {
+        case UndoJob::Type::WRITE_UNDO: {
+            bool ok = false;
+            if (ShouldInjectUndoWriteFault(job.block_hash, job.block_height) || HasStorageIOError()) {
+                close_rev_handle();
+                LatchStorageIOError();
+            } else {
+                if (!rev_handle || rev_file != job.pos.nFile) {
+                    close_rev_handle();
+                    if (!HasStorageIOError()) {
+                        rev_handle = m_undo_file_seq.Open(job.pos, /*read_only=*/false);
+                        if (rev_handle) {
+                            rev_file = job.pos.nFile;
+                            rev_pos = job.pos.nPos;
+                        }
+                    }
+                } else if (rev_pos != job.pos.nPos) {
+                    if (FileSeek64(rev_handle, static_cast<int64_t>(job.pos.nPos), SEEK_SET) != 0) {
+                        LogError("Failed to seek persistent undo file %d to %u\n", job.pos.nFile, job.pos.nPos);
+                        close_rev_handle();
+                    } else {
+                        rev_pos = job.pos.nPos;
+                    }
+                }
+
+                if (rev_handle) {
+                    if (m_obfuscation) {
+                        m_obfuscation(MakeWritableByteSpan(job.payload.data), job.pos.nPos);
+                    }
+                    const size_t nbytes = job.payload.data.size();
+                    if (std::fwrite(job.payload.data.data(), 1, nbytes, rev_handle) == nbytes && std::fflush(rev_handle) == 0) {
+                        rev_pos += nbytes;
+                        ok = true;
+                    } else {
+                        LogError("Failed writing undo data at %s: %s\n", job.pos.ToString(), SysErrorString(errno));
+                        close_rev_handle();
+                        LatchStorageIOError();
+                    }
+                } else {
+                    LogError("OpenUndoFile failed for %s while writing block undo asynchronously\n", job.pos.ToString());
+                    LatchStorageIOError();
+                }
+            }
+
+            if (m_pending_undo_budget_bytes && job.budgeted_bytes > 0) {
+                m_pending_undo_budget_bytes->fetch_sub(job.budgeted_bytes, std::memory_order_relaxed);
+            }
+
+            {
+                LOCK(m_undo_queue_mutex);
+                if (ok) {
+                    m_completed_undos.push_back(CompletedUndo{job.pindex, job.pos.nFile, job.pos.nPos + STORAGE_HEADER_BYTES});
+                } else {
+                    m_pending_undo_work.fetch_sub(1, std::memory_order_release);
+                }
+                m_undo_worker_busy = false;
+                if (m_undo_queue.empty()) m_undo_settled_cv.notify_all();
+            }
+            break;
+        }
+        case UndoJob::Type::TRIM_UNDO: {
+            close_rev_handle();
+            if (!m_undo_file_seq.Trim(job.trim_pos)) {
+                LogWarning("Failed to trim undo file %05i\n", job.trim_pos.nFile);
+            }
+            {
+                LOCK(m_undo_queue_mutex);
+                m_pending_undo_work.fetch_sub(1, std::memory_order_release);
+                m_undo_worker_busy = false;
+                if (m_undo_queue.empty()) m_undo_settled_cv.notify_all();
+            }
+            break;
+        }
+        case UndoJob::Type::UNLINK_FILES: {
+            close_rev_handle();
+            UnlinkFilesNow(job.files_to_unlink);
+            {
+                LOCK(m_undo_queue_mutex);
+                m_pending_undo_work.fetch_sub(1, std::memory_order_release);
+                m_undo_worker_busy = false;
+                if (m_undo_queue.empty()) m_undo_settled_cv.notify_all();
+            }
+            break;
+        }
+        case UndoJob::Type::CLOSE_HANDLE: {
+            close_rev_handle();
+            {
+                LOCK(m_undo_queue_mutex);
+                m_pending_undo_work.fetch_sub(1, std::memory_order_release);
+                m_undo_worker_busy = false;
+                if (m_undo_queue.empty()) m_undo_settled_cv.notify_all();
+            }
+            break;
+        }
+        }
+    }
+
+    close_rev_handle();
+    {
+        LOCK(m_undo_queue_mutex);
+        m_undo_thread_running.store(false, std::memory_order_release);
+        m_undo_settled_cv.notify_all();
+    }
+}
+
+void BlockManager::ApplyCompletedUndos() const
 {
     AssertLockHeld(::cs_main);
+    std::vector<CompletedUndo> completed;
+    {
+        LOCK(m_undo_queue_mutex);
+        if (m_completed_undos.empty()) return;
+        completed.swap(m_completed_undos);
+    }
+    for (const CompletedUndo& c : completed) {
+        if (c.pindex) {
+            c.pindex->nUndoPos = c.undo_pos;
+            c.pindex->nStatus |= BLOCK_HAVE_UNDO;
+            m_dirty_blockindex.insert(c.pindex);
+            m_unsynced_undo_files.insert(c.file_num);
+        }
+    }
+    m_pending_undo_work.fetch_sub(completed.size(), std::memory_order_release);
+}
+
+bool BlockManager::SettlePendingUndoWrites() const
+{
+    AssertLockHeld(::cs_main);
+    if (IsAsyncUndoWriterRunning()) {
+        WAIT_LOCK(m_undo_queue_mutex, lock);
+        if (IsAsyncUndoWriterRunning()) {
+            if (!m_undo_stop) {
+                UndoJob close_job;
+                close_job.type = UndoJob::Type::CLOSE_HANDLE;
+                m_pending_undo_work.fetch_add(1, std::memory_order_release);
+                m_undo_queue.push_back(std::move(close_job));
+                m_undo_cv.notify_one();
+            }
+            m_undo_settled_cv.wait(lock, [&]() EXCLUSIVE_LOCKS_REQUIRED(m_undo_queue_mutex) {
+                if (m_undo_stop) {
+                    return !IsAsyncUndoWriterRunning();
+                }
+                return m_undo_queue.empty() && !m_undo_worker_busy;
+            });
+        }
+    }
+    ApplyCompletedUndos();
+    return !HasStorageIOError();
+}
+
+void BlockManager::StopAsyncUndoWriterImpl()
+{
+    {
+        LOCK(m_undo_lifecycle_mutex);
+        if (m_undo_thread.joinable()) {
+            m_undo_stopping.store(true, std::memory_order_release);
+            {
+                LOCK(m_undo_queue_mutex);
+                m_undo_stop = true;
+            }
+            m_undo_cv.notify_all();
+            m_undo_thread.join();
+            {
+                LOCK(m_undo_queue_mutex);
+                m_undo_stop = false;
+                m_undo_thread_running.store(false, std::memory_order_release);
+            }
+            m_undo_stopping.store(false, std::memory_order_release);
+            m_undo_settled_cv.notify_all();
+        }
+    }
+    (void)CloseBlockWriteHandle();
+    CloseConcurrentReadHandles(/*drop_cache=*/true);
+}
+
+void BlockManager::StopAsyncUndoWriter()
+{
+    AssertLockNotHeld(::cs_main);
+    StopAsyncUndoWriterImpl();
+}
+
+bool BlockManager::EnqueueBlockUndoWrite(SerializedBlockUndo&& serialized, BlockValidationState& state, CBlockIndex& block)
+{
+    AssertLockHeld(::cs_main);
+    ApplyCompletedUndos();
+    if (HasStorageIOError()) {
+        return FatalError(m_opts.notifications, state, _("Failed to write undo data."));
+    }
+    if (!block.GetUndoPos().IsNull()) {
+        return true;
+    }
+
+    const BlockfileType type = BlockfileTypeForHeight(block.nHeight);
+    auto& cursor = *Assert(m_blockfile_cursors[type]);
+    const uint64_t prev_undo_size = m_blockfile_info[block.nFile].nUndoSize;
+    const int prev_cursor_undo_height = cursor.undo_height;
+
+    FlatFilePos pos;
+    if (!FindUndoPos(state, block.nFile, pos, serialized.data.size())) {
+        LogError("FindUndoPos failed for %s while enqueueing block undo", pos.ToString());
+        m_blockfile_info[block.nFile].nUndoSize = prev_undo_size;
+        LatchStorageIOError();
+        if (!state.IsError()) {
+            return FatalError(m_opts.notifications, state, _("Failed to write undo data."));
+        }
+        return false;
+    }
+
+    std::optional<FlatFilePos> trim_after;
+    bool updated_cursor = false;
+    if (pos.nFile < cursor.file_num && static_cast<uint32_t>(block.nHeight) == m_blockfile_info[pos.nFile].nHeightLast) {
+        trim_after = FlatFilePos(pos.nFile, m_blockfile_info[pos.nFile].nUndoSize);
+    } else if (pos.nFile == cursor.file_num && block.nHeight > cursor.undo_height) {
+        cursor.undo_height = block.nHeight;
+        updated_cursor = true;
+    }
+
+    const size_t budgeted = serialized.data.capacity() + sizeof(UndoJob);
+    if (m_pending_undo_budget_bytes) {
+        m_pending_undo_budget_bytes->fetch_add(budgeted, std::memory_order_relaxed);
+    }
+
+    // Ensure the worker is running and not stopping in the same m_undo_queue_mutex critical
+    // section that pushes the job, so a concurrent StopAsyncUndoWriter() off cs_main can
+    // never leave a queued undo job stranded without a worker thread.
+    for (;;) {
+        if (!EnsureAsyncUndoWriterStarted()) {
+            if (m_pending_undo_budget_bytes) {
+                m_pending_undo_budget_bytes->fetch_sub(budgeted, std::memory_order_relaxed);
+            }
+            m_blockfile_info[pos.nFile].nUndoSize = prev_undo_size;
+            if (updated_cursor) {
+                cursor.undo_height = prev_cursor_undo_height;
+            }
+            LatchStorageIOError();
+            return FatalError(m_opts.notifications, state, _("Failed to write undo data."));
+        }
+        LOCK(m_undo_queue_mutex);
+        if (!IsAsyncUndoWriterRunning() || m_undo_stop) {
+            continue;
+        }
+        UndoJob write_job;
+        write_job.type = UndoJob::Type::WRITE_UNDO;
+        write_job.pindex = &block;
+        write_job.block_hash = block.GetBlockHash();
+        write_job.block_height = block.nHeight;
+        write_job.pos = pos;
+        write_job.payload = std::move(serialized);
+        write_job.budgeted_bytes = budgeted;
+        m_pending_undo_work.fetch_add(1, std::memory_order_release);
+        m_undo_queue.push_back(std::move(write_job));
+
+        if (trim_after) {
+            UndoJob trim_job;
+            trim_job.type = UndoJob::Type::TRIM_UNDO;
+            trim_job.trim_pos = *trim_after;
+            m_pending_undo_work.fetch_add(1, std::memory_order_release);
+            m_undo_queue.push_back(std::move(trim_job));
+        }
+        m_undo_cv.notify_one();
+        break;
+    }
+    return true;
+}
+
+bool BlockManager::PrepareBatchUndoWrites(
+    std::span<CBlockIndex* const> blocks,
+    std::span<const size_t> serialized_sizes,
+    std::vector<PreparedUndoWrite>& prepared,
+    BlockValidationState& state)
+{
+    AssertLockHeld(::cs_main);
+    Assert(blocks.size() == serialized_sizes.size());
+    prepared.clear();
+    prepared.reserve(blocks.size());
+
+    ApplyCompletedUndos();
+    if (HasStorageIOError()) {
+        return FatalError(m_opts.notifications, state, _("Failed to write undo data."));
+    }
+
+    bool any_needed = false;
+    for (size_t i = 0; i < blocks.size(); ++i) {
+        if (serialized_sizes[i] > 0 && blocks[i] && blocks[i]->GetUndoPos().IsNull()) {
+            any_needed = true;
+            break;
+        }
+    }
+    if (any_needed && !EnsureAsyncUndoWriterStarted()) {
+        return FatalError(m_opts.notifications, state, _("Failed to write undo data."));
+    }
+
+    for (size_t i = 0; i < blocks.size(); ++i) {
+        CBlockIndex* pindex = blocks[i];
+        PreparedUndoWrite entry;
+        entry.pindex = pindex;
+
+        if (serialized_sizes[i] == 0 || !pindex || !pindex->GetUndoPos().IsNull()) {
+            entry.needs_write = false;
+            prepared.push_back(entry);
+            continue;
+        }
+
+        Assert(pindex->nFile >= 0 && static_cast<size_t>(pindex->nFile) < m_blockfile_info.size());
+        const BlockfileType type = BlockfileTypeForHeight(pindex->nHeight);
+        auto& cursor = *Assert(m_blockfile_cursors[type]);
+        entry.file_type = type;
+        entry.prev_undo_size = m_blockfile_info[pindex->nFile].nUndoSize;
+        entry.prev_cursor_undo_height = cursor.undo_height;
+
+        FlatFilePos pos;
+        if (!FindUndoPos(state, pindex->nFile, pos, serialized_sizes[i])) {
+            LogError("FindUndoPos failed for %s while preparing batch block undo", pos.ToString());
+            m_blockfile_info[pindex->nFile].nUndoSize = entry.prev_undo_size;
+            RollbackPreparedBatchUndoWrites(prepared, 0);
+            prepared.clear();
+            LatchStorageIOError();
+            if (!state.IsError()) {
+                return FatalError(m_opts.notifications, state, _("Failed to write undo data."));
+            }
+            return false;
+        }
+
+        entry.pos = pos;
+        entry.needs_write = true;
+
+        if (pos.nFile < cursor.file_num &&
+            static_cast<uint32_t>(pindex->nHeight) == m_blockfile_info[pos.nFile].nHeightLast) {
+            entry.trim_after = FlatFilePos(pos.nFile, m_blockfile_info[pos.nFile].nUndoSize);
+        } else if (pos.nFile == cursor.file_num && pindex->nHeight > cursor.undo_height) {
+            cursor.undo_height = pindex->nHeight;
+            entry.updated_cursor = true;
+        }
+
+        prepared.push_back(entry);
+    }
+
+    return true;
+}
+
+void BlockManager::RollbackPreparedBatchUndoWrites(
+    std::span<const PreparedUndoWrite> prepared,
+    size_t from_index)
+{
+    AssertLockHeld(::cs_main);
+    for (size_t i = prepared.size(); i > from_index; --i) {
+        const PreparedUndoWrite& prep = prepared[i - 1];
+        if (!prep.needs_write) continue;
+        m_blockfile_info[prep.pos.nFile].nUndoSize = prep.prev_undo_size;
+        m_dirty_fileinfo.insert(prep.pos.nFile);
+        if (prep.updated_cursor && m_blockfile_cursors[prep.file_type]) {
+            m_blockfile_cursors[prep.file_type]->undo_height = prep.prev_cursor_undo_height;
+        }
+    }
+}
+
+void BlockManager::EnqueuePreparedUndoWrite(
+    const PreparedUndoWrite& prep,
+    SerializedBlockUndo&& serialized)
+{
+    AssertLockHeld(::cs_main);
+    if (!prep.needs_write) {
+        return;
+    }
+    Assert(prep.pindex != nullptr);
+
+    const size_t budgeted = serialized.data.capacity() + sizeof(UndoJob);
+    if (m_pending_undo_budget_bytes) {
+        m_pending_undo_budget_bytes->fetch_add(budgeted, std::memory_order_relaxed);
+    }
+
+    for (;;) {
+        if (!EnsureAsyncUndoWriterStarted()) {
+            if (m_pending_undo_budget_bytes) {
+                m_pending_undo_budget_bytes->fetch_sub(budgeted, std::memory_order_relaxed);
+            }
+            LatchStorageIOError();
+            return;
+        }
+        LOCK(m_undo_queue_mutex);
+        if (!IsAsyncUndoWriterRunning() || m_undo_stop) {
+            continue;
+        }
+        UndoJob write_job;
+        write_job.type = UndoJob::Type::WRITE_UNDO;
+        write_job.pindex = prep.pindex;
+        write_job.block_hash = prep.pindex->GetBlockHash();
+        write_job.block_height = prep.pindex->nHeight;
+        write_job.pos = prep.pos;
+        write_job.payload = std::move(serialized);
+        write_job.budgeted_bytes = budgeted;
+        m_pending_undo_work.fetch_add(1, std::memory_order_release);
+        m_undo_queue.push_back(std::move(write_job));
+
+        if (prep.trim_after) {
+            UndoJob trim_job;
+            trim_job.type = UndoJob::Type::TRIM_UNDO;
+            trim_job.trim_pos = *prep.trim_after;
+            m_pending_undo_work.fetch_add(1, std::memory_order_release);
+            m_undo_queue.push_back(std::move(trim_job));
+        }
+        m_undo_cv.notify_one();
+        break;
+    }
+}
+
+bool BlockManager::WriteSerializedBlockUndoInline(SerializedBlockUndo& serialized, BlockValidationState& state, CBlockIndex& block)
+{
+    AssertLockHeld(::cs_main);
+    if (IsAsyncUndoWriterRunning() || HasPendingUndoWrites()) {
+        if (!SettlePendingUndoWrites()) {
+            return FatalError(m_opts.notifications, state, _("Failed to write undo data."));
+        }
+    }
+    if (HasStorageIOError()) {
+        return FatalError(m_opts.notifications, state, _("Failed to write undo data."));
+    }
+
     const BlockfileType type = BlockfileTypeForHeight(block.nHeight);
     auto& cursor = *Assert(m_blockfile_cursors[type]);
 
-    // Write undo information to disk
     if (block.GetUndoPos().IsNull()) {
         FlatFilePos pos;
-        const auto blockundo_size{static_cast<uint32_t>(GetSerializeSize(blockundo))};
-        if (!FindUndoPos(state, block.nFile, pos, blockundo_size + UNDO_DATA_DISK_OVERHEAD)) {
+        if (!FindUndoPos(state, block.nFile, pos, serialized.data.size())) {
             LogError("FindUndoPos failed for %s while writing block undo", pos.ToString());
             return false;
         }
 
-        // Open history file to append
+        if (ShouldInjectUndoWriteFault(block.GetBlockHash(), block.nHeight)) {
+            LatchStorageIOError();
+            return FatalError(m_opts.notifications, state, _("Failed to write undo data."));
+        }
+
         AutoFile file{OpenUndoFile(pos)};
         if (file.IsNull()) {
             LogError("OpenUndoFile failed for %s while writing block undo", pos.ToString());
+            LatchStorageIOError();
             return FatalError(m_opts.notifications, state, _("Failed to write undo data."));
         }
-        {
-            BufferedWriter fileout{file};
-
-            // Write index header
-            fileout << GetParams().MessageStart() << blockundo_size;
-            pos.nPos += STORAGE_HEADER_BYTES;
-            {
-                // Calculate checksum
-                HashWriter hasher{};
-                hasher << block.pprev->GetBlockHash() << blockundo;
-                // Write undo data & checksum
-                fileout << blockundo << hasher.GetHash();
-            }
-            // BufferedWriter will flush pending data to file when fileout goes out of scope.
+        try {
+            file.write_buffer(MakeWritableByteSpan(serialized.data));
+        } catch (const std::exception& e) {
+            LogError("Failed writing block undo %s: %s\n", pos.ToString(), e.what());
+            (void)file.fclose();
+            LatchStorageIOError();
+            return FatalError(m_opts.notifications, state, _("Failed to write undo data."));
         }
 
-        // Make sure that the file is closed before we call `FlushUndoFile`.
         if (file.fclose() != 0) {
             LogError("Failed to close block undo file %s: %s", pos.ToString(), SysErrorString(errno));
+            LatchStorageIOError();
             return FatalError(m_opts.notifications, state, _("Failed to close block undo file."));
         }
 
-        // rev files are written in block height order, whereas blk files are written as blocks come in (often out of order)
-        // we want to flush the rev (undo) file once we've written the last block, which is indicated by the last height
-        // in the block file info as below; note that this does not catch the case where the undo writes are keeping up
-        // with the block writes (usually when a synced up node is getting newly mined blocks) -- this case is caught in
-        // the FindNextBlockPos function
+        pos.nPos += STORAGE_HEADER_BYTES;
+        m_unsynced_undo_files.insert(pos.nFile);
+
         if (pos.nFile < cursor.file_num && static_cast<uint32_t>(block.nHeight) == m_blockfile_info[pos.nFile].nHeightLast) {
-            // Do not propagate the return code, a failed flush here should not
-            // be an indication for a failed write. If it were propagated here,
-            // the caller would assume the undo data not to be written, when in
-            // fact it is. Note though, that a failed flush might leave the data
-            // file untrimmed.
-            if (!FlushUndoFile(pos.nFile, true)) {
-                LogWarning("Failed to flush undo file %05i\n", pos.nFile);
+            FlatFilePos undo_pos_old(pos.nFile, m_blockfile_info[pos.nFile].nUndoSize);
+            if (!m_undo_file_seq.Trim(undo_pos_old)) {
+                LogWarning("Failed to trim undo file %05i\n", pos.nFile);
             }
         } else if (pos.nFile == cursor.file_num && block.nHeight > cursor.undo_height) {
             cursor.undo_height = block.nHeight;
@@ -1127,10 +1706,19 @@ bool BlockManager::WriteBlockUndo(const CBlockUndo& blockundo, BlockValidationSt
         block.nUndoPos = pos.nPos;
         block.nStatus |= BLOCK_HAVE_UNDO;
         m_dirty_blockindex.insert(&block);
-    m_unsynced_undo_files.insert(pos.nFile);
     }
 
     return true;
+}
+
+bool BlockManager::WriteBlockUndo(const CBlockUndo& blockundo, BlockValidationState& state, CBlockIndex& block)
+{
+    AssertLockHeld(::cs_main);
+    if (!block.GetUndoPos().IsNull()) {
+        return true;
+    }
+    SerializedBlockUndo serialized = SerializeBlockUndoPayload(blockundo, block.pprev->GetBlockHash());
+    return WriteSerializedBlockUndoInline(serialized, state, block);
 }
 
 bool BlockManager::DeserializeAndCheckBlock(CBlock& block, std::span<const std::byte> block_data, const FlatFilePos& pos, const std::optional<uint256>& expected_hash) const
@@ -1213,7 +1801,9 @@ BlockManager::ReadFd::~ReadFd()
 {
     if (fd >= 0) {
 #ifdef POSIX_FADV_DONTNEED
-        (void)::posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
+        if (drop_cache_on_close) {
+            (void)::posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
+        }
 #endif
         ::close(fd);
     }
@@ -1268,10 +1858,13 @@ std::shared_ptr<BlockManager::ReadFd> BlockManager::BlockReadFdCache::GetOrOpen(
         entries[target].insert_seq = ++next_seq;
         entries[target].fd = opened;
     }
+    if (evicted) {
+        evicted->drop_cache_on_close = true;
+    }
     return opened;
 }
 
-void BlockManager::BlockReadFdCache::Clear()
+void BlockManager::BlockReadFdCache::Clear(bool drop_cache)
 {
     std::array<std::shared_ptr<ReadFd>, MAX_CACHED_FDS> to_close;
     {
@@ -1280,6 +1873,11 @@ void BlockManager::BlockReadFdCache::Clear()
             to_close[i] = std::move(entries[i].fd);
             entries[i].file_num = -1;
             entries[i].insert_seq = 0;
+        }
+    }
+    if (drop_cache) {
+        for (auto& fd_handle : to_close) {
+            if (fd_handle) fd_handle->drop_cache_on_close = true;
         }
     }
 }
@@ -1295,10 +1893,12 @@ void BlockManager::AdviseBlockRange(const FlatFilePos& pos, uint64_t offset, uin
 #endif
 }
 
-void BlockManager::CloseConcurrentReadHandles() const
+void BlockManager::CloseConcurrentReadHandles(bool drop_cache) const
 {
 #ifndef WIN32
-    m_read_fd_cache.Clear();
+    m_read_fd_cache.Clear(drop_cache);
+#else
+    (void)drop_cache;
 #endif
 }
 
@@ -1501,23 +2101,74 @@ bool BlockManager::CloseBlockWriteHandle() const
     return true;
 }
 
+BlockManager::InflightBlockStoreGuard BlockManager::AcquireInflightBlockStore(const CBlockIndex* pindex) const
+{
+    AssertLockNotHeld(::cs_main);
+    if (!pindex) return {};
+    {
+        WAIT_LOCK(m_inflight_store_mutex, lock);
+        m_inflight_store_cv.wait(lock, [&]() EXCLUSIVE_LOCKS_REQUIRED(m_inflight_store_mutex) {
+            return !m_inflight_store_blocks.contains(pindex);
+        });
+        m_inflight_store_blocks.insert(pindex);
+    }
+    return InflightBlockStoreGuard{this, pindex};
+}
+
+void BlockManager::ReleaseInflightBlockStore(const CBlockIndex* pindex) const noexcept
+{
+    {
+        LOCK(m_inflight_store_mutex);
+        m_inflight_store_blocks.erase(pindex);
+    }
+    m_inflight_store_cv.notify_all();
+}
+
 BlockManager::BlockWriteReservation BlockManager::ReserveBlockPos(uint64_t total_size, unsigned int nHeight, uint64_t nTime)
 {
     AssertLockHeld(::cs_main);
     if (HasStorageIOError()) {
         return {};
     }
-    FlatFilePos pos{FindNextBlockPos(total_size, nHeight, nTime)};
+    FlatFilePos pos{FindNextBlockPos(total_size, nHeight, nTime, /*update_block_stats=*/false)};
     if (pos.IsNull()) {
         LogError("FindNextBlockPos failed for %s while reserving block space", pos.ToString());
         return {};
     }
     m_unsynced_block_files.insert(pos.nFile);
+    ++m_unpublished_block_files[pos.nFile];
     {
         LOCK(m_blk_handle_mutex);
         ++m_inflight_blk_writes;
     }
     return BlockWriteReservation{this, pos};
+}
+
+void BlockManager::PublishReservedBlockPos(int nFile, unsigned int nHeight, uint64_t nTime)
+{
+    AssertLockHeld(::cs_main);
+    Assert(nFile >= 0 && static_cast<size_t>(nFile) < m_blockfile_info.size());
+    m_blockfile_info[nFile].AddBlock(nHeight, nTime);
+    m_dirty_fileinfo.insert(nFile);
+    auto it = m_unpublished_block_files.find(nFile);
+    if (Assume(it != m_unpublished_block_files.end())) {
+        Assert(it->second > 0);
+        if (--it->second == 0) {
+            m_unpublished_block_files.erase(it);
+        }
+    }
+}
+
+void BlockManager::AbortReservedBlockPos(int nFile)
+{
+    AssertLockHeld(::cs_main);
+    auto it = m_unpublished_block_files.find(nFile);
+    if (Assume(it != m_unpublished_block_files.end())) {
+        Assert(it->second > 0);
+        if (--it->second == 0) {
+            m_unpublished_block_files.erase(it);
+        }
+    }
 }
 
 bool BlockManager::WriteRawBlockToDisk(const FlatFilePos& pos, std::vector<unsigned char>& raw_data, bool keep_handle_open) const
@@ -1528,7 +2179,7 @@ bool BlockManager::WriteRawBlockToDisk(const FlatFilePos& pos, std::vector<unsig
     }
 
     LOCK(m_blk_handle_mutex);
-    auto close_handle = [&]() -> bool {
+    auto close_handle = [&]() EXCLUSIVE_LOCKS_REQUIRED(m_blk_handle_mutex) {
         if (!m_blk_handle) return true;
         FILE* f = m_blk_handle;
         m_blk_handle = nullptr;
@@ -1589,9 +2240,11 @@ FlatFilePos BlockManager::WriteBlock(const CBlock& block, int nHeight)
     const bool ok = WriteRawBlockToDisk(reservation.pos, raw, /*keep_handle_open=*/false);
     reservation.Release();
     if (!ok) {
+        AbortReservedBlockPos(data_pos.nFile);
         m_opts.notifications.fatalError(_("Failed to write block."));
         return FlatFilePos();
     }
+    PublishReservedBlockPos(data_pos.nFile, nHeight, block.GetBlockTime());
     return data_pos;
 }
 
@@ -1668,8 +2321,7 @@ BlockManager::BlockManager(const util::SignalInterrupt& interrupt, Options opts)
 
 BlockManager::~BlockManager()
 {
-    (void)CloseBlockWriteHandle();
-    CloseConcurrentReadHandles();
+    StopAsyncUndoWriterImpl();
 }
 
 class ImportingNow

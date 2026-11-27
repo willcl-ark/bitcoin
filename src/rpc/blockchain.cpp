@@ -266,7 +266,12 @@ UniValue blockToJSON(BlockManager& blockman, const CBlock& block, const CBlockIn
         case TxVerbosity::SHOW_DETAILS_AND_PREVOUT:
             CBlockUndo blockUndo;
             const bool is_not_pruned{WITH_LOCK(::cs_main, return !blockman.IsBlockPruned(blockindex))};
-            bool have_undo{is_not_pruned && WITH_LOCK(::cs_main, return blockindex.nStatus & BLOCK_HAVE_UNDO)};
+            bool have_undo{is_not_pruned && WITH_LOCK(::cs_main,
+                if (blockman.HasPendingUndoWrites()) {
+                    (void)blockman.SettlePendingUndoWrites();
+                }
+                return (blockindex.nStatus & BLOCK_HAVE_UNDO) != 0;
+            )};
             if (have_undo && !blockman.ReadBlockUndo(blockUndo, blockindex)) {
                 throw JSONRPCError(RPC_INTERNAL_ERROR, "Undo data expected but can't be read. This could be due to disk corruption or a conflict with a pruning event.");
             }
@@ -705,6 +710,9 @@ static RPCMethod getblockheader()
 void CheckBlockDataAvailability(BlockManager& blockman, const CBlockIndex& blockindex, bool check_for_undo)
 {
     AssertLockHeld(cs_main);
+    if (check_for_undo && blockman.HasPendingUndoWrites()) {
+        (void)blockman.SettlePendingUndoWrites();
+    }
     uint32_t flag = check_for_undo ? BLOCK_HAVE_UNDO : BLOCK_HAVE_DATA;
     if (!(blockindex.nStatus & flag)) {
         if (blockman.IsBlockPruned(blockindex)) {
@@ -925,6 +933,10 @@ std::optional<int> GetPruneHeight(const BlockManager& blockman, const CChain& ch
 
     // If there are no blocks after the genesis block, or no blocks at all, nothing is pruned.
     if (!first_block || !chain_tip) return std::nullopt;
+
+    if (blockman.HasPendingUndoWrites()) {
+        (void)blockman.SettlePendingUndoWrites();
+    }
 
     // If the chain tip is pruned, everything is pruned.
     if ((chain_tip->nStatus & BLOCK_HAVE_MASK) != BLOCK_HAVE_MASK) return chain_tip->nHeight;
@@ -3182,7 +3194,13 @@ static RPCMethod dumptxoutset()
         std::optional<TemporaryPruneLock> temp_prune_lock;
         if (node.chainman->m_blockman.IsPruneMode()) {
             LOCK(node.chainman->GetMutex());
+            if (node.chainman->m_blockman.HasPendingUndoWrites() && !node.chainman->m_blockman.SettlePendingUndoWrites()) {
+                throw JSONRPCError(RPC_DATABASE_ERROR, "Failed to settle pending undo writes.");
+            }
             const CBlockIndex* current_tip{node.chainman->ActiveChain().Tip()};
+            if (!current_tip || (current_tip->nStatus & BLOCK_HAVE_MASK) != BLOCK_HAVE_MASK) {
+                throw JSONRPCError(RPC_MISC_ERROR, "Could not roll back to requested height since necessary block data is already pruned.");
+            }
             const CBlockIndex& first_block{node.chainman->m_blockman.GetFirstBlock(*current_tip, /*status_mask=*/BLOCK_HAVE_MASK)};
             if (first_block.nHeight > target_index->nHeight) {
                 throw JSONRPCError(RPC_MISC_ERROR, "Could not roll back to requested height since necessary block data is already pruned.");
