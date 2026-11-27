@@ -36,6 +36,7 @@ static constexpr size_t WARN_FLUSH_COINS_COUNT{10'000'000};
 
 bool CCoinsViewDB::NeedsUpgrade()
 {
+    std::shared_lock rw_lock{m_db_rw_mutex};
     std::unique_ptr<CDBIterator> cursor{m_db->NewIterator()};
     // DB_COINS was deprecated in v0.15.0, commit
     // 1088b02f0ccd7358d2b7076bb9e122d59d502d02
@@ -58,7 +59,20 @@ struct CoinEntry {
 CCoinsViewDB::CCoinsViewDB(DBParams db_params, CoinsViewOptions options) :
     m_db_params{std::move(db_params)},
     m_options{std::move(options)},
-    m_db{std::make_unique<CDBWrapper>(m_db_params)} { }
+    m_db{std::make_unique<CDBWrapper>(m_db_params)}
+{
+    bool has_coins = false;
+    if (!m_db_params.wipe_data) {
+        std::unique_ptr<CDBIterator> cursor{m_db->NewIterator()};
+        cursor->Seek(DB_COIN);
+        cursor->CheckStatus();
+        uint8_t prefix{0};
+        if (cursor->Valid() && cursor->GetKey(prefix) && prefix == DB_COIN) {
+            has_coins = true;
+        }
+    }
+    m_has_coins.store(has_coins, std::memory_order_release);
+}
 
 CCoinsViewDB::~CCoinsViewDB()
 {
@@ -75,9 +89,10 @@ void CCoinsViewDB::ResizeCache(size_t new_cache_size)
     // We can't do this operation with an in-memory DB since we'll lose all the coins upon
     // reset.
     if (!m_db_params.memory_only) {
+        // Hold m_db_mutex (against CompactFullAsync) and exclusive m_db_rw_mutex (against
+        // concurrent off-cs_main PeekCoin/HaveCoin readers) while reopening LevelDB.
         LOCK(m_db_mutex);
-        // Have to do a reset first to get the original `m_db` state to release its
-        // filesystem lock.
+        std::unique_lock rw_lock{m_db_rw_mutex};
         m_db.reset();
         m_db_params.cache_bytes = new_cache_size;
         m_db_params.wipe_data = false;
@@ -87,6 +102,8 @@ void CCoinsViewDB::ResizeCache(size_t new_cache_size)
 
 std::optional<Coin> CCoinsViewDB::GetCoin(const COutPoint& outpoint) const
 {
+    if (!m_has_coins.load(std::memory_order_acquire)) return std::nullopt;
+    std::shared_lock rw_lock{m_db_rw_mutex};
     Coin coin;
     const CDBWrapper::ReadStatus res = m_db->TryRead(CoinEntry(&outpoint), coin);
     if (!res) {
@@ -114,10 +131,13 @@ std::optional<Coin> CCoinsViewDB::PeekCoin(const COutPoint& outpoint) const
 
 bool CCoinsViewDB::HaveCoin(const COutPoint& outpoint) const
 {
+    if (!m_has_coins.load(std::memory_order_acquire)) return false;
+    std::shared_lock rw_lock{m_db_rw_mutex};
     return m_db->Exists(CoinEntry(&outpoint));
 }
 
 uint256 CCoinsViewDB::GetBestBlock() const {
+    std::shared_lock rw_lock{m_db_rw_mutex};
     uint256 hashBestChain;
     if (!m_db->Read(DB_BEST_BLOCK, hashBestChain))
         return uint256();
@@ -125,6 +145,7 @@ uint256 CCoinsViewDB::GetBestBlock() const {
 }
 
 std::vector<uint256> CCoinsViewDB::GetHeadBlocks() const {
+    std::shared_lock rw_lock{m_db_rw_mutex};
     std::vector<uint256> vhashHeadBlocks;
     if (!m_db->Read(DB_HEAD_BLOCKS, vhashHeadBlocks)) {
         return std::vector<uint256>();
@@ -132,17 +153,26 @@ std::vector<uint256> CCoinsViewDB::GetHeadBlocks() const {
     return vhashHeadBlocks;
 }
 
-void CCoinsViewDB::BatchWrite(CoinsViewCacheCursor& cursor, const uint256& block_hash)
+void CCoinsViewDB::BatchWriteEntries(
+    size_t dirty_count,
+    size_t total_count,
+    const uint256& block_hash,
+    const std::function<void(CoinsWriteSink&)>& emit_entries)
 {
+    std::shared_lock rw_lock{m_db_rw_mutex};
     CDBBatch batch(*m_db);
-    size_t count = 0;
-    const size_t dirty_count{cursor.GetDirtyCount()};
     assert(!block_hash.IsNull());
 
-    uint256 old_tip = GetBestBlock();
+    uint256 old_tip;
+    if (!m_db->Read(DB_BEST_BLOCK, old_tip)) {
+        old_tip.SetNull();
+    }
     if (old_tip.IsNull()) {
         // We may be in the middle of replaying.
-        std::vector<uint256> old_heads = GetHeadBlocks();
+        std::vector<uint256> old_heads;
+        if (!m_db->Read(DB_HEAD_BLOCKS, old_heads)) {
+            old_heads.clear();
+        }
         if (old_heads.size() == 2) {
             if (old_heads[0] != block_hash) {
                 LogError("The coins database detected an inconsistent state, likely due to a previous crash or shutdown. You will need to restart bitcoind with the -reindex-chainstate or -reindex configuration option.\n");
@@ -154,7 +184,7 @@ void CCoinsViewDB::BatchWrite(CoinsViewCacheCursor& cursor, const uint256& block
 
     if (dirty_count > WARN_FLUSH_COINS_COUNT) LogWarning("Flushing large (%d entries) UTXO set to disk, it may take several minutes", dirty_count);
     LOG_TIME_MILLIS_WITH_CATEGORY(strprintf("write coins cache to disk (%d out of %d cached coins)",
-        dirty_count, cursor.GetTotalCount()), BCLog::BENCH);
+        dirty_count, total_count), BCLog::BENCH);
 
     // In the first batch, mark the database as being in the middle of a
     // transition from old_tip to block_hash.
@@ -163,31 +193,53 @@ void CCoinsViewDB::BatchWrite(CoinsViewCacheCursor& cursor, const uint256& block
     batch.Erase(DB_BEST_BLOCK);
     batch.Write(DB_HEAD_BLOCKS, Vector(block_hash, old_tip));
 
-    for (auto it{cursor.Begin()}; it != cursor.End();) {
-        if (it->second.IsDirty()) {
-            CoinEntry entry(&it->first);
-            if (it->second.coin.IsSpent()) {
-                batch.Erase(entry);
-            } else {
-                batch.Write(entry, it->second.coin);
-            }
-        }
-        count++;
-        it = cursor.NextAndMaybeErase(*it);
-        if (batch.ApproximateSize() > m_options.batch_write_bytes) {
-            LogDebug(BCLog::COINDB, "Writing partial batch of %.2f MiB\n", batch.ApproximateSize() / double(1_MiB));
+    struct DBCoinsWriteSink final : CoinsWriteSink {
+        CDBWrapper& db;
+        CDBBatch& batch;
+        const CoinsViewOptions& options;
+        std::atomic<bool>& has_coins;
+        size_t written{0};
 
-            m_db->WriteBatch(batch);
-            batch.Clear();
-            if (m_options.simulate_crash_ratio) {
-                static FastRandomContext rng;
-                if (rng.randrange(m_options.simulate_crash_ratio) == 0) {
-                    LogError("Simulating a crash. Goodbye.");
-                    _Exit(0);
+        DBCoinsWriteSink(CDBWrapper& d, CDBBatch& b, const CoinsViewOptions& o, std::atomic<bool>& hc)
+            : db{d}, batch{b}, options{o}, has_coins{hc} {}
+
+        void MaybeFlushBatch()
+        {
+            if (batch.ApproximateSize() > options.batch_write_bytes) {
+                LogDebug(BCLog::COINDB, "Writing partial batch of %.2f MiB\n", batch.ApproximateSize() / double(1_MiB));
+                db.WriteBatch(batch);
+                batch.Clear();
+                if (options.simulate_crash_ratio) {
+                    static FastRandomContext rng;
+                    if (rng.randrange(options.simulate_crash_ratio) == 0) {
+                        LogError("Simulating a crash. Goodbye.");
+                        _Exit(0);
+                    }
                 }
             }
         }
-    }
+
+        void Write(const COutPoint& outpoint, const Coin& coin) override
+        {
+            if (!has_coins.load(std::memory_order_relaxed)) {
+                has_coins.store(true, std::memory_order_release);
+            }
+            CoinEntry entry(&outpoint);
+            batch.Write(entry, coin);
+            ++written;
+            MaybeFlushBatch();
+        }
+
+        void Erase(const COutPoint& outpoint) override
+        {
+            CoinEntry entry(&outpoint);
+            batch.Erase(entry);
+            ++written;
+            MaybeFlushBatch();
+        }
+    } sink{*m_db, batch, m_options, m_has_coins};
+
+    emit_entries(sink);
 
     // In the last batch, mark the database as consistent with block_hash again.
     batch.Erase(DB_HEAD_BLOCKS);
@@ -195,16 +247,34 @@ void CCoinsViewDB::BatchWrite(CoinsViewCacheCursor& cursor, const uint256& block
 
     LogDebug(BCLog::COINDB, "Writing final batch of %.2f MiB\n", batch.ApproximateSize() / double(1_MiB));
     m_db->WriteBatch(batch);
-    LogDebug(BCLog::COINDB, "Committed %u changed transaction outputs (out of %u) to coin database...", (unsigned int)dirty_count, (unsigned int)count);
+    LogDebug(BCLog::COINDB, "Committed %u changed transaction outputs (out of %u) to coin database...", (unsigned int)sink.written, (unsigned int)total_count);
+}
+
+void CCoinsViewDB::BatchWrite(CoinsViewCacheCursor& cursor, const uint256& block_hash)
+{
+    BatchWriteEntries(cursor.GetDirtyCount(), cursor.GetTotalCount(), block_hash, [&](CoinsWriteSink& sink) {
+        for (auto it{cursor.Begin()}; it != cursor.End();) {
+            if (it->second.IsDirty()) {
+                if (it->second.coin.IsSpent()) {
+                    sink.Erase(it->first);
+                } else {
+                    sink.Write(it->first, it->second.coin);
+                }
+            }
+            it = cursor.NextAndMaybeErase(*it);
+        }
+    });
 }
 
 size_t CCoinsViewDB::EstimateSize() const
 {
+    std::shared_lock rw_lock{m_db_rw_mutex};
     return m_db->EstimateSize(DB_COIN, uint8_t(DB_COIN + 1));
 }
 
 std::optional<std::string> CCoinsViewDB::GetDBProperty(const std::string& property)
 {
+    std::shared_lock rw_lock{m_db_rw_mutex};
     return m_db->GetProperty(property);
 }
 
@@ -216,6 +286,7 @@ std::shared_future<void> CCoinsViewDB::CompactFullAsync()
         try {
             util::ThreadRename("utxocompact");
             LOCK(m_db_mutex);
+            std::shared_lock rw_lock{m_db_rw_mutex};
 
             m_db->CompactFull();
         } catch (const std::exception& e) {
@@ -231,8 +302,8 @@ class CCoinsViewDBCursor: public CCoinsViewCursor
 public:
     // Prefer using CCoinsViewDB::Cursor() since we want to perform some
     // cache warmup on instantiation.
-    CCoinsViewDBCursor(CDBIterator* pcursorIn, const uint256& in_block_hash):
-        CCoinsViewCursor(in_block_hash), pcursor(pcursorIn) {}
+    CCoinsViewDBCursor(std::shared_lock<std::shared_mutex>&& db_lock, CDBIterator* pcursorIn, const uint256& in_block_hash):
+        CCoinsViewCursor(in_block_hash), m_db_lock(std::move(db_lock)), pcursor(pcursorIn) {}
     ~CCoinsViewDBCursor() = default;
 
     bool GetKey(COutPoint &key) const override;
@@ -242,6 +313,8 @@ public:
     void Next() override;
 
 private:
+    // Declared before pcursor so pcursor is destroyed before m_db_lock is released.
+    std::shared_lock<std::shared_mutex> m_db_lock;
     std::unique_ptr<CDBIterator> pcursor;
     std::pair<char, COutPoint> keyTmp;
 
@@ -250,8 +323,15 @@ private:
 
 std::unique_ptr<CCoinsViewCursor> CCoinsViewDB::Cursor() const
 {
+    std::shared_lock rw_lock{m_db_rw_mutex};
+    uint256 best_block;
+    if (!m_db->Read(DB_BEST_BLOCK, best_block)) {
+        best_block.SetNull();
+    }
     auto i = std::make_unique<CCoinsViewDBCursor>(
-        const_cast<CDBWrapper&>(*m_db).NewIterator(), GetBestBlock());
+        std::move(rw_lock),
+        const_cast<CDBWrapper&>(*m_db).NewIterator(/*use_snapshot=*/true),
+        best_block);
     /* It seems that there are no "const iterators" for LevelDB.  Since we
        only need read operations on it, use a const-cast to get around
        that restriction.  */

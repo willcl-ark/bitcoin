@@ -391,9 +391,21 @@ bool CDBWrapper::IsEmpty()
 }
 
 struct CDBIterator::IteratorImpl {
-    const std::unique_ptr<leveldb::Iterator> iter;
+    std::unique_ptr<leveldb::Iterator> iter;
+    leveldb::DB* db{nullptr};
+    const leveldb::Snapshot* snapshot{nullptr};
 
-    explicit IteratorImpl(leveldb::Iterator* _iter) : iter{_iter} {}
+    IteratorImpl(leveldb::Iterator* _iter, leveldb::DB* _db = nullptr, const leveldb::Snapshot* _snapshot = nullptr)
+        : iter{_iter}, db{_db}, snapshot{_snapshot} {}
+
+    ~IteratorImpl()
+    {
+        // LevelDB requires iterators using a snapshot to be destroyed before releasing the snapshot.
+        iter.reset();
+        if (snapshot && db) {
+            db->ReleaseSnapshot(snapshot);
+        }
+    }
 };
 
 CDBIterator::CDBIterator(const CDBWrapper& _parent, util::NotNullUniquePtr<IteratorImpl> _piter)
@@ -403,9 +415,16 @@ CDBIterator::CDBIterator(const CDBWrapper& _parent, util::NotNullUniquePtr<Itera
     m_scratch.reserve(DBWRAPPER_PREALLOC_KEY_SIZE);
 }
 
-CDBIterator* CDBWrapper::NewIterator()
+CDBIterator* CDBWrapper::NewIterator(bool use_snapshot)
 {
-    return new CDBIterator{*this, util::MakeNotNullUnique<CDBIterator::IteratorImpl>(DBContext().pdb->NewIterator(DBContext().iteroptions))};
+    leveldb::ReadOptions opts = DBContext().iteroptions;
+    const leveldb::Snapshot* snapshot{nullptr};
+    if (use_snapshot) {
+        snapshot = DBContext().pdb->GetSnapshot();
+        opts.snapshot = snapshot;
+    }
+    return new CDBIterator{*this, util::MakeNotNullUnique<CDBIterator::IteratorImpl>(
+        DBContext().pdb->NewIterator(opts), DBContext().pdb, snapshot)};
 }
 
 void CDBIterator::SeekImpl(std::span<const std::byte> key)
@@ -428,6 +447,7 @@ std::span<const std::byte> CDBIterator::GetValueImpl() const
 
 CDBIterator::~CDBIterator() = default;
 bool CDBIterator::Valid() const { return m_impl_iter->iter->Valid(); }
+void CDBIterator::CheckStatus() const { HandleError(m_impl_iter->iter->status()); }
 void CDBIterator::SeekToFirst() { m_impl_iter->iter->SeekToFirst(); }
 void CDBIterator::Next() { m_impl_iter->iter->Next(); }
 

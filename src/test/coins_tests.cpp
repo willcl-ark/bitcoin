@@ -1199,4 +1199,114 @@ BOOST_AUTO_TEST_CASE(ccoins_peekcoin)
     BOOST_CHECK(!main_cache.HaveCoinInCache(outpoint));
 }
 
+BOOST_FIXTURE_TEST_CASE(coins_view_db_batch_write_entries_snapshot_and_find_by_txid, FlushTest)
+{
+    const fs::path db_path{m_args.GetDataDirBase() / "coins_db_streaming_test"};
+
+    const Txid tx1{Txid::FromUint256(m_rng.rand256())};
+    const Txid tx2{Txid::FromUint256(m_rng.rand256())};
+    const Txid tx_missing{Txid::FromUint256(m_rng.rand256())};
+    const COutPoint op1{tx1, 0};
+    const COutPoint op2{tx2, 3}; // non-zero vout tests FindCoinByTxid scanning
+    const Coin coin1{MakeCoin()};
+    const Coin coin2{MakeCoin()};
+    const uint256 block1{m_rng.rand256()};
+    const uint256 block2{m_rng.rand256()};
+
+    {
+        CCoinsViewDB db{{.path = db_path, .cache_bytes = 1_MiB, .wipe_data = true}, {}};
+
+        // Fresh DB starts with empty-DB fast path: lookups miss cleanly.
+        BOOST_CHECK(!db.GetCoin(op1).has_value());
+        BOOST_CHECK(!db.HaveCoin(op1));
+        BOOST_CHECK(!FindCoinByTxid(db, tx1).has_value());
+
+        // Stream writes directly via BatchWriteEntries().
+        db.BatchWriteEntries(/*dirty_count=*/2, /*total_count=*/2, block1, [&](CoinsWriteSink& sink) {
+            sink.Write(op1, coin1);
+            sink.Write(op2, coin2);
+        });
+
+        BOOST_CHECK_EQUAL(db.GetBestBlock(), block1);
+        BOOST_CHECK_EQUAL(*Assert(db.GetCoin(op1)), coin1);
+        BOOST_CHECK_EQUAL(*Assert(db.GetCoin(op2)), coin2);
+        BOOST_CHECK_EQUAL(*Assert(FindCoinByTxid(db, tx1)), coin1);
+        BOOST_CHECK_EQUAL(*Assert(FindCoinByTxid(db, tx2)), coin2);
+        BOOST_CHECK(!FindCoinByTxid(db, tx_missing).has_value());
+
+        // Snapshot cursor sees pre-mutation state across a subsequent BatchWriteEntries() erase.
+        auto cursor = db.Cursor();
+        BOOST_REQUIRE(cursor != nullptr);
+
+        db.BatchWriteEntries(/*dirty_count=*/1, /*total_count=*/1, block2, [&](CoinsWriteSink& sink) {
+            sink.Erase(op1);
+        });
+        BOOST_CHECK(!db.GetCoin(op1).has_value());
+        BOOST_CHECK(db.GetCoin(op2).has_value());
+        BOOST_CHECK_EQUAL(db.GetBestBlock(), block2);
+
+        size_t snap_count{0};
+        bool snap_saw_op1{false};
+        bool snap_saw_op2{false};
+        for (; cursor->Valid(); cursor->Next()) {
+            COutPoint key;
+            Coin val;
+            BOOST_REQUIRE(cursor->GetKey(key));
+            BOOST_REQUIRE(cursor->GetValue(val));
+            if (key == op1) {
+                BOOST_CHECK_EQUAL(val, coin1);
+                snap_saw_op1 = true;
+            } else if (key == op2) {
+                BOOST_CHECK_EQUAL(val, coin2);
+                snap_saw_op2 = true;
+            }
+            ++snap_count;
+        }
+        BOOST_CHECK_EQUAL(snap_count, 2U);
+        BOOST_CHECK(snap_saw_op1);
+        BOOST_CHECK(snap_saw_op2);
+
+        cursor.reset();
+
+        // ResizeCache safely reopens LevelDB with the new cache size once active readers/cursors release it.
+        db.ResizeCache(2_MiB);
+        BOOST_CHECK_EQUAL(*Assert(db.GetCoin(op2)), coin2);
+    }
+
+    // Reopen from disk: startup scan detects DB_COIN entry and allows reading op2.
+    {
+        CCoinsViewDB db{{.path = db_path, .cache_bytes = 1_MiB, .wipe_data = false}, {}};
+        BOOST_CHECK_EQUAL(db.GetBestBlock(), block2);
+        BOOST_CHECK(!db.GetCoin(op1).has_value());
+        BOOST_CHECK_EQUAL(*Assert(db.GetCoin(op2)), coin2);
+
+        // Erase remaining coin and verify reopening detects empty coin set cleanly.
+        db.BatchWriteEntries(/*dirty_count=*/1, /*total_count=*/0, block2, [&](CoinsWriteSink& sink) {
+            sink.Erase(op2);
+        });
+    }
+    {
+        CCoinsViewDB db{{.path = db_path, .cache_bytes = 1_MiB, .wipe_data = false}, {}};
+        BOOST_CHECK(!db.GetCoin(op2).has_value());
+        BOOST_CHECK(!FindCoinByTxid(db, tx2).has_value());
+    }
+
+    // Also verify default CCoinsView::BatchWriteEntries() fallback on CCoinsViewCache.
+    {
+        CCoinsViewCache overlay{&CoinsViewEmpty::Get()};
+        overlay.BatchWriteEntries(/*dirty_count=*/2, /*total_count=*/2, block1, [&](CoinsWriteSink& sink) {
+            sink.Write(op1, coin1);
+            sink.Write(op2, coin2);
+        });
+        BOOST_CHECK_EQUAL(overlay.GetBestBlock(), block1);
+        BOOST_CHECK_EQUAL(*Assert(overlay.GetCoin(op1)), coin1);
+        BOOST_CHECK_EQUAL(*Assert(FindCoinByTxid(overlay, tx2)), coin2);
+        overlay.BatchWriteEntries(/*dirty_count=*/1, /*total_count=*/1, block2, [&](CoinsWriteSink& sink) {
+            sink.Erase(op1);
+        });
+        BOOST_CHECK(!overlay.HaveCoin(op1));
+        BOOST_CHECK(overlay.HaveCoin(op2));
+    }
+}
+
 BOOST_AUTO_TEST_SUITE_END()

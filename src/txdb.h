@@ -13,11 +13,13 @@
 #include <sync.h>
 #include <util/fs.h>
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <future>
 #include <memory>
 #include <optional>
+#include <shared_mutex>
 #include <string>
 #include <vector>
 
@@ -40,7 +42,12 @@ protected:
     CoinsViewOptions m_options;
     //! Prevents CompactFull() from using m_db while ResizeCache() replaces it.
     Mutex m_db_mutex;
+    //! Pins m_db alive for concurrent off-cs_main readers while allowing ResizeCache() to reopen it safely.
+    mutable std::shared_mutex m_db_rw_mutex;
     std::unique_ptr<CDBWrapper> m_db;
+    //! False while the underlying LevelDB contains zero DB_COIN entries, allowing
+    //! concurrent readers to short-circuit empty-DB misses without LevelDB lock contention.
+    std::atomic<bool> m_has_coins{true};
     std::shared_future<void> m_compaction;
 public:
     explicit CCoinsViewDB(DBParams db_params, CoinsViewOptions options);
@@ -52,6 +59,11 @@ public:
     uint256 GetBestBlock() const override;
     std::vector<uint256> GetHeadBlocks() const override;
     void BatchWrite(CoinsViewCacheCursor& cursor, const uint256& block_hash) override;
+    void BatchWriteEntries(
+        size_t dirty_count,
+        size_t total_count,
+        const uint256& block_hash,
+        const std::function<void(CoinsWriteSink&)>& emit_entries) override;
     //! Get a cursor to iterate over the whole state.
     std::unique_ptr<CCoinsViewCursor> Cursor() const;
 

@@ -155,6 +155,9 @@ public:
 
     bool Valid() const;
 
+    /** Throw dbwrapper_error if the underlying LevelDB iterator encountered an I/O or corruption error. */
+    void CheckStatus() const;
+
     void SeekToFirst();
 
     template<typename K> void Seek(const K& key) {
@@ -332,7 +335,7 @@ public:
     // Get an estimate of LevelDB memory usage (in bytes).
     size_t DynamicMemoryUsage() const;
 
-    CDBIterator* NewIterator();
+    CDBIterator* NewIterator(bool use_snapshot = false);
 
     /**
      * Return true if the database managed by this class contains no entries.

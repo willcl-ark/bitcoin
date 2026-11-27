@@ -32,6 +32,35 @@ CoinsViewEmpty& CoinsViewEmpty::Get()
     return instance;
 }
 
+void CCoinsView::BatchWriteEntries(
+    size_t,
+    size_t,
+    const uint256& block_hash,
+    const std::function<void(CoinsWriteSink&)>& emit_entries)
+{
+    CCoinsViewCache staging{&CoinsViewEmpty::Get()};
+    struct StagingSink final : CoinsWriteSink {
+        CCoinsViewCache& cache;
+        explicit StagingSink(CCoinsViewCache& c) : cache{c} {}
+        void Write(const COutPoint& outpoint, const Coin& coin) override
+        {
+            cache.AddCoin(outpoint, Coin{coin}, /*possible_overwrite=*/true);
+        }
+        void Erase(const COutPoint& outpoint) override
+        {
+            CTxOut dummy_out;
+            dummy_out.nValue = 0;
+            dummy_out.scriptPubKey.assign(1, OP_TRUE);
+            cache.AddCoin(outpoint, Coin{std::move(dummy_out), 1, false}, /*possible_overwrite=*/true);
+            cache.SpendCoin(outpoint);
+        }
+    } sink{staging};
+    emit_entries(sink);
+    staging.SetBestBlock(block_hash);
+    staging.SetBackend(*this);
+    staging.Flush(/*reallocate_cache=*/false);
+}
+
 std::optional<Coin> CCoinsViewCache::PeekCoin(const COutPoint& outpoint) const
 {
     if (auto it{cacheCoins.find(outpoint)}; it != cacheCoins.end()) {
@@ -424,6 +453,16 @@ const Coin& AccessByTxid(const CCoinsViewCache& view, const Txid& txid)
         ++iter.n;
     }
     return coinEmpty;
+}
+
+std::optional<Coin> FindCoinByTxid(const CCoinsView& view, const Txid& txid)
+{
+    COutPoint iter(txid, 0);
+    while (iter.n < MAX_OUTPUTS_PER_BLOCK) {
+        if (auto coin = view.GetCoin(iter)) return coin;
+        ++iter.n;
+    }
+    return std::nullopt;
 }
 
 template <typename ReturnType, typename Func>

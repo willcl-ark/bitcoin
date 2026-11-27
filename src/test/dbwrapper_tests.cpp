@@ -558,5 +558,78 @@ BOOST_AUTO_TEST_CASE(unicodepath)
     BOOST_CHECK(fs::exists(lockPath));
 }
 
+BOOST_AUTO_TEST_CASE(dbwrapper_iterator_snapshot_isolation)
+{
+    const fs::path path{m_args.GetDataDirBase() / "dbwrapper_snapshot_iter"};
+    CDBWrapper dbw({.path = path, .cache_bytes = 1_MiB, .memory_only = true, .wipe_data = false, .obfuscate = false});
+
+    for (uint8_t k = 1; k <= 5; ++k) {
+        dbw.Write(k, static_cast<uint32_t>(k * 10));
+    }
+
+    // Open a snapshot-backed iterator before mutating the DB.
+    std::unique_ptr<CDBIterator> snap_it{dbw.NewIterator(/*use_snapshot=*/true)};
+    snap_it->SeekToFirst();
+    snap_it->CheckStatus();
+
+    // Mutate existing keys, erase one, and insert a new key after the snapshot was taken.
+    dbw.Write(uint8_t{2}, uint32_t{999});
+    dbw.Erase(uint8_t{4});
+    dbw.Write(uint8_t{6}, uint32_t{60});
+
+    // The snapshot iterator must observe only the pre-mutation keys and values.
+    std::vector<std::pair<uint8_t, uint32_t>> snap_entries;
+    for (; snap_it->Valid(); snap_it->Next()) {
+        uint8_t k{0};
+        uint32_t v{0};
+        BOOST_REQUIRE(snap_it->GetKey(k));
+        BOOST_REQUIRE(snap_it->GetValue(v));
+        snap_entries.emplace_back(k, v);
+    }
+    snap_it->CheckStatus();
+    const std::vector<std::pair<uint8_t, uint32_t>> expected_snap{{1, 10}, {2, 20}, {3, 30}, {4, 40}, {5, 50}};
+    BOOST_CHECK(snap_entries == expected_snap);
+
+    // A fresh iterator sees the post-mutation state.
+    std::unique_ptr<CDBIterator> live_it{dbw.NewIterator(/*use_snapshot=*/false)};
+    live_it->SeekToFirst();
+    std::vector<std::pair<uint8_t, uint32_t>> live_entries;
+    for (; live_it->Valid(); live_it->Next()) {
+        uint8_t k{0};
+        uint32_t v{0};
+        BOOST_REQUIRE(live_it->GetKey(k));
+        BOOST_REQUIRE(live_it->GetValue(v));
+        live_entries.emplace_back(k, v);
+    }
+    live_it->CheckStatus();
+    const std::vector<std::pair<uint8_t, uint32_t>> expected_live{{1, 10}, {2, 999}, {3, 30}, {5, 50}, {6, 60}};
+    BOOST_CHECK(live_entries == expected_live);
+}
+
+BOOST_AUTO_TEST_CASE(dbwrapper_iterator_checkstatus_throws_on_db_error)
+{
+    const fs::path path{m_args.GetDataDirBase() / "dbwrapper_iter_error"};
+    constexpr uint8_t key{'Z'};
+
+    const auto make_db = [](const fs::path& p, const bool force_compact) {
+        return CDBWrapper({.path = p, .cache_bytes = 1 << 20, .obfuscate = false,
+                           .options = {.force_compact = force_compact}});
+    };
+
+    make_db(path, /*force_compact=*/false).Write(key, m_rng.rand256());
+    (void)make_db(path, /*force_compact=*/true);
+
+    for (const auto& entry : fs::directory_iterator(path)) {
+        if (entry.path().extension() == ".ldb") {
+            std::ofstream{entry.path(), std::ios::binary | std::ios::trunc}.write("\xff", 1);
+        }
+    }
+
+    auto db{make_db(path, /*force_compact=*/false)};
+    std::unique_ptr<CDBIterator> it{db.NewIterator()};
+    it->Seek(key);
+    BOOST_CHECK(!it->Valid());
+    BOOST_CHECK_EXCEPTION(it->CheckStatus(), dbwrapper_error, HasReason("Fatal LevelDB error"));
+}
 
 BOOST_AUTO_TEST_SUITE_END()

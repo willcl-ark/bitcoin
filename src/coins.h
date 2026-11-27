@@ -351,6 +351,15 @@ private:
     bool m_will_erase;
 };
 
+/** Streaming sink for bulk coin writes without intermediate map copies. */
+class CoinsWriteSink
+{
+public:
+    virtual ~CoinsWriteSink() = default;
+    virtual void Write(const COutPoint& outpoint, const Coin& coin) = 0;
+    virtual void Erase(const COutPoint& outpoint) = 0;
+};
+
 /** Pure abstract view on the open txout dataset. */
 class CCoinsView
 {
@@ -383,6 +392,15 @@ public:
     //! The passed cursor is used to iterate through the coins.
     virtual void BatchWrite(CoinsViewCacheCursor& cursor, const uint256& block_hash) = 0;
 
+    //! Stream a bulk modification directly through a CoinsWriteSink.
+    //! Backends that write directly to disk (such as CCoinsViewDB) override this to avoid
+    //! intermediate CCoinsMap copies.
+    virtual void BatchWriteEntries(
+        size_t dirty_count,
+        size_t total_count,
+        const uint256& block_hash,
+        const std::function<void(CoinsWriteSink&)>& emit_entries);
+
     //! Estimate database size
     virtual size_t EstimateSize() const = 0;
 };
@@ -408,6 +426,7 @@ public:
     {
         for (auto it{cursor.Begin()}; it != cursor.End(); it = cursor.NextAndMaybeErase(*it)) { }
     }
+    void BatchWriteEntries(size_t, size_t, const uint256&, const std::function<void(CoinsWriteSink&)>&) override {}
     size_t EstimateSize() const override { return 0; }
 };
 
@@ -428,6 +447,14 @@ public:
     uint256 GetBestBlock() const override { return base->GetBestBlock(); }
     std::vector<uint256> GetHeadBlocks() const override { return base->GetHeadBlocks(); }
     void BatchWrite(CoinsViewCacheCursor& cursor, const uint256& block_hash) override { base->BatchWrite(cursor, block_hash); }
+    void BatchWriteEntries(
+        size_t dirty_count,
+        size_t total_count,
+        const uint256& block_hash,
+        const std::function<void(CoinsWriteSink&)>& emit_entries) override
+    {
+        base->BatchWriteEntries(dirty_count, total_count, block_hash, emit_entries);
+    }
     size_t EstimateSize() const override { return base->EstimateSize(); }
 };
 
@@ -491,6 +518,14 @@ public:
     uint256 GetBestBlock() const override;
     void SetBestBlock(const uint256& block_hash);
     void BatchWrite(CoinsViewCacheCursor& cursor, const uint256& block_hash) override;
+    void BatchWriteEntries(
+        size_t dirty_count,
+        size_t total_count,
+        const uint256& block_hash,
+        const std::function<void(CoinsWriteSink&)>& emit_entries) override
+    {
+        CCoinsView::BatchWriteEntries(dirty_count, total_count, block_hash, emit_entries);
+    }
 
     /**
      * Check if we have the given utxo already loaded in this cache.
@@ -795,6 +830,9 @@ void AddCoins(CCoinsViewCache& cache, const CTransaction& tx, int nHeight, bool 
 //! which is not found in the cache, it can cause up to MAX_OUTPUTS_PER_BLOCK
 //! lookups to database, so it should be used with care.
 const Coin& AccessByTxid(const CCoinsViewCache& cache, const Txid& txid);
+
+//! Value-returning equivalent of AccessByTxid for any CCoinsView.
+std::optional<Coin> FindCoinByTxid(const CCoinsView& view, const Txid& txid);
 
 /**
  * This is a minimally invasive approach to shutdown on LevelDB read errors from the
