@@ -887,6 +887,19 @@ public:
     std::pair<int, int> GetPruneRange(int last_height_can_prune) const EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
 protected:
+    enum class ParallelIBDResult {
+        CONTINUE_SERIAL,
+        STOP_ACTIVATION,
+        SYSTEM_ERROR,
+    };
+
+    ParallelIBDResult ActivateBestChainParallelIBD(
+        BlockValidationState& state,
+        CBlockIndex*& pindexMostWork,
+        bool& exited_ibd)
+        EXCLUSIVE_LOCKS_REQUIRED(m_chainstate_mutex)
+        LOCKS_EXCLUDED(::cs_main);
+
     bool ActivateBestChainStep(BlockValidationState& state, CBlockIndex& index_most_work, const std::shared_ptr<const CBlock>& pblock, bool& fInvalidFound, std::vector<ConnectedBlock>& connected_blocks) EXCLUSIVE_LOCKS_REQUIRED(cs_main, m_mempool->cs);
     bool ConnectTip(
         BlockValidationState& state,
@@ -1024,15 +1037,17 @@ private:
     size_t m_active_pool_users GUARDED_BY(m_pool_lifecycle_mutex){0};
     bool m_pool_resize_pending GUARDED_BY(m_pool_lifecycle_mutex){false};
 
-    //! Shared state for the optional IBD-exit callback so registration handles can
-    //! safely unregister even if ChainstateManager is destroyed first (e.g. test restarts).
+    //! Shared state for optional IBD-exit callbacks so registration handles can
+    //! safely unregister independently even if ChainstateManager is destroyed first (e.g. test restarts).
     struct IBDExitCallbackState {
         Mutex mutex;
-        std::function<void()> callback GUARDED_BY(mutex);
+        uint64_t next_id GUARDED_BY(mutex){1};
+        std::vector<std::pair<uint64_t, std::function<void()>>> callbacks GUARDED_BY(mutex);
         std::atomic<bool> pending{false};
     };
     std::shared_ptr<IBDExitCallbackState> m_ibd_exit_cb_state{std::make_shared<IBDExitCallbackState>()};
     std::atomic<bool> m_ibd_pool_expanded{false};
+    std::atomic<bool> m_ibd_teardown_deferred_for_historical{false};
 
     //! Timers and counters used for benchmarking validation in both background
     //! and active chainstates.
@@ -1223,6 +1238,7 @@ public:
         if (it != m_chainstates.end()) {
             auto ret{std::move(*it)};
             m_chainstates.erase(it);
+            m_ibd_teardown_deferred_for_historical.store(false, std::memory_order_release);
             return ret;
         }
         return nullptr;
@@ -1491,9 +1507,47 @@ public:
         }
     };
 
+    /** Non-blocking RAII guard registering an active validation pool user when no resize is pending.
+     *  Safe to acquire under ::cs_main (never waits on m_pool_idle_cv; falls back to serial if busy). */
+    class TryPoolUsageGuard
+    {
+        ChainstateManager& m_chainman;
+        bool m_engaged{false};
+
+    public:
+        explicit TryPoolUsageGuard(ChainstateManager& chainman)
+            : m_chainman{chainman}
+        {
+            LOCK(m_chainman.m_pool_lifecycle_mutex);
+            if (!m_chainman.m_pool_resize_pending) {
+                ++m_chainman.m_active_pool_users;
+                m_engaged = true;
+            }
+        }
+
+        TryPoolUsageGuard(const TryPoolUsageGuard&) = delete;
+        TryPoolUsageGuard& operator=(const TryPoolUsageGuard&) = delete;
+
+        explicit operator bool() const noexcept { return m_engaged; }
+
+        ~TryPoolUsageGuard()
+        {
+            if (!m_engaged) return;
+            bool notify = false;
+            {
+                LOCK(m_chainman.m_pool_lifecycle_mutex);
+                Assert(m_chainman.m_active_pool_users > 0);
+                if (--m_chainman.m_active_pool_users == 0) {
+                    notify = true;
+                }
+            }
+            if (notify) m_chainman.m_pool_idle_cv.notify_all();
+        }
+    };
+
     //! Safely resize the shared validation pool once active users drain.
     //! Must be called strictly outside cs_main and m_chainstate_mutex.
-    void ResizeValidationPool(int num_workers) EXCLUSIVE_LOCKS_REQUIRED(!m_pool_lifecycle_mutex) LOCKS_EXCLUDED(::cs_main);
+    void ResizeValidationPool(int num_workers) LOCKS_EXCLUDED(::cs_main) EXCLUSIVE_LOCKS_REQUIRED(!m_pool_lifecycle_mutex);
 
     //! Compute parallel IBD validation window width (0 disables parallel windowing).
     size_t ComputeIBDWindowWidth() const noexcept;
@@ -1501,30 +1555,35 @@ public:
     //! Return maximum byte budget for P2P BlockHandoffCache scaled to -dbcache.
     size_t GetHandoffCacheMaxBytes() const EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
-    //! RAII handle that unregisters the IBD-exit callback without dereferencing ChainstateManager.
+    //! RAII handle that unregisters its IBD-exit callback without dereferencing ChainstateManager.
     class IBDExitCallbackRegistration {
         std::shared_ptr<IBDExitCallbackState> m_state;
+        uint64_t m_id{0};
     public:
         IBDExitCallbackRegistration() = default;
-        explicit IBDExitCallbackRegistration(std::shared_ptr<IBDExitCallbackState> state)
-            : m_state{std::move(state)} {}
+        IBDExitCallbackRegistration(std::shared_ptr<IBDExitCallbackState> state, uint64_t id)
+            : m_state{std::move(state)}, m_id{id} {}
         IBDExitCallbackRegistration(const IBDExitCallbackRegistration&) = delete;
         IBDExitCallbackRegistration& operator=(const IBDExitCallbackRegistration&) = delete;
-        IBDExitCallbackRegistration(IBDExitCallbackRegistration&&) noexcept = default;
+        IBDExitCallbackRegistration(IBDExitCallbackRegistration&& other) noexcept
+            : m_state{std::move(other.m_state)}, m_id{std::exchange(other.m_id, 0)} {}
         IBDExitCallbackRegistration& operator=(IBDExitCallbackRegistration&& other) noexcept
         {
             if (this != &other) {
                 Reset();
                 m_state = std::move(other.m_state);
+                m_id = std::exchange(other.m_id, 0);
             }
             return *this;
         }
         void Reset() noexcept
         {
-            if (auto state = std::move(m_state)) {
-                LOCK(state->mutex);
-                state->callback = {};
-                state->pending.store(false, std::memory_order_release);
+            if (auto state_ptr = std::move(m_state)) {
+                const uint64_t id = std::exchange(m_id, 0);
+                IBDExitCallbackState& state = *state_ptr;
+                LOCK(state.mutex);
+                std::erase_if(state.callbacks, [id](const auto& entry) { return entry.first == id; });
+                state.pending.store(!state.callbacks.empty(), std::memory_order_release);
             }
         }
         ~IBDExitCallbackRegistration() { Reset(); }
@@ -1533,20 +1592,39 @@ public:
     //! Register callback invoked off cs_main when IBD resources tear down.
     [[nodiscard]] IBDExitCallbackRegistration RegisterIBDExitCallback(std::function<void()> cb);
 
-    //! Fast lock-free check whether any IBD-only resources are currently active or awaiting teardown.
-    bool HasActiveIBDResources() const noexcept
+    //! Fast lock-free check whether P2P-only IBD resources are currently active.
+    bool HasActiveP2PIBDResources() const noexcept
     {
-        return m_blockman.IsAsyncUndoWriterRunning() ||
-               m_blockman.HasPendingUndoWrites() ||
-               m_handoff_cache.Size() > 0 ||
-               m_ibd_pool_expanded.load(std::memory_order_acquire) ||
+        return m_handoff_cache.Size() > 0 ||
                m_ibd_exit_cb_state->pending.load(std::memory_order_acquire);
     }
 
-    //! Once IBD finishes and no historical AssumeUTXO chainstate needs IBD workers,
-    //! settle and join the async undo writer, clear the handoff cache, resize the
-    //! validation pool back to -prevoutfetchthreads, and notify the IBD-exit callback.
-    void MaybeTeardownIBDResources() LOCKS_EXCLUDED(::cs_main);
+    //! Fast lock-free check whether shared worker/undo IBD resources are currently active.
+    bool HasActiveWorkerIBDResources() const noexcept
+    {
+        return m_blockman.IsAsyncUndoWriterRunning() ||
+               m_blockman.HasPendingUndoWrites() ||
+               m_ibd_pool_expanded.load(std::memory_order_acquire);
+    }
+
+    //! Fast lock-free check whether any IBD-only resources are currently active or awaiting teardown.
+    bool HasActiveIBDResources() const noexcept
+    {
+        return HasActiveP2PIBDResources() || HasActiveWorkerIBDResources();
+    }
+
+    //! Fast lock-free check whether IBD teardown work can proceed now (avoids repeated calls
+    //! once P2P resources are torn down while an AssumeUTXO historical chainstate is still syncing).
+    bool HasPendingIBDTeardown() const noexcept
+    {
+        return HasActiveP2PIBDResources() ||
+               (HasActiveWorkerIBDResources() && !m_ibd_teardown_deferred_for_historical.load(std::memory_order_acquire));
+    }
+
+    //! Once IBD finishes, immediately clear the P2P handoff cache and invoke IBD-exit callbacks.
+    //! Once no historical AssumeUTXO chainstate still needs IBD workers, also settle and join
+    //! the async undo writer and resize the validation pool back to -prevoutfetchthreads.
+    void MaybeTeardownIBDResources() LOCKS_EXCLUDED(::cs_main) EXCLUSIVE_LOCKS_REQUIRED(!m_pool_lifecycle_mutex);
 
     ~ChainstateManager();
 
@@ -1696,5 +1774,11 @@ bool CheckInputScripts(const CTransaction& tx, TxValidationState& state,
                        bool cacheFullScriptStore, PrecomputedTransactionData& txdata,
                        ValidationCache& validation_cache,
                        std::vector<CScriptCheck>* pvChecks = nullptr);
+
+/** Wrap a signal CBlock with an IBDMemoryBudget::pinned_signals_bytes tracking holder. */
+std::shared_ptr<const CBlock> WrapBudgetedSignalBlock(
+    std::shared_ptr<const CBlock> block,
+    const std::shared_ptr<IBDMemoryBudget>& budget,
+    size_t bytes);
 
 #endif // BITCOIN_VALIDATION_H

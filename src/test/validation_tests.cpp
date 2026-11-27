@@ -360,4 +360,55 @@ BOOST_AUTO_TEST_CASE(block_malleation)
     }
 }
 
+BOOST_AUTO_TEST_CASE(wrap_budgeted_signal_block)
+{
+    auto budget = std::make_shared<IBDMemoryBudget>();
+    auto block1 = std::make_shared<CBlock>();
+    auto block2 = std::make_shared<CBlock>();
+
+    BOOST_CHECK_EQUAL(budget->pinned_signals_bytes.load(), 0U);
+
+    // Null / zero-byte edge cases do not modify pinned_signals_bytes.
+    BOOST_CHECK(WrapBudgetedSignalBlock(nullptr, budget, 1024) == nullptr);
+    BOOST_CHECK_EQUAL(budget->pinned_signals_bytes.load(), 0U);
+
+    {
+        auto zero_wrapped = WrapBudgetedSignalBlock(block1, budget, 0);
+        BOOST_CHECK_EQUAL(zero_wrapped.get(), block1.get());
+        BOOST_CHECK_EQUAL(budget->pinned_signals_bytes.load(), 0U);
+    }
+    {
+        auto no_budget = WrapBudgetedSignalBlock(block1, nullptr, 1024);
+        BOOST_CHECK_EQUAL(no_budget.get(), block1.get());
+        BOOST_CHECK_EQUAL(budget->pinned_signals_bytes.load(), 0U);
+    }
+
+    // Single wrapped block increments pinned_signals_bytes once while retained
+    // (including across shared_ptr copies) and returns to exact 0 on release.
+    constexpr size_t bytes1{4096};
+    constexpr size_t bytes2{8192};
+    {
+        std::shared_ptr<const CBlock> wrapped1 = WrapBudgetedSignalBlock(block1, budget, bytes1);
+        BOOST_REQUIRE(wrapped1 != nullptr);
+        BOOST_CHECK_EQUAL(wrapped1.get(), block1.get());
+        BOOST_CHECK_EQUAL(budget->pinned_signals_bytes.load(), bytes1);
+
+        std::shared_ptr<const CBlock> retained1 = wrapped1;
+        wrapped1.reset();
+        BOOST_CHECK_EQUAL(budget->pinned_signals_bytes.load(), bytes1);
+
+        std::shared_ptr<const CBlock> wrapped2 = WrapBudgetedSignalBlock(block2, budget, bytes2);
+        BOOST_REQUIRE(wrapped2 != nullptr);
+        BOOST_CHECK_EQUAL(wrapped2.get(), block2.get());
+        BOOST_CHECK_EQUAL(budget->pinned_signals_bytes.load(), bytes1 + bytes2);
+
+        retained1.reset();
+        BOOST_CHECK_EQUAL(budget->pinned_signals_bytes.load(), bytes2);
+
+        wrapped2.reset();
+        BOOST_CHECK_EQUAL(budget->pinned_signals_bytes.load(), 0U);
+    }
+    BOOST_CHECK_EQUAL(budget->pinned_signals_bytes.load(), 0U);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

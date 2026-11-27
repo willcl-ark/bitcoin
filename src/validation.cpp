@@ -2401,15 +2401,30 @@ bool ShouldEnforceBIP30(const CBlockIndex& pindex, const Consensus::Params& para
     // initial block download.
     //
     // Once BIP34 activated it was not possible to create new duplicate coinbases and thus other than starting
-    // with the 2 existing duplicate coinbase pairs, not possible to create overwriting txs. But by the
+    // with the 2 existing duplicate coinbase pairs, not possible to create overwriting txs.  But by the
     // time BIP34 activated, in each of the existing pairs the duplicate coinbase had overwritten the first
-    // before the first had been spent. Since those coinbases are sufficiently buried it's no longer possible
-    // to create further duplicate transactions descending from the known pairs either.
-    //
-    // BIP34 requires that a block at height X has its coinbase scriptSig start with CScriptNum(X).
-    // That implication is flawed if a pre-BIP34 block X has an indicated height Y > X that could collide
-    // at height Y. Exhaustive search of mainnet coinbases before BIP34 found the first possible collision
-    // is at height 1,983,702, so BIP30 is unconditionally enforced from that height onward.
+    // before the first had been spent.  Since those coinbases are sufficiently buried it's no longer possible to create further
+    // duplicate transactions descending from the known pairs either.
+    // If we're on the known chain at height greater than where BIP34 activated, we can save the db accesses needed for the BIP30 check.
+
+    // BIP34 requires that a block at height X (block X) has its coinbase
+    // scriptSig start with a CScriptNum of X (indicated height X).  The above
+    // logic of no longer requiring BIP30 once BIP34 activates is based on the
+    // assumption that all future coinbases after BIP34 activation are at height
+    // X and thus have a different scriptSig from all previous coinbases.
+    // However, this assumption is flawed.  Before BIP34 activated, coinbases
+    // were allowed to have arbitrary scriptSigs, which means a pre-BIP34 block
+    // at height X could have a scriptSig that happens to start with a valid
+    // CScriptNum for a future height Y > X (indicated height Y).  When block Y
+    // is later mined under BIP34, its coinbase scriptSig will start with Y, and
+    // if the rest of the coinbase transaction matches the pre-BIP34 coinbase
+    // (including outputs), block Y's coinbase could have the same txid as the
+    // pre-BIP34 coinbase, violating BIP30!
+    // Exhaustive search of all pre-BIP34 mainnet coinbase transactions found
+    // that the first block height where such a historical collision is possible
+    // is height 1,983,702 (where block 164,384's coinbase has indicated height
+    // 1,983,702). Therefore, BIP30 checks are unconditionally re-enabled from
+    // height 1,983,702 onward.
     static constexpr int BIP34_IMPLIES_BIP30_LIMIT = 1983702;
     if (pindex.nHeight >= BIP34_IMPLIES_BIP30_LIMIT) return true;
     if (IsBIP30Repeat(pindex)) return false;
@@ -2482,6 +2497,10 @@ bool ValidateBlockCore(const CBlock& block,
     // (its coinbase is unspendable).
     if (block_hash == consensus_params.hashGenesisBlock) {
         return true;
+    }
+
+    if (block.vtx.empty()) {
+        return state.Invalid(BlockValidationResult::BLOCK_CONSENSUS, "bad-blk-length", "size limits failed");
     }
 
     if (ctx.enforce_bip30) {
@@ -3068,8 +3087,11 @@ bool Chainstate::FlushStateToDisk(
                     return FatalError(m_chainman.GetNotifications(), state, _("Disk space is too low!"));
                 }
                 // Flush the chainstate (which may refer to block index entries).
-                empty_cache ? CoinsTip().Flush(/*reallocate_cache=*/true, &*m_chainman.GetValidationPool())
-                            : CoinsTip().Sync(&*m_chainman.GetValidationPool());
+                ChainstateManager::TryPoolUsageGuard pool_guard{m_chainman};
+                auto validation_pool = pool_guard ? std::optional{m_chainman.GetValidationPool()} : std::nullopt;
+                ThreadPool* flush_pool = validation_pool ? &**validation_pool : nullptr;
+                empty_cache ? CoinsTip().Flush(/*reallocate_cache=*/true, flush_pool)
+                            : CoinsTip().Sync(flush_pool);
                 m_last_flushed_block = m_blockman.LookupBlockIndex(CoinsTip().GetBestBlock());
                 full_flush_completed = true;
                 TRACEPOINT(utxocache, flush,
@@ -3590,12 +3612,558 @@ bool ChainstateManager::NotifyHeaderTip()
     return fNotify;
 }
 
-static void LimitValidationInterfaceQueue(ValidationSignals& signals) LOCKS_EXCLUDED(cs_main) {
+static void LimitValidationInterfaceQueue(ValidationSignals& signals, size_t max_pending = 10) LOCKS_EXCLUDED(cs_main) {
     AssertLockNotHeld(cs_main);
 
-    if (signals.CallbacksPending() > 10) {
+    if (signals.CallbacksPending() > max_pending) {
         signals.SyncWithValidationInterfaceQueue();
     }
+}
+
+std::shared_ptr<const CBlock> WrapBudgetedSignalBlock(
+    std::shared_ptr<const CBlock> block,
+    const std::shared_ptr<IBDMemoryBudget>& budget,
+    size_t bytes)
+{
+    if (!block || !budget || bytes == 0) return block;
+    struct PinHolder {
+        std::shared_ptr<const CBlock> inner;
+        std::shared_ptr<IBDMemoryBudget> budget;
+        size_t bytes;
+
+        PinHolder(std::shared_ptr<const CBlock> blk, std::shared_ptr<IBDMemoryBudget> b, size_t n)
+            : inner{std::move(blk)}, budget{std::move(b)}, bytes{n}
+        {
+            budget->pinned_signals_bytes.fetch_add(bytes, std::memory_order_relaxed);
+        }
+
+        PinHolder(const PinHolder&) = delete;
+        PinHolder& operator=(const PinHolder&) = delete;
+        PinHolder(PinHolder&&) = delete;
+        PinHolder& operator=(PinHolder&&) = delete;
+
+        ~PinHolder()
+        {
+            budget->pinned_signals_bytes.fetch_sub(bytes, std::memory_order_relaxed);
+        }
+    };
+    const CBlock* raw = block.get();
+    auto holder = std::make_shared<PinHolder>(std::move(block), budget, bytes);
+    return std::shared_ptr<const CBlock>(std::move(holder), raw);
+}
+
+Chainstate::ParallelIBDResult Chainstate::ActivateBestChainParallelIBD(
+    BlockValidationState& state,
+    CBlockIndex*& pindexMostWork,
+    bool& exited_ibd)
+{
+    AssertLockHeld(m_chainstate_mutex);
+    AssertLockNotHeld(::cs_main);
+
+    bool is_historical = WITH_LOCK(::cs_main, return GetRole().historical);
+    if (!m_chainman.IsInitialBlockDownload() && !is_historical) return ParallelIBDResult::CONTINUE_SERIAL;
+    if (m_blockman.HasStorageIOError()) return ParallelIBDResult::CONTINUE_SERIAL;
+
+    const size_t window_width = m_chainman.ComputeIBDWindowWidth();
+    if (window_width < 2) return ParallelIBDResult::CONTINUE_SERIAL;
+    if (m_chainman.GetValidationPool()->WorkersCount() == 0) return ParallelIBDResult::CONTINUE_SERIAL;
+
+    const int raw_stop_height = m_chainman.GetNotifications().stopAtHeight();
+    const std::optional<int> stop_at_height = (raw_stop_height > 0) ? std::optional<int>{raw_stop_height} : std::nullopt;
+
+    ShardedCoinsView* coins_tip = nullptr;
+    const CCoinsView* coins_base = nullptr;
+    const CTxMemPool* mempool = nullptr;
+    size_t coinstip_budget = 0;
+    int max_height = 0;
+    int next_schedule_height = 0;
+
+    {
+        LOCK(::cs_main);
+        if (!m_coins_views || (m_from_snapshot_blockhash && m_assumeutxo != Assumeutxo::VALIDATED)) {
+            return ParallelIBDResult::CONTINUE_SERIAL;
+        }
+        is_historical = GetRole().historical;
+        if (!m_chainman.IsInitialBlockDownload() && !is_historical) {
+            return ParallelIBDResult::CONTINUE_SERIAL;
+        }
+        if (pindexMostWork == nullptr) {
+            pindexMostWork = FindMostWorkChain();
+        }
+        if (pindexMostWork == nullptr || pindexMostWork == m_chain.Tip()) {
+            return ParallelIBDResult::CONTINUE_SERIAL;
+        }
+        CBlockIndex* tip = m_chain.Tip();
+        if (!tip || m_chain.FindFork(*pindexMostWork) != tip) {
+            return ParallelIBDResult::CONTINUE_SERIAL;
+        }
+
+        max_height = pindexMostWork->nHeight;
+        if (const CBlockIndex* target = TargetBlock()) {
+            max_height = std::min(max_height, target->nHeight);
+        }
+        if (stop_at_height.has_value()) {
+            max_height = std::min(max_height, *stop_at_height);
+        }
+        if (max_height - tip->nHeight < 2) {
+            return ParallelIBDResult::CONTINUE_SERIAL;
+        }
+
+        coins_tip = &CoinsTip();
+        coins_base = &CoinsErrorCatcher();
+        mempool = m_mempool;
+        coinstip_budget = m_coinstip_cache_size_bytes;
+        next_schedule_height = tip->nHeight + 1;
+    }
+
+    ParallelIBDWindow window{m_chainman, *coins_tip, *coins_base, window_width, coinstip_budget};
+    const auto caps = IBDMemoryBudget::ComputeCaps(coinstip_budget);
+
+    auto build_slot = [&](CBlockIndex* pindex) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) -> std::shared_ptr<ParallelIBDWindow::Slot> {
+        AssertLockHeld(::cs_main);
+        auto slot = std::make_shared<ParallelIBDWindow::Slot>();
+        slot->pindex = pindex;
+        slot->height = pindex->nHeight;
+        slot->block_hash = pindex->GetBlockHash();
+        slot->prev_block_hash = pindex->pprev ? pindex->pprev->GetBlockHash() : uint256{};
+        slot->disk_pos = pindex->GetBlockPos();
+        slot->script_check_reason = GetScriptCheckReason(*pindex, m_chainman);
+        slot->needs_undo = pindex->GetUndoPos().IsNull();
+
+        int locktime_flags = 0;
+        if (DeploymentActiveAt(*pindex, m_chainman, Consensus::DEPLOYMENT_CSV)) {
+            locktime_flags |= LOCKTIME_VERIFY_SEQUENCE;
+        }
+
+        slot->val_ctx = std::make_unique<BlockValidationContext>(BlockValidationContext{
+            .pindex = pindex,
+            .consensus_params = &m_chainman.GetConsensus(),
+            .script_flags = GetBlockScriptFlags(*pindex, m_chainman),
+            .locktime_flags = locktime_flags,
+            .enforce_bip30 = ShouldEnforceBIP30(*pindex, m_chainman.GetConsensus()),
+            .script_checks = (slot->script_check_reason != nullptr),
+            .run_check_block = true,
+            .check_pow_and_merkle = true,
+            .build_undo = slot->needs_undo,
+            .cache_script_results = false,
+            .validation_cache = &m_chainman.m_validation_cache,
+            .check_queue = nullptr,
+        });
+        return slot;
+    };
+
+    CBlockIndex* scheduled_target = pindexMostWork;
+    std::vector<ShardedCoinsView::ShardedBlockCommit> block_commits;
+
+    while (!m_chainman.m_interrupt && (m_chainman.IsInitialBlockDownload() || is_historical)) {
+        if (m_blockman.HasStorageIOError()) {
+            window.DrainOffCsMain();
+            pindexMostWork = nullptr;
+            return ParallelIBDResult::CONTINUE_SERIAL;
+        }
+
+        if (window.CanScheduleMore()) {
+            std::vector<std::shared_ptr<ParallelIBDWindow::Slot>> new_slots;
+            bool reorg_or_diverged = false;
+            {
+                LOCK(::cs_main);
+                is_historical = GetRole().historical;
+                mempool = m_mempool;
+                if (!m_chainman.IsInitialBlockDownload() && !is_historical) {
+                    reorg_or_diverged = true;
+                } else {
+                // Avoid re-walking the entire chain in FindMostWorkChain() on every batch:
+                // verify in O(1)/O(delta) when the top candidate is scheduled_target or a
+                // short valid extension of it, falling back to FindMostWorkChain() otherwise.
+                CBlockIndex* best = nullptr;
+                CBlockIndex* top_cand = setBlockIndexCandidates.empty() ? nullptr : *setBlockIndexCandidates.rbegin();
+                if (top_cand && scheduled_target && !(scheduled_target->nStatus & BLOCK_FAILED_VALID)) {
+                    CBlockIndex* walk = top_cand;
+                    int steps = 0;
+                    while (walk && walk != scheduled_target && steps < 128) {
+                        if ((walk->nStatus & BLOCK_FAILED_VALID) || !(walk->nStatus & BLOCK_HAVE_DATA)) {
+                            walk = nullptr;
+                            break;
+                        }
+                        walk = walk->pprev;
+                        ++steps;
+                    }
+                    if (walk == scheduled_target) {
+                        best = top_cand;
+                    }
+                }
+                if (!best) {
+                    best = FindMostWorkChain();
+                }
+                if (!best || m_chain.FindFork(*best) != m_chain.Tip()) {
+                    pindexMostWork = best;
+                    reorg_or_diverged = true;
+                } else if (next_schedule_height > m_chain.Height() + 1 &&
+                           best->GetAncestor(next_schedule_height - 1) != scheduled_target->GetAncestor(next_schedule_height - 1)) {
+                    pindexMostWork = best;
+                    reorg_or_diverged = true;
+                } else {
+                    pindexMostWork = best;
+                    scheduled_target = best;
+
+                    max_height = scheduled_target->nHeight;
+                    if (const CBlockIndex* target = TargetBlock()) {
+                        max_height = std::min(max_height, target->nHeight);
+                    }
+                    if (stop_at_height.has_value()) {
+                        max_height = std::min(max_height, *stop_at_height);
+                    }
+
+                    const size_t avail_slots = window.MaxSchedulableSlots();
+                    const int end_h = std::min(max_height, next_schedule_height + static_cast<int>(avail_slots) - 1);
+                    if (avail_slots > 0 && end_h >= next_schedule_height) {
+                        std::vector<CBlockIndex*> to_schedule;
+                        to_schedule.reserve(static_cast<size_t>(end_h - next_schedule_height + 1));
+                        CBlockIndex* iter = scheduled_target->GetAncestor(end_h);
+                        while (iter && iter->nHeight >= next_schedule_height) {
+                            to_schedule.push_back(iter);
+                            iter = iter->pprev;
+                        }
+                        std::reverse(to_schedule.begin(), to_schedule.end());
+                        new_slots.reserve(to_schedule.size());
+                        for (CBlockIndex* pindex : to_schedule) {
+                            if (!(pindex->nStatus & BLOCK_HAVE_DATA) || (pindex->nStatus & BLOCK_FAILED_VALID)) {
+                                break;
+                            }
+                            new_slots.push_back(build_slot(pindex));
+                        }
+                    }
+                }
+                }
+            }
+            if (reorg_or_diverged) {
+                break;
+            }
+            if (!new_slots.empty()) {
+                next_schedule_height = new_slots.back()->height + 1;
+                window.ScheduleSlots(std::move(new_slots));
+            }
+        }
+
+        if (window.Size() == 0) {
+            break;
+        }
+
+        // Apply backpressure above a multi-batch callback burst so a 32-block commit
+        // does not force a synchronous scheduler round-trip every batch.
+        if (m_chainman.m_options.signals) LimitValidationInterfaceQueue(*m_chainman.m_options.signals, /*max_pending=*/256);
+
+        if (!window.WaitForFrontReady([&]() { return static_cast<bool>(m_chainman.m_interrupt); })) {
+            break;
+        }
+        if (m_chainman.m_interrupt) {
+            break;
+        }
+        if (window.IsFrontFailed()) {
+            // Drain speculative tasks off cs_main and let serial ConnectTip handle invalid/corrupt blocks identically to master.
+            window.DrainOffCsMain();
+            pindexMostWork = nullptr;
+            return ParallelIBDResult::CONTINUE_SERIAL;
+        }
+
+        // Shrink batch size automatically near UTXO cache flush thresholds, undo pressure, or prune mode.
+        // Cap at window_width / 2 (at least 1, at most 64) so at least half the window stays in flight
+        // on workers across every commit batch (32 on a 16-thread / 64-block window, scaling on larger hosts).
+        size_t max_batch = std::clamp<size_t>(window_width / 2, 1, 64);
+        {
+            const size_t aux_bytes = m_chainman.m_ibd_budget->TotalAuxiliaryBytes();
+            const size_t cache_bytes = coins_tip->DynamicMemoryUsage();
+            const int64_t mempool_headroom = mempool
+                ? std::max<int64_t>(static_cast<int64_t>(mempool->m_opts.max_size_bytes) - static_cast<int64_t>(mempool->DynamicMemoryUsage()), 0)
+                : 0;
+            const int64_t effective_space = std::max<int64_t>(0, static_cast<int64_t>(coinstip_budget) + mempool_headroom - static_cast<int64_t>(aux_bytes));
+            const int64_t large_thresh = LargeCoinsCacheThreshold(effective_space);
+            if (static_cast<int64_t>(cache_bytes) >= large_thresh) {
+                max_batch = 1;
+            } else if (static_cast<int64_t>(cache_bytes) >= (large_thresh * 3) / 4 ||
+                       m_chainman.m_ibd_budget->pending_undo_bytes.load(std::memory_order_relaxed) >= (caps.max_pending_undo_bytes * 3) / 4) {
+                max_batch = std::min<size_t>(max_batch, 4);
+            }
+            if (m_blockman.IsPruneMode()) {
+                max_batch = std::min<size_t>(max_batch, 4);
+            }
+        }
+
+        auto ready_prefix = window.PeekReadyPrefix(max_batch);
+        if (ready_prefix.empty()) {
+            continue;
+        }
+
+        // Build zero-copy pre-sharded commit descriptors (O(batch_size), zero per-op work on coordinator).
+        block_commits.clear();
+        block_commits.reserve(ready_prefix.size());
+        for (const auto& slot : ready_prefix) {
+            block_commits.push_back(ShardedCoinsView::ShardedBlockCommit{
+                .meta = ShardedCoinsView::BatchCommitBlockMeta{
+                    .block_hash = slot->block_hash,
+                    .validated_flush_epoch = slot->validated_flush_epoch,
+                    .height = static_cast<uint32_t>(slot->height),
+                    .enforce_bip30 = slot->val_ctx->enforce_bip30,
+                },
+                .spends = slot->spends,
+                .creates = slot->creates,
+                .spend_offsets = &slot->spend_shard_offsets,
+                .create_offsets = &slot->create_shard_offsets,
+            });
+        }
+
+        size_t committed_count = 0;
+        bool had_conflict = false;
+        bool reached_target = false;
+        bool stopped_by_notification = false;
+        bool flush_error = false;
+        int new_tip_height = 0;
+
+        {
+            LOCK(::cs_main);
+            CBlockIndex* pindexNewTip = nullptr;
+            {
+                LOCK(MempoolMutex());
+
+                const bool was_in_ibd = m_chainman.IsInitialBlockDownload();
+                const CBlockIndex* starting_tip = m_chain.Tip();
+                const ChainstateRole chainstate_role{this->GetRole()};
+
+                // Strictly bound the commit batch against tip continuity, assumevalid re-check,
+                // AssumeUTXO target, -stopatheight, and IBD exit boundary.
+                size_t allowed = 0;
+                const CBlockIndex* expected_prev = starting_tip;
+                const CBlockIndex* target_block = TargetBlock();
+                const bool is_active_cs = (this == &m_chainman.ActiveChainstate());
+                const bool check_ibd_exit = is_active_cs && was_in_ibd && !m_blockman.LoadingBlocks();
+                const NodeSeconds ibd_cutoff_time = check_ibd_exit ? Now<NodeSeconds>() - m_chainman.m_options.max_tip_age : NodeSeconds{};
+                for (size_t b = 0; b < ready_prefix.size(); ++b) {
+                    CBlockIndex* pindex = ready_prefix[b]->pindex;
+                    if (pindex->pprev != expected_prev) break;
+                    if (pindex->nStatus & BLOCK_FAILED_VALID) break;
+                    // Re-evaluate assumevalid under cs_main at commit time: a header reorg since
+                    // scheduling can flip a block from skip-scripts to verify-scripts, in which case
+                    // fall back to serial ConnectTip() rather than committing unverified scripts.
+                    if (ready_prefix[b]->script_check_reason == nullptr &&
+                        GetScriptCheckReason(*pindex, m_chainman) != nullptr) {
+                        break;
+                    }
+                    if (target_block && pindex->nHeight > target_block->nHeight) break;
+                    if (stop_at_height.has_value() && pindex->nHeight > *stop_at_height) break;
+                    ++allowed;
+                    expected_prev = pindex;
+                    if (target_block && pindex == target_block) break;
+                    if (stop_at_height.has_value() && pindex->nHeight == *stop_at_height) break;
+                    // Stop the parallel batch at the block that exits IBD so all subsequent
+                    // post-IBD blocks connect and emit notifications individually on the serial path.
+                    if (check_ibd_exit &&
+                        pindex->nChainWork >= m_chainman.MinimumChainWork() &&
+                        pindex->Time() >= ibd_cutoff_time) {
+                        break;
+                    }
+                }
+
+                if (allowed == 0) {
+                    had_conflict = true;
+                } else if (m_blockman.HasStorageIOError()) {
+                    m_chainman.GetNotifications().flushError(_("Flushing block or undo file to disk failed. This is likely the result of an I/O error."));
+                    state.Error("Storage I/O error previously occurred");
+                    flush_error = true;
+                } else if (!CheckDiskSpace(m_blockman.m_opts.blocks_dir)) {
+                    FatalError(m_chainman.GetNotifications(), state, _("Disk space is too low!"));
+                    flush_error = true;
+                } else {
+                    if (allowed < block_commits.size()) {
+                        block_commits.resize(allowed);
+                    }
+
+                    std::vector<CBlockIndex*> blocks_to_prep;
+                    std::vector<size_t> undo_sizes;
+                    blocks_to_prep.reserve(allowed);
+                    undo_sizes.reserve(allowed);
+                    for (size_t b = 0; b < allowed; ++b) {
+                        const auto& slot = ready_prefix[b];
+                        blocks_to_prep.push_back(slot->pindex);
+                        undo_sizes.push_back(slot->needs_undo ? slot->serialized_undo.data.size() : 0);
+                    }
+
+                    std::vector<node::BlockManager::PreparedUndoWrite> prepared_undos;
+                    if (!m_blockman.PrepareBatchUndoWrites(blocks_to_prep, undo_sizes, prepared_undos, state)) {
+                        flush_error = true;
+                    } else {
+                        committed_count = CoinsTip().CommitBlockBatch(block_commits, &*m_chainman.GetValidationPool());
+                        had_conflict = (committed_count < allowed);
+                        if (committed_count < allowed) {
+                            m_blockman.RollbackPreparedBatchUndoWrites(prepared_undos, committed_count);
+                        }
+                    }
+
+                    if (!flush_error && committed_count > 0) {
+                        std::vector<ConnectedBlock> connected_blocks;
+                        connected_blocks.reserve(committed_count);
+
+                        for (size_t b = 0; b < committed_count; ++b) {
+                            auto& slot = ready_prefix[b];
+                            CBlockIndex* pindexNew = slot->pindex;
+
+                            const kernel::ChainstateRole role{GetRole()};
+                            if (slot->script_check_reason != m_last_script_check_reason_logged && role.validated && !role.historical) {
+                                if (slot->script_check_reason != nullptr) {
+                                    LogInfo("Enabling script verification at block #%d (%s): %s.",
+                                            pindexNew->nHeight, slot->block_hash.ToString(), slot->script_check_reason);
+                                } else {
+                                    LogInfo("Disabling script verification at block #%d (%s).",
+                                            pindexNew->nHeight, slot->block_hash.ToString());
+                                }
+                                m_last_script_check_reason_logged = slot->script_check_reason;
+                            }
+
+                            if (slot->needs_undo) {
+                                m_blockman.EnqueuePreparedUndoWrite(prepared_undos[b], window.TakeSerializedUndo(*slot));
+                            } else {
+                                Assert(!pindexNew->GetUndoPos().IsNull());
+                            }
+
+                            if (!pindexNew->IsValid(BLOCK_VALID_SCRIPTS)) {
+                                pindexNew->RaiseValidity(BLOCK_VALID_SCRIPTS);
+                                m_blockman.m_dirty_blockindex.insert(pindexNew);
+                            }
+
+                            m_chainman.num_blocks_total++;
+                            m_chainman.time_connect += slot->time_connect;
+                            m_chainman.time_verify += slot->time_verify;
+
+                            TRACEPOINT(validation, block_connected,
+                                slot->block_hash.data(),
+                                pindexNew->nHeight,
+                                slot->block->vtx.size(),
+                                slot->inputs_count,
+                                slot->sigops_cost,
+                                Ticks<std::chrono::nanoseconds>(slot->time_verify)
+                            );
+
+                            if (m_chainman.m_options.signals) {
+                                m_chainman.m_options.signals->BlockChecked(slot->block, slot->val_state);
+                            }
+
+                            std::vector<RemovedMempoolTransactionInfo> txs_removed_for_block;
+                            if (m_mempool) {
+                                txs_removed_for_block = m_mempool->removeForBlock(slot->block->vtx);
+                            }
+
+                            m_chain.SetTip(*pindexNew);
+                            m_chainman.UpdateIBDStatus();
+                            if (m_mempool && m_chainman.m_options.signals && !m_chainman.IsInitialBlockDownload()) {
+                                m_chainman.m_options.signals->MempoolTransactionsRemovedForBlock(
+                                    slot->block, std::move(txs_removed_for_block), pindexNew->nHeight);
+                            }
+                            UpdateTip(pindexNew);
+
+                            Chainstate& current_cs{m_chainman.CurrentChainstate()};
+                            m_chainman.MaybeValidateSnapshot(*this, current_cs);
+
+                            std::shared_ptr<const CBlock> signal_block = WrapBudgetedSignalBlock(
+                                slot->block, m_chainman.m_ibd_budget, slot->block_mem_bytes);
+                            connected_blocks.emplace_back(pindexNew, std::move(signal_block));
+
+                            if (ReachedTarget()) {
+                                reached_target = true;
+                                break;
+                            }
+                        }
+
+                        Assert(CoinsTip().GetBestBlock() == m_chain.Tip()->GetBlockHash());
+                        PruneBlockIndexCandidates();
+
+                        if (!FlushStateToDisk(state, FlushStateMode::IF_NEEDED)) {
+                            flush_error = true;
+                        }
+
+                        if (!flush_error) {
+                            if (m_mempool) m_mempool->check(this->CoinsTip(), this->m_chain.Height() + 1);
+                            CheckForkWarningConditions();
+
+                            for (auto& [index, block] : std::move(connected_blocks)) {
+                                if (m_chainman.m_options.signals) {
+                                    m_chainman.m_options.signals->BlockConnected(chainstate_role, std::move(Assert(block)), Assert(index));
+                                }
+                            }
+
+                            pindexNewTip = m_chain.Tip();
+                            new_tip_height = pindexNewTip->nHeight;
+                            const CBlockIndex* pindexFork = starting_tip ? m_chain.FindFork(*starting_tip) : nullptr;
+                            const bool still_in_ibd = m_chainman.IsInitialBlockDownload();
+                            if (was_in_ibd && !still_in_ibd) {
+                                exited_ibd = true;
+                            }
+                            is_historical = GetRole().historical;
+                            mempool = m_mempool;
+
+                            if (this == &m_chainman.ActiveChainstate() && pindexFork != pindexNewTip) {
+                                if (m_chainman.m_options.signals) {
+                                    m_chainman.m_options.signals->UpdatedBlockTip(pindexNewTip, pindexFork, still_in_ibd);
+                                }
+                                if (kernel::IsInterrupted(m_chainman.GetNotifications().blockTip(
+                                        /*state=*/GetSynchronizationState(still_in_ibd, m_chainman.m_blockman.m_blockfiles_indexed),
+                                        /*index=*/*pindexNewTip,
+                                        /*verification_progress=*/m_chainman.GuessVerificationProgress(pindexNewTip)))) {
+                                    stopped_by_notification = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            } // release MempoolMutex
+            if (pindexNewTip && !flush_error && m_chainman.m_options.signals && this == &m_chainman.ActiveChainstate()) {
+                m_chainman.m_options.signals->ActiveTipChange(*Assert(pindexNewTip), m_chainman.IsInitialBlockDownload());
+            }
+        } // release cs_main
+
+        if (flush_error) {
+            window.DrainOffCsMain();
+            return ParallelIBDResult::SYSTEM_ERROR;
+        }
+
+        if (committed_count > 0) {
+            window.ReleaseCommittedPrefix(committed_count, new_tip_height);
+
+            {
+                LOCK(m_chainman.GetMutex());
+                if (exited_ibd) {
+                    m_chainman.MaybeRebalanceCaches();
+                }
+                if (!FlushStateToDisk(state, FlushStateMode::PERIODIC)) {
+                    flush_error = true;
+                }
+                reached_target = reached_target || ReachedTarget();
+            }
+            if (flush_error) {
+                window.DrainOffCsMain();
+                return ParallelIBDResult::SYSTEM_ERROR;
+            }
+            if (reached_target) {
+                if (m_chainman.snapshot_download_completed) {
+                    m_chainman.snapshot_download_completed();
+                }
+                window.DrainOffCsMain();
+                return ParallelIBDResult::STOP_ACTIVATION;
+            }
+            if (stopped_by_notification || (stop_at_height.has_value() && new_tip_height >= *stop_at_height)) {
+                window.DrainOffCsMain();
+                return ParallelIBDResult::STOP_ACTIVATION;
+            }
+        }
+
+        if (had_conflict) {
+            window.DrainOffCsMain();
+            pindexMostWork = nullptr;
+            return ParallelIBDResult::CONTINUE_SERIAL;
+        }
+    }
+
+    window.DrainOffCsMain();
+    pindexMostWork = nullptr;
+    return ParallelIBDResult::CONTINUE_SERIAL;
 }
 
 bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<const CBlock> pblock)
@@ -3608,161 +4176,202 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
     // sanely for performance or correctness!
     AssertLockNotHeld(::cs_main);
 
-    ChainstateManager::PoolUsageGuard pool_guard{m_chainman};
+    bool need_teardown{false};
+    {
+        ChainstateManager::PoolUsageGuard pool_guard{m_chainman};
 
-    // ABC maintains a fair degree of expensive-to-calculate internal state
-    // because this function periodically releases cs_main so that it does not lock up other threads for too long
-    // during large connects - and to allow for e.g. the callback queue to drain
-    // we use m_chainstate_mutex to enforce mutual exclusion so that only one caller may execute this function at a time
-    LOCK(m_chainstate_mutex);
+        // ABC maintains a fair degree of expensive-to-calculate internal state
+        // because this function periodically releases cs_main so that it does not lock up other threads for too long
+        // during large connects - and to allow for e.g. the callback queue to drain
+        // we use m_chainstate_mutex to enforce mutual exclusion so that only one caller may execute this function at a time
+        LOCK(m_chainstate_mutex);
 
-    // Belt-and-suspenders check that we aren't attempting to advance the
-    // chainstate past the target block.
-    if (WITH_LOCK(::cs_main, return m_target_utxohash)) {
-        LogError("%s", STR_INTERNAL_BUG("m_target_utxohash is set - this chainstate should not be in operation."));
-        return Assume(false);
-    }
+        // Belt-and-suspenders check that we aren't attempting to advance the
+        // chainstate past the target block.
+        if (WITH_LOCK(::cs_main, return m_target_utxohash)) {
+            LogError("%s", STR_INTERNAL_BUG("m_target_utxohash is set - this chainstate should not be in operation."));
+            return Assume(false);
+        }
 
-    CBlockIndex *pindexMostWork = nullptr;
-    CBlockIndex *pindexNewTip = nullptr;
-    bool exited_ibd{false};
-    do {
-        // Block until the validation queue drains. This should largely
-        // never happen in normal operation, however may happen during
-        // reindex, causing memory blowup if we run too far ahead.
-        // Note that if a validationinterface callback ends up calling
-        // ActivateBestChain this may lead to a deadlock! We should
-        // probably have a DEBUG_LOCKORDER test for this in the future.
-        if (m_chainman.m_options.signals) LimitValidationInterfaceQueue(*m_chainman.m_options.signals);
+        CBlockIndex *pindexMostWork = nullptr;
+        CBlockIndex *pindexNewTip = nullptr;
+        bool exited_ibd{false};
+        bool parallel_blocks_connected{false};
+        bool run_check_block_index{true};
+        do {
+            // Block until the validation queue drains. This should largely
+            // never happen in normal operation, however may happen during
+            // reindex, causing memory blowup if we run too far ahead.
+            // Note that if a validationinterface callback ends up calling
+            // ActivateBestChain this may lead to a deadlock! We should
+            // probably have a DEBUG_LOCKORDER test for this in the future.
+            if (m_chainman.m_options.signals) LimitValidationInterfaceQueue(*m_chainman.m_options.signals);
 
-        {
-            LOCK(cs_main);
-            {
-            // Lock transaction pool for at least as long as it takes for connected_blocks to be consumed
-            LOCK(MempoolMutex());
-            const bool was_in_ibd = m_chainman.IsInitialBlockDownload();
-            CBlockIndex* starting_tip = m_chain.Tip();
-            bool blocks_connected = false;
-            do {
-                // We absolutely may not unlock cs_main until we've made forward progress
-                // (with the exception of shutdown due to hardware issues, low disk space, etc).
-                std::vector<ConnectedBlock> connected_blocks; // Destructed before cs_main is unlocked
-
-                if (pindexMostWork == nullptr) {
-                    pindexMostWork = FindMostWorkChain();
+            // During IBD (or -reindex-chainstate, or historical AssumeUTXO background validation),
+            // attempt bounded parallel block validation.
+            if (m_chainman.IsInitialBlockDownload() || WITH_LOCK(::cs_main, return GetRole().historical)) {
+                const CBlockIndex* tip_before_par = WITH_LOCK(::cs_main, return m_chain.Tip());
+                const ParallelIBDResult par_res = ActivateBestChainParallelIBD(state, pindexMostWork, exited_ibd);
+                if (WITH_LOCK(::cs_main, return m_chain.Tip()) != tip_before_par) {
+                    parallel_blocks_connected = true;
                 }
-
-                // Whether we have anything to do at all.
-                if (pindexMostWork == nullptr || pindexMostWork == m_chain.Tip()) {
-                    break;
-                }
-
-                bool fInvalidFound = false;
-                std::shared_ptr<const CBlock> nullBlockPtr;
-                // BlockConnected signals must be sent for the original role;
-                // in case snapshot validation is completed during ActivateBestChainStep, the
-                // result of GetRole() changes from BACKGROUND to NORMAL.
-               const ChainstateRole chainstate_role{this->GetRole()};
-                if (!ActivateBestChainStep(state, *pindexMostWork, pblock && pblock->GetHash() == pindexMostWork->GetBlockHash() ? pblock : nullBlockPtr, fInvalidFound, connected_blocks)) {
-                    // A system error occurred
+                if (par_res == ParallelIBDResult::SYSTEM_ERROR) {
                     return false;
                 }
-                blocks_connected = true;
-
-                if (fInvalidFound) {
-                    // Wipe cache, we may need another branch now.
-                    pindexMostWork = nullptr;
+                if (par_res == ParallelIBDResult::STOP_ACTIVATION) {
+                    break;
                 }
-                pindexNewTip = m_chain.Tip();
+                if (m_chainman.m_interrupt && parallel_blocks_connected) {
+                    break;
+                }
+            }
 
-                for (auto& [index, block] : std::move(connected_blocks)) {
+            {
+                LOCK(cs_main);
+                if (!m_coins_views || m_assumeutxo == Assumeutxo::INVALID) {
+                    return false;
+                }
+                {
+                // Lock transaction pool for at least as long as it takes for connected_blocks to be consumed
+                LOCK(MempoolMutex());
+                const bool was_in_ibd = m_chainman.IsInitialBlockDownload();
+                CBlockIndex* starting_tip = m_chain.Tip();
+                bool blocks_connected = false;
+                do {
+                    // We absolutely may not unlock cs_main until we've made forward progress
+                    // (with the exception of shutdown due to hardware issues, low disk space, etc).
+                    std::vector<ConnectedBlock> connected_blocks; // Destructed before cs_main is unlocked
+
+                    if (pindexMostWork == nullptr) {
+                        pindexMostWork = FindMostWorkChain();
+                    }
+
+                    // Whether we have anything to do at all.
+                    if (pindexMostWork == nullptr || pindexMostWork == m_chain.Tip()) {
+                        break;
+                    }
+
+                    bool fInvalidFound = false;
+                    std::shared_ptr<const CBlock> nullBlockPtr;
+                    // BlockConnected signals must be sent for the original role;
+                    // in case snapshot validation is completed during ActivateBestChainStep, the
+                    // result of GetRole() changes from BACKGROUND to NORMAL.
+                    const ChainstateRole chainstate_role{this->GetRole()};
+                    if (!ActivateBestChainStep(state, *pindexMostWork, pblock && pblock->GetHash() == pindexMostWork->GetBlockHash() ? pblock : nullBlockPtr, fInvalidFound, connected_blocks)) {
+                        // A system error occurred
+                        return false;
+                    }
+                    blocks_connected = true;
+
+                    if (fInvalidFound) {
+                        // Wipe cache, we may need another branch now.
+                        pindexMostWork = nullptr;
+                    }
+                    pindexNewTip = m_chain.Tip();
+
+                    for (auto& [index, block] : std::move(connected_blocks)) {
+                        if (m_chainman.m_options.signals) {
+                            m_chainman.m_options.signals->BlockConnected(chainstate_role, std::move(Assert(block)), Assert(index));
+                        }
+                    }
+
+                    // Break this do-while to ensure we don't advance past the target block.
+                    if (ReachedTarget()) {
+                        break;
+                    }
+                } while (!m_chain.Tip() || (starting_tip && CBlockIndexWorkComparator()(m_chain.Tip(), starting_tip)));
+                if (!blocks_connected) {
+                    if (!parallel_blocks_connected) {
+                        run_check_block_index = false;
+                    }
+                    break;
+                }
+
+                const CBlockIndex* pindexFork = starting_tip ? m_chain.FindFork(*starting_tip) : nullptr;
+                bool still_in_ibd = m_chainman.IsInitialBlockDownload();
+
+                if (was_in_ibd && !still_in_ibd) {
+                    // Active chainstate has exited IBD.
+                    exited_ibd = true;
+                }
+
+                // Notify external listeners about the new tip.
+                // Enqueue while holding cs_main to ensure that UpdatedBlockTip is called in the order in which blocks are connected
+                if (this == &m_chainman.ActiveChainstate() && pindexFork != pindexNewTip) {
+                    // Notify ValidationInterface subscribers
                     if (m_chainman.m_options.signals) {
-                        m_chainman.m_options.signals->BlockConnected(chainstate_role, std::move(Assert(block)), Assert(index));
+                        m_chainman.m_options.signals->UpdatedBlockTip(pindexNewTip, pindexFork, still_in_ibd);
+                    }
+
+                    if (kernel::IsInterrupted(m_chainman.GetNotifications().blockTip(
+                            /*state=*/GetSynchronizationState(still_in_ibd, m_chainman.m_blockman.m_blockfiles_indexed),
+                            /*index=*/*pindexNewTip,
+                            /*verification_progress=*/m_chainman.GuessVerificationProgress(pindexNewTip))))
+                    {
+                        // Just breaking and returning success for now. This could
+                        // be changed to bubble up the kernel::Interrupted value to
+                        // the caller so the caller could distinguish between
+                        // completed and interrupted operations.
+                        break;
                     }
                 }
-
-                // Break this do-while to ensure we don't advance past the target block.
-                if (ReachedTarget()) {
-                    break;
+                } // release MempoolMutex
+                // Notify external listeners about the new tip, even if pindexFork == pindexNewTip.
+                if (m_chainman.m_options.signals && this == &m_chainman.ActiveChainstate()) {
+                    m_chainman.m_options.signals->ActiveTipChange(*Assert(pindexNewTip), m_chainman.IsInitialBlockDownload());
                 }
-            } while (!m_chain.Tip() || (starting_tip && CBlockIndexWorkComparator()(m_chain.Tip(), starting_tip)));
-            if (!blocks_connected) return true;
+            } // release cs_main
+            // When we reach this point, we switched to a new tip (stored in pindexNewTip).
 
-            const CBlockIndex* pindexFork = starting_tip ? m_chain.FindFork(*starting_tip) : nullptr;
-            bool still_in_ibd = m_chainman.IsInitialBlockDownload();
-
-            if (was_in_ibd && !still_in_ibd) {
-                // Active chainstate has exited IBD.
-                exited_ibd = true;
-            }
-
-            // Notify external listeners about the new tip.
-            // Enqueue while holding cs_main to ensure that UpdatedBlockTip is called in the order in which blocks are connected
-            if (this == &m_chainman.ActiveChainstate() && pindexFork != pindexNewTip) {
-                // Notify ValidationInterface subscribers
-                if (m_chainman.m_options.signals) {
-                    m_chainman.m_options.signals->UpdatedBlockTip(pindexNewTip, pindexFork, still_in_ibd);
+            bool reached_target;
+            {
+                LOCK(m_chainman.GetMutex());
+                if (exited_ibd) {
+                    // If a background chainstate is in use, we may need to rebalance our
+                    // allocation of caches once a chainstate exits initial block download.
+                    m_chainman.MaybeRebalanceCaches();
                 }
 
-                if (kernel::IsInterrupted(m_chainman.GetNotifications().blockTip(
-                        /*state=*/GetSynchronizationState(still_in_ibd, m_chainman.m_blockman.m_blockfiles_indexed),
-                        /*index=*/*pindexNewTip,
-                        /*verification_progress=*/m_chainman.GuessVerificationProgress(pindexNewTip))))
-                {
-                    // Just breaking and returning success for now. This could
-                    // be changed to bubble up the kernel::Interrupted value to
-                    // the caller so the caller could distinguish between
-                    // completed and interrupted operations.
-                    break;
+                // Write changes periodically to disk, after relay.
+                if (!FlushStateToDisk(state, FlushStateMode::PERIODIC)) {
+                    return false;
                 }
-            }
-            } // release MempoolMutex
-            // Notify external listeners about the new tip, even if pindexFork == pindexNewTip.
-            if (m_chainman.m_options.signals && this == &m_chainman.ActiveChainstate()) {
-                m_chainman.m_options.signals->ActiveTipChange(*Assert(pindexNewTip), m_chainman.IsInitialBlockDownload());
-            }
-        } // release cs_main
-        // When we reach this point, we switched to a new tip (stored in pindexNewTip).
 
-        bool reached_target;
-        {
-            LOCK(m_chainman.GetMutex());
-            if (exited_ibd) {
-                // If a background chainstate is in use, we may need to rebalance our
-                // allocation of caches once a chainstate exits initial block download.
-                m_chainman.MaybeRebalanceCaches();
+                reached_target = ReachedTarget();
             }
 
-            // Write changes periodically to disk, after relay.
-            if (!FlushStateToDisk(state, FlushStateMode::PERIODIC)) {
-                return false;
+            if (reached_target) {
+                // Chainstate has reached the target block, so exit.
+                //
+                // Restart indexes so indexes can resync and index new blocks after
+                // the target block.
+                //
+                // This cannot be done while holding cs_main (within
+                // MaybeValidateSnapshot) or a cs_main deadlock will occur.
+                if (m_chainman.snapshot_download_completed) {
+                    m_chainman.snapshot_download_completed();
+                }
+                break;
             }
 
-            reached_target = ReachedTarget();
+            // We check interrupt only after giving ActivateBestChainStep a chance to run once so that we
+            // never interrupt before connecting the genesis block during LoadChainTip(). Previously this
+            // caused an assert() failure during interrupt in such cases as the UTXO DB flushing checks
+            // that the best block hash is non-null.
+            if (m_chainman.m_interrupt) break;
+        } while (pindexNewTip != pindexMostWork);
+
+        if (run_check_block_index) {
+            m_chainman.CheckBlockIndex();
         }
-
-        if (reached_target) {
-            // Chainstate has reached the target block, so exit.
-            //
-            // Restart indexes so indexes can resync and index new blocks after
-            // the target block.
-            //
-            // This cannot be done while holding cs_main (within
-            // MaybeValidateSnapshot) or a cs_main deadlock will occur.
-            if (m_chainman.snapshot_download_completed) {
-                m_chainman.snapshot_download_completed();
-            }
-            break;
+        if (!m_chainman.IsInitialBlockDownload() && m_chainman.HasPendingIBDTeardown()) {
+            need_teardown = true;
         }
+    } // release m_chainstate_mutex and PoolUsageGuard BEFORE MaybeTeardownIBDResources
 
-        // We check interrupt only after giving ActivateBestChainStep a chance to run once so that we
-        // never interrupt before connecting the genesis block during LoadChainTip(). Previously this
-        // caused an assert() failure during interrupt in such cases as the UTXO DB flushing checks
-        // that the best block hash is non-null.
-        if (m_chainman.m_interrupt) break;
-    } while (pindexNewTip != pindexMostWork);
-
-    m_chainman.CheckBlockIndex();
+    if (need_teardown) {
+        m_chainman.MaybeTeardownIBDResources();
+    }
 
     return true;
 }
@@ -4698,6 +5307,7 @@ bool ChainstateManager::StoreNewBlock(
     // Skipping AcceptBlockHeader on CheckBlock failure preserves CVE-2012-2459 protection.
     if (!CheckBlock(block, state, GetConsensus())) {
         if (m_options.signals) {
+            LOCK(cs_main);
             m_options.signals->BlockChecked(pblock, state);
         }
         LogError("%s: AcceptBlock FAILED (%s)\n", __func__, state.ToString());
@@ -4739,120 +5349,154 @@ bool ChainstateManager::StoreNewBlock(
         return true;
     }
 
-    // 3. Run contextual checks (thread-safe VersionBitsCache + immutable header ancestry) off cs_main.
-    if (!ContextualCheckBlock(block, state, *this, pindexPrev)) {
-        {
-            LOCK(cs_main);
-            if (Assume(state.IsInvalid())) {
-                ActiveChainstate().InvalidBlockFound(pindex, state);
-            }
-        }
-        if (m_options.signals) {
-            m_options.signals->BlockChecked(pblock, state);
-        }
-        LogError("%s: AcceptBlock FAILED (%s)\n", __func__, state.ToString());
-        return false;
-    }
-
-    // 4. Serialize block once off cs_main (with 8-byte disk storage header).
-    std::vector<unsigned char> raw_block;
-    try {
-        raw_block = m_blockman.SerializeBlockForDisk(block);
-    } catch (const std::runtime_error& e) {
-        FatalError(GetNotifications(), state, strprintf(_("System error while serializing block: %s"), e.what()));
-        if (m_options.signals) {
-            m_options.signals->BlockChecked(pblock, state);
-        }
-        LogError("%s: AcceptBlock FAILED (%s)\n", __func__, state.ToString());
-        return false;
-    }
-
-    // 5. Reserve blk*.dat position under brief cs_main lock.
-    node::BlockManager::BlockWriteReservation write_reservation;
-    bool keep_blk_handle = false;
-    bool already_have = false;
     {
-        LOCK(cs_main);
-        if (pindex->nStatus & BLOCK_HAVE_DATA) {
-            already_have = true;
-        } else if (pindex->nStatus & BLOCK_FAILED_VALID) {
-            state.Invalid(BlockValidationResult::BLOCK_CACHED_INVALID, "duplicate-invalid",
-                          strprintf("block %s was previously marked invalid", block.GetHash().ToString()));
+        // Deduplicate concurrent StoreNewBlock calls for the same block off cs_main.
+        auto store_guard = m_blockman.AcquireInflightBlockStore(pindex);
+
+        // 3. Run contextual checks (thread-safe VersionBitsCache + immutable header ancestry) off cs_main.
+        if (!ContextualCheckBlock(block, state, *this, pindexPrev)) {
+            {
+                LOCK(cs_main);
+                if (Assume(state.IsInvalid())) {
+                    ActiveChainstate().InvalidBlockFound(pindex, state);
+                }
+                if (m_options.signals) {
+                    m_options.signals->BlockChecked(pblock, state);
+                }
+            }
+            LogError("%s: AcceptBlock FAILED (%s)\n", __func__, state.ToString());
+            return false;
+        }
+
+        // 4. Serialize block once off cs_main (with 8-byte disk storage header).
+        std::vector<unsigned char> raw_block;
+        try {
+            raw_block = m_blockman.SerializeBlockForDisk(block);
+        } catch (const std::runtime_error& e) {
+            FatalError(GetNotifications(), state, strprintf(_("System error while serializing block: %s"), e.what()));
             if (m_options.signals) {
+                LOCK(cs_main);
                 m_options.signals->BlockChecked(pblock, state);
             }
             LogError("%s: AcceptBlock FAILED (%s)\n", __func__, state.ToString());
             return false;
-        } else {
-            try {
-                write_reservation = m_blockman.ReserveBlockPos(raw_block.size(), block_height, block.GetBlockTime());
-            } catch (const std::runtime_error& e) {
-                FatalError(GetNotifications(), state, strprintf(_("System error while saving block to disk: %s"), e.what()));
+        }
+
+        // 5. Reserve blk*.dat position under cs_main.
+        node::BlockManager::BlockWriteReservation write_reservation;
+        bool done_under_lock = false;
+        {
+            LOCK(cs_main);
+            if (pindex->nStatus & BLOCK_HAVE_DATA) {
+                done_under_lock = true;
+            } else if (pindex->nStatus & BLOCK_FAILED_VALID) {
+                state.Invalid(BlockValidationResult::BLOCK_CACHED_INVALID, "duplicate-invalid",
+                              strprintf("block %s was previously marked invalid", block.GetHash().ToString()));
                 if (m_options.signals) {
                     m_options.signals->BlockChecked(pblock, state);
                 }
                 LogError("%s: AcceptBlock FAILED (%s)\n", __func__, state.ToString());
                 return false;
+            } else {
+                try {
+                    write_reservation = m_blockman.ReserveBlockPos(raw_block.size(), block_height, block.GetBlockTime());
+                } catch (const std::runtime_error& e) {
+                    FatalError(GetNotifications(), state, strprintf(_("System error while saving block to disk: %s"), e.what()));
+                    if (m_options.signals) {
+                        m_options.signals->BlockChecked(pblock, state);
+                    }
+                    LogError("%s: AcceptBlock FAILED (%s)\n", __func__, state.ToString());
+                    return false;
+                }
+                if (write_reservation.pos.IsNull()) {
+                    state.Error(strprintf("%s: Failed to find position to write new block to disk", __func__));
+                    if (m_options.signals) {
+                        m_options.signals->BlockChecked(pblock, state);
+                    }
+                    LogError("%s: AcceptBlock FAILED (%s)\n", __func__, state.ToString());
+                    return false;
+                }
+
+                if (!IsInitialBlockDownload()) {
+                    // Post-IBD tip path: preserve zero-latency compact block relay before disk write
+                    // under cs_main, matching AcceptBlock().
+                    if (ActiveTip() == pindex->pprev && m_options.signals) {
+                        m_options.signals->NewPoWValidBlock(pindex, pblock);
+                    }
+                    const FlatFilePos reserved_pos = write_reservation.pos;
+                    const FlatFilePos data_pos{reserved_pos.nFile, reserved_pos.nPos + node::STORAGE_HEADER_BYTES};
+                    const bool write_ok = m_blockman.WriteRawBlockToDisk(reserved_pos, raw_block, /*keep_handle_open=*/false);
+                    write_reservation.Release();
+                    if (!write_ok) {
+                        m_blockman.AbortReservedBlockPos(reserved_pos.nFile);
+                        FatalError(GetNotifications(), state, _("Failed to write block."));
+                        if (m_options.signals) {
+                            m_options.signals->BlockChecked(pblock, state);
+                        }
+                        LogError("%s: AcceptBlock FAILED (%s)\n", __func__, state.ToString());
+                        return false;
+                    }
+                    if (new_block) *new_block = true;
+                    m_blockman.PublishReservedBlockPos(reserved_pos.nFile, static_cast<unsigned int>(block_height), block.GetBlockTime());
+                    ReceivedBlockTransactions(block, pindex, data_pos);
+                    BlockValidationState flush_state_ignore;
+                    (void)ActiveChainstate().FlushStateToDisk(flush_state_ignore, FlushStateMode::NONE);
+                    CheckBlockIndex();
+                    done_under_lock = true;
+                }
             }
-            if (write_reservation.pos.IsNull()) {
-                state.Error(strprintf("%s: Failed to find position to write new block to disk", __func__));
-                if (m_options.signals) {
-                    m_options.signals->BlockChecked(pblock, state);
+        }
+
+        if (!done_under_lock) {
+            // 6. IBD path: write pre-serialized block bytes to blk*.dat off cs_main using persistent write handle.
+            const FlatFilePos reserved_pos = write_reservation.pos;
+            const FlatFilePos data_pos{reserved_pos.nFile, reserved_pos.nPos + node::STORAGE_HEADER_BYTES};
+            const bool write_ok = m_blockman.WriteRawBlockToDisk(reserved_pos, raw_block, /*keep_handle_open=*/true);
+            write_reservation.Release();
+            if (!write_ok) {
+                {
+                    LOCK(cs_main);
+                    m_blockman.AbortReservedBlockPos(reserved_pos.nFile);
+                    FatalError(GetNotifications(), state, _("Failed to write block."));
+                    if (m_options.signals) {
+                        m_options.signals->BlockChecked(pblock, state);
+                    }
                 }
                 LogError("%s: AcceptBlock FAILED (%s)\n", __func__, state.ToString());
                 return false;
             }
-            keep_blk_handle = IsInitialBlockDownload();
-        }
-    }
-    if (already_have) {
-        NotifyHeaderTip();
-        return true;
-    }
 
-    // 6. Write pre-serialized block bytes to blk*.dat off cs_main using persistent write handle.
-    const FlatFilePos data_pos{write_reservation.pos.nFile, write_reservation.pos.nPos + node::STORAGE_HEADER_BYTES};
-    const bool write_ok = m_blockman.WriteRawBlockToDisk(write_reservation.pos, raw_block, keep_blk_handle);
-    write_reservation.Release();
-    if (!write_ok) {
-        FatalError(GetNotifications(), state, _("Failed to write block."));
-        if (m_options.signals) {
-            m_options.signals->BlockChecked(pblock, state);
-        }
-        LogError("%s: AcceptBlock FAILED (%s)\n", __func__, state.ToString());
-        return false;
-    }
+            // 7. Record block position, publish file info, and trigger pruning check under brief cs_main lock.
+            {
+                LOCK(cs_main);
+                if (pindex->nStatus & BLOCK_FAILED_VALID) {
+                    m_blockman.AbortReservedBlockPos(reserved_pos.nFile);
+                    state.Invalid(BlockValidationResult::BLOCK_CACHED_INVALID, "duplicate-invalid",
+                                  strprintf("block %s was previously marked invalid", block.GetHash().ToString()));
+                    if (m_options.signals) {
+                        m_options.signals->BlockChecked(pblock, state);
+                    }
+                    LogError("%s: AcceptBlock FAILED (%s)\n", __func__, state.ToString());
+                    return false;
+                }
+                if (pindex->nStatus & BLOCK_HAVE_DATA) {
+                    m_blockman.AbortReservedBlockPos(reserved_pos.nFile);
+                } else {
+                    if (new_block) *new_block = true;
+                    m_blockman.PublishReservedBlockPos(reserved_pos.nFile, static_cast<unsigned int>(block_height), block.GetBlockTime());
+                    ReceivedBlockTransactions(block, pindex, data_pos);
 
-    // 7. Record block position, relay at tip, and trigger pruning check under brief cs_main lock.
-    bool failed_concurrently = false;
-    {
-        LOCK(cs_main);
-        if (pindex->nStatus & BLOCK_FAILED_VALID) {
-            failed_concurrently = true;
-        } else if (!(pindex->nStatus & BLOCK_HAVE_DATA)) {
-            if (new_block) *new_block = true;
-            ReceivedBlockTransactions(block, pindex, data_pos);
+                    // If IBD latched to false while Step 6 was in flight, still relay if building on tip.
+                    if (!IsInitialBlockDownload() && ActiveTip() == pindex->pprev && m_options.signals) {
+                        m_options.signals->NewPoWValidBlock(pindex, pblock);
+                    }
 
-            // Header is valid/has work, merkle tree and segwit merkle tree are good...RELAY NOW.
-            // Relay only after ReceivedBlockTransactions so peers replying immediately with
-            // GETDATA/GETBLOCKTXN always observe BLOCK_HAVE_DATA and HaveNumChainTxs() under cs_main.
-            if (!IsInitialBlockDownload() && ActiveTip() == pindex->pprev && m_options.signals) {
-                m_options.signals->NewPoWValidBlock(pindex, pblock);
+                    BlockValidationState flush_state_ignore;
+                    (void)ActiveChainstate().FlushStateToDisk(flush_state_ignore, FlushStateMode::NONE);
+                    CheckBlockIndex();
+                }
             }
-
-            BlockValidationState flush_state_ignore;
-            (void)ActiveChainstate().FlushStateToDisk(flush_state_ignore, FlushStateMode::NONE);
-            CheckBlockIndex();
         }
-    }
-    if (failed_concurrently) {
-        state.Invalid(BlockValidationResult::BLOCK_CACHED_INVALID, "duplicate-invalid",
-                      strprintf("block %s was previously marked invalid", block.GetHash().ToString()));
-        if (m_options.signals) {
-            m_options.signals->BlockChecked(pblock, state);
-        }
-        LogError("%s: AcceptBlock FAILED (%s)\n", __func__, state.ToString());
-        return false;
     }
 
     NotifyHeaderTip();
@@ -5077,6 +5721,11 @@ VerifyDBResult CVerifyDB::VerifyDB(
     LogInfo("Verification progress: 0%%");
 
     const bool is_snapshot_cs{chainstate.m_from_snapshot_blockhash};
+
+    if (nCheckLevel >= 2 && chainstate.m_blockman.HasPendingUndoWrites() && !chainstate.m_blockman.SettlePendingUndoWrites()) {
+        LogError("Verification error: failed to settle pending undo writes");
+        return VerifyDBResult::CORRUPTED_BLOCK_DB;
+    }
 
     for (pindex = chainstate.m_chain.Tip(); pindex && pindex->pprev; pindex = pindex->pprev) {
         const int percentageDone = std::max(1, std::min(99, (int)(((double)(chainstate.m_chain.Height() - pindex->nHeight)) / (double)nCheckDepth * (nCheckLevel >= 4 ? 50 : 100))));
@@ -5908,11 +6557,12 @@ bool Chainstate::ResizeCoinsCaches(size_t coinstip_size, size_t coinsdb_size)
     }
     size_t old_coinstip_size = m_coinstip_cache_size_bytes;
     m_coinstip_cache_size_bytes = coinstip_size;
-    m_coinsdb_cache_size_bytes = coinsdb_size;
-    CoinsDB().ResizeCache(coinsdb_size);
-
-    LogInfo("[%s] resized coinsdb cache to %.1f MiB",
-        this->ToString(), coinsdb_size / double(1_MiB));
+    if (coinsdb_size != m_coinsdb_cache_size_bytes) {
+        m_coinsdb_cache_size_bytes = coinsdb_size;
+        CoinsDB().ResizeCache(coinsdb_size);
+        LogInfo("[%s] resized coinsdb cache to %.1f MiB",
+            this->ToString(), coinsdb_size / double(1_MiB));
+    }
     LogInfo("[%s] resized coinstip cache to %.1f MiB",
         this->ToString(), coinstip_size / double(1_MiB));
 
@@ -6263,6 +6913,10 @@ util::Result<void> ChainstateManager::PopulateAndValidateSnapshot(
                     return util::Error{Untranslated(strprintf("Bad snapshot data after deserializing %d coins - bad tx out value",
                               coins_count - coins_left))};
                 }
+                if (coin.out.scriptPubKey.IsUnspendable()) {
+                    return util::Error{Untranslated(strprintf("Bad snapshot data after deserializing %d coins - unspendable scriptPubKey",
+                              coins_count - coins_left))};
+                }
                 coins_cache.EmplaceCoinInternalDANGER(outpoint, std::move(coin));
 
                 --coins_left;
@@ -6448,6 +7102,7 @@ SnapshotCompletionResult ChainstateManager::MaybeValidateSnapshot(Chainstate& va
 
         // Reset chainstate target to network tip instead of snapshot block.
         validated_cs.SetTargetBlock(nullptr);
+        m_ibd_teardown_deferred_for_historical.store(false, std::memory_order_release);
 
         unvalidated_cs.m_assumeutxo = Assumeutxo::INVALID;
 
@@ -6513,6 +7168,7 @@ SnapshotCompletionResult ChainstateManager::MaybeValidateSnapshot(Chainstate& va
 
     unvalidated_cs.m_assumeutxo = Assumeutxo::VALIDATED;
     validated_cs.m_target_utxohash = AssumeutxoHash{validated_cs_stats->hashSerialized};
+    m_ibd_teardown_deferred_for_historical.store(false, std::memory_order_release);
     this->MaybeRebalanceCaches();
 
     return SnapshotCompletionResult::SUCCESS;
@@ -6559,6 +7215,7 @@ void ChainstateManager::MaybeRebalanceCaches()
 void ChainstateManager::ResetChainstates()
 {
     m_chainstates.clear();
+    m_ibd_teardown_deferred_for_historical.store(false, std::memory_order_release);
 }
 
 /**
@@ -6595,6 +7252,9 @@ ChainstateManager::ChainstateManager(const util::SignalInterrupt& interrupt, Opt
             } else if (m_options.ibd_window_size.has_value() && *m_options.ibd_window_size >= 2) {
                 initial_workers = std::max(initial_workers, 2);
             }
+            if (m_options.worker_threads_num >= 0 && m_options.worker_threads_num < cores - 1) {
+                initial_workers = std::min(initial_workers, std::max(1, m_options.worker_threads_num + 1));
+            }
         }
         if (initial_workers > m_options.prevoutfetch_threads_num) {
             m_ibd_pool_expanded.store(true, std::memory_order_release);
@@ -6629,10 +7289,13 @@ size_t ChainstateManager::GetHandoffCacheMaxBytes() const
 
 ChainstateManager::IBDExitCallbackRegistration ChainstateManager::RegisterIBDExitCallback(std::function<void()> cb)
 {
-    LOCK(m_ibd_exit_cb_state->mutex);
-    m_ibd_exit_cb_state->callback = std::move(cb);
-    m_ibd_exit_cb_state->pending.store(static_cast<bool>(m_ibd_exit_cb_state->callback), std::memory_order_release);
-    return IBDExitCallbackRegistration{m_ibd_exit_cb_state};
+    if (!cb) return {};
+    IBDExitCallbackState& state = *m_ibd_exit_cb_state;
+    LOCK(state.mutex);
+    const uint64_t id = state.next_id++;
+    state.callbacks.emplace_back(id, std::move(cb));
+    state.pending.store(true, std::memory_order_release);
+    return IBDExitCallbackRegistration{m_ibd_exit_cb_state, id};
 }
 
 void ChainstateManager::MaybeTeardownIBDResources()
@@ -6640,9 +7303,37 @@ void ChainstateManager::MaybeTeardownIBDResources()
     AssertLockNotHeld(::cs_main);
     if (IsInitialBlockDownload()) return;
     if (!HasActiveIBDResources()) return;
-    if (WITH_LOCK(::cs_main, return HistoricalChainstate() != nullptr)) return;
 
-    // 1. Settle all pending async undo writes, join the undo writer thread, and close persistent file handles.
+    // 1. Always tear down P2P-only IBD resources immediately upon exiting IBD,
+    // even while a historical AssumeUTXO chainstate is still syncing in the background.
+    if (m_handoff_cache.Size() > 0) {
+        m_handoff_cache.Clear();
+    }
+
+    // Invoke and clear registered IBD-exit callbacks (e.g., stop P2P IBD connector thread).
+    // Hold state.mutex across invocation so PeerManagerImpl::~PeerManagerImpl() cannot
+    // destroy itself while its callback is still running.
+    if (m_ibd_exit_cb_state->pending.load(std::memory_order_acquire)) {
+        IBDExitCallbackState& state = *m_ibd_exit_cb_state;
+        LOCK(state.mutex);
+        auto callbacks = std::move(state.callbacks);
+        state.callbacks.clear();
+        state.pending.store(false, std::memory_order_release);
+        for (auto& [_, cb] : callbacks) {
+            if (cb) cb();
+        }
+    }
+
+    if (!HasActiveWorkerIBDResources()) return;
+    bool has_historical = false;
+    {
+        LOCK(::cs_main);
+        has_historical = (HistoricalChainstate() != nullptr);
+        m_ibd_teardown_deferred_for_historical.store(has_historical, std::memory_order_release);
+    }
+    if (has_historical) return;
+
+    // 2. Settle all pending async undo writes, join the undo writer thread, and close persistent file handles.
     if (m_blockman.IsAsyncUndoWriterRunning() || m_blockman.HasPendingUndoWrites()) {
         if (!WITH_LOCK(::cs_main, return m_blockman.SettlePendingUndoWrites())) {
             GetNotifications().flushError(_("Flushing undo file to disk failed. This is likely the result of an I/O error."));
@@ -6650,24 +7341,9 @@ void ChainstateManager::MaybeTeardownIBDResources()
         m_blockman.StopAsyncUndoWriter();
     }
 
-    // 2. Clear and release any cached P2P handoff blocks.
-    if (m_handoff_cache.Size() > 0) {
-        m_handoff_cache.Clear();
-    }
-
     // 3. Resize the shared validation pool back to steady-state -prevoutfetchthreads if expanded.
     if (m_ibd_pool_expanded.exchange(false, std::memory_order_acq_rel)) {
         ResizeValidationPool(m_options.prevoutfetch_threads_num);
-    }
-
-    // 4. Stop P2P IBD connector thread (callback safely handles self-thread invocation).
-    // Hold m_ibd_exit_cb_state->mutex across invocation so PeerManagerImpl::~PeerManagerImpl()
-    // cannot destroy itself while this callback is still running.
-    if (m_ibd_exit_cb_state->pending.exchange(false, std::memory_order_acq_rel)) {
-        LOCK(m_ibd_exit_cb_state->mutex);
-        if (m_ibd_exit_cb_state->callback) {
-            m_ibd_exit_cb_state->callback();
-        }
     }
 }
 
