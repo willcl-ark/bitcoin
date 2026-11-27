@@ -343,6 +343,9 @@ void Shutdown(NodeContext& node)
     // using the other before destroying them.
     if (node.peerman && node.validation_signals) node.validation_signals->UnregisterValidationInterface(node.peerman.get());
     if (node.connman) node.connman->Stop();
+    // Join any active ibdconnect thread before stopping the scheduler so ActivateBestChains()
+    // cannot block forever in SyncWithValidationInterfaceQueue().
+    if (node.peerman) node.peerman->StopIBDConnector();
 
     if (node.tor_controller) {
         node.tor_controller->Join();
@@ -2147,7 +2150,6 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         // before activating genesis. This wakeup lets the wait observe the
         // shutdown request.
         WITH_LOCK(kernel_notifications.m_tip_block_mutex, kernel_notifications.m_tip_block_cv.notify_all());
-        WITH_LOCK(::cs_main, chainman.UpdateIBDStatus());
         if (args.GetBoolArg("-stopafterblockimport", DEFAULT_STOPAFTERBLOCKIMPORT)) {
             LogInfo("Stopping after block import");
             if (!(Assert(node.shutdown_request))()) {

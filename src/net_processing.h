@@ -133,6 +133,9 @@ public:
     /** Begin running background tasks, should only be called once */
     virtual void StartScheduledTasks(CScheduler& scheduler) = 0;
 
+    /** Stop and join any background IBD block connector thread before scheduler shutdown. */
+    virtual void StopIBDConnector() = 0;
+
     /** Get statistics from node state */
     virtual bool GetNodeStateStats(NodeId nodeid, CNodeStateStats& stats) const = 0;
 

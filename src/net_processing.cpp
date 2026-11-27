@@ -58,7 +58,9 @@
 #include <uint256.h>
 #include <util/check.h>
 #include <util/hasher.h>
+#include <util/signalinterrupt.h>
 #include <util/strencodings.h>
+#include <util/thread.h>
 #include <util/time.h>
 #include <util/tokenbucket.h>
 #include <util/trace.h>
@@ -68,6 +70,7 @@
 #include <array>
 #include <atomic>
 #include <compare>
+#include <condition_variable>
 #include <cstddef>
 #include <deque>
 #include <exception>
@@ -85,6 +88,7 @@
 #include <ratio>
 #include <set>
 #include <span>
+#include <thread>
 #include <typeinfo>
 #include <unordered_set>
 #include <utility>
@@ -283,6 +287,39 @@ struct Peer {
     std::atomic<NodeClock::time_point> m_ping_start{NodeClock::epoch};
     /** Whether a ping has been requested by the user */
     std::atomic<bool> m_ping_queued{false};
+    struct DeferredPong {
+        uint64_t ticket{0};
+        const CBlockIndex* pindex{nullptr};
+        uint64_t nonce{0};
+        SteadyClock::time_point received_at{};
+    };
+    /** Latest IBD block handoff ticket submitted by this peer (0 if none). */
+    uint64_t m_last_ibd_block_ticket GUARDED_BY(NetEventsInterface::g_msgproc_mutex){0};
+    /** CBlockIndex of the latest IBD block handed off by this peer (nullptr if none). */
+    const CBlockIndex* m_last_ibd_block_pindex GUARDED_BY(NetEventsInterface::g_msgproc_mutex){nullptr};
+    /** Bounded queue of deferred PONG replies for this peer during IBD. */
+    std::deque<DeferredPong> m_deferred_pongs GUARDED_BY(NetEventsInterface::g_msgproc_mutex);
+
+    void PushDeferredPong(uint64_t ticket, const CBlockIndex* pindex, uint64_t nonce, SteadyClock::time_point received_at)
+        EXCLUSIVE_LOCKS_REQUIRED(NetEventsInterface::g_msgproc_mutex)
+    {
+        m_deferred_pongs.push_back(DeferredPong{ticket, pindex, nonce, received_at});
+        ++m_deferred_pongs_count;
+        if (m_deferred_pongs_total) {
+            m_deferred_pongs_total->fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
+    uint64_t PopDeferredPong() EXCLUSIVE_LOCKS_REQUIRED(NetEventsInterface::g_msgproc_mutex)
+    {
+        const uint64_t nonce = m_deferred_pongs.front().nonce;
+        m_deferred_pongs.pop_front();
+        --m_deferred_pongs_count;
+        if (m_deferred_pongs_total) {
+            m_deferred_pongs_total->fetch_sub(1, std::memory_order_relaxed);
+        }
+        return nonce;
+    }
 
     /** Whether this peer relays txs via wtxid */
     std::atomic<bool> m_wtxid_relay{false};
@@ -418,13 +455,24 @@ struct Peer {
      * timestamp the peer sent in the version message. */
     std::atomic<std::chrono::seconds> m_time_offset{0s};
 
-    explicit Peer(NodeId id, ServiceFlags our_services, bool is_inbound)
+    explicit Peer(NodeId id, ServiceFlags our_services, bool is_inbound, std::atomic<size_t>* deferred_pongs_total = nullptr)
         : m_id{id}
         , m_our_services{our_services}
         , m_is_inbound{is_inbound}
+        , m_deferred_pongs_total{deferred_pongs_total}
     {}
 
+    ~Peer()
+    {
+        if (m_deferred_pongs_total && m_deferred_pongs_count > 0) {
+            m_deferred_pongs_total->fetch_sub(m_deferred_pongs_count, std::memory_order_relaxed);
+        }
+    }
+
 private:
+    std::atomic<size_t>* const m_deferred_pongs_total{nullptr};
+    size_t m_deferred_pongs_count{0};
+
     mutable Mutex m_tx_relay_mutex;
 
     /** Transaction relay data. May be a nullptr. */
@@ -573,6 +621,7 @@ public:
     PeerManagerImpl(CConnman& connman, AddrMan& addrman,
                     BanMan* banman, ChainstateManager& chainman,
                     CTxMemPool& pool, node::Warnings& warnings, Options opts);
+    ~PeerManagerImpl() override;
 
     /** Overridden from CValidationInterface. */
     void ActiveTipChange(const CBlockIndex& new_tip, bool) override
@@ -593,9 +642,9 @@ public:
     void FinalizeNode(const CNode& node) override EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex, !m_headers_presync_mutex, !m_tx_download_mutex);
     bool HasAllDesirableServiceFlags(ServiceFlags services) const override;
     bool ProcessMessages(CNode& node, std::atomic<bool>& interrupt) override
-        EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex, !m_most_recent_block_mutex, !m_headers_presync_mutex, g_msgproc_mutex, !m_tx_download_mutex, !m_inv_to_send_mutex);
+        EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex, !m_most_recent_block_mutex, !m_headers_presync_mutex, g_msgproc_mutex, !m_tx_download_mutex, !m_inv_to_send_mutex, !m_ibd_connector_join_mutex, !m_ibd_connector_mutex);
     bool SendMessages(CNode& node) override
-        EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex, !m_most_recent_block_mutex, g_msgproc_mutex, !m_tx_download_mutex, !m_inv_to_send_mutex);
+        EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex, !m_most_recent_block_mutex, g_msgproc_mutex, !m_tx_download_mutex, !m_inv_to_send_mutex, !m_ibd_connector_join_mutex, !m_ibd_connector_mutex);
 
     /** Implement PeerManager */
     void StartScheduledTasks(CScheduler& scheduler) override;
@@ -622,7 +671,7 @@ public:
 private:
     void ProcessMessage(Peer& peer, CNode& pfrom, const std::string& msg_type, DataStream& vRecv, NodeClock::time_point time_received,
                         const std::atomic<bool>& interruptMsgProc)
-        EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex, !m_most_recent_block_mutex, !m_headers_presync_mutex, g_msgproc_mutex, !m_tx_download_mutex, !m_inv_to_send_mutex);
+        EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex, !m_most_recent_block_mutex, !m_headers_presync_mutex, g_msgproc_mutex, !m_tx_download_mutex, !m_inv_to_send_mutex, !m_ibd_connector_join_mutex, !m_ibd_connector_mutex);
 
     /** Consider evicting an outbound peer based on the amount of time they've been behind our tip */
     void ConsiderEviction(CNode& pto, Peer& peer, std::chrono::seconds time_in_seconds) EXCLUSIVE_LOCKS_REQUIRED(cs_main, g_msgproc_mutex);
@@ -887,6 +936,10 @@ private:
       * on extra block-relay-only peers. */
     bool m_initial_sync_finished GUARDED_BY(cs_main){false};
 
+    /** Total deferred IBD PONG replies across all connected peers.
+     *  Declared before m_peer_map so ~Peer() always observes a live counter. */
+    std::atomic<size_t> m_deferred_pongs_total{0};
+
     /** Protects m_peer_map. This mutex must not be locked while holding a lock
      *  on any of the mutexes inside a Peer object. */
     mutable Mutex m_peer_mutex;
@@ -1049,11 +1102,40 @@ private:
         LOCKS_EXCLUDED(::cs_main);
 
     /** Process a new block. Perform any post-processing housekeeping */
-    void ProcessBlock(CNode& node, const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked);
+    void ProcessBlock(CNode& node, Peer& peer, const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked, bool inserted_block_source)
+        EXCLUSIVE_LOCKS_REQUIRED(NetEventsInterface::g_msgproc_mutex, !m_ibd_connector_join_mutex, !m_ibd_connector_mutex);
+
+    /** Single lazy, idle-stoppable, restartable IBD block connector thread ("ibdconnect"). */
+    static constexpr size_t MAX_DEFERRED_PONGS_PER_PEER{16};
+    static constexpr std::chrono::seconds DEFERRED_PONG_MAX_WAIT{15};
+    static constexpr std::chrono::seconds IBD_CONNECTOR_IDLE_TIMEOUT{10};
+
+    Mutex m_ibd_connector_join_mutex;
+    Mutex m_ibd_connector_mutex;
+    std::condition_variable m_ibd_connector_cv;
+    std::thread m_ibd_connector_thread GUARDED_BY(m_ibd_connector_mutex);
+    std::thread::id m_ibd_connector_thread_id GUARDED_BY(m_ibd_connector_mutex){};
+    bool m_ibd_connector_running GUARDED_BY(m_ibd_connector_mutex){false};
+    bool m_ibd_connector_stop GUARDED_BY(m_ibd_connector_mutex){false};
+    bool m_ibd_connector_shutdown GUARDED_BY(m_ibd_connector_mutex){false};
+    uint64_t m_ibd_handoff_ticket GUARDED_BY(m_ibd_connector_mutex){0};
+    std::atomic<uint64_t> m_ibd_completed_ticket{0};
+    std::atomic<bool> m_ibd_connector_needs_join{false};
+    ChainstateManager::IBDExitCallbackRegistration m_ibd_exit_cb_reg;
+
+    uint64_t SignalIBDConnector() LOCKS_EXCLUDED(::cs_main) EXCLUSIVE_LOCKS_REQUIRED(!m_ibd_connector_join_mutex, !m_ibd_connector_mutex);
+    void IBDConnectorLoop() LOCKS_EXCLUDED(::cs_main) EXCLUSIVE_LOCKS_REQUIRED(!m_ibd_connector_mutex);
+    void StopIBDConnector(bool is_shutdown) LOCKS_EXCLUDED(::cs_main) EXCLUSIVE_LOCKS_REQUIRED(!m_ibd_connector_join_mutex, !m_ibd_connector_mutex);
+    void StopIBDConnector() override LOCKS_EXCLUDED(::cs_main) EXCLUSIVE_LOCKS_REQUIRED(!m_ibd_connector_join_mutex, !m_ibd_connector_mutex)
+    {
+        StopIBDConnector(/*is_shutdown=*/true);
+    }
+    void ReapExitedIBDConnector() LOCKS_EXCLUDED(::cs_main) EXCLUSIVE_LOCKS_REQUIRED(!m_ibd_connector_join_mutex, !m_ibd_connector_mutex);
+    void FlushDeferredPongs(CNode& node, Peer& peer) EXCLUSIVE_LOCKS_REQUIRED(NetEventsInterface::g_msgproc_mutex) LOCKS_EXCLUDED(::cs_main);
 
     /** Process compact block txns  */
     void ProcessCompactBlockTxns(CNode& pfrom, Peer& peer, const BlockTransactions& block_transactions)
-        EXCLUSIVE_LOCKS_REQUIRED(g_msgproc_mutex, !m_most_recent_block_mutex);
+        EXCLUSIVE_LOCKS_REQUIRED(g_msgproc_mutex, !m_most_recent_block_mutex, !m_ibd_connector_join_mutex, !m_ibd_connector_mutex);
 
     /**
      * Schedule an INV for a transaction to be sent to the given peer (via `PushMessage()`).
@@ -1535,10 +1617,12 @@ void PeerManagerImpl::FindNextBlocksToDownload(const Peer& peer, unsigned int co
     // linked block we have in common with this peer. The +1 is so we can detect stalling, namely if we would be able to
     // download that next block if the window were 1 larger.
     int nWindowEnd = state->pindexLastCommonBlock->nHeight + static_cast<int>(BLOCK_DOWNLOAD_WINDOW);
-    if (m_chainman.IsInitialBlockDownload() || m_chainman.m_blockman.IsPruneMode()) {
+    if (m_chainman.IsInitialBlockDownload() && m_chainman.ActiveTip() &&
+        state->pindexLastCommonBlock->nChainWork > m_chainman.ActiveTip()->nChainWork) {
         // Bound download lookahead relative to the active chain tip during IBD
-        // (while msghand stores blocks asynchronously ahead of ibdconnect) and
-        // in prune mode. Leave post-IBD non-pruning fork downloads unchanged.
+        // while msghand stores blocks asynchronously ahead of ibdconnect.
+        // Only clamp once stored blocks already exceed ActiveTip()'s chainwork
+        // so a longer lower-difficulty fork can still be downloaded without deadlocking.
         nWindowEnd = std::min(nWindowEnd, m_chainman.ActiveHeight() + static_cast<int>(BLOCK_DOWNLOAD_WINDOW));
     }
 
@@ -1723,7 +1807,7 @@ void PeerManagerImpl::InitializeNode(const CNode& node, ServiceFlags our_service
         our_services = static_cast<ServiceFlags>(our_services | NODE_BLOOM);
     }
 
-    PeerRef peer = std::make_shared<Peer>(nodeid, our_services, node.IsInboundConn());
+    PeerRef peer = std::make_shared<Peer>(nodeid, our_services, node.IsInboundConn(), &m_deferred_pongs_total);
     {
         LOCK(m_peer_mutex);
         m_peer_map.emplace_hint(m_peer_map.end(), nodeid, peer);
@@ -2159,6 +2243,18 @@ PeerManagerImpl::PeerManagerImpl(CConnman& connman, AddrMan& addrman,
     if (opts.reconcile_txs) {
         m_txreconciliation = std::make_unique<TxReconciliationTracker>(TXRECONCILIATION_VERSION);
     }
+
+    m_ibd_exit_cb_reg = m_chainman.RegisterIBDExitCallback([this] {
+        StopIBDConnector(/*is_shutdown=*/false);
+    });
+}
+
+PeerManagerImpl::~PeerManagerImpl()
+{
+    // Unregister via shared callback state without touching m_chainman (which may
+    // already have been reset in test harnesses) and wait for any active callback.
+    m_ibd_exit_cb_reg.Reset();
+    StopIBDConnector(/*is_shutdown=*/true);
 }
 
 void PeerManagerImpl::StartScheduledTasks(CScheduler& scheduler)
@@ -2192,6 +2288,8 @@ void PeerManagerImpl::ActiveTipChange(const CBlockIndex& new_tip, bool is_ibd)
         // to a timelock. Reset the rejection filters to give those transactions another chance if we
         // see them again.
         m_txdownloadman.ActiveTipChange();
+    } else if (m_deferred_pongs_total.load(std::memory_order_relaxed) > 0) {
+        m_connman.WakeMessageHandler();
     }
 }
 
@@ -3688,20 +3786,227 @@ void PeerManagerImpl::ProcessGetCFCheckPt(CNode& node, Peer& peer, DataStream& v
               headers);
 }
 
-void PeerManagerImpl::ProcessBlock(CNode& node, const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked)
+uint64_t PeerManagerImpl::SignalIBDConnector()
 {
+    AssertLockNotHeld(::cs_main);
+    uint64_t ticket = 0;
+    {
+        LOCK(m_ibd_connector_join_mutex);
+        std::thread old_thread;
+        {
+            LOCK(m_ibd_connector_mutex);
+            if (m_ibd_connector_shutdown) {
+                return m_ibd_completed_ticket.load(std::memory_order_acquire);
+            }
+            if (m_ibd_connector_running) {
+                ticket = ++m_ibd_handoff_ticket;
+            } else if (m_ibd_connector_thread.joinable()) {
+                old_thread = std::move(m_ibd_connector_thread);
+            }
+        }
+        if (old_thread.joinable()) {
+            old_thread.join();
+        }
+        if (ticket == 0) {
+            LOCK(m_ibd_connector_mutex);
+            if (m_ibd_connector_shutdown) {
+                if (!m_ibd_connector_running) {
+                    m_ibd_connector_thread_id = std::thread::id{};
+                    m_ibd_connector_needs_join.store(false, std::memory_order_release);
+                }
+                return m_ibd_completed_ticket.load(std::memory_order_acquire);
+            }
+            if (!m_ibd_connector_running) {
+                m_ibd_connector_thread_id = std::thread::id{};
+                m_ibd_connector_stop = false;
+                m_ibd_connector_running = true;
+                m_ibd_connector_needs_join.store(false, std::memory_order_release);
+                try {
+                    m_ibd_connector_thread = std::thread(&util::TraceThread, "ibdconnect", [this] {
+                        IBDConnectorLoop();
+                    });
+                } catch (...) {
+                    m_ibd_connector_running = false;
+                    throw;
+                }
+                m_ibd_connector_thread_id = m_ibd_connector_thread.get_id();
+            }
+            ticket = ++m_ibd_handoff_ticket;
+        }
+    }
+    m_ibd_connector_cv.notify_one();
+    return ticket;
+}
+
+void PeerManagerImpl::IBDConnectorLoop()
+{
+    while (true) {
+        uint64_t target_ticket = 0;
+        {
+            WAIT_LOCK(m_ibd_connector_mutex, lock);
+            const auto wake_pred = [&]() EXCLUSIVE_LOCKS_REQUIRED(m_ibd_connector_mutex) {
+                return m_ibd_connector_stop || m_ibd_connector_shutdown || static_cast<bool>(m_chainman.m_interrupt) ||
+                       m_ibd_handoff_ticket > m_ibd_completed_ticket.load(std::memory_order_relaxed);
+            };
+            if (!wake_pred()) {
+                m_ibd_connector_cv.wait_for(lock, IBD_CONNECTOR_IDLE_TIMEOUT, wake_pred);
+            }
+            if (m_ibd_connector_shutdown || static_cast<bool>(m_chainman.m_interrupt)) {
+                m_ibd_connector_running = false;
+                m_ibd_connector_needs_join.store(true, std::memory_order_release);
+                break;
+            }
+            if (m_ibd_handoff_ticket > m_ibd_completed_ticket.load(std::memory_order_relaxed)) {
+                target_ticket = m_ibd_handoff_ticket;
+            } else {
+                m_ibd_connector_running = false;
+                m_ibd_connector_needs_join.store(true, std::memory_order_release);
+                break;
+            }
+        }
+
+        if (auto result = m_chainman.ActivateBestChains(); !result) {
+            LogError("ibdconnect: %s\n", util::ErrorString(result).original);
+        }
+
+        m_ibd_completed_ticket.store(target_ticket, std::memory_order_release);
+        m_connman.WakeMessageHandler();
+
+        if (!m_chainman.IsInitialBlockDownload()) {
+            LOCK(m_ibd_connector_mutex);
+            if (m_ibd_handoff_ticket <= target_ticket) {
+                m_ibd_connector_running = false;
+                m_ibd_connector_needs_join.store(true, std::memory_order_release);
+                break;
+            }
+        }
+    }
+    m_connman.WakeMessageHandler();
+}
+
+void PeerManagerImpl::StopIBDConnector(bool is_shutdown)
+{
+    AssertLockNotHeld(::cs_main);
+    {
+        LOCK(m_ibd_connector_mutex);
+        m_ibd_connector_stop = true;
+        if (is_shutdown) m_ibd_connector_shutdown = true;
+        if (std::this_thread::get_id() == m_ibd_connector_thread_id) {
+            // Never self-join; hand off joining to msghand once IBDConnectorLoop exits.
+            m_ibd_connector_needs_join.store(true, std::memory_order_release);
+            m_connman.WakeMessageHandler();
+            return;
+        }
+    }
+    m_ibd_connector_cv.notify_all();
+
+    LOCK(m_ibd_connector_join_mutex);
+    std::thread thread_to_join;
+    bool notify_cv = false;
+    {
+        LOCK(m_ibd_connector_mutex);
+        if (m_ibd_connector_thread.joinable()) {
+            // Re-assert stop under join_mutex + connector_mutex so a racing SignalIBDConnector()
+            // cannot leave us joining a newly spawned thread with m_ibd_connector_stop == false.
+            m_ibd_connector_stop = true;
+            notify_cv = true;
+            thread_to_join = std::move(m_ibd_connector_thread);
+        }
+    }
+    if (notify_cv) m_ibd_connector_cv.notify_all();
+    if (thread_to_join.joinable()) {
+        thread_to_join.join();
+        LOCK(m_ibd_connector_mutex);
+        if (!m_ibd_connector_running) {
+            m_ibd_connector_thread_id = std::thread::id{};
+            m_ibd_connector_needs_join.store(false, std::memory_order_release);
+        }
+    }
+}
+
+void PeerManagerImpl::ReapExitedIBDConnector()
+{
+    AssertLockNotHeld(::cs_main);
+    LOCK(m_ibd_connector_join_mutex);
+    std::thread thread_to_join;
+    {
+        LOCK(m_ibd_connector_mutex);
+        if (!m_ibd_connector_running && m_ibd_connector_thread.joinable() &&
+            std::this_thread::get_id() != m_ibd_connector_thread_id) {
+            thread_to_join = std::move(m_ibd_connector_thread);
+            m_ibd_connector_needs_join.store(false, std::memory_order_release);
+        }
+    }
+    if (thread_to_join.joinable()) {
+        thread_to_join.join();
+        LOCK(m_ibd_connector_mutex);
+        if (!m_ibd_connector_running) {
+            m_ibd_connector_thread_id = std::thread::id{};
+        }
+    }
+}
+
+void PeerManagerImpl::FlushDeferredPongs(CNode& node, Peer& peer)
+{
+    if (peer.m_deferred_pongs.empty()) return;
+    const uint64_t completed = m_ibd_completed_ticket.load(std::memory_order_acquire);
+    const auto now = SteadyClock::now();
+    while (!peer.m_deferred_pongs.empty()) {
+        const auto& entry = peer.m_deferred_pongs.front();
+        bool ready = entry.ticket <= completed || (now - entry.received_at >= DEFERRED_PONG_MAX_WAIT);
+        if (!ready && entry.pindex != nullptr) {
+            ready = WITH_LOCK(::cs_main, return m_chainman.ActiveChain().Contains(*entry.pindex));
+        }
+        if (!ready) break;
+        const uint64_t nonce = peer.PopDeferredPong();
+        MakeAndPushMessage(node, NetMsgType::PONG, nonce);
+    }
+}
+
+void PeerManagerImpl::ProcessBlock(CNode& node, Peer& peer, const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked, bool inserted_block_source)
+{
+    if (!m_chainman.IsInitialBlockDownload()) {
+        // Post-IBD tip fast path: synchronous ProcessNewBlock with zero extra locks or handoffs.
+        bool new_block{false};
+        m_chainman.ProcessNewBlock(block, force_processing, min_pow_checked, &new_block);
+        if (new_block) {
+            node.m_last_block_time = GetTime<std::chrono::seconds>();
+            LOCK(cs_main);
+            RemoveBlockRequest(block->GetHash(), std::nullopt);
+        } else if (inserted_block_source) {
+            LOCK(cs_main);
+            if (auto it = mapBlockSource.find(block->GetHash()); it != mapBlockSource.end() && it->second.first == node.GetId()) {
+                mapBlockSource.erase(it);
+            }
+        }
+        return;
+    }
+
+    // IBD decoupled path: validate and store to blk*.dat on msghand off cs_main,
+    // place parsed CBlock in bounded handoff cache, and signal single ibdconnect thread.
+    BlockValidationState store_state;
+    CBlockIndex* stored_pindex{nullptr};
     bool new_block{false};
-    m_chainman.ProcessNewBlock(block, force_processing, min_pow_checked, &new_block);
+    m_chainman.StoreNewBlock(block, force_processing, min_pow_checked, store_state, &stored_pindex, &new_block);
     if (new_block) {
         node.m_last_block_time = GetTime<std::chrono::seconds>();
-        // In case this block came from a different peer than we requested
-        // from, we can erase the block request now anyway (as we just stored
-        // this block to disk).
+        size_t max_handoff_bytes = 0;
+        {
+            LOCK(cs_main);
+            RemoveBlockRequest(block->GetHash(), std::nullopt);
+            max_handoff_bytes = m_chainman.GetHandoffCacheMaxBytes();
+        }
+        m_chainman.m_handoff_cache.Put(block->GetHash(), block, max_handoff_bytes);
+        peer.m_last_ibd_block_pindex = stored_pindex;
+        peer.m_last_ibd_block_ticket = SignalIBDConnector();
+    } else if (inserted_block_source) {
         LOCK(cs_main);
-        RemoveBlockRequest(block->GetHash(), std::nullopt);
-    } else {
-        LOCK(cs_main);
-        mapBlockSource.erase(block->GetHash());
+        // Only clear mapBlockSource if this call inserted the entry and it still
+        // belongs to this peer so a duplicate delivery (from another peer or the
+        // same peer) cannot wipe attribution before ibdconnect validates.
+        if (auto it = mapBlockSource.find(block->GetHash()); it != mapBlockSource.end() && it->second.first == node.GetId()) {
+            mapBlockSource.erase(it);
+        }
     }
 }
 
@@ -3709,6 +4014,7 @@ void PeerManagerImpl::ProcessCompactBlockTxns(CNode& pfrom, Peer& peer, const Bl
 {
     std::shared_ptr<CBlock> pblock = std::make_shared<CBlock>();
     bool fBlockRead{false};
+    bool inserted_block_source{false};
     {
         LOCK(cs_main);
 
@@ -3777,7 +4083,7 @@ void PeerManagerImpl::ProcessCompactBlockTxns(CNode& pfrom, Peer& peer, const Bl
             // BIP 152 permits peers to relay compact blocks after validating
             // the header only; we should not punish peers if the block turns
             // out to be invalid.
-            mapBlockSource.emplace(block_transactions.blockhash, std::make_pair(pfrom.GetId(), false));
+            inserted_block_source = mapBlockSource.emplace(block_transactions.blockhash, std::make_pair(pfrom.GetId(), false)).second;
         }
     } // Don't hold cs_main when we call into ProcessNewBlock
     if (fBlockRead) {
@@ -3787,7 +4093,7 @@ void PeerManagerImpl::ProcessCompactBlockTxns(CNode& pfrom, Peer& peer, const Bl
         // disk-space attacks), but this should be safe due to the
         // protections in the compact block handler -- see related comment
         // in compact block optimistic reconstruction handling.
-        ProcessBlock(pfrom, pblock, /*force_processing=*/true, /*min_pow_checked=*/true);
+        ProcessBlock(pfrom, peer, pblock, /*force_processing=*/true, /*min_pow_checked=*/true, inserted_block_source);
     }
     return;
 }
@@ -5030,9 +5336,10 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         if (fBlockReconstructed) {
             // If we got here, we were able to optimistically reconstruct a
             // block that is in flight from some other peer.
+            bool inserted_block_source{false};
             {
                 LOCK(cs_main);
-                mapBlockSource.emplace(pblock->GetHash(), std::make_pair(pfrom.GetId(), false));
+                inserted_block_source = mapBlockSource.emplace(pblock->GetHash(), std::make_pair(pfrom.GetId(), false)).second;
             }
             // Setting force_processing to true means that we bypass some of
             // our anti-DoS protections in AcceptBlock, which filters
@@ -5043,7 +5350,7 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
             // we have a chain with at least the minimum chain work), and we ignore
             // compact blocks with less work than our tip, it is safe to treat
             // reconstructed compact blocks as having been requested.
-            ProcessBlock(pfrom, pblock, /*force_processing=*/true, /*min_pow_checked=*/true);
+            ProcessBlock(pfrom, peer, pblock, /*force_processing=*/true, /*min_pow_checked=*/true, inserted_block_source);
             LOCK(cs_main); // hold cs_main for CBlockIndex::IsValid()
             if (pindex->IsValid(BLOCK_VALID_TRANSACTIONS)) {
                 // Clear download state for this block, which is in
@@ -5138,6 +5445,7 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         bool forceProcessing = false;
         const uint256 hash(pblock->GetHash());
         bool min_pow_checked = false;
+        bool inserted_block_source = false;
         {
             LOCK(cs_main);
             // Always process the block if we requested it, since we may
@@ -5147,14 +5455,14 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
             // mapBlockSource is only used for punishing peers and setting
             // which peers send us compact blocks, so the race between here and
             // cs_main in ProcessNewBlock is fine.
-            mapBlockSource.emplace(hash, std::make_pair(pfrom.GetId(), true));
+            inserted_block_source = mapBlockSource.emplace(hash, std::make_pair(pfrom.GetId(), true)).second;
 
             // Check claimed work on this block against our anti-dos thresholds.
             if (prev_block && prev_block->nChainWork + GetBlockProof(*pblock) >= GetAntiDoSWorkThreshold()) {
                 min_pow_checked = true;
             }
         }
-        ProcessBlock(pfrom, pblock, forceProcessing, min_pow_checked);
+        ProcessBlock(pfrom, peer, pblock, forceProcessing, min_pow_checked, inserted_block_source);
         return;
     }
 
@@ -5228,18 +5536,25 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         if (pfrom.GetCommonVersion() > BIP0031_VERSION) {
             uint64_t nonce = 0;
             vRecv >> nonce;
-            // Echo the message back with the nonce. This allows for two useful features:
-            //
-            // 1) A remote node can quickly check if the connection is operational
-            // 2) Remote nodes can measure the latency of the network thread. If this node
-            //    is overloaded it won't respond to pings quickly and the remote node can
-            //    avoid sending us more work, like chain download requests.
-            //
-            // The nonce stops the remote getting confused between different pings: without
-            // it, if the remote node sends a ping once per second and this node takes 5
-            // seconds to respond to each, the 5th ping the remote sends would appear to
-            // return very quickly.
-            MakeAndPushMessage(pfrom, NetMsgType::PONG, nonce);
+            // Echo the message back with the nonce. During IBD, if this peer recently
+            // handed off a block to ibdconnect, defer PONG (bounded per peer) until
+            // that handoff ticket finishes ActivateBestChains. At chain tip or for
+            // peers with no pending IBD handoff, reply immediately with no connector lock.
+            if (peer.m_last_ibd_block_ticket == 0 ||
+                m_ibd_completed_ticket.load(std::memory_order_acquire) >= peer.m_last_ibd_block_ticket) {
+                FlushDeferredPongs(pfrom, peer);
+                MakeAndPushMessage(pfrom, NetMsgType::PONG, nonce);
+            } else {
+                FlushDeferredPongs(pfrom, peer);
+                peer.PushDeferredPong(peer.m_last_ibd_block_ticket, peer.m_last_ibd_block_pindex, nonce, SteadyClock::now());
+                if (peer.m_deferred_pongs.size() == 1) {
+                    FlushDeferredPongs(pfrom, peer);
+                }
+                while (peer.m_deferred_pongs.size() > MAX_DEFERRED_PONGS_PER_PEER) {
+                    const uint64_t oldest_nonce = peer.PopDeferredPong();
+                    MakeAndPushMessage(pfrom, NetMsgType::PONG, oldest_nonce);
+                }
+            }
         }
         return;
     }
@@ -5431,9 +5746,15 @@ bool PeerManagerImpl::ProcessMessages(CNode& node, std::atomic<bool>& interruptM
     AssertLockNotHeld(m_tx_download_mutex);
     AssertLockHeld(g_msgproc_mutex);
 
+    if (m_ibd_connector_needs_join.load(std::memory_order_acquire)) {
+        ReapExitedIBDConnector();
+    }
+
     PeerRef maybe_peer{GetPeerRef(node.GetId())};
     if (maybe_peer == nullptr) return false;
     Peer& peer{*maybe_peer};
+
+    if (MaybeDiscourageAndDisconnect(node, peer)) return false;
 
     // For outbound connections, ensure that the initial VERSION message
     // has been sent first before processing any incoming messages
@@ -6101,6 +6422,13 @@ bool PeerManagerImpl::SendMessages(CNode& node)
         LogDebug(BCLog::NET, "addrfetch connection timeout, %s", node.DisconnectMsg());
         node.fDisconnect = true;
         return true;
+    }
+
+    if (m_ibd_connector_needs_join.load(std::memory_order_acquire)) {
+        ReapExitedIBDConnector();
+    }
+    if (!peer.m_deferred_pongs.empty()) {
+        FlushDeferredPongs(node, peer);
     }
 
     MaybeSendPing(node, peer, now);

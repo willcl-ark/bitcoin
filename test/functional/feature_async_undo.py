@@ -20,16 +20,20 @@ from test_framework.wallet import MiniWallet
 class AsyncUndoTest(BitcoinTestFramework):
     def set_test_params(self):
         self.setup_clean_chain = True
-        self.num_nodes = 2
-        self.extra_args = [[], ["-txindex=1", "-coinstatsindex=1"]]
+        self.num_nodes = 3
+        self.extra_args = [
+            [],
+            ["-txindex=1", "-coinstatsindex=1"],
+            ["-prune=1", "-par=4", "-prevoutfetchthreads=4"],
+        ]
 
     def setup_network(self):
         self.setup_nodes()
 
     def run_test(self):
-        source, syncing = self.nodes
-        # Keep block timestamps 2 days old so the syncing node remains in IBD while
-        # connecting blocks and exercises the async undo path.
+        source, syncing, pruned = self.nodes
+        # Keep block timestamps 2 days old so the syncing nodes remain in IBD while
+        # connecting blocks and exercise the async undo path.
         mocktime = int(time.time()) - 2 * 24 * 3600
         source.setmocktime(mocktime)
         wallet = MiniWallet(source)
@@ -43,7 +47,7 @@ class AsyncUndoTest(BitcoinTestFramework):
 
         self.log.info("Sync transaction-bearing blocks in IBD so AsyncUndoWriter writes rev*.dat")
         self.connect_nodes(1, 0)
-        self.sync_blocks()
+        self.sync_blocks([source, syncing])
         assert syncing.getblockchaininfo()["initialblockdownload"]
 
         self.log.info("Verify undo-dependent RPCs and indexes settle pending async undo writes")
@@ -76,6 +80,21 @@ class AsyncUndoTest(BitcoinTestFramework):
             syncing.gettxoutsetinfo("muhash")["muhash"],
             source.gettxoutsetinfo("muhash")["muhash"],
         )
+
+        self.log.info("Sync pruned node in IBD and verify undo durability, pruneheight, verifychain, and rollback dump")
+        self.connect_nodes(2, 0)
+        self.sync_blocks([source, pruned])
+        pruned_info = pruned.getblockchaininfo()
+        assert pruned_info["initialblockdownload"]
+        assert pruned_info["pruned"]
+        assert_equal(pruned_info["pruneheight"], 0)
+        assert_equal(pruned.getbestblockhash(), tip_hash)
+        assert pruned.verifychain(checklevel=2)
+
+        rollback_height = 107
+        dump = pruned.dumptxoutset("txoutset_pruned.dat", "rollback", {"rollback": rollback_height})
+        assert_equal(dump["base_height"], rollback_height)
+        assert_equal(dump["base_hash"], pruned.getblockhash(rollback_height))
 
 
 if __name__ == "__main__":

@@ -77,6 +77,7 @@ class P2PIBDLookaheadAndStallingTest(BitcoinTestFramework):
             timeout=120,
         )
         assert_equal(node.getblockcount(), 0)
+        assert node.getblockchaininfo()["initialblockdownload"]
 
         # Blocks beyond ActiveHeight() + BLOCK_DOWNLOAD_WINDOW (1024) must NOT have been requested.
         with p2p_lock:
@@ -90,6 +91,7 @@ class P2PIBDLookaheadAndStallingTest(BitcoinTestFramework):
         peer.send_without_ping(msg_block(withheld))
         self.wait_until(lambda: node.getblockcount() == len(blocks), timeout=120)
         assert_equal(node.getbestblockhash(), blocks[-1].hash_hex)
+        assert node.getblockchaininfo()["initialblockdownload"]
         node.disconnect_p2ps()
 
     def sync_all_peers(self, peers):
