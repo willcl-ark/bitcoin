@@ -25,7 +25,7 @@ BOOST_AUTO_TEST_CASE(getcoinscachesizestate)
 
     LOCK(::cs_main);
     BOOST_REQUIRE(chainstate.ResizeCoinsCaches(MAX_COINS_BYTES, /*coinsdb_size=*/1_MiB));
-    CCoinsViewCache& view{chainstate.CoinsTip()};
+    ShardedCoinsView& view{chainstate.CoinsTip()};
 
     // Sanity: an empty cache should be ≲ 1 chunk (~ 256 KiB).
     BOOST_CHECK_LT(view.DynamicMemoryUsage() / (256 * 1024.0), 1.1);
@@ -64,6 +64,41 @@ BOOST_AUTO_TEST_CASE(getcoinscachesizestate)
     view.SetBestBlock(m_rng.rand256());
     view.Flush();
     BOOST_CHECK_EQUAL(chainstate.GetCoinsCacheSizeState(MAX_COINS_BYTES, /*max_mempool_size_bytes=*/0), CoinsCacheSizeState::OK);
+}
+
+BOOST_AUTO_TEST_CASE(coinstip_sync_and_flush_invariants)
+{
+    Chainstate& chainstate{m_node.chainman->ActiveChainstate()};
+    LOCK(::cs_main);
+    ShardedCoinsView& tip{chainstate.CoinsTip()};
+    CCoinsViewDB& db{chainstate.CoinsDB()};
+
+    const COutPoint op{Txid::FromUint256(m_rng.rand256()), 0};
+    const Coin coin{CTxOut{50'000, CScript() << OP_TRUE}, /*nHeightIn=*/10, /*fCoinBaseIn=*/false};
+    const uint256 block_hash{m_rng.rand256()};
+
+    tip.AddCoin(op, Coin{coin}, /*possible_overwrite=*/false);
+    tip.SetBestBlock(block_hash);
+    BOOST_CHECK(tip.HaveCoinInCache(op));
+    BOOST_CHECK(!db.HaveCoin(op));
+
+    // Sync writes dirty coins to CoinsDB while preserving cached entries and not bumping FlushEpoch.
+    const uint64_t epoch_before_sync{tip.FlushEpoch()};
+    tip.Sync();
+    BOOST_CHECK_EQUAL(tip.FlushEpoch(), epoch_before_sync);
+    BOOST_CHECK(tip.HaveCoinInCache(op));
+    BOOST_CHECK(db.HaveCoin(op));
+    BOOST_CHECK(db.GetBestBlock() == block_hash);
+
+    // Flush clears cached entries, increments FlushEpoch, and leaves CoinsDB intact.
+    tip.Flush();
+    BOOST_CHECK_EQUAL(tip.FlushEpoch(), epoch_before_sync + 1);
+    BOOST_CHECK(!tip.HaveCoinInCache(op));
+    auto persisted = tip.PeekCoin(op);
+    BOOST_REQUIRE(persisted.has_value());
+    BOOST_CHECK(persisted->out == coin.out);
+    BOOST_CHECK_EQUAL(persisted->nHeight, coin.nHeight);
+    tip.SanityCheck();
 }
 
 BOOST_AUTO_TEST_SUITE_END()

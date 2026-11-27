@@ -263,7 +263,7 @@ bool CheckSequenceLocksAtTip(CBlockIndex* tip,
     return EvaluateSequenceLocks(index, {lock_points.height, lock_points.time});
 }
 
-static void LimitMempoolSize(CTxMemPool& pool, CCoinsViewCache& coins_cache)
+static void LimitMempoolSize(CTxMemPool& pool, ShardedCoinsView& coins_cache)
     EXCLUSIVE_LOCKS_REQUIRED(::cs_main, pool.cs)
 {
     AssertLockHeld(::cs_main);
@@ -371,10 +371,10 @@ void Chainstate::MaybeUpdateMempoolForReorg(
         if (it->GetSpendsCoinbase()) {
             for (const CTxIn& txin : tx.vin) {
                 if (m_mempool->exists(txin.prevout.hash)) continue;
-                const Coin& coin{CoinsTip().AccessCoin(txin.prevout)};
-                assert(!coin.IsSpent());
+                const auto coin{CoinsTip().GetCoin(txin.prevout)};
+                assert(coin.has_value());
                 const auto mempool_spend_height{m_chain.Tip()->nHeight + 1};
-                if (coin.IsCoinBase() && mempool_spend_height - coin.nHeight < COINBASE_MATURITY) {
+                if (coin->IsCoinBase() && mempool_spend_height - coin->nHeight < COINBASE_MATURITY) {
                     return true;
                 }
             }
@@ -396,7 +396,7 @@ void Chainstate::MaybeUpdateMempoolForReorg(
 * */
 static bool CheckInputsFromMempoolAndCache(const CTransaction& tx, TxValidationState& state,
                 const CCoinsViewCache& view, const CTxMemPool& pool,
-                script_verify_flags flags, PrecomputedTransactionData& txdata, CCoinsViewCache& coins_tip,
+                script_verify_flags flags, PrecomputedTransactionData& txdata, const ShardedCoinsView& coins_tip,
                 ValidationCache& validation_cache)
                 EXCLUSIVE_LOCKS_REQUIRED(cs_main, pool.cs)
 {
@@ -422,9 +422,9 @@ static bool CheckInputsFromMempoolAndCache(const CTransaction& tx, TxValidationS
             assert(txFrom->vout.size() > txin.prevout.n);
             assert(txFrom->vout[txin.prevout.n] == coin.out);
         } else {
-            const Coin& coinFromUTXOSet = coins_tip.AccessCoin(txin.prevout);
-            assert(!coinFromUTXOSet.IsSpent());
-            assert(coinFromUTXOSet.out == coin.out);
+            const auto coinFromUTXOSet = coins_tip.GetCoin(txin.prevout);
+            assert(coinFromUTXOSet.has_value());
+            assert(coinFromUTXOSet->out == coin.out);
         }
     }
 
@@ -834,7 +834,7 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
 
     m_view.SetBackend(m_viewmempool);
 
-    const CCoinsViewCache& coins_cache = m_active_chainstate.CoinsTip();
+    const ShardedCoinsView& coins_cache = m_active_chainstate.CoinsTip();
     // do all inputs exist?
     for (const CTxIn& txin : tx.vin) {
         if (!coins_cache.HaveCoinInCache(txin.prevout)) {
@@ -1841,15 +1841,10 @@ CoinsViews::CoinsViews(DBParams db_params, CoinsViewOptions options)
     : m_dbview{std::move(db_params), std::move(options)},
       m_catcherview(&m_dbview) {}
 
-void CoinsViews::InitCache(int32_t prevoutfetch_threads)
+void CoinsViews::InitCache(util::NotNullSharedPtr<ThreadPool> thread_pool)
 {
     AssertLockHeld(::cs_main);
-    m_cacheview = std::make_unique<CCoinsViewCache>(&m_catcherview);
-    auto thread_pool{util::MakeNotNullShared<ThreadPool>("prevout")};
-    if (prevoutfetch_threads > 0) {
-        thread_pool->Start(prevoutfetch_threads);
-        LogInfo("Block input prevout fetching uses %d additional threads", prevoutfetch_threads);
-    }
+    m_cacheview = std::make_unique<ShardedCoinsView>(&m_catcherview);
     m_connect_block_view = std::make_unique<CoinsViewOverlay>(&*m_cacheview, std::move(thread_pool));
 }
 
@@ -1926,7 +1921,7 @@ void Chainstate::InitCoinsCache(size_t cache_size_bytes)
     AssertLockHeld(::cs_main);
     assert(m_coins_views != nullptr);
     m_coinstip_cache_size_bytes = cache_size_bytes;
-    m_coins_views->InitCache(m_chainman.m_options.prevoutfetch_threads_num);
+    m_coins_views->InitCache(m_chainman.GetValidationPool());
 }
 
 // Lock-free: depends on `m_cached_is_ibd`, which is latched by `UpdateIBDStatus()`.
@@ -3051,7 +3046,8 @@ bool Chainstate::FlushStateToDisk(
                     return FatalError(m_chainman.GetNotifications(), state, _("Disk space is too low!"));
                 }
                 // Flush the chainstate (which may refer to block index entries).
-                empty_cache ? CoinsTip().Flush() : CoinsTip().Sync();
+                empty_cache ? CoinsTip().Flush(/*reallocate_cache=*/true, &*m_chainman.GetValidationPool())
+                            : CoinsTip().Sync(&*m_chainman.GetValidationPool());
                 m_last_flushed_block = m_blockman.LookupBlockIndex(CoinsTip().GetBestBlock());
                 full_flush_completed = true;
                 TRACEPOINT(utxocache, flush,
@@ -3113,7 +3109,7 @@ void Chainstate::PruneAndFlush()
 
 static void UpdateTipLog(
     const ChainstateManager& chainman,
-    const CCoinsViewCache& coins_tip,
+    const ShardedCoinsView& coins_tip,
     const CBlockIndex* tip,
     const std::string& func_name,
     const std::string& prefix,
@@ -3586,6 +3582,8 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
     // us in the middle of ProcessNewBlock - do not assume pblock is set
     // sanely for performance or correctness!
     AssertLockNotHeld(::cs_main);
+
+    ChainstateManager::PoolUsageGuard pool_guard{m_chainman};
 
     // ABC maintains a fair degree of expensive-to-calculate internal state
     // because this function periodically releases cs_main so that it does not lock up other threads for too long
@@ -4810,7 +4808,7 @@ void PruneBlockFilesManual(Chainstate& active_chainstate, int nManualPruneHeight
 bool Chainstate::LoadChainTip()
 {
     AssertLockHeld(cs_main);
-    const CCoinsViewCache& coins_cache = CoinsTip();
+    const ShardedCoinsView& coins_cache = CoinsTip();
     assert(!coins_cache.GetBestBlock().IsNull()); // Never called when the coins view is empty
     CBlockIndex* tip = m_chain.Tip();
 
@@ -5994,7 +5992,7 @@ util::Result<CBlockIndex*> ChainstateManager::ActivateSnapshot(
     return snapshot_start_block;
 }
 
-static void FlushSnapshotToDisk(CCoinsViewCache& coins_cache, bool snapshot_loaded)
+static void FlushSnapshotToDisk(ShardedCoinsView& coins_cache, bool snapshot_loaded, ThreadPool* pool = nullptr)
 {
     LOG_TIME_MILLIS_WITH_CATEGORY_MSG_ONCE(
         strprintf("%s (%.2f MB)",
@@ -6002,7 +6000,7 @@ static void FlushSnapshotToDisk(CCoinsViewCache& coins_cache, bool snapshot_load
                   coins_cache.DynamicMemoryUsage() / (1000 * 1000)),
         BCLog::LogFlags::ALL);
 
-    coins_cache.Flush();
+    coins_cache.Flush(/*reallocate_cache=*/true, pool);
 }
 
 struct StopHashingException : public std::exception
@@ -6025,7 +6023,7 @@ util::Result<void> ChainstateManager::PopulateAndValidateSnapshot(
 {
     // It's okay to release cs_main before we're done using `coins_cache` because we know
     // that nothing else will be referencing the newly created snapshot_chainstate yet.
-    CCoinsViewCache& coins_cache = *WITH_LOCK(::cs_main, return &snapshot_chainstate.CoinsTip());
+    ShardedCoinsView& coins_cache = *WITH_LOCK(::cs_main, return &snapshot_chainstate.CoinsTip());
 
     uint256 base_blockhash = metadata.m_base_blockhash;
 
@@ -6401,12 +6399,33 @@ static ChainstateManager::Options&& Flatten(ChainstateManager::Options&& opts)
 
 ChainstateManager::ChainstateManager(const util::SignalInterrupt& interrupt, Options options, node::BlockManager::Options blockman_options)
     : m_script_check_queue{/*batch_size=*/128, std::clamp(options.worker_threads_num, 0, MAX_SCRIPTCHECK_THREADS)},
+      m_validation_pool{util::MakeNotNullShared<ThreadPool>("prevout")},
       m_interrupt{interrupt},
       m_options{Flatten(std::move(options))},
       m_blockman{interrupt, std::move(blockman_options)},
       m_all_consensus_script_flags{GetAllConsensusScriptFlags(m_options.chainparams.GetConsensus())},
       m_validation_cache{m_options.script_execution_cache_bytes, m_options.signature_cache_bytes}
 {
+    if (m_options.prevoutfetch_threads_num > 0) {
+        m_validation_pool->Start(m_options.prevoutfetch_threads_num);
+        LogInfo("Block input prevout fetching uses %d additional threads", m_options.prevoutfetch_threads_num);
+    }
+}
+
+void ChainstateManager::ResizeValidationPool(int num_workers)
+{
+    AssertLockNotHeld(::cs_main);
+    WAIT_LOCK(m_pool_lifecycle_mutex, lock);
+    m_pool_idle_cv.wait(lock, [&]() EXCLUSIVE_LOCKS_REQUIRED(m_pool_lifecycle_mutex) {
+        return !m_pool_resize_pending;
+    });
+    m_pool_resize_pending = true;
+    m_pool_idle_cv.wait(lock, [&]() EXCLUSIVE_LOCKS_REQUIRED(m_pool_lifecycle_mutex) {
+        return m_active_pool_users == 0;
+    });
+    m_validation_pool->Resize(num_workers);
+    m_pool_resize_pending = false;
+    m_pool_idle_cv.notify_all();
 }
 
 ChainstateManager::~ChainstateManager()

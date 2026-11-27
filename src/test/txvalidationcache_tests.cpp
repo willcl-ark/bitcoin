@@ -118,7 +118,7 @@ BOOST_FIXTURE_TEST_CASE(tx_mempool_block_doublespend_one_in_mempool_other_in_blo
 // CHECKLOCKTIMEVERIFY (or CHECKSEQUENCEVERIFY), but the script does contain
 // OP_CHECKLOCKTIMEVERIFY (or OP_CHECKSEQUENCEVERIFY), then script execution
 // should fail.
-static void ValidateCheckInputsForAllFlags(const CTransaction &tx, script_verify_flags failing_flags, bool add_to_cache, CCoinsViewCache& active_coins_tip, ValidationCache& validation_cache) EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
+static void ValidateCheckInputsForAllFlags(const CTransaction &tx, script_verify_flags failing_flags, bool add_to_cache, CCoinsView& active_coins_tip, ValidationCache& validation_cache) EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
 {
     PrecomputedTransactionData txdata;
 
@@ -274,7 +274,7 @@ BOOST_FIXTURE_TEST_CASE(checkinputs_test, Dersig100Setup)
         invalid_with_cltv_tx.vin[0].scriptSig = CScript() << vchSig << 100;
         TxValidationState state;
         PrecomputedTransactionData txdata;
-        BOOST_CHECK(CheckInputScripts(CTransaction(invalid_with_cltv_tx), state, m_node.chainman->ActiveChainstate().CoinsTip(), SCRIPT_VERIFY_CHECKLOCKTIMEVERIFY, CheckInputScriptsFor::Mempool, true, true, txdata, m_node.chainman->m_validation_cache, nullptr));
+        BOOST_CHECK(CheckInputScripts(CTransaction(invalid_with_cltv_tx), state, &m_node.chainman->ActiveChainstate().CoinsTip(), SCRIPT_VERIFY_CHECKLOCKTIMEVERIFY, CheckInputScriptsFor::Mempool, true, true, txdata, m_node.chainman->m_validation_cache, nullptr));
     }
 
     // TEST CHECKSEQUENCEVERIFY

@@ -251,7 +251,7 @@ struct SnapshotTestSetup : TestChain100Setup {
         // Make some initial assertions about the contents of the chainstate.
         {
             LOCK(::cs_main);
-            CCoinsViewCache& ibd_coinscache = chainman.ActiveChainstate().CoinsTip();
+            ShardedCoinsView& ibd_coinscache = chainman.ActiveChainstate().CoinsTip();
             initial_size = ibd_coinscache.GetCacheSize();
             size_t total_coins{0};
 
@@ -353,7 +353,7 @@ struct SnapshotTestSetup : TestChain100Setup {
 
             for (const auto& chainstate : chainman.m_chainstates) {
                 BOOST_TEST_MESSAGE("Checking coins in " << chainstate->ToString());
-                CCoinsViewCache& coinscache = chainstate->CoinsTip();
+                ShardedCoinsView& coinscache = chainstate->CoinsTip();
 
                 // Both caches will be empty initially.
                 BOOST_CHECK_EQUAL((unsigned int)0, coinscache.GetCacheSize());
@@ -386,7 +386,7 @@ struct SnapshotTestSetup : TestChain100Setup {
 
             for (const auto& chainstate : chainman.m_chainstates) {
                 BOOST_TEST_MESSAGE("Checking coins in " << chainstate->ToString());
-                CCoinsViewCache& coinscache = chainstate->CoinsTip();
+                ShardedCoinsView& coinscache = chainstate->CoinsTip();
                 bool is_background = chainstate.get() != &chainman.ActiveChainstate();
 
                 for (CTransactionRef& txn : m_coinbase_txns) {
@@ -886,7 +886,7 @@ BOOST_FIXTURE_TEST_CASE(chainstatemanager_snapshot_completion_hash_mismatch, Sna
 
     // Test tampering with the IBD UTXO set with an extra coin to ensure it causes
     // snapshot completion to fail.
-    CCoinsViewCache& ibd_coins = WITH_LOCK(::cs_main,
+    ShardedCoinsView& ibd_coins = WITH_LOCK(::cs_main,
         return validation_chainstate.CoinsTip());
     Coin badcoin;
     badcoin.out.nValue = m_rng.rand32();

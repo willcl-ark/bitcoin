@@ -89,9 +89,8 @@ static RPCMethod gettxoutproof()
 
                 // Loop through txids and try to find which block they're in. Exit loop once a block is found.
                 for (const auto& tx : setTxids) {
-                    const Coin& coin{AccessByTxid(active_chainstate.CoinsTip(), tx)};
-                    if (!coin.IsSpent()) {
-                        pblockindex = active_chainstate.m_chain[coin.nHeight];
+                    if (const auto coin{FindCoinByTxid(active_chainstate.CoinsTip(), tx)}) {
+                        pblockindex = active_chainstate.m_chain[coin->nHeight];
                         break;
                     }
                 }

@@ -11,6 +11,7 @@
 #include <chain.h>
 #include <checkqueue.h>
 #include <coins.h>
+#include <coins_sharded.h>
 #include <consensus/amount.h>
 #include <cuckoocache.h>
 #include <deploymentstatus.h>
@@ -35,12 +36,14 @@
 #include <util/fs.h>
 #include <util/hasher.h>
 #include <util/result.h>
+#include <util/threadpool.h>
 #include <util/time.h>
 #include <util/translation.h>
 #include <versionbits.h>
 
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -509,23 +512,23 @@ public:
     CCoinsViewErrorCatcher m_catcherview GUARDED_BY(cs_main);
 
     //! This is the top layer of the cache hierarchy - it keeps as many coins in memory as
-    //! can fit per the dbcache setting.
-    std::unique_ptr<CCoinsViewCache> m_cacheview GUARDED_BY(cs_main);
+    //! can fit per the dbcache setting using a concurrent key-range-sharded store.
+    std::unique_ptr<ShardedCoinsView> m_cacheview GUARDED_BY(cs_main);
 
     //! Reused CoinsViewOverlay layered on top of m_cacheview and passed to ConnectBlock().
     //! Reset between calls and flushed only on success, so invalid blocks don't pollute the underlying cache.
     std::unique_ptr<CoinsViewOverlay> m_connect_block_view GUARDED_BY(cs_main);
 
     //! This constructor initializes CCoinsViewDB and CCoinsViewErrorCatcher instances, but it
-    //! *does not* create a CCoinsViewCache instance by default. This is done separately because the
+    //! *does not* create a ShardedCoinsView instance by default. This is done separately because the
     //! presence of the cache has implications on whether or not we're allowed to flush the cache's
     //! state to disk, which should not be done until the health of the database is verified.
     //!
     //! All arguments forwarded onto CCoinsViewDB.
     CoinsViews(DBParams db_params, CoinsViewOptions options);
 
-    //! Initialize the CCoinsViewCache member.
-    void InitCache(int32_t prevoutfetch_threads) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    //! Initialize the ShardedCoinsView member and connect-block overlay sharing `thread_pool`.
+    void InitCache(util::NotNullSharedPtr<ThreadPool> thread_pool) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 };
 
 enum class CoinsCacheSizeState
@@ -713,8 +716,8 @@ public:
      */
     std::set<CBlockIndex*, node::CBlockIndexWorkComparator> setBlockIndexCandidates;
 
-    //! @returns A reference to the in-memory cache of the UTXO set.
-    CCoinsViewCache& CoinsTip() EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
+    //! @returns A reference to the in-memory concurrent sharded cache of the UTXO set.
+    ShardedCoinsView& CoinsTip() EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
     {
         AssertLockHeld(::cs_main);
         Assert(m_coins_views);
@@ -1009,6 +1012,16 @@ private:
 
     //! A queue for script verifications that have to be performed by worker threads.
     CCheckQueue<CScriptCheck> m_script_check_queue;
+
+    //! Shared worker pool used for prevout prefetching, parallel IBD validation,
+    //! and parallel UTXO commit/flush sorting.
+    util::NotNullSharedPtr<ThreadPool> m_validation_pool;
+
+    //! Guards validation pool resize and teardown strictly outside cs_main and m_chainstate_mutex.
+    Mutex m_pool_lifecycle_mutex;
+    std::condition_variable m_pool_idle_cv;
+    size_t m_active_pool_users GUARDED_BY(m_pool_lifecycle_mutex){0};
+    bool m_pool_resize_pending GUARDED_BY(m_pool_lifecycle_mutex){false};
 
     //! Timers and counters used for benchmarking validation in both background
     //! and active chainstates.
@@ -1412,6 +1425,46 @@ public:
     std::optional<int> BlocksAheadOfTip() const LOCKS_EXCLUDED(::cs_main);
 
     CCheckQueue<CScriptCheck>& GetCheckQueue() { return m_script_check_queue; }
+
+    util::NotNullSharedPtr<ThreadPool> GetValidationPool() const { return m_validation_pool; }
+
+    /** RAII guard registering an active validation pool user strictly outside cs_main/m_chainstate_mutex. */
+    class PoolUsageGuard
+    {
+        ChainstateManager& m_chainman;
+
+    public:
+        explicit PoolUsageGuard(ChainstateManager& chainman) LOCKS_EXCLUDED(::cs_main)
+            : m_chainman{chainman}
+        {
+            AssertLockNotHeld(::cs_main);
+            WAIT_LOCK(m_chainman.m_pool_lifecycle_mutex, lock);
+            m_chainman.m_pool_idle_cv.wait(lock, [&]() EXCLUSIVE_LOCKS_REQUIRED(m_chainman.m_pool_lifecycle_mutex) {
+                return !m_chainman.m_pool_resize_pending;
+            });
+            ++m_chainman.m_active_pool_users;
+        }
+
+        PoolUsageGuard(const PoolUsageGuard&) = delete;
+        PoolUsageGuard& operator=(const PoolUsageGuard&) = delete;
+
+        ~PoolUsageGuard()
+        {
+            bool notify = false;
+            {
+                LOCK(m_chainman.m_pool_lifecycle_mutex);
+                Assert(m_chainman.m_active_pool_users > 0);
+                if (--m_chainman.m_active_pool_users == 0) {
+                    notify = true;
+                }
+            }
+            if (notify) m_chainman.m_pool_idle_cv.notify_all();
+        }
+    };
+
+    //! Safely resize the shared validation pool once active users drain.
+    //! Must be called strictly outside cs_main and m_chainstate_mutex.
+    void ResizeValidationPool(int num_workers) EXCLUSIVE_LOCKS_REQUIRED(!m_pool_lifecycle_mutex) LOCKS_EXCLUDED(::cs_main);
 
     ~ChainstateManager();
 

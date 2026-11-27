@@ -5,6 +5,7 @@
 #include <test/util/coins.h>
 
 #include <coins.h>
+#include <coins_sharded.h>
 #include <primitives/transaction.h>
 #include <script/script.h>
 #include <test/util/random.h>
@@ -13,7 +14,8 @@
 #include <cstdint>
 #include <utility>
 
-COutPoint AddTestCoin(FastRandomContext& rng, CCoinsViewCache& coins_view)
+template <typename CoinsViewT>
+static COutPoint AddTestCoinImpl(FastRandomContext& rng, CoinsViewT& coins_view)
 {
     Coin new_coin;
     COutPoint outpoint{Txid::FromUint256(rng.rand256()), /*nIn=*/0};
@@ -23,4 +25,14 @@ COutPoint AddTestCoin(FastRandomContext& rng, CCoinsViewCache& coins_view)
     coins_view.AddCoin(outpoint, std::move(new_coin), /*possible_overwrite=*/false);
 
     return outpoint;
-};
+}
+
+COutPoint AddTestCoin(FastRandomContext& rng, CCoinsViewCache& coins_view)
+{
+    return AddTestCoinImpl(rng, coins_view);
+}
+
+COutPoint AddTestCoin(FastRandomContext& rng, ShardedCoinsView& coins_view)
+{
+    return AddTestCoinImpl(rng, coins_view);
+}
