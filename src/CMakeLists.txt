@@ -104,6 +104,7 @@ add_library(bitcoin_common STATIC EXCLUDE_FROM_ALL
   chainparams.cpp
   chainparamsbase.cpp
   coins.cpp
+  coins_sharded.cpp
   common/args.cpp
   common/bloom.cpp
   common/bip352.cpp
