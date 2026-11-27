@@ -129,6 +129,27 @@ uint32_t ShardedCoinsView::Shard::AllocLiveSlot(const COutPoint& outpoint, const
     return AllocLiveSlot(outpoint, coin.out, coin.nHeight, coin.fCoinBase, new_flags);
 }
 
+uint32_t ShardedCoinsView::Shard::AllocLiveSlotStored(const COutPoint& outpoint, StoredCoin&& coin, uint8_t new_flags)
+{
+    const uint32_t idx = live_storage.Allocate();
+    Assert(idx < TOMBSTONE_BIT);
+    LiveEntry& entry = live_storage[idx];
+    const uint8_t keep_dirty_list = entry.Flags() & FLAG_IN_DIRTY_LIST;
+    entry.outpoint = outpoint;
+    entry.coin.AssignPreservingFlags(std::move(coin));
+    entry.SetFlags(static_cast<uint8_t>(keep_dirty_list | FLAG_OCCUPIED | (new_flags & (FLAG_DIRTY | FLAG_FRESH))));
+    script_dynamic_bytes += entry.coin.DynamicMemoryUsage();
+    ++live_count;
+    if (entry.Flags() & FLAG_DIRTY) {
+        ++dirty_count;
+        if (!(entry.Flags() & FLAG_IN_DIRTY_LIST)) {
+            entry.OrFlags(FLAG_IN_DIRTY_LIST);
+            dirty_live_slots.push_back(idx);
+        }
+    }
+    return idx;
+}
+
 void ShardedCoinsView::Shard::FreeLiveSlot(uint32_t idx, Coin* moveto)
 {
     LiveEntry& entry = live_storage[idx];
@@ -142,6 +163,21 @@ void ShardedCoinsView::Shard::FreeLiveSlot(uint32_t idx, Coin* moveto)
         *moveto = entry.coin.ToCoin();
     }
     entry.coin.Clear();
+    // Preserve FLAG_IN_DIRTY_LIST so reused slots are never duplicated in dirty_live_slots.
+    entry.AndFlags(FLAG_IN_DIRTY_LIST);
+    live_storage.Recycle(idx);
+}
+
+void ShardedCoinsView::Shard::FreeLiveSlotMoveStored(uint32_t idx, StoredCoin& moveto)
+{
+    LiveEntry& entry = live_storage[idx];
+    Assert(entry.Flags() & FLAG_OCCUPIED);
+    Assume(TrySub(script_dynamic_bytes, entry.coin.DynamicMemoryUsage()));
+    if (entry.Flags() & FLAG_DIRTY) {
+        Assume(TrySub(dirty_count, size_t{1}));
+    }
+    Assume(TrySub(live_count, size_t{1}));
+    moveto.AssignPreservingFlags(std::move(entry.coin));
     // Preserve FLAG_IN_DIRTY_LIST so reused slots are never duplicated in dirty_live_slots.
     entry.AndFlags(FLAG_IN_DIRTY_LIST);
     live_storage.Recycle(idx);
@@ -247,6 +283,213 @@ ShardedCoinsView::CacheLookupStatus ShardedCoinsView::PeekCacheStatus(const COut
     if (tagged & TOMBSTONE_BIT) return CacheLookupStatus::TOMBSTONE;
     if (coin_out) *coin_out = shard.live_storage[tagged].coin.ToCoin();
     return CacheLookupStatus::LIVE;
+}
+
+void ShardedCoinsView::LookupBatch(std::span<const COutPoint> outpoints, std::span<BatchLookupResult> results) const
+{
+    Assert(outpoints.size() == results.size());
+    const size_t n = outpoints.size();
+    if (n == 0) return;
+    if (n == 1) {
+        results[0].status = PeekCacheStatus(outpoints[0], &results[0].coin);
+        return;
+    }
+
+    // Group indices by shard in O(n) via counting sort so each touched shard locks once,
+    // and precompute outpoint hashes outside shard locks while keys are hot in L1.
+    std::array<uint32_t, NUM_SHARDS> counts{};
+    static thread_local std::vector<uint32_t> hashes;
+    hashes.resize(n);
+    for (size_t i = 0; i < n; ++i) {
+        ++counts[ShardIndex(outpoints[i])];
+        hashes[i] = HashOutPoint(outpoints[i]);
+    }
+
+    std::array<uint32_t, NUM_SHARDS + 1> offsets{};
+    for (size_t s = 0; s < NUM_SHARDS; ++s) {
+        offsets[s + 1] = offsets[s] + counts[s];
+    }
+
+    static thread_local std::vector<uint32_t> order;
+    order.resize(n);
+    std::array<uint32_t, NUM_SHARDS> write_pos{};
+    for (size_t s = 0; s < NUM_SHARDS; ++s) write_pos[s] = offsets[s];
+    for (uint32_t i = 0; i < static_cast<uint32_t>(n); ++i) {
+        const size_t s = ShardIndex(outpoints[i]);
+        order[write_pos[s]++] = i;
+    }
+
+    static constexpr uint32_t PREFETCH_TABLE_DIST = 8;
+    static constexpr uint32_t PREFETCH_ENTRY_DIST = 4;
+
+    // Stagger shard traversal order across workers to break mutex convoys.
+    const size_t start_shard = m_lookup_shard_cursor.fetch_add(1, std::memory_order_relaxed) & (NUM_SHARDS - 1);
+    for (size_t k = 0; k < NUM_SHARDS; ++k) {
+        const size_t s = (start_shard + k) & (NUM_SHARDS - 1);
+        const uint32_t begin = offsets[s];
+        const uint32_t end = offsets[s + 1];
+        if (begin == end) continue;
+
+        const Shard& shard = m_shards[s];
+        std::shared_lock lock{shard.mutex};
+        if (shard.table.empty()) {
+            for (uint32_t p = begin; p < end; ++p) {
+                results[order[p]].status = CacheLookupStatus::ABSENT;
+            }
+            continue;
+        }
+
+        const size_t mask = shard.table.size() - 1;
+        const uint32_t prime_end = std::min(end, begin + PREFETCH_TABLE_DIST);
+        for (uint32_t p = begin; p < prime_end; ++p) {
+            shard.PrefetchTableSlot(hashes[order[p]]);
+        }
+
+        for (uint32_t p = begin; p < end; ++p) {
+            if (p + PREFETCH_TABLE_DIST < end) {
+                shard.PrefetchTableSlot(hashes[order[p + PREFETCH_TABLE_DIST]]);
+            }
+            if (p + PREFETCH_ENTRY_DIST < end) {
+                const uint32_t h_ahead = hashes[order[p + PREFETCH_ENTRY_DIST]];
+                const IndexSlot& slot_ahead = shard.table[h_ahead & mask];
+                if (slot_ahead.tagged_idx != EMPTY_TAG && slot_ahead.hash32 == h_ahead) {
+                    shard.PrefetchEntry(slot_ahead.tagged_idx);
+                }
+            }
+
+            const uint32_t idx = order[p];
+            const COutPoint& op = outpoints[idx];
+            const uint32_t hash32 = hashes[idx];
+            const size_t pos = shard.FindPos(op, hash32);
+            if (pos == Shard::NOT_FOUND) {
+                results[idx].status = CacheLookupStatus::ABSENT;
+            } else {
+                const uint32_t tagged = shard.table[pos].tagged_idx;
+                if (tagged & TOMBSTONE_BIT) {
+                    results[idx].status = CacheLookupStatus::TOMBSTONE;
+                } else {
+                    results[idx].status = CacheLookupStatus::LIVE;
+                    results[idx].coin = shard.live_storage[tagged].coin.ToCoin();
+                }
+            }
+        }
+    }
+}
+
+void ShardedCoinsView::PeekCacheStatusBatch(std::span<const COutPoint> outpoints, std::span<CacheLookupStatus> statuses) const
+{
+    Assert(outpoints.size() == statuses.size());
+    const size_t n = outpoints.size();
+    if (n == 0) return;
+    if (n == 1) {
+        statuses[0] = PeekCacheStatus(outpoints[0]);
+        return;
+    }
+
+    if (n <= 8) {
+        struct SmallItem {
+            uint8_t shard;
+            uint8_t idx;
+            uint32_t hash32;
+        };
+        std::array<SmallItem, 8> items{};
+        for (size_t i = 0; i < n; ++i) {
+            items[i] = SmallItem{
+                static_cast<uint8_t>(ShardIndex(outpoints[i])),
+                static_cast<uint8_t>(i),
+                HashOutPoint(outpoints[i]),
+            };
+        }
+        std::sort(items.begin(), items.begin() + static_cast<std::ptrdiff_t>(n),
+                  [](const SmallItem& a, const SmallItem& b) noexcept { return a.shard < b.shard; });
+
+        size_t i = 0;
+        while (i < n) {
+            const uint8_t s = items[i].shard;
+            const Shard& shard = m_shards[s];
+            std::shared_lock lock{shard.mutex};
+            if (shard.table.empty()) {
+                while (i < n && items[i].shard == s) {
+                    statuses[items[i].idx] = CacheLookupStatus::ABSENT;
+                    ++i;
+                }
+                continue;
+            }
+            while (i < n && items[i].shard == s) {
+                const uint8_t idx = items[i].idx;
+                const size_t pos = shard.FindPos(outpoints[idx], items[i].hash32);
+                if (pos == Shard::NOT_FOUND) {
+                    statuses[idx] = CacheLookupStatus::ABSENT;
+                } else {
+                    const uint32_t tagged = shard.table[pos].tagged_idx;
+                    statuses[idx] = (tagged & TOMBSTONE_BIT) ? CacheLookupStatus::TOMBSTONE : CacheLookupStatus::LIVE;
+                }
+                ++i;
+            }
+        }
+        return;
+    }
+
+    std::array<uint32_t, NUM_SHARDS> counts{};
+    static thread_local std::vector<uint32_t> hashes;
+    hashes.resize(n);
+    for (size_t i = 0; i < n; ++i) {
+        ++counts[ShardIndex(outpoints[i])];
+        hashes[i] = HashOutPoint(outpoints[i]);
+    }
+
+    std::array<uint32_t, NUM_SHARDS + 1> offsets{};
+    for (size_t s = 0; s < NUM_SHARDS; ++s) {
+        offsets[s + 1] = offsets[s] + counts[s];
+    }
+
+    static thread_local std::vector<uint32_t> order;
+    order.resize(n);
+    std::array<uint32_t, NUM_SHARDS> write_pos{};
+    for (size_t s = 0; s < NUM_SHARDS; ++s) write_pos[s] = offsets[s];
+    for (uint32_t i = 0; i < static_cast<uint32_t>(n); ++i) {
+        const size_t s = ShardIndex(outpoints[i]);
+        order[write_pos[s]++] = i;
+    }
+
+    static constexpr uint32_t PREFETCH_TABLE_DIST = 8;
+
+    const size_t start_shard = m_lookup_shard_cursor.fetch_add(1, std::memory_order_relaxed) & (NUM_SHARDS - 1);
+    for (size_t k = 0; k < NUM_SHARDS; ++k) {
+        const size_t s = (start_shard + k) & (NUM_SHARDS - 1);
+        const uint32_t begin = offsets[s];
+        const uint32_t end = offsets[s + 1];
+        if (begin == end) continue;
+
+        const Shard& shard = m_shards[s];
+        std::shared_lock lock{shard.mutex};
+        if (shard.table.empty()) {
+            for (uint32_t p = begin; p < end; ++p) {
+                statuses[order[p]] = CacheLookupStatus::ABSENT;
+            }
+            continue;
+        }
+
+        const uint32_t prime_end = std::min(end, begin + PREFETCH_TABLE_DIST);
+        for (uint32_t p = begin; p < prime_end; ++p) {
+            shard.PrefetchTableSlot(hashes[order[p]]);
+        }
+
+        for (uint32_t p = begin; p < end; ++p) {
+            if (p + PREFETCH_TABLE_DIST < end) {
+                shard.PrefetchTableSlot(hashes[order[p + PREFETCH_TABLE_DIST]]);
+            }
+
+            const uint32_t idx = order[p];
+            const size_t pos = shard.FindPos(outpoints[idx], hashes[idx]);
+            if (pos == Shard::NOT_FOUND) {
+                statuses[idx] = CacheLookupStatus::ABSENT;
+            } else {
+                const uint32_t tagged = shard.table[pos].tagged_idx;
+                statuses[idx] = (tagged & TOMBSTONE_BIT) ? CacheLookupStatus::TOMBSTONE : CacheLookupStatus::LIVE;
+            }
+        }
+    }
 }
 
 std::optional<Coin> ShardedCoinsView::PeekCoin(const COutPoint& outpoint) const
@@ -372,6 +615,7 @@ void ShardedCoinsView::AddCoin(const COutPoint& outpoint, Coin&& coin, bool poss
 
 void ShardedCoinsView::EmplaceCoinInternalDANGER(const COutPoint& outpoint, Coin&& coin)
 {
+    Assert(!coin.IsSpent());
     Shard& shard = m_shards[ShardIndex(outpoint)];
     const uint32_t hash32 = HashOutPoint(outpoint);
     std::unique_lock lock{shard.mutex};
@@ -480,6 +724,7 @@ void ShardedCoinsView::Uncache(const COutPoint& outpoint)
     shard.EraseIndexPos(pos);
     shard.FreeLiveSlot(tagged);
     SyncShardAccounting(shard);
+    m_flush_epoch.fetch_add(1, std::memory_order_release);
 }
 
 void ShardedCoinsView::BatchWrite(CoinsViewCacheCursor& cursor, const uint256& in_block_hash)
@@ -538,6 +783,11 @@ void ShardedCoinsView::BatchWrite(CoinsViewCacheCursor& cursor, const uint256& i
 
             Shard& shard = m_shards[s];
             std::unique_lock lock{shard.mutex};
+            struct AccountingGuard {
+                const ShardedCoinsView& view;
+                Shard& shard;
+                ~AccountingGuard() noexcept { view.SyncShardAccounting(shard); }
+            } accounting_guard{*this, shard};
 
             for (uint32_t p = begin; p < end; ++p) {
                 if (p + 4 < end) {
@@ -597,7 +847,6 @@ void ShardedCoinsView::BatchWrite(CoinsViewCacheCursor& cursor, const uint256& i
                     }
                 }
             }
-            SyncShardAccounting(shard);
         }
     }
 
@@ -654,7 +903,7 @@ void ShardedCoinsView::Flush(bool reallocate_cache, ThreadPool* pool)
     if (pool && pool->WorkersCount() > 0 && total_dirty >= 4096 && non_empty_shards.size() >= 4) {
         std::atomic<size_t> next_idx{0};
         const size_t num_helpers = std::min(pool->WorkersCount(), non_empty_shards.size() - 1);
-        auto worker_fn = [&]() {
+        auto worker_fn = [&]() noexcept {
             while (true) {
                 const size_t i = next_idx.fetch_add(1, std::memory_order_relaxed);
                 if (i >= non_empty_shards.size()) break;
@@ -664,7 +913,7 @@ void ShardedCoinsView::Flush(bool reallocate_cache, ThreadPool* pool)
         std::vector<std::function<void()>> tasks(num_helpers, worker_fn);
         if (auto futures = pool->SubmitPriority(std::move(tasks))) {
             worker_fn();
-            for (auto& f : *futures) f.wait();
+            for (auto& f : *futures) f.get();
         } else {
             worker_fn();
         }
@@ -696,13 +945,20 @@ void ShardedCoinsView::Flush(bool reallocate_cache, ThreadPool* pool)
         }
     });
 
-    // LevelDB write succeeded; clear all shards.
+    // LevelDB write succeeded; clear all shards, then advance flush epoch so no reader
+    // can observe the new epoch while stale pre-flush entries still exist in any shard.
     for (size_t s = 0; s < NUM_SHARDS; ++s) {
         Shard& shard = m_shards[s];
         std::unique_lock lock{shard.mutex};
         shard.Clear(reallocate_cache);
         SyncShardAccounting(shard);
+        if (reallocate_cache) {
+            std::vector<ShardUndoEntry>{}.swap(m_commit_undos[s].entries);
+        } else {
+            m_commit_undos[s].entries.clear();
+        }
     }
+    m_flush_epoch.fetch_add(1, std::memory_order_release);
 }
 
 void ShardedCoinsView::Sync(ThreadPool* pool)
@@ -717,6 +973,7 @@ void ShardedCoinsView::Sync(ThreadPool* pool)
     emit_shards.reserve(NUM_SHARDS);
     size_t total_dirty = 0;
     size_t total_entries = m_cached_coins_count.load(std::memory_order_relaxed);
+    bool removed_tombstones = false;
 
     for (size_t s = 0; s < NUM_SHARDS; ++s) {
         const Shard& shard = m_shards[s];
@@ -736,6 +993,7 @@ void ShardedCoinsView::Sync(ThreadPool* pool)
             const TombstoneEntry& e = shard.tomb_storage[idx];
             if ((e.flags & FLAG_OCCUPIED) && (e.flags & FLAG_DIRTY)) {
                 list.push_back(idx | TOMBSTONE_BIT);
+                removed_tombstones = true;
             }
         }
         if (!list.empty()) {
@@ -756,7 +1014,7 @@ void ShardedCoinsView::Sync(ThreadPool* pool)
     if (pool && pool->WorkersCount() > 0 && total_dirty >= 4096 && emit_shards.size() >= 4) {
         std::atomic<size_t> next_idx{0};
         const size_t num_helpers = std::min(pool->WorkersCount(), emit_shards.size() - 1);
-        auto worker_fn = [&]() {
+        auto worker_fn = [&]() noexcept {
             while (true) {
                 const size_t i = next_idx.fetch_add(1, std::memory_order_relaxed);
                 if (i >= emit_shards.size()) break;
@@ -766,7 +1024,7 @@ void ShardedCoinsView::Sync(ThreadPool* pool)
         std::vector<std::function<void()>> tasks(num_helpers, worker_fn);
         if (auto futures = pool->SubmitPriority(std::move(tasks))) {
             worker_fn();
-            for (auto& f : *futures) f.wait();
+            for (auto& f : *futures) f.get();
         } else {
             worker_fn();
         }
@@ -828,6 +1086,590 @@ void ShardedCoinsView::Sync(ThreadPool* pool)
         shard.dirty_tomb_slots.clear();
         SyncShardAccounting(shard);
     }
+
+    if (removed_tombstones) {
+        m_flush_epoch.fetch_add(1, std::memory_order_release);
+    }
+}
+
+bool ShardedCoinsView::ApplyBatchSpend(
+    Shard& shard,
+    uint32_t block_idx,
+    const COutPoint& outpoint,
+    uint32_t hash32,
+    bool from_db,
+    bool epoch_matches,
+    uint32_t expected_height,
+    bool expected_coinbase,
+    bool check_meta,
+    std::vector<ShardUndoEntry>& undo) const
+{
+    const size_t pos = shard.FindPos(outpoint, hash32);
+    if (pos != Shard::NOT_FOUND) {
+        const uint32_t tagged = shard.table[pos].tagged_idx;
+        if (tagged & TOMBSTONE_BIT) return false;
+        LiveEntry& entry = shard.live_storage[tagged];
+        if (check_meta && (entry.coin.Height() != expected_height || entry.coin.IsCoinBase() != expected_coinbase)) {
+            return false;
+        }
+        const uint8_t prev_flags = entry.Flags() & (FLAG_DIRTY | FLAG_FRESH);
+        StoredCoin old_coin;
+        if (prev_flags & FLAG_FRESH) {
+            shard.EraseIndexPos(pos);
+            shard.FreeLiveSlotMoveStored(tagged, old_coin);
+            undo.push_back(ShardUndoEntry{block_idx, RestoreKind::RESTORE_LIVE, prev_flags, outpoint, std::move(old_coin)});
+        } else {
+            const uint32_t tomb_idx = shard.AllocTombSlot(outpoint, FLAG_DIRTY);
+            shard.table[pos].tagged_idx = tomb_idx | TOMBSTONE_BIT;
+            shard.FreeLiveSlotMoveStored(tagged, old_coin);
+            undo.push_back(ShardUndoEntry{block_idx, RestoreKind::RESTORE_LIVE_FROM_TOMB, prev_flags, outpoint, std::move(old_coin)});
+        }
+        return true;
+    }
+
+    bool in_db = false;
+    if (epoch_matches) {
+        in_db = from_db;
+    } else if (check_meta) {
+        const auto db_coin = base->PeekCoin(outpoint);
+        in_db = db_coin.has_value() &&
+                db_coin->nHeight == expected_height &&
+                db_coin->IsCoinBase() == expected_coinbase;
+    } else {
+        in_db = base->HaveCoin(outpoint);
+    }
+    if (!in_db) return false;
+
+    const uint32_t tomb_idx = shard.AllocTombSlot(outpoint, FLAG_DIRTY);
+    shard.InsertIndexSlot(tomb_idx | TOMBSTONE_BIT, hash32);
+    undo.push_back(ShardUndoEntry{block_idx, RestoreKind::ERASE_TOMB, 0, outpoint, StoredCoin{}});
+    return true;
+}
+
+bool ShardedCoinsView::ApplyBatchCreate(
+    Shard& shard,
+    uint32_t block_idx,
+    const COutPoint& outpoint,
+    uint32_t hash32,
+    const CTxOut& out,
+    uint32_t height,
+    bool is_coinbase,
+    bool possible_overwrite,
+    std::vector<ShardUndoEntry>& undo) const
+{
+    Assert(!out.IsNull());
+    if (out.scriptPubKey.IsUnspendable()) return true;
+
+    const size_t pos = shard.FindPos(outpoint, hash32);
+    if (pos != Shard::NOT_FOUND) {
+        const uint32_t tagged = shard.table[pos].tagged_idx;
+        if (tagged & TOMBSTONE_BIT) {
+            const uint32_t old_tomb = tagged & INDEX_MASK;
+            const uint8_t prev_flags = shard.tomb_storage[old_tomb].flags & FLAG_DIRTY;
+            const uint32_t live_idx = shard.AllocLiveSlot(outpoint, out, height, is_coinbase, FLAG_DIRTY);
+            shard.table[pos].tagged_idx = live_idx;
+            shard.FreeTombSlot(old_tomb);
+            undo.push_back(ShardUndoEntry{block_idx, RestoreKind::RESTORE_TOMB_FROM_LIVE, prev_flags, outpoint, StoredCoin{}});
+            return true;
+        }
+        if (!possible_overwrite) return false;
+        LiveEntry& entry = shard.live_storage[tagged];
+        const uint8_t prev_flags = entry.Flags() & (FLAG_DIRTY | FLAG_FRESH);
+        Assume(TrySub(shard.script_dynamic_bytes, entry.coin.DynamicMemoryUsage()));
+        StoredCoin old_coin;
+        old_coin.AssignPreservingFlags(std::move(entry.coin));
+        entry.coin.AssignPreservingFlags(out, height, is_coinbase);
+        shard.script_dynamic_bytes += entry.coin.DynamicMemoryUsage();
+        entry.AndFlags(static_cast<uint8_t>(~FLAG_FRESH));
+        shard.MarkLiveDirty(tagged);
+        undo.push_back(ShardUndoEntry{block_idx, RestoreKind::RESTORE_LIVE, prev_flags, outpoint, std::move(old_coin)});
+        return true;
+    }
+
+    const uint8_t flags = static_cast<uint8_t>(FLAG_DIRTY | (!possible_overwrite ? FLAG_FRESH : 0));
+    const uint32_t live_idx = shard.AllocLiveSlot(outpoint, out, height, is_coinbase, flags);
+    shard.InsertIndexSlot(live_idx, hash32);
+    undo.push_back(ShardUndoEntry{block_idx, RestoreKind::ERASE_LIVE, 0, outpoint, StoredCoin{}});
+    return true;
+}
+
+bool ShardedCoinsView::ApplyBatchCreate(
+    Shard& shard,
+    uint32_t block_idx,
+    const COutPoint& outpoint,
+    uint32_t hash32,
+    const Coin& coin,
+    bool possible_overwrite,
+    std::vector<ShardUndoEntry>& undo) const
+{
+    return ApplyBatchCreate(shard, block_idx, outpoint, hash32, coin.out, coin.nHeight, coin.fCoinBase, possible_overwrite, undo);
+}
+
+bool ShardedCoinsView::RollbackShardUndo(
+    Shard& shard,
+    uint32_t committed,
+    std::vector<ShardUndoEntry>& undo) const
+{
+    if (undo.empty() || undo.back().block_idx < committed) return false;
+
+    std::unique_lock lock{shard.mutex};
+    bool erased_tombstone = false;
+
+    while (!undo.empty() && undo.back().block_idx >= committed) {
+        ShardUndoEntry u = std::move(undo.back());
+        undo.pop_back();
+
+        const uint32_t hash32 = HashOutPoint(u.outpoint);
+        const size_t pos = shard.FindPos(u.outpoint, hash32);
+
+        switch (u.kind) {
+        case RestoreKind::ERASE_LIVE: {
+            Assert(pos != Shard::NOT_FOUND && !(shard.table[pos].tagged_idx & TOMBSTONE_BIT));
+            const uint32_t live_idx = shard.table[pos].tagged_idx;
+            shard.EraseIndexPos(pos);
+            shard.FreeLiveSlot(live_idx);
+            break;
+        }
+        case RestoreKind::ERASE_TOMB: {
+            Assert(pos != Shard::NOT_FOUND && (shard.table[pos].tagged_idx & TOMBSTONE_BIT));
+            const uint32_t tomb_idx = shard.table[pos].tagged_idx & INDEX_MASK;
+            shard.EraseIndexPos(pos);
+            shard.FreeTombSlot(tomb_idx);
+            erased_tombstone = true;
+            break;
+        }
+        case RestoreKind::RESTORE_LIVE: {
+            if (pos == Shard::NOT_FOUND) {
+                const uint32_t live_idx = shard.AllocLiveSlotStored(u.outpoint, std::move(u.coin), u.prev_flags);
+                shard.InsertIndexSlot(live_idx, hash32);
+            } else {
+                Assert(!(shard.table[pos].tagged_idx & TOMBSTONE_BIT));
+                const uint32_t live_idx = shard.table[pos].tagged_idx;
+                LiveEntry& entry = shard.live_storage[live_idx];
+                Assume(TrySub(shard.script_dynamic_bytes, entry.coin.DynamicMemoryUsage()));
+                const bool was_dirty = (entry.Flags() & FLAG_DIRTY) != 0;
+                entry.coin.AssignPreservingFlags(std::move(u.coin));
+                shard.script_dynamic_bytes += entry.coin.DynamicMemoryUsage();
+                const uint8_t keep_list = entry.Flags() & FLAG_IN_DIRTY_LIST;
+                entry.SetFlags(static_cast<uint8_t>(keep_list | FLAG_OCCUPIED | (u.prev_flags & (FLAG_DIRTY | FLAG_FRESH))));
+                const bool now_dirty = (entry.Flags() & FLAG_DIRTY) != 0;
+                if (was_dirty && !now_dirty) {
+                    Assume(TrySub(shard.dirty_count, size_t{1}));
+                } else if (!was_dirty && now_dirty) {
+                    ++shard.dirty_count;
+                }
+                if (now_dirty && !(entry.Flags() & FLAG_IN_DIRTY_LIST)) {
+                    entry.OrFlags(FLAG_IN_DIRTY_LIST);
+                    shard.dirty_live_slots.push_back(live_idx);
+                }
+            }
+            break;
+        }
+        case RestoreKind::RESTORE_LIVE_FROM_TOMB: {
+            Assert(pos != Shard::NOT_FOUND && (shard.table[pos].tagged_idx & TOMBSTONE_BIT));
+            const uint32_t tomb_idx = shard.table[pos].tagged_idx & INDEX_MASK;
+            const uint32_t live_idx = shard.AllocLiveSlotStored(u.outpoint, std::move(u.coin), u.prev_flags);
+            shard.table[pos].tagged_idx = live_idx;
+            shard.FreeTombSlot(tomb_idx);
+            erased_tombstone = true;
+            break;
+        }
+        case RestoreKind::RESTORE_TOMB_FROM_LIVE: {
+            Assert(pos != Shard::NOT_FOUND && !(shard.table[pos].tagged_idx & TOMBSTONE_BIT));
+            const uint32_t live_idx = shard.table[pos].tagged_idx;
+            const uint32_t tomb_idx = shard.AllocTombSlot(u.outpoint, u.prev_flags);
+            shard.table[pos].tagged_idx = tomb_idx | TOMBSTONE_BIT;
+            shard.FreeLiveSlot(live_idx);
+            break;
+        }
+        }
+    }
+
+    SyncShardAccounting(shard);
+    return erased_tombstone;
+}
+
+size_t ShardedCoinsView::CommitBlockBatch(
+    std::span<const BatchCommitBlockMeta> blocks,
+    std::array<std::vector<BatchCommitOp>, NUM_SHARDS>& shard_ops,
+    ThreadPool* pool)
+{
+    if (blocks.empty()) return 0;
+
+    const uint64_t current_epoch = FlushEpoch();
+    uint32_t initial_limit = static_cast<uint32_t>(blocks.size());
+    for (uint32_t b = 0; b < static_cast<uint32_t>(blocks.size()); ++b) {
+        if (blocks[b].enforce_bip30 && blocks[b].validated_flush_epoch != current_epoch) {
+            initial_limit = b;
+            break;
+        }
+    }
+    if (initial_limit == 0) return 0;
+
+    std::vector<size_t> active_shards;
+    active_shards.reserve(NUM_SHARDS);
+    size_t total_ops = 0;
+    for (size_t s = 0; s < NUM_SHARDS; ++s) {
+        if (!shard_ops[s].empty()) {
+            active_shards.push_back(s);
+            total_ops += shard_ops[s].size();
+        }
+    }
+
+    if (active_shards.empty()) {
+        SetBestBlock(blocks[initial_limit - 1].block_hash);
+        return initial_limit;
+    }
+
+    std::array<AlignedUndoVec, NUM_SHARDS> shard_undos;
+    std::atomic<uint32_t> min_conflict_block{initial_limit};
+
+    auto apply_shard = [&](size_t s) {
+        Shard& shard = m_shards[s];
+        auto& ops = shard_ops[s];
+        std::vector<ShardUndoEntry> undo;
+        const size_t num_ops = ops.size();
+        undo.reserve(num_ops);
+
+        std::vector<uint32_t> hashes(num_ops);
+        for (size_t i = 0; i < num_ops; ++i) {
+            hashes[i] = HashOutPoint(ops[i].outpoint);
+        }
+
+        static constexpr size_t PREFETCH_TABLE_DIST = 8;
+        static constexpr size_t PREFETCH_ENTRY_DIST = 4;
+
+        std::unique_lock lock{shard.mutex};
+
+        if (!shard.table.empty()) {
+            const size_t prime_end = std::min(num_ops, PREFETCH_TABLE_DIST);
+            for (size_t i = 0; i < prime_end; ++i) {
+                shard.PrefetchTableSlot(hashes[i]);
+            }
+        }
+
+        for (size_t i = 0; i < num_ops; ++i) {
+            auto& op = ops[i];
+            const uint32_t limit = min_conflict_block.load(std::memory_order_relaxed);
+            if (op.block_idx >= limit) break;
+
+            if (!shard.table.empty()) {
+                if (i + PREFETCH_TABLE_DIST < num_ops) {
+                    shard.PrefetchTableSlot(hashes[i + PREFETCH_TABLE_DIST]);
+                }
+                if (i + PREFETCH_ENTRY_DIST < num_ops) {
+                    const uint32_t h_ahead = hashes[i + PREFETCH_ENTRY_DIST];
+                    const IndexSlot& slot_ahead = shard.table[h_ahead & (shard.table.size() - 1)];
+                    if (slot_ahead.tagged_idx != EMPTY_TAG && slot_ahead.hash32 == h_ahead) {
+                        shard.PrefetchEntry(slot_ahead.tagged_idx);
+                    }
+                }
+            }
+
+            bool ok = false;
+            if (op.kind == BatchCommitOp::Kind::SPEND) {
+                const bool epoch_matches = blocks[op.block_idx].validated_flush_epoch == current_epoch;
+                const bool check_meta = !op.coin.IsSpent();
+                ok = ApplyBatchSpend(
+                    shard, op.block_idx, op.outpoint, hashes[i], op.from_db, epoch_matches,
+                    check_meta ? op.coin.nHeight : uint32_t{0}, check_meta ? op.coin.IsCoinBase() : false,
+                    check_meta, undo);
+            } else {
+                ok = ApplyBatchCreate(shard, op.block_idx, op.outpoint, hashes[i], op.coin, op.possible_overwrite, undo);
+            }
+            if (!ok) {
+                AtomicMin(min_conflict_block, op.block_idx);
+                break;
+            }
+        }
+
+        SyncShardAccounting(shard);
+        shard_undos[s].entries = std::move(undo);
+    };
+
+    if (pool && pool->WorkersCount() > 0 && active_shards.size() >= 8 && total_ops >= 4096) {
+        std::atomic<size_t> next_idx{0};
+        const size_t num_helpers = std::min({pool->WorkersCount(), active_shards.size() - 1, total_ops / 1024});
+        auto worker_fn = [&]() noexcept {
+            // Any exception (e.g. OOM) during a partial shard commit cannot be safely recovered
+            // without risking dangling stack captures or a half-applied UTXO tip; terminate.
+            while (true) {
+                const size_t i = next_idx.fetch_add(1, std::memory_order_relaxed);
+                if (i >= active_shards.size()) break;
+                apply_shard(active_shards[i]);
+            }
+        };
+        // Per-helper atomic state: 0 = QUEUED, 1 = RUNNING, 2 = CANCELLED.
+        // Allows the coordinator to cancel unstarted helpers without blocking in f.get().
+        auto helper_states = std::shared_ptr<std::atomic<uint8_t>[]>(new std::atomic<uint8_t>[num_helpers]{});
+        std::vector<std::function<void()>> tasks;
+        tasks.reserve(num_helpers);
+        for (size_t h = 0; h < num_helpers; ++h) {
+            tasks.emplace_back([helper_states, h, &worker_fn]() noexcept {
+                uint8_t expected = 0;
+                if (!helper_states[h].compare_exchange_strong(expected, 1, std::memory_order_acq_rel)) return;
+                worker_fn();
+            });
+        }
+        if (auto futures = pool->SubmitPriority(std::move(tasks))) {
+            worker_fn();
+            for (size_t h = 0; h < num_helpers; ++h) {
+                uint8_t expected = 0;
+                if (!helper_states[h].compare_exchange_strong(expected, 2, std::memory_order_acq_rel)) {
+                    (*futures)[h].get();
+                }
+            }
+        } else {
+            worker_fn();
+        }
+    } else {
+        try {
+            for (size_t s : active_shards) {
+                apply_shard(s);
+            }
+        } catch (...) {
+            std::terminate();
+        }
+    }
+
+    const uint32_t committed = min_conflict_block.load(std::memory_order_acquire);
+
+    if (committed < initial_limit) {
+        bool erased_tombstone = false;
+        try {
+            for (size_t s : active_shards) {
+                if (RollbackShardUndo(m_shards[s], committed, shard_undos[s].entries)) {
+                    erased_tombstone = true;
+                }
+            }
+        } catch (...) {
+            std::terminate();
+        }
+        if (erased_tombstone) {
+            m_flush_epoch.fetch_add(1, std::memory_order_release);
+        }
+    }
+
+    if (committed > 0) {
+        SetBestBlock(blocks[committed - 1].block_hash);
+    }
+    return committed;
+}
+
+size_t ShardedCoinsView::CommitBlockBatch(
+    std::span<const ShardedBlockCommit> blocks,
+    ThreadPool* pool)
+{
+    if (blocks.empty()) return 0;
+
+    const uint64_t current_epoch = FlushEpoch();
+    uint32_t initial_limit = static_cast<uint32_t>(blocks.size());
+    for (uint32_t b = 0; b < static_cast<uint32_t>(blocks.size()); ++b) {
+        if (blocks[b].meta.enforce_bip30 && blocks[b].meta.validated_flush_epoch != current_epoch) {
+            initial_limit = b;
+            break;
+        }
+    }
+    if (initial_limit == 0) return 0;
+
+    std::array<uint32_t, NUM_SHARDS> shard_op_counts{};
+    size_t total_ops = 0;
+    for (uint32_t b = 0; b < initial_limit; ++b) {
+        const auto& sp_off = *Assert(blocks[b].spend_offsets);
+        const auto& cr_off = *Assert(blocks[b].create_offsets);
+        for (size_t s = 0; s < NUM_SHARDS; ++s) {
+            const uint32_t cnt = (sp_off[s + 1] - sp_off[s]) + (cr_off[s + 1] - cr_off[s]);
+            shard_op_counts[s] += cnt;
+            total_ops += cnt;
+        }
+    }
+
+    std::vector<size_t> active_shards;
+    active_shards.reserve(NUM_SHARDS);
+    for (size_t s = 0; s < NUM_SHARDS; ++s) {
+        if (shard_op_counts[s] > 0) {
+            active_shards.push_back(s);
+        }
+    }
+
+    if (active_shards.empty()) {
+        SetBestBlock(blocks[initial_limit - 1].meta.block_hash);
+        return initial_limit;
+    }
+
+    std::atomic<uint32_t> min_conflict_block{initial_limit};
+
+    auto apply_shard = [&](size_t s) {
+        Shard& shard = m_shards[s];
+        const size_t num_ops = shard_op_counts[s];
+        auto& undo = m_commit_undos[s].entries;
+        undo.clear();
+        if (undo.capacity() < num_ops) undo.reserve(num_ops);
+
+        // Precompute outpoint hashes in exact (block_idx, SPEND-then-CREATE) order outside shard lock.
+        static thread_local std::vector<uint32_t> hashes;
+        hashes.clear();
+        if (hashes.capacity() < num_ops) hashes.reserve(num_ops);
+        for (uint32_t b = 0; b < initial_limit; ++b) {
+            const auto& blk = blocks[b];
+            const uint32_t sb = (*blk.spend_offsets)[s];
+            const uint32_t se = (*blk.spend_offsets)[s + 1];
+            for (uint32_t i = sb; i < se; ++i) {
+                hashes.push_back(HashOutPoint(blk.spends[i].outpoint));
+            }
+            const uint32_t cb = (*blk.create_offsets)[s];
+            const uint32_t ce = (*blk.create_offsets)[s + 1];
+            for (uint32_t i = cb; i < ce; ++i) {
+                const BlockCreateOp& cr = blk.creates[i];
+                hashes.push_back(HashOutPoint(COutPoint{cr.tx->GetHash(), cr.vout_idx}));
+            }
+        }
+
+        static constexpr size_t PREFETCH_TABLE_DIST = 8;
+        static constexpr size_t PREFETCH_ENTRY_DIST = 4;
+
+        std::unique_lock lock{shard.mutex};
+
+        if (!shard.table.empty()) {
+            const size_t prime_end = std::min(num_ops, PREFETCH_TABLE_DIST);
+            for (size_t i = 0; i < prime_end; ++i) {
+                shard.PrefetchTableSlot(hashes[i]);
+            }
+        }
+
+        auto prefetch_ahead = [&](size_t h_idx) noexcept {
+            if (!shard.table.empty()) {
+                if (h_idx + PREFETCH_TABLE_DIST < num_ops) {
+                    shard.PrefetchTableSlot(hashes[h_idx + PREFETCH_TABLE_DIST]);
+                }
+                if (h_idx + PREFETCH_ENTRY_DIST < num_ops) {
+                    const uint32_t h_ahead = hashes[h_idx + PREFETCH_ENTRY_DIST];
+                    const IndexSlot& slot_ahead = shard.table[h_ahead & (shard.table.size() - 1)];
+                    if (slot_ahead.tagged_idx != EMPTY_TAG && slot_ahead.hash32 == h_ahead) {
+                        shard.PrefetchEntry(slot_ahead.tagged_idx);
+                    }
+                }
+            }
+        };
+
+        size_t h_idx = 0;
+        bool conflicted = false;
+        for (uint32_t b = 0; b < initial_limit && !conflicted; ++b) {
+            if (b >= min_conflict_block.load(std::memory_order_relaxed)) break;
+            const auto& blk = blocks[b];
+            const bool epoch_matches = blk.meta.validated_flush_epoch == current_epoch;
+
+            const uint32_t sb = (*blk.spend_offsets)[s];
+            const uint32_t se = (*blk.spend_offsets)[s + 1];
+            for (uint32_t i = sb; i < se; ++i, ++h_idx) {
+                prefetch_ahead(h_idx);
+                const BlockSpendOp& sp = blk.spends[i];
+                if (!ApplyBatchSpend(shard, b, sp.outpoint, hashes[h_idx], sp.from_db, epoch_matches,
+                                     sp.expected_height, sp.expected_coinbase != 0, /*check_meta=*/true, undo)) {
+                    AtomicMin(min_conflict_block, b);
+                    conflicted = true;
+                    break;
+                }
+            }
+            if (conflicted) break;
+
+            const uint32_t cb = (*blk.create_offsets)[s];
+            const uint32_t ce = (*blk.create_offsets)[s + 1];
+            for (uint32_t i = cb; i < ce; ++i, ++h_idx) {
+                prefetch_ahead(h_idx);
+                const BlockCreateOp& cr = blk.creates[i];
+                const COutPoint outpoint{cr.tx->GetHash(), cr.vout_idx};
+                if (!ApplyBatchCreate(shard, b, outpoint, hashes[h_idx], cr.tx->vout[cr.vout_idx],
+                                      blk.meta.height, cr.is_coinbase != 0, cr.possible_overwrite != 0, undo)) {
+                    AtomicMin(min_conflict_block, b);
+                    conflicted = true;
+                    break;
+                }
+            }
+        }
+
+        SyncShardAccounting(shard);
+    };
+
+    const bool ran_parallel = pool && pool->WorkersCount() > 0 && active_shards.size() >= 8 && total_ops >= 4096;
+    if (ran_parallel) {
+        std::atomic<size_t> next_idx{0};
+        const size_t num_helpers = std::min({pool->WorkersCount(), active_shards.size() - 1, total_ops / 1024});
+        auto worker_fn = [&]() noexcept {
+            // Any exception (e.g. OOM) during a partial shard commit cannot be safely recovered
+            // without risking dangling stack captures or a half-applied UTXO tip; terminate.
+            while (true) {
+                const size_t i = next_idx.fetch_add(1, std::memory_order_relaxed);
+                if (i >= active_shards.size()) break;
+                apply_shard(active_shards[i]);
+            }
+        };
+        // Per-helper atomic state: 0 = QUEUED, 1 = RUNNING, 2 = CANCELLED.
+        // Allows the coordinator to cancel unstarted helpers without blocking in f.get().
+        auto helper_states = std::shared_ptr<std::atomic<uint8_t>[]>(new std::atomic<uint8_t>[num_helpers]{});
+        std::vector<std::function<void()>> tasks;
+        tasks.reserve(num_helpers);
+        for (size_t h = 0; h < num_helpers; ++h) {
+            tasks.emplace_back([helper_states, h, &worker_fn]() noexcept {
+                uint8_t expected = 0;
+                if (!helper_states[h].compare_exchange_strong(expected, 1, std::memory_order_acq_rel)) return;
+                worker_fn();
+            });
+        }
+        if (auto futures = pool->SubmitPriority(std::move(tasks))) {
+            worker_fn();
+            for (size_t h = 0; h < num_helpers; ++h) {
+                uint8_t expected = 0;
+                if (!helper_states[h].compare_exchange_strong(expected, 2, std::memory_order_acq_rel)) {
+                    (*futures)[h].get();
+                }
+            }
+        } else {
+            worker_fn();
+        }
+    } else {
+        try {
+            for (size_t s : active_shards) {
+                apply_shard(s);
+            }
+        } catch (...) {
+            std::terminate();
+        }
+    }
+
+    const uint32_t committed = min_conflict_block.load(std::memory_order_acquire);
+
+    if (committed < initial_limit) {
+        bool erased_tombstone = false;
+        try {
+            for (size_t s : active_shards) {
+                if (RollbackShardUndo(m_shards[s], committed, m_commit_undos[s].entries)) {
+                    erased_tombstone = true;
+                }
+            }
+        } catch (...) {
+            std::terminate();
+        }
+        if (erased_tombstone) {
+            m_flush_epoch.fetch_add(1, std::memory_order_release);
+        }
+    }
+
+    // Always drop spent coin payloads after commit/rollback and cap retained vector capacity
+    // so large batches do not leave uncounted memory outside DynamicMemoryUsage().
+    static constexpr size_t MAX_RETAINED_UNDO_CAP = 512;
+    for (size_t s : active_shards) {
+        auto& entries = m_commit_undos[s].entries;
+        entries.clear();
+        if (entries.capacity() > MAX_RETAINED_UNDO_CAP) {
+            std::vector<ShardUndoEntry>{}.swap(entries);
+        }
+    }
+
+    if (committed > 0) {
+        SetBestBlock(blocks[committed - 1].meta.block_hash);
+    }
+    return committed;
 }
 
 bool ShardedCoinsView::HaveInputs(const CTransaction& tx) const

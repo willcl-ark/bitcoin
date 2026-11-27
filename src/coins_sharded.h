@@ -85,7 +85,7 @@ class ShardedCoinsView final : public CCoinsViewBacked
 {
 public:
     static constexpr size_t NUM_SHARDS = 256;
-    static constexpr uint32_t MAX_HEIGHT{(uint32_t{1} << 27) - 1};
+    static constexpr uint32_t MAX_HEIGHT{(uint32_t{1} << 31) - 1};
 
     static inline size_t ShardIndex(const COutPoint& outpoint) noexcept
     {
@@ -98,6 +98,56 @@ public:
         TOMBSTONE,
     };
 
+    struct BatchLookupResult {
+        CacheLookupStatus status{CacheLookupStatus::ABSENT};
+        Coin coin;
+    };
+
+    struct BatchCommitOp {
+        enum class Kind : uint8_t {
+            SPEND,
+            CREATE,
+        };
+        COutPoint outpoint;
+        Coin coin;
+        uint32_t block_idx{0};
+        Kind kind{Kind::SPEND};
+        bool from_db{false};
+        bool possible_overwrite{false};
+    };
+
+    struct BatchCommitBlockMeta {
+        uint256 block_hash;
+        uint64_t validated_flush_epoch{0};
+        uint32_t height{0};
+        bool enforce_bip30{false};
+    };
+
+    struct BlockSpendOp {
+        COutPoint outpoint;
+        uint32_t expected_height : 31 {0};
+        uint32_t expected_coinbase : 1 {0};
+        bool from_db{false};
+    };
+
+    /** Lightweight 16-byte POD create descriptor referencing the owning CBlock's CTransaction. */
+    struct BlockCreateOp {
+        const CTransaction* tx{nullptr};
+        uint32_t vout_idx{0};
+        uint8_t is_coinbase : 1 {0};
+        uint8_t possible_overwrite : 1 {0};
+    };
+    static_assert(sizeof(BlockCreateOp) <= 16);
+
+    /** Pre-sharded per-block commit slice with spends and creates already grouped by ShardIndex. */
+    struct ShardedBlockCommit {
+        BatchCommitBlockMeta meta;
+        std::span<const BlockSpendOp> spends;
+        std::span<const BlockCreateOp> creates;
+        const std::array<uint32_t, NUM_SHARDS + 1>* spend_offsets{nullptr};
+        const std::array<uint32_t, NUM_SHARDS + 1>* create_offsets{nullptr};
+    };
+
     explicit ShardedCoinsView(CCoinsView* in_base, bool deterministic = false);
     ~ShardedCoinsView() override = default;
 
@@ -108,9 +158,9 @@ public:
     std::optional<Coin> GetCoin(const COutPoint& outpoint) const override;
     std::optional<Coin> PeekCoin(const COutPoint& outpoint) const override;
     bool HaveCoin(const COutPoint& outpoint) const override;
-    uint256 GetBestBlock() const override;
-    void SetBestBlock(const uint256& block_hash);
-    void BatchWrite(CoinsViewCacheCursor& cursor, const uint256& block_hash) override;
+    uint256 GetBestBlock() const override EXCLUSIVE_LOCKS_REQUIRED(!m_best_block_mutex);
+    void SetBestBlock(const uint256& block_hash) EXCLUSIVE_LOCKS_REQUIRED(!m_best_block_mutex);
+    void BatchWrite(CoinsViewCacheCursor& cursor, const uint256& block_hash) override EXCLUSIVE_LOCKS_REQUIRED(!m_best_block_mutex);
     void BatchWriteEntries(
         size_t dirty_count,
         size_t total_count,
@@ -122,6 +172,13 @@ public:
 
     //! Non-caching single-key cache lookup distinguishing ABSENT / LIVE / TOMBSTONE.
     CacheLookupStatus PeekCacheStatus(const COutPoint& outpoint, Coin* coin_out = nullptr) const;
+
+    //! Concurrent batch cache lookup (does not populate cache or query base DB).
+    //! Traverses shards in staggered order to avoid mutex convoys across workers.
+    void LookupBatch(std::span<const COutPoint> outpoints, std::span<BatchLookupResult> results) const;
+
+    //! Concurrent batch status-only lookup (no Coin deserialization/copying; used by BIP30).
+    void PeekCacheStatusBatch(std::span<const COutPoint> outpoints, std::span<CacheLookupStatus> statuses) const;
 
     //! Check if an unspent coin is currently cached (no backing DB call).
     bool HaveCoinInCache(const COutPoint& outpoint) const;
@@ -139,11 +196,28 @@ public:
     void Uncache(const COutPoint& outpoint);
 
     //! Stream all dirty changes in globally sorted LevelDB key order and clear cache.
-    void Flush(bool reallocate_cache = true, ThreadPool* pool = nullptr);
+    void Flush(bool reallocate_cache = true, ThreadPool* pool = nullptr) EXCLUSIVE_LOCKS_REQUIRED(!m_best_block_mutex);
 
     //! Stream only dirty entries in globally sorted order while keeping clean live coins.
     //! Removes flushed tombstones without full-table scans or rehashes.
-    void Sync(ThreadPool* pool = nullptr);
+    void Sync(ThreadPool* pool = nullptr) EXCLUSIVE_LOCKS_REQUIRED(!m_best_block_mutex);
+
+    //! Apply a contiguous batch of validated blocks in a single probe per entry,
+    //! with lightweight per-shard rollback on rare conflicts.
+    //! `shard_ops[s]` must be sorted by `(block_idx, kind)` (SPEND before CREATE).
+    //! Returns the number of prefix blocks cleanly committed.
+    size_t CommitBlockBatch(
+        std::span<const BatchCommitBlockMeta> blocks,
+        std::array<std::vector<BatchCommitOp>, NUM_SHARDS>& shard_ops,
+        ThreadPool* pool = nullptr) EXCLUSIVE_LOCKS_REQUIRED(!m_best_block_mutex);
+
+    //! Zero-copy overload committing pre-sharded block slices directly without coordinator-thread op copying.
+    size_t CommitBlockBatch(
+        std::span<const ShardedBlockCommit> blocks,
+        ThreadPool* pool = nullptr) EXCLUSIVE_LOCKS_REQUIRED(!m_best_block_mutex);
+
+    //! Monotonic epoch incremented whenever entries or tombstones are removed by Flush/Sync/Uncache.
+    uint64_t FlushEpoch() const noexcept { return m_flush_epoch.load(std::memory_order_acquire); }
 
     //! Total number of cached entries (live + tombstones), matching CCoinsViewCache::GetCacheSize().
     size_t GetCacheSize() const noexcept { return m_cached_coins_count.load(std::memory_order_relaxed); }
@@ -177,16 +251,19 @@ private:
 
     /**
      * Compact 44-byte (align 4) coin representation storing:
-     * - 7-byte little-endian amount (all valid CAmount up to 2^56 - 2, all-0xFF = spent)
+     * - 7-byte little-endian amount (52 bits, all valid CAmount up to 2^52 - 2 > 2x MAX_MONEY;
+     *   all-1s = spent) with the 4 entry cache flags packed in the upper nibble of m_value[6]
      * - 1-byte script kind: 0..32 inline raw script (P2PKH, P2SH, P2WPKH),
      *   32-byte compact encodings for P2WSH (34 B), P2TR (34 B), compressed P2PK (35 B),
      *   or HEAP pointer to [uint32_t size][script bytes]
-     * - 4-byte bitfield packing height (27 bits, up to 134M blocks), coinbase (1 bit),
-     *   and entry cache flags (4 bits) so LiveEntry packs to exactly 80 bytes.
+     * - 4-byte bitfield packing height (31 bits, matching Coin) and coinbase (1 bit)
+     *   so LiveEntry packs to exactly 80 bytes.
      */
     class StoredCoin
     {
-        static constexpr uint64_t SPENT_VALUE{(uint64_t{1} << 56) - 1};
+        static constexpr uint64_t SPENT_VALUE{(uint64_t{1} << 52) - 1};
+        static constexpr unsigned char VALUE_HIGH_MASK{0x0Fu};
+        static constexpr unsigned char FLAGS_SHIFT{4};
         static constexpr size_t INLINE{32};
         static constexpr uint8_t P2WSH{INLINE + 1};
         static constexpr uint8_t P2TR{INLINE + 2};
@@ -195,19 +272,19 @@ private:
         static constexpr uint8_t HEAP{0xff};
         static_assert(P2PK_ODD < HEAP && INLINE >= sizeof(unsigned char*));
 
-        unsigned char m_value[7]{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+        unsigned char m_value[7]{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x0f};
         uint8_t m_kind{0};
-        uint32_t m_height : 27 {0};
+        uint32_t m_height : 31 {0};
         uint32_t m_coinbase : 1 {0};
-        uint32_t m_flags : 4 {0};
         unsigned char m_bytes[INLINE]{};
 
         CAmount Value() const noexcept
         {
             uint64_t value{0};
-            for (size_t i = 0; i < sizeof(m_value); ++i) {
+            for (size_t i = 0; i < 6; ++i) {
                 value |= uint64_t{m_value[i]} << (8 * i);
             }
+            value |= static_cast<uint64_t>(m_value[6] & VALUE_HIGH_MASK) << 48;
             return value == SPENT_VALUE ? CAmount{-1} : static_cast<CAmount>(value);
         }
 
@@ -215,9 +292,11 @@ private:
         {
             Assert(amount == -1 || (amount >= 0 && static_cast<uint64_t>(amount) < SPENT_VALUE));
             const uint64_t value{amount == -1 ? SPENT_VALUE : static_cast<uint64_t>(amount)};
-            for (size_t i = 0; i < sizeof(m_value); ++i) {
+            for (size_t i = 0; i < 6; ++i) {
                 m_value[i] = static_cast<unsigned char>(value >> (8 * i));
             }
+            m_value[6] = static_cast<unsigned char>((m_value[6] & static_cast<unsigned char>(~VALUE_HIGH_MASK)) |
+                                                    ((value >> 48) & VALUE_HIGH_MASK));
         }
 
         unsigned char* HeapBlock() const noexcept
@@ -295,7 +374,6 @@ private:
             std::memcpy(m_value, other.m_value, sizeof(m_value));
             m_height = other.m_height;
             m_coinbase = other.m_coinbase;
-            m_flags = other.m_flags;
             if (other.m_kind == HEAP) {
                 SetScript(other.HeapBlock() + sizeof(uint32_t), other.HeapSize());
             } else {
@@ -310,17 +388,17 @@ private:
             m_kind = other.m_kind;
             m_height = other.m_height;
             m_coinbase = other.m_coinbase;
-            m_flags = other.m_flags;
             std::memcpy(m_bytes, other.m_bytes, INLINE);
             other.m_kind = 0;
             other.SetValue(-1);
+            other.SetEntryFlags(0);
             other.m_height = 0;
             other.m_coinbase = 0;
-            other.m_flags = 0;
         }
 
     public:
-        static constexpr uint32_t MAX_HEIGHT{(uint32_t{1} << 27) - 1};
+        static constexpr uint32_t MAX_HEIGHT{(uint32_t{1} << 31) - 1};
+        static_assert(MAX_HEIGHT == ShardedCoinsView::MAX_HEIGHT);
 
         StoredCoin() = default;
         StoredCoin(const StoredCoin& other) { CopyFrom(other); }
@@ -373,8 +451,10 @@ private:
         void AssignPreservingFlags(StoredCoin&& other) noexcept
         {
             if (this == &other) return;
+            const uint8_t keep_flags = EntryFlags();
             Release();
             std::memcpy(m_value, other.m_value, sizeof(m_value));
+            SetEntryFlags(keep_flags);
             m_kind = other.m_kind;
             m_height = other.m_height;
             m_coinbase = other.m_coinbase;
@@ -420,8 +500,11 @@ private:
             return m_kind == HEAP ? memusage::MallocUsage(sizeof(uint32_t) + HeapSize()) : 0;
         }
 
-        uint8_t EntryFlags() const noexcept { return static_cast<uint8_t>(m_flags); }
-        void SetEntryFlags(uint8_t flags) noexcept { m_flags = flags & 0x0Fu; }
+        uint8_t EntryFlags() const noexcept { return static_cast<uint8_t>(m_value[6] >> FLAGS_SHIFT); }
+        void SetEntryFlags(uint8_t flags) noexcept
+        {
+            m_value[6] = static_cast<unsigned char>((m_value[6] & VALUE_HIGH_MASK) | ((flags & 0x0Fu) << FLAGS_SHIFT));
+        }
     };
     static_assert(sizeof(StoredCoin) == 44 && alignof(StoredCoin) == 4);
 
@@ -434,7 +517,7 @@ private:
         void OrFlags(uint8_t mask) noexcept { coin.SetEntryFlags(static_cast<uint8_t>(coin.EntryFlags() | mask)); }
         void AndFlags(uint8_t mask) noexcept { coin.SetEntryFlags(static_cast<uint8_t>(coin.EntryFlags() & mask)); }
     };
-    static_assert(sizeof(LiveEntry) == 80 && alignof(LiveEntry) == 4);
+    static_assert(sizeof(LiveEntry) == LIVE_ENTRY_BYTES && alignof(LiveEntry) == 4);
 
     struct TombstoneEntry {
         COutPoint outpoint;
@@ -662,7 +745,9 @@ private:
 
         uint32_t AllocLiveSlot(const COutPoint& outpoint, const CTxOut& out, uint32_t height, bool is_coinbase, uint8_t new_flags);
         uint32_t AllocLiveSlot(const COutPoint& outpoint, const Coin& coin, uint8_t new_flags);
+        uint32_t AllocLiveSlotStored(const COutPoint& outpoint, StoredCoin&& coin, uint8_t new_flags);
         void FreeLiveSlot(uint32_t idx, Coin* moveto = nullptr);
+        void FreeLiveSlotMoveStored(uint32_t idx, StoredCoin& moveto);
         uint32_t AllocTombSlot(const COutPoint& outpoint, uint8_t new_flags);
         void FreeTombSlot(uint32_t idx);
         void MarkLiveDirty(uint32_t idx);
@@ -676,6 +761,63 @@ private:
         return static_cast<uint32_t>(h ^ (h >> 32));
     }
 
+    enum class RestoreKind : uint8_t {
+        ERASE_LIVE,
+        ERASE_TOMB,
+        RESTORE_LIVE,
+        RESTORE_LIVE_FROM_TOMB,
+        RESTORE_TOMB_FROM_LIVE,
+    };
+
+    struct ShardUndoEntry {
+        uint32_t block_idx;
+        RestoreKind kind;
+        uint8_t prev_flags;
+        COutPoint outpoint;
+        StoredCoin coin;
+    };
+
+    struct alignas(64) AlignedUndoVec {
+        std::vector<ShardUndoEntry> entries;
+    };
+
+    bool ApplyBatchSpend(
+        Shard& shard,
+        uint32_t block_idx,
+        const COutPoint& outpoint,
+        uint32_t hash32,
+        bool from_db,
+        bool epoch_matches,
+        uint32_t expected_height,
+        bool expected_coinbase,
+        bool check_meta,
+        std::vector<ShardUndoEntry>& undo) const;
+
+    bool ApplyBatchCreate(
+        Shard& shard,
+        uint32_t block_idx,
+        const COutPoint& outpoint,
+        uint32_t hash32,
+        const CTxOut& out,
+        uint32_t height,
+        bool is_coinbase,
+        bool possible_overwrite,
+        std::vector<ShardUndoEntry>& undo) const;
+
+    bool ApplyBatchCreate(
+        Shard& shard,
+        uint32_t block_idx,
+        const COutPoint& outpoint,
+        uint32_t hash32,
+        const Coin& coin,
+        bool possible_overwrite,
+        std::vector<ShardUndoEntry>& undo) const;
+
+    bool RollbackShardUndo(
+        Shard& shard,
+        uint32_t committed,
+        std::vector<ShardUndoEntry>& undo) const;
+
     void SyncShardAccounting(Shard& shard) const noexcept;
 
     SaltedCoinsCacheHasher m_hasher;
@@ -683,9 +825,12 @@ private:
     mutable uint256 m_block_hash GUARDED_BY(m_best_block_mutex);
 
     mutable std::array<Shard, NUM_SHARDS> m_shards;
+    mutable std::array<AlignedUndoVec, NUM_SHARDS> m_commit_undos;
     mutable std::atomic<size_t> m_cached_coins_count{0};
     mutable std::atomic<size_t> m_dirty_count{0};
     mutable std::atomic<size_t> m_dynamic_memory_usage{0};
+    mutable std::atomic<size_t> m_lookup_shard_cursor{0};
+    std::atomic<uint64_t> m_flush_epoch{0};
 };
 
 #endif // BITCOIN_COINS_SHARDED_H
