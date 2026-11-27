@@ -7,6 +7,7 @@
 #include <arith_uint256.h>
 #include <chain.h>
 #include <consensus/params.h>
+#include <crypto/common.h>
 #include <crypto/hex_base.h>
 #include <dbwrapper.h>
 #include <flatfile.h>
@@ -30,6 +31,7 @@
 #include <util/check.h>
 #include <util/expected.h>
 #include <util/fs.h>
+#include <util/fs_helpers.h>
 #include <util/log.h>
 #include <util/obfuscation.h>
 #include <util/overflow.h>
@@ -53,6 +55,11 @@
 #include <stdexcept>
 #include <system_error>
 #include <unordered_map>
+
+#ifndef WIN32
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 namespace kernel {
 static constexpr uint8_t DB_BLOCK_FILES{'f'};
@@ -529,6 +536,10 @@ bool BlockManager::LoadBlockIndex(const std::optional<uint256>& snapshot_blockha
 void BlockManager::WriteBlockIndexDB()
 {
     AssertLockHeld(::cs_main);
+    if (HasStorageIOError()) {
+        LogError("Refusing to write block index DB after storage I/O error\n");
+        return;
+    }
     std::vector<std::pair<int, const CBlockFileInfo*>> vFiles;
     vFiles.reserve(m_dirty_fileinfo.size());
     for (std::set<int>::iterator it = m_dirty_fileinfo.begin(); it != m_dirty_fileinfo.end();) {
@@ -797,14 +808,72 @@ BlockfileType BlockManager::BlockfileTypeForHeight(int height)
 bool BlockManager::FlushChainstateBlockFile(int tip_height)
 {
     AssertLockHeld(::cs_main);
-    auto& cursor = m_blockfile_cursors[BlockfileTypeForHeight(tip_height)];
-    // If the cursor does not exist, it means an assumeutxo snapshot is loaded,
-    // but no blocks past the snapshot height have been written yet, so there
-    // is no data associated with the chainstate, and it is safe not to flush.
-    if (cursor) {
-        return FlushBlockFile(cursor->file_num, /*fFinalize=*/false, /*finalize_undo=*/false);
+    return FlushUnsyncedFiles(tip_height);
+}
+
+bool BlockManager::FlushUnsyncedFiles(int tip_height)
+{
+    AssertLockHeld(::cs_main);
+
+    if (!CloseBlockWriteHandle() || HasStorageIOError()) {
+        LatchStorageIOError();
+        m_opts.notifications.flushError(_("Flushing block file to disk failed. This is likely the result of an I/O error."));
+        return false;
     }
-    // No need to log warnings in this case.
+
+    if (m_blockfile_info.empty()) {
+        m_unsynced_block_files.clear();
+        m_unsynced_undo_files.clear();
+        return true;
+    }
+
+    bool synced_any = false;
+    for (int file_num : m_unsynced_block_files) {
+        if (file_num < 0 || static_cast<size_t>(file_num) >= m_blockfile_info.size() || m_blockfile_info[file_num].nSize == 0) {
+            continue;
+        }
+        if (!m_block_file_seq.Sync(file_num)) {
+            LatchStorageIOError();
+            m_opts.notifications.flushError(_("Flushing block file to disk failed. This is likely the result of an I/O error."));
+            return false;
+        }
+        synced_any = true;
+    }
+
+    for (int file_num : m_unsynced_undo_files) {
+        if (file_num < 0 || static_cast<size_t>(file_num) >= m_blockfile_info.size() || m_blockfile_info[file_num].nUndoSize == 0) {
+            continue;
+        }
+        if (!m_undo_file_seq.Sync(file_num)) {
+            LatchStorageIOError();
+            m_opts.notifications.flushError(_("Flushing undo file to disk failed. This is likely the result of an I/O error."));
+            return false;
+        }
+        synced_any = true;
+    }
+
+    // Preserve upstream invariant that the active blockfile has a paired undo file on flush
+    // even when no undo records have been written yet (e.g. genesis-only after -reindex).
+    const BlockfileType active_type = BlockfileTypeForHeight(tip_height);
+    if (m_blockfile_cursors[active_type]) {
+        const int active_file = m_blockfile_cursors[active_type]->file_num;
+        if (active_file >= 0 && static_cast<size_t>(active_file) < m_blockfile_info.size() &&
+            m_blockfile_info[active_file].nSize > 0 && m_blockfile_info[active_file].nUndoSize == 0) {
+            if (!m_undo_file_seq.Flush(FlatFilePos(active_file, 0), /*finalize=*/false)) {
+                LatchStorageIOError();
+                m_opts.notifications.flushError(_("Flushing undo file to disk failed. This is likely the result of an I/O error."));
+                return false;
+            }
+            synced_any = true;
+        }
+    }
+
+    if (synced_any) {
+        m_block_file_seq.SyncDirectory();
+    }
+
+    m_unsynced_block_files.clear();
+    m_unsynced_undo_files.clear();
     return true;
 }
 
@@ -820,13 +889,20 @@ uint64_t BlockManager::CalculateCurrentUsage()
 
 void BlockManager::UnlinkPrunedFiles(const std::set<int>& setFilesToPrune) const
 {
+    if (setFilesToPrune.empty()) return;
+
+    // Close persistent blk*.dat write handle and cached concurrent read handles
+    // deterministically before unlinking (required on Windows and avoids open deleted files).
+    (void)CloseBlockWriteHandle();
+    CloseConcurrentReadHandles();
+
     std::error_code ec;
-    for (std::set<int>::iterator it = setFilesToPrune.begin(); it != setFilesToPrune.end(); ++it) {
-        FlatFilePos pos(*it, 0);
+    for (int file_num : setFilesToPrune) {
+        FlatFilePos pos(file_num, 0);
         const bool removed_blockfile{fs::remove(m_block_file_seq.FileName(pos), ec)};
         const bool removed_undofile{fs::remove(m_undo_file_seq.FileName(pos), ec)};
         if (removed_blockfile || removed_undofile) {
-            LogDebug(BCLog::BLOCKSTORAGE, "Prune: %s deleted blk/rev (%05u)\n", __func__, *it);
+            LogDebug(BCLog::BLOCKSTORAGE, "Prune: %s deleted blk/rev (%05u)\n", __func__, file_num);
         }
     }
 }
@@ -903,17 +979,21 @@ FlatFilePos BlockManager::FindNextBlockPos(uint64_t nAddSize, unsigned int nHeig
         LogDebug(BCLog::BLOCKSTORAGE, "Leaving block file %i: %s (onto %i) (height %i)\n",
                  last_blockfile, m_blockfile_info[last_blockfile].ToString(), nFile, nHeight);
 
-        // Do not propagate the return code. The flush concerns a previous block
-        // and undo file that has already been written to. If a flush fails
-        // here, and we crash, there is no expected additional block data
-        // inconsistency arising from the flush failure here. However, the undo
-        // data may be inconsistent after a crash if the flush is called during
-        // a reindex. A flush error might also leave some of the data files
-        // untrimmed.
-        if (!FlushBlockFile(last_blockfile, /*fFinalize=*/true, finalize_undo)) {
-            LogWarning(
-                          "Failed to flush previous block file %05i (finalize=1, finalize_undo=%i) before opening new block file %05i\n",
-                          last_blockfile, finalize_undo, nFile);
+        // Close persistent handle before trimming the rotated block file; defer fsync to FlushStateToDisk.
+        (void)CloseBlockWriteHandle();
+        FlatFilePos block_pos_old(last_blockfile, m_blockfile_info[last_blockfile].nSize);
+        if (!m_block_file_seq.Trim(block_pos_old)) {
+            LogWarning("Failed to trim previous block file %05i before opening new block file %05i\n",
+                       last_blockfile, nFile);
+        }
+        m_unsynced_block_files.insert(last_blockfile);
+
+        if (finalize_undo && m_blockfile_info[last_blockfile].nUndoSize > 0) {
+            FlatFilePos undo_pos_old(last_blockfile, m_blockfile_info[last_blockfile].nUndoSize);
+            if (!m_undo_file_seq.Trim(undo_pos_old)) {
+                LogWarning("Failed to trim previous undo file %05i\n", last_blockfile);
+            }
+            m_unsynced_undo_files.insert(last_blockfile);
         }
         // No undo data yet in the new file, so reset our undo-height tracking.
         m_blockfile_cursors[chain_type] = BlockfileCursor{nFile};
@@ -921,6 +1001,11 @@ FlatFilePos BlockManager::FindNextBlockPos(uint64_t nAddSize, unsigned int nHeig
 
     m_blockfile_info[nFile].AddBlock(nHeight, nTime);
     m_blockfile_info[nFile].nSize += nAddSize;
+
+    // Close persistent handle before preallocating a new chunk (required on Windows).
+    if (m_block_file_seq.WillAllocate(pos, nAddSize)) {
+        (void)CloseBlockWriteHandle();
+    }
 
     bool out_of_space;
     uint64_t bytes_allocated{m_block_file_seq.Allocate(pos, nAddSize, out_of_space)};
@@ -961,8 +1046,8 @@ bool BlockManager::FindUndoPos(BlockValidationState& state, int nFile, FlatFileP
 {
     AssertLockHeld(::cs_main);
     pos.nFile = nFile;
-
     pos.nPos = m_blockfile_info[nFile].nUndoSize;
+
     m_blockfile_info[nFile].nUndoSize += nAddSize;
     m_dirty_fileinfo.insert(nFile);
 
@@ -1042,24 +1127,19 @@ bool BlockManager::WriteBlockUndo(const CBlockUndo& blockundo, BlockValidationSt
         block.nUndoPos = pos.nPos;
         block.nStatus |= BLOCK_HAVE_UNDO;
         m_dirty_blockindex.insert(&block);
+    m_unsynced_undo_files.insert(pos.nFile);
     }
 
     return true;
 }
 
-bool BlockManager::ReadBlock(CBlock& block, const FlatFilePos& pos, const std::optional<uint256>& expected_hash) const
+bool BlockManager::DeserializeAndCheckBlock(CBlock& block, std::span<const std::byte> block_data, const FlatFilePos& pos, const std::optional<uint256>& expected_hash) const
 {
     block.SetNull();
 
-    // Open history file to read
-    const auto block_data{ReadRawBlock(pos)};
-    if (!block_data) {
-        return false;
-    }
-
     try {
         // Read block
-        SpanReader{*block_data} >> TX_WITH_WITNESS(block);
+        SpanReader{block_data} >> TX_WITH_WITNESS(block);
     } catch (const std::exception& e) {
         LogError("Deserialize or I/O error - %s at %s while reading block", e.what(), pos.ToString());
         return false;
@@ -1088,10 +1168,241 @@ bool BlockManager::ReadBlock(CBlock& block, const FlatFilePos& pos, const std::o
     return true;
 }
 
+bool BlockManager::ReadBlock(CBlock& block, const FlatFilePos& pos, const std::optional<uint256>& expected_hash) const
+{
+    block.SetNull();
+
+    // Open history file to read
+    const auto block_data{ReadRawBlock(pos)};
+    if (!block_data) {
+        return false;
+    }
+
+    return DeserializeAndCheckBlock(block, *block_data, pos, expected_hash);
+}
+
 bool BlockManager::ReadBlock(CBlock& block, const CBlockIndex& index) const
 {
     const FlatFilePos block_pos{WITH_LOCK(cs_main, return index.GetBlockPos())};
     return ReadBlock(block, block_pos, index.GetBlockHash());
+}
+
+#ifndef WIN32
+namespace {
+
+bool PreadAll(int fd, std::byte* dst, size_t len, uint64_t offset) noexcept
+{
+    size_t total = 0;
+    while (total < len) {
+        const ssize_t n = ::pread(fd, dst + total, len - total, static_cast<off_t>(offset + total));
+        if (n > 0) {
+            total += static_cast<size_t>(n);
+            continue;
+        }
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+        return false;
+    }
+    return true;
+}
+
+} // namespace
+
+BlockManager::ReadFd::~ReadFd()
+{
+    if (fd >= 0) {
+#ifdef POSIX_FADV_DONTNEED
+        (void)::posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
+#endif
+        ::close(fd);
+    }
+}
+
+std::shared_ptr<BlockManager::ReadFd> BlockManager::BlockReadFdCache::GetOrOpen(int file_num, const fs::path& path)
+{
+    {
+        std::shared_lock lock{mutex};
+        for (const auto& e : entries) {
+            if (e.fd && e.file_num == file_num) {
+                return e.fd;
+            }
+        }
+    }
+
+    int flags = O_RDONLY;
+#ifdef O_CLOEXEC
+    flags |= O_CLOEXEC;
+#endif
+    const int raw_fd = ::open(fs::PathToString(path).c_str(), flags);
+    if (raw_fd < 0) {
+        return nullptr;
+    }
+#ifdef POSIX_FADV_SEQUENTIAL
+    (void)::posix_fadvise(raw_fd, 0, 0, POSIX_FADV_SEQUENTIAL);
+#endif
+    auto opened = std::make_shared<ReadFd>(raw_fd);
+
+    std::shared_ptr<ReadFd> evicted;
+    {
+        std::unique_lock lock{mutex};
+        for (const auto& e : entries) {
+            if (e.fd && e.file_num == file_num) {
+                return e.fd;
+            }
+        }
+        size_t target = 0;
+        uint64_t oldest_seq = std::numeric_limits<uint64_t>::max();
+        for (size_t i = 0; i < MAX_CACHED_FDS; ++i) {
+            if (!entries[i].fd) {
+                target = i;
+                break;
+            }
+            if (entries[i].insert_seq < oldest_seq) {
+                oldest_seq = entries[i].insert_seq;
+                target = i;
+            }
+        }
+        evicted = std::move(entries[target].fd);
+        entries[target].file_num = file_num;
+        entries[target].insert_seq = ++next_seq;
+        entries[target].fd = opened;
+    }
+    return opened;
+}
+
+void BlockManager::BlockReadFdCache::Clear()
+{
+    std::array<std::shared_ptr<ReadFd>, MAX_CACHED_FDS> to_close;
+    {
+        std::unique_lock lock{mutex};
+        for (size_t i = 0; i < MAX_CACHED_FDS; ++i) {
+            to_close[i] = std::move(entries[i].fd);
+            entries[i].file_num = -1;
+            entries[i].insert_seq = 0;
+        }
+    }
+}
+#endif
+
+void BlockManager::AdviseBlockRange(const FlatFilePos& pos, uint64_t offset, uint64_t length) const
+{
+#if !defined(WIN32) && defined(POSIX_FADV_WILLNEED)
+    if (pos.IsNull() || length == 0) return;
+    if (auto fd_handle = m_read_fd_cache.GetOrOpen(pos.nFile, GetBlockPosFilename(pos))) {
+        (void)::posix_fadvise(fd_handle->fd, static_cast<off_t>(offset), static_cast<off_t>(length), POSIX_FADV_WILLNEED);
+    }
+#endif
+}
+
+void BlockManager::CloseConcurrentReadHandles() const
+{
+#ifndef WIN32
+    m_read_fd_cache.Clear();
+#endif
+}
+
+bool BlockManager::ReadBlockConcurrent(CBlock& block, const FlatFilePos& pos, const std::optional<uint256>& expected_hash) const
+{
+#ifndef WIN32
+    if (pos.IsNull() || pos.nPos < STORAGE_HEADER_BYTES ||
+        pos.nPos > static_cast<uint64_t>(std::numeric_limits<off_t>::max())) {
+        LogError("Failed for %s while reading raw block storage header", pos.ToString());
+        return false;
+    }
+
+    const auto fd_handle = m_read_fd_cache.GetOrOpen(pos.nFile, GetBlockPosFilename(pos));
+    if (!fd_handle) {
+        LogError("OpenBlockFile failed for %s while reading raw block", pos.ToString());
+        return false;
+    }
+
+    const uint64_t header_off = pos.nPos - STORAGE_HEADER_BYTES;
+    std::array<std::byte, 4096> stack_buf;
+    size_t got = 0;
+    while (got < STORAGE_HEADER_BYTES) {
+        const ssize_t n = ::pread(fd_handle->fd, stack_buf.data() + got, stack_buf.size() - got,
+                                  static_cast<off_t>(header_off + got));
+        if (n > 0) {
+            got += static_cast<size_t>(n);
+            continue;
+        }
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+        LogError("Failed reading block header at %s", pos.ToString());
+        return false;
+    }
+
+    if (m_obfuscation) {
+        m_obfuscation(std::span<std::byte>{stack_buf.data(), STORAGE_HEADER_BYTES},
+                      static_cast<size_t>(header_off % Obfuscation::KEY_SIZE));
+    }
+
+    const MessageStartChars& expected_magic = GetParams().MessageStart();
+    if (std::memcmp(stack_buf.data(), expected_magic.data(), expected_magic.size()) != 0) {
+        LogError("Block magic mismatch for %s while reading raw block", pos.ToString());
+        return false;
+    }
+
+    const uint32_t blk_size = ReadLE32(stack_buf.data() + expected_magic.size());
+    if (blk_size > MAX_SIZE) {
+        LogError("Block data is larger than maximum deserialization size for %s: %u versus %u while reading raw block",
+                 pos.ToString(), blk_size, MAX_SIZE);
+        return false;
+    }
+    if (static_cast<uint64_t>(blk_size) > static_cast<uint64_t>(std::numeric_limits<off_t>::max()) - pos.nPos) {
+        LogError("Block offset overflow for %s while reading raw block", pos.ToString());
+        return false;
+    }
+
+    const size_t data_obf_off = static_cast<size_t>(pos.nPos % Obfuscation::KEY_SIZE);
+    if (got >= STORAGE_HEADER_BYTES + blk_size) {
+        std::span<std::byte> blk_span{stack_buf.data() + STORAGE_HEADER_BYTES, blk_size};
+        if (m_obfuscation) {
+            m_obfuscation(blk_span, data_obf_off);
+        }
+        return DeserializeAndCheckBlock(block, blk_span, pos, expected_hash);
+    }
+
+    std::vector<std::byte> data(blk_size);
+    const size_t already = got - STORAGE_HEADER_BYTES;
+    if (already > 0) {
+        std::memcpy(data.data(), stack_buf.data() + STORAGE_HEADER_BYTES, already);
+    }
+    if (!PreadAll(fd_handle->fd, data.data() + already, blk_size - already, pos.nPos + already)) {
+        LogError("Failed reading block body at %s", pos.ToString());
+        return false;
+    }
+    if (m_obfuscation) {
+        m_obfuscation(data, data_obf_off);
+    }
+    return DeserializeAndCheckBlock(block, data, pos, expected_hash);
+#else
+    ReadRawBlockResult raw_block{util::Unexpected{ReadRawError::IO}};
+    {
+        {
+            WAIT_LOCK(m_concurrent_read_mutex, lock);
+            m_concurrent_read_cv.wait(lock, [&]() EXCLUSIVE_LOCKS_REQUIRED(m_concurrent_read_mutex) {
+                return m_active_concurrent_reads < MAX_CONCURRENT_WINDOWS_READS;
+            });
+            ++m_active_concurrent_reads;
+        }
+        struct DiskReadGuard {
+            const BlockManager& bm;
+            ~DiskReadGuard()
+            {
+                {
+                    LOCK(bm.m_concurrent_read_mutex);
+                    --bm.m_active_concurrent_reads;
+                }
+                bm.m_concurrent_read_cv.notify_one();
+            }
+        } read_guard{*this};
+        raw_block = ReadRawBlock(pos);
+    }
+    return raw_block && DeserializeAndCheckBlock(block, *raw_block, pos, expected_hash);
+#endif
 }
 
 BlockManager::ReadRawBlockResult BlockManager::ReadRawBlock(const FlatFilePos& pos, std::optional<std::pair<size_t, size_t>> block_part) const
@@ -1145,38 +1456,143 @@ BlockManager::ReadRawBlockResult BlockManager::ReadRawBlock(const FlatFilePos& p
     }
 }
 
+std::vector<unsigned char> BlockManager::SerializeBlockForDisk(const CBlock& block) const
+{
+    std::vector<unsigned char> buf;
+    VectorWriter writer{buf, 0};
+    writer << GetParams().MessageStart() << uint32_t{0};
+    writer << TX_WITH_WITNESS(block);
+    const size_t block_size = buf.size() - STORAGE_HEADER_BYTES;
+    Assert(block_size <= std::numeric_limits<uint32_t>::max());
+    WriteLE32(buf.data() + std::tuple_size_v<MessageStartChars>, static_cast<uint32_t>(block_size));
+    return buf;
+}
+
+void BlockManager::FinishInflightBlockWrite() const noexcept
+{
+    bool notify = false;
+    {
+        LOCK(m_blk_handle_mutex);
+        Assert(m_inflight_blk_writes > 0);
+        if (--m_inflight_blk_writes == 0) {
+            notify = true;
+        }
+    }
+    if (notify) m_blk_writes_cv.notify_all();
+}
+
+bool BlockManager::CloseBlockWriteHandle() const
+{
+    WAIT_LOCK(m_blk_handle_mutex, lock);
+    m_blk_writes_cv.wait(lock, [&]() EXCLUSIVE_LOCKS_REQUIRED(m_blk_handle_mutex) {
+        return m_inflight_blk_writes == 0;
+    });
+    if (m_blk_handle) {
+        FILE* f = m_blk_handle;
+        m_blk_handle = nullptr;
+        m_blk_handle_file = -1;
+        m_blk_handle_pos = 0;
+        if (std::fclose(f) != 0) {
+            LogError("Failed to close persistent block file handle: %s\n", SysErrorString(errno));
+            LatchStorageIOError();
+            return false;
+        }
+    }
+    return true;
+}
+
+BlockManager::BlockWriteReservation BlockManager::ReserveBlockPos(uint64_t total_size, unsigned int nHeight, uint64_t nTime)
+{
+    AssertLockHeld(::cs_main);
+    if (HasStorageIOError()) {
+        return {};
+    }
+    FlatFilePos pos{FindNextBlockPos(total_size, nHeight, nTime)};
+    if (pos.IsNull()) {
+        LogError("FindNextBlockPos failed for %s while reserving block space", pos.ToString());
+        return {};
+    }
+    m_unsynced_block_files.insert(pos.nFile);
+    {
+        LOCK(m_blk_handle_mutex);
+        ++m_inflight_blk_writes;
+    }
+    return BlockWriteReservation{this, pos};
+}
+
+bool BlockManager::WriteRawBlockToDisk(const FlatFilePos& pos, std::vector<unsigned char>& raw_data, bool keep_handle_open) const
+{
+    if (HasStorageIOError()) return false;
+    if (m_obfuscation) {
+        m_obfuscation(MakeWritableByteSpan(raw_data), pos.nPos);
+    }
+
+    LOCK(m_blk_handle_mutex);
+    auto close_handle = [&]() -> bool {
+        if (!m_blk_handle) return true;
+        FILE* f = m_blk_handle;
+        m_blk_handle = nullptr;
+        m_blk_handle_file = -1;
+        m_blk_handle_pos = 0;
+        if (std::fclose(f) != 0) {
+            LogError("Failed to close block file handle: %s\n", SysErrorString(errno));
+            LatchStorageIOError();
+            return false;
+        }
+        return true;
+    };
+
+    if (!m_blk_handle || m_blk_handle_file != pos.nFile) {
+        if (!close_handle()) return false;
+        m_blk_handle = m_block_file_seq.Open(pos, /*read_only=*/false);
+        if (!m_blk_handle) {
+            LogError("OpenBlockFile failed for %s while writing block\n", pos.ToString());
+            LatchStorageIOError();
+            return false;
+        }
+        m_blk_handle_file = pos.nFile;
+        m_blk_handle_pos = pos.nPos;
+    } else if (m_blk_handle_pos != pos.nPos) {
+        if (FileSeek64(m_blk_handle, static_cast<int64_t>(pos.nPos), SEEK_SET) != 0) {
+            LogError("Failed seeking block file %s: %s\n", pos.ToString(), SysErrorString(errno));
+            (void)close_handle();
+            LatchStorageIOError();
+            return false;
+        }
+        m_blk_handle_pos = pos.nPos;
+    }
+
+    const size_t nbytes = raw_data.size();
+    if (std::fwrite(raw_data.data(), 1, nbytes, m_blk_handle) != nbytes || std::fflush(m_blk_handle) != 0) {
+        LogError("Failed writing block at %s: %s\n", pos.ToString(), SysErrorString(errno));
+        (void)close_handle();
+        LatchStorageIOError();
+        return false;
+    }
+    m_blk_handle_pos += nbytes;
+
+    if (!keep_handle_open) {
+        if (!close_handle()) return false;
+    }
+    return true;
+}
+
 FlatFilePos BlockManager::WriteBlock(const CBlock& block, int nHeight)
 {
     AssertLockHeld(::cs_main);
-    const unsigned int block_size{static_cast<unsigned int>(GetSerializeSize(TX_WITH_WITNESS(block)))};
-    FlatFilePos pos{FindNextBlockPos(block_size + STORAGE_HEADER_BYTES, nHeight, block.GetBlockTime())};
-    if (pos.IsNull()) {
-        LogError("FindNextBlockPos failed for %s while writing block", pos.ToString());
+    std::vector<unsigned char> raw = SerializeBlockForDisk(block);
+    BlockWriteReservation reservation = ReserveBlockPos(raw.size(), nHeight, block.GetBlockTime());
+    if (reservation.pos.IsNull()) {
         return FlatFilePos();
     }
-    AutoFile file{OpenBlockFile(pos, /*fReadOnly=*/false)};
-    if (file.IsNull()) {
-        LogError("OpenBlockFile failed for %s while writing block", pos.ToString());
+    const FlatFilePos data_pos{reservation.pos.nFile, reservation.pos.nPos + STORAGE_HEADER_BYTES};
+    const bool ok = WriteRawBlockToDisk(reservation.pos, raw, /*keep_handle_open=*/false);
+    reservation.Release();
+    if (!ok) {
         m_opts.notifications.fatalError(_("Failed to write block."));
         return FlatFilePos();
     }
-    {
-        BufferedWriter fileout{file};
-
-        // Write index header
-        fileout << GetParams().MessageStart() << block_size;
-        pos.nPos += STORAGE_HEADER_BYTES;
-        // Write block
-        fileout << TX_WITH_WITNESS(block);
-    }
-
-    if (file.fclose() != 0) {
-        LogError("Failed to close block file %s: %s", pos.ToString(), SysErrorString(errno));
-        m_opts.notifications.fatalError(_("Failed to close file when writing block."));
-        return FlatFilePos();
-    }
-
-    return pos;
+    return data_pos;
 }
 
 static auto InitBlocksdirXorKey(const BlockManager::Options& opts)
@@ -1250,6 +1666,12 @@ BlockManager::BlockManager(const util::SignalInterrupt& interrupt, Options opts)
     }
 }
 
+BlockManager::~BlockManager()
+{
+    (void)CloseBlockWriteHandle();
+    CloseConcurrentReadHandles();
+}
+
 class ImportingNow
 {
     std::atomic<bool>& m_importing;
@@ -1269,59 +1691,61 @@ public:
 
 void ImportBlocks(ChainstateManager& chainman, std::span<const fs::path> import_paths)
 {
-    ImportingNow imp{chainman.m_blockman.m_importing};
+    {
+        ImportingNow imp{chainman.m_blockman.m_importing};
 
-    // -reindex
-    if (!chainman.m_blockman.m_blockfiles_indexed) {
-        int total_files{0};
-        while (fs::exists(chainman.m_blockman.GetBlockPosFilename(FlatFilePos(total_files, 0)))) {
-            total_files++;
+        // -reindex
+        if (!chainman.m_blockman.m_blockfiles_indexed) {
+            int total_files{0};
+            while (fs::exists(chainman.m_blockman.GetBlockPosFilename(FlatFilePos(total_files, 0)))) {
+                total_files++;
+            }
+
+            // Map of disk positions for blocks with unknown parent (only used for reindex);
+            // parent hash -> child disk position, multiple children can have the same parent.
+            std::multimap<uint256, FlatFilePos> blocks_with_unknown_parent;
+
+            for (int nFile{0}; nFile < total_files; ++nFile) {
+                FlatFilePos pos(nFile, 0);
+                AutoFile file{chainman.m_blockman.OpenBlockFile(pos, /*fReadOnly=*/true)};
+                if (file.IsNull()) {
+                    break; // This error is logged in OpenBlockFile
+                }
+                LogInfo("Reindexing block file blk%05u.dat (%d%% complete)...", (unsigned int)nFile, nFile * 100 / total_files);
+                chainman.LoadExternalBlockFile(file, &pos, &blocks_with_unknown_parent);
+                if (chainman.m_interrupt) {
+                    LogInfo("Interrupt requested. Exit reindexing.");
+                    return;
+                }
+            }
+            WITH_LOCK(::cs_main, chainman.m_blockman.m_block_tree_db->WriteReindexing(false));
+            chainman.m_blockman.m_blockfiles_indexed = true;
+            LogInfo("Reindexing finished");
+            // To avoid ending up in a situation without genesis block, re-try initializing (no-op if reindexing worked):
+            (void)chainman.LoadGenesisBlock();
         }
 
-        // Map of disk positions for blocks with unknown parent (only used for reindex);
-        // parent hash -> child disk position, multiple children can have the same parent.
-        std::multimap<uint256, FlatFilePos> blocks_with_unknown_parent;
-
-        for (int nFile{0}; nFile < total_files; ++nFile) {
-            FlatFilePos pos(nFile, 0);
-            AutoFile file{chainman.m_blockman.OpenBlockFile(pos, /*fReadOnly=*/true)};
-            if (file.IsNull()) {
-                break; // This error is logged in OpenBlockFile
-            }
-            LogInfo("Reindexing block file blk%05u.dat (%d%% complete)...", (unsigned int)nFile, nFile * 100 / total_files);
-            chainman.LoadExternalBlockFile(file, &pos, &blocks_with_unknown_parent);
-            if (chainman.m_interrupt) {
-                LogInfo("Interrupt requested. Exit reindexing.");
-                return;
+        // -loadblock=
+        for (const fs::path& path : import_paths) {
+            AutoFile file{fsbridge::fopen(path, "rb")};
+            if (!file.IsNull()) {
+                LogInfo("Importing blocks file %s...", fs::PathToString(path));
+                chainman.LoadExternalBlockFile(file);
+                if (chainman.m_interrupt) {
+                    LogInfo("Interrupt requested. Exit block importing.");
+                    return;
+                }
+            } else {
+                LogWarning("Could not open blocks file %s", fs::PathToString(path));
             }
         }
-        WITH_LOCK(::cs_main, chainman.m_blockman.m_block_tree_db->WriteReindexing(false));
-        chainman.m_blockman.m_blockfiles_indexed = true;
-        LogInfo("Reindexing finished");
-        // To avoid ending up in a situation without genesis block, re-try initializing (no-op if reindexing worked):
-        (void)chainman.LoadGenesisBlock();
-    }
 
-    // -loadblock=
-    for (const fs::path& path : import_paths) {
-        AutoFile file{fsbridge::fopen(path, "rb")};
-        if (!file.IsNull()) {
-            LogInfo("Importing blocks file %s...", fs::PathToString(path));
-            chainman.LoadExternalBlockFile(file);
-            if (chainman.m_interrupt) {
-                LogInfo("Interrupt requested. Exit block importing.");
-                return;
-            }
-        } else {
-            LogWarning("Could not open blocks file %s", fs::PathToString(path));
+        // scan for better chains in the block chain database, that are not yet connected in the active best chain
+        if (auto result = chainman.ActivateBestChains(); !result) {
+            chainman.GetNotifications().fatalError(util::ErrorString(result));
         }
+        // End scope of ImportingNow so LoadingBlocks() becomes false
     }
-
-    // scan for better chains in the block chain database, that are not yet connected in the active best chain
-    if (auto result = chainman.ActivateBestChains(); !result) {
-        chainman.GetNotifications().fatalError(util::ErrorString(result));
-    }
-    // End scope of ImportingNow
 }
 
 std::ostream& operator<<(std::ostream& os, const BlockfileType& type) {

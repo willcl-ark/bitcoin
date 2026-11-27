@@ -130,4 +130,33 @@ BOOST_AUTO_TEST_CASE(flatfile_flush)
     BOOST_CHECK_EQUAL(fs::file_size(seq.FileName(FlatFilePos(0, 1))), 1U);
 }
 
+BOOST_AUTO_TEST_CASE(flatfile_will_allocate_trim_and_sync)
+{
+    const auto data_dir = m_args.GetDataDirBase();
+    FlatFileSeq seq(data_dir, "t", 100);
+
+    // WillAllocate predicts chunk boundary crossings accurately.
+    BOOST_CHECK(seq.WillAllocate(FlatFilePos(0, 0), 1));
+    BOOST_CHECK(!seq.WillAllocate(FlatFilePos(0, 1), 99));
+    BOOST_CHECK(seq.WillAllocate(FlatFilePos(0, 99), 2));
+    BOOST_CHECK(!seq.WillAllocate(FlatFilePos(0, 50), 0));
+
+    bool out_of_space{false};
+    BOOST_CHECK_EQUAL(seq.Allocate(FlatFilePos(0, 0), 10, out_of_space), 100U);
+    BOOST_CHECK(!out_of_space);
+    BOOST_CHECK_EQUAL(fs::file_size(seq.FileName(FlatFilePos(0, 0))), 100U);
+
+    // Trim truncates pre-allocated bytes without forcing fsync.
+    BOOST_CHECK(seq.Trim(FlatFilePos(0, 27)));
+    BOOST_CHECK_EQUAL(fs::file_size(seq.FileName(FlatFilePos(0, 0))), 27U);
+
+    // Sync succeeds on an existing file and returns false for null file positions.
+    BOOST_CHECK(seq.Sync(0));
+    BOOST_CHECK(!seq.Sync(-1));
+    BOOST_CHECK(!seq.Trim(FlatFilePos{}));
+
+    // SyncDirectory completes cleanly on the existing directory.
+    seq.SyncDirectory();
+}
+
 BOOST_AUTO_TEST_SUITE_END()

@@ -62,6 +62,11 @@ public:
     FILE* Open(const FlatFilePos& pos, bool read_only = false) const;
 
     /**
+     * Return true if Allocate(pos, add_size, ...) would extend the file to a new chunk.
+     */
+    bool WillAllocate(const FlatFilePos& pos, uint64_t add_size) const;
+
+    /**
      * Allocate additional space in a file after the given starting position. The amount allocated
      * will be the minimum multiple of the sequence chunk size greater than add_size.
      *
@@ -71,6 +76,22 @@ public:
      * @return The number of bytes successfully allocated.
      */
     uint64_t Allocate(const FlatFilePos& pos, uint64_t add_size, bool& out_of_space) const;
+
+    /**
+     * Truncate off extra pre-allocated bytes without calling FileCommit / fsync.
+     * Used on file rotation so fsyncs can be batched in FlushStateToDisk.
+     */
+    bool Trim(const FlatFilePos& pos) const;
+
+    /**
+     * Commit file contents to disk via FileCommit without syncing the parent directory.
+     */
+    bool Sync(int file_num) const;
+
+    /**
+     * Sync the directory containing this file sequence.
+     */
+    void SyncDirectory() const;
 
     /**
      * Commit a file to disk, and optionally truncate off extra pre-allocated bytes if final.

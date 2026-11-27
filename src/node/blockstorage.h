@@ -27,8 +27,11 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <deque>
 #include <functional>
 #include <iosfwd>
 #include <limits>
@@ -36,6 +39,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <shared_mutex>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -215,7 +219,7 @@ private:
     /**
      * Helper function performing various preparations before a block can be saved to disk:
      * Returns the correct position for the block to be saved, which may be in the current or a new
-     * block file depending on nAddSize. May flush the previous blockfile to disk if full, updates
+     * block file depending on nAddSize. May trim the previous blockfile if full, updates
      * blockfile info, and checks if there is enough disk space to save the block.
      *
      * The nAddSize argument passed to this function should include not just the size of the serialized CBlock, but also the size of
@@ -223,9 +227,61 @@ private:
      */
     [[nodiscard]] FlatFilePos FindNextBlockPos(uint64_t nAddSize, unsigned int nHeight, uint64_t nTime) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
     [[nodiscard]] bool FlushChainstateBlockFile(int tip_height) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    [[nodiscard]] bool FlushUnsyncedFiles(int tip_height) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
     [[nodiscard]] bool FindUndoPos(BlockValidationState& state, int nFile, FlatFilePos& pos, uint64_t nAddSize) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     AutoFile OpenUndoFile(const FlatFilePos& pos, bool fReadOnly = false) const;
+
+    /** Persistent blk*.dat write handle and in-flight off-cs_main write tracker.
+     *  Lock order: cs_main -> m_blk_handle_mutex (never acquires cs_main). */
+    mutable Mutex m_blk_handle_mutex;
+    mutable std::condition_variable m_blk_writes_cv;
+    mutable FILE* m_blk_handle GUARDED_BY(m_blk_handle_mutex){nullptr};
+    mutable int m_blk_handle_file GUARDED_BY(m_blk_handle_mutex){-1};
+    mutable uint64_t m_blk_handle_pos GUARDED_BY(m_blk_handle_mutex){0};
+    mutable size_t m_inflight_blk_writes GUARDED_BY(m_blk_handle_mutex){0};
+
+    void FinishInflightBlockWrite() const noexcept;
+
+    /** Platform-agnostic concurrent read handle cache for parallel blk*.dat reads during IBD.
+     *  Never acquires cs_main; starts empty with zero open descriptors or threads. */
+#ifndef WIN32
+    struct ReadFd {
+        int fd{-1};
+        explicit ReadFd(int f) noexcept : fd{f} {}
+        ~ReadFd();
+        ReadFd(const ReadFd&) = delete;
+        ReadFd& operator=(const ReadFd&) = delete;
+    };
+
+    struct BlockReadFdCache {
+        static constexpr size_t MAX_CACHED_FDS = 16;
+        struct CacheEntry {
+            int file_num{-1};
+            uint64_t insert_seq{0};
+            std::shared_ptr<ReadFd> fd;
+        };
+        mutable std::shared_mutex mutex;
+        std::array<CacheEntry, MAX_CACHED_FDS> entries{};
+        uint64_t next_seq{0};
+
+        std::shared_ptr<ReadFd> GetOrOpen(int file_num, const fs::path& path);
+        void Clear();
+    };
+    mutable BlockReadFdCache m_read_fd_cache;
+#else
+    mutable Mutex m_concurrent_read_mutex;
+    mutable std::condition_variable m_concurrent_read_cv;
+    mutable size_t m_active_concurrent_reads GUARDED_BY(m_concurrent_read_mutex){0};
+    static constexpr size_t MAX_CONCURRENT_WINDOWS_READS = 8;
+#endif
+
+    /** Track modified blk*.dat and rev*.dat files not yet fsynced in FlushStateToDisk. */
+    std::set<int> m_unsynced_block_files GUARDED_BY(::cs_main);
+    mutable std::set<int> m_unsynced_undo_files GUARDED_BY(::cs_main);
+
+    /** Permanently latched on any block/undo write or sync I/O failure. */
+    mutable std::atomic<bool> m_storage_io_error{false};
 
     /* Calculate the block/rev files to delete based on height specified by user with RPC command pruneblockchain */
     void FindFilesToPruneManual(
@@ -308,7 +364,7 @@ protected:
     std::vector<CBlockFileInfo> m_blockfile_info;
 
     /** Dirty block index entries. */
-    std::set<CBlockIndex*> m_dirty_blockindex;
+    mutable std::set<CBlockIndex*> m_dirty_blockindex;
 
     /** Dirty block file entries. */
     std::set<int> m_dirty_fileinfo;
@@ -317,7 +373,38 @@ public:
     using Options = kernel::BlockManagerOpts;
     using ReadRawBlockResult = util::Expected<std::vector<std::byte>, ReadRawError>;
 
+    /** RAII reservation keeping in-flight off-cs_main blk*.dat writes accounted for. */
+    class BlockWriteReservation {
+        const BlockManager* m_blockman{nullptr};
+    public:
+        FlatFilePos pos;
+        BlockWriteReservation() = default;
+        BlockWriteReservation(const BlockManager* bm, FlatFilePos p) : m_blockman{bm}, pos{p} {}
+        BlockWriteReservation(const BlockWriteReservation&) = delete;
+        BlockWriteReservation& operator=(const BlockWriteReservation&) = delete;
+        BlockWriteReservation(BlockWriteReservation&& other) noexcept
+            : m_blockman{std::exchange(other.m_blockman, nullptr)}, pos{other.pos} {}
+        BlockWriteReservation& operator=(BlockWriteReservation&& other) noexcept
+        {
+            if (this != &other) {
+                Release();
+                m_blockman = std::exchange(other.m_blockman, nullptr);
+                pos = other.pos;
+            }
+            return *this;
+        }
+        ~BlockWriteReservation() { Release(); }
+        void Release() noexcept
+        {
+            if (m_blockman) {
+                m_blockman->FinishInflightBlockWrite();
+                m_blockman = nullptr;
+            }
+        }
+    };
+
     explicit BlockManager(const util::SignalInterrupt& interrupt, Options opts);
+    ~BlockManager();
 
     const util::SignalInterrupt& m_interrupt;
     std::atomic<bool> m_importing{false};
@@ -382,6 +469,23 @@ public:
 
     bool WriteBlockUndo(const CBlockUndo& blockundo, BlockValidationState& state, CBlockIndex& block)
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+
+    /** Latch or query permanent storage I/O failure state. */
+    void LatchStorageIOError() const noexcept { m_storage_io_error.store(true, std::memory_order_release); }
+    bool HasStorageIOError() const noexcept { return m_storage_io_error.load(std::memory_order_acquire); }
+
+    /** Single-pass serialization of a block plus its 8-byte disk storage header (safe off cs_main). */
+    std::vector<unsigned char> SerializeBlockForDisk(const CBlock& block) const;
+
+    /** Reserve space in blk*.dat under cs_main and track an in-flight off-cs_main write. */
+    BlockWriteReservation ReserveBlockPos(uint64_t total_size, unsigned int nHeight, uint64_t nTime)
+        EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+
+    /** Write a pre-serialized block payload at `pos` off cs_main using a persistent file handle. */
+    [[nodiscard]] bool WriteRawBlockToDisk(const FlatFilePos& pos, std::vector<unsigned char>& raw_data, bool keep_handle_open) const;
+
+    /** Wait for in-flight block writes and close any open persistent blk*.dat write handle. */
+    bool CloseBlockWriteHandle() const;
 
     /** Store block on disk and update block file statistics.
      *
@@ -471,8 +575,15 @@ public:
     void UnlinkPrunedFiles(const std::set<int>& setFilesToPrune) const;
 
     /** Functions for disk access for blocks */
+    bool DeserializeAndCheckBlock(CBlock& block, std::span<const std::byte> block_data, const FlatFilePos& pos, const std::optional<uint256>& expected_hash) const;
     bool ReadBlock(CBlock& block, const FlatFilePos& pos, const std::optional<uint256>& expected_hash) const;
     bool ReadBlock(CBlock& block, const CBlockIndex& index) const;
+    /** Concurrent lock-free block read/decode safe for parallel IBD workers off cs_main. */
+    bool ReadBlockConcurrent(CBlock& block, const FlatFilePos& pos, const std::optional<uint256>& expected_hash) const;
+    /** Best-effort OS readahead hint for a contiguous byte range in a blk*.dat file (safe off cs_main). */
+    void AdviseBlockRange(const FlatFilePos& pos, uint64_t offset, uint64_t length) const;
+    /** Release any cached concurrent blk*.dat read handles. */
+    void CloseConcurrentReadHandles() const;
     ReadRawBlockResult ReadRawBlock(const FlatFilePos& pos, std::optional<std::pair<size_t, size_t>> block_part = std::nullopt) const;
 
     bool ReadBlockUndo(CBlockUndo& blockundo, const CBlockIndex& index) const;

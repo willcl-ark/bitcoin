@@ -56,6 +56,13 @@ FILE* FlatFileSeq::Open(const FlatFilePos& pos, bool read_only) const
     return file;
 }
 
+bool FlatFileSeq::WillAllocate(const FlatFilePos& pos, uint64_t add_size) const
+{
+    uint64_t n_old_chunks = CeilDiv(pos.nPos, m_chunk_size);
+    uint64_t n_new_chunks = CeilDiv(pos.nPos + add_size, m_chunk_size);
+    return n_new_chunks > n_old_chunks;
+}
+
 uint64_t FlatFileSeq::Allocate(const FlatFilePos& pos, uint64_t add_size, bool& out_of_space) const
 {
     out_of_space = false;
@@ -83,6 +90,53 @@ uint64_t FlatFileSeq::Allocate(const FlatFilePos& pos, uint64_t add_size, bool& 
         }
     }
     return 0;
+}
+
+bool FlatFileSeq::Trim(const FlatFilePos& pos) const
+{
+    FILE* file = Open(FlatFilePos(pos.nFile, 0));
+    if (!file) {
+        LogError("%s: failed to open file %d\n", __func__, pos.nFile);
+        return false;
+    }
+    if (!TruncateFile(file, pos.nPos)) {
+        LogError("%s: failed to truncate file %d\n", __func__, pos.nFile);
+        if (fclose(file) != 0) {
+            LogError("Failed to close file %d", pos.nFile);
+        }
+        return false;
+    }
+    if (fclose(file) != 0) {
+        LogError("Failed to close file %d after trim", pos.nFile);
+        return false;
+    }
+    return true;
+}
+
+bool FlatFileSeq::Sync(int file_num) const
+{
+    FILE* file = Open(FlatFilePos(file_num, 0));
+    if (!file) {
+        LogError("%s: failed to open file %d\n", __func__, file_num);
+        return false;
+    }
+    if (!FileCommit(file)) {
+        LogError("%s: failed to commit file %d\n", __func__, file_num);
+        if (fclose(file) != 0) {
+            LogError("Failed to close file %d", file_num);
+        }
+        return false;
+    }
+    if (fclose(file) != 0) {
+        LogError("Failed to close file %d after sync", file_num);
+        return false;
+    }
+    return true;
+}
+
+void FlatFileSeq::SyncDirectory() const
+{
+    DirectoryCommit(m_dir);
 }
 
 bool FlatFileSeq::Flush(const FlatFilePos& pos, bool finalize) const

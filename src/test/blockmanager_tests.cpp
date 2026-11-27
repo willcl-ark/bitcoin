@@ -8,6 +8,7 @@
 #include <node/blockstorage.h>
 #include <node/context.h>
 #include <node/kernel_notifications.h>
+#include <pow.h>
 #include <script/solver.h>
 #include <primitives/block.h>
 #include <util/chaintype.h>
@@ -17,6 +18,10 @@
 #include <test/util/common.h>
 #include <test/util/logging.h>
 #include <test/util/setup_common.h>
+
+#include <atomic>
+#include <thread>
+#include <vector>
 
 using kernel::CBlockFileInfo;
 using node::STORAGE_HEADER_BYTES;
@@ -346,6 +351,96 @@ BOOST_FIXTURE_TEST_CASE(blockmanager_add_to_block_index_best_header, TestingSetu
     BOOST_CHECK(second != first);
     BOOST_CHECK(second->nChainWork == first->nChainWork);
     BOOST_CHECK_EQUAL(best_header, first);
+}
+
+BOOST_AUTO_TEST_CASE(blockmanager_off_cs_main_write_and_concurrent_reads)
+{
+    const auto params{CreateChainParams(ArgsManager{}, ChainType::REGTEST)};
+    KernelNotifications notifications{Assert(m_node.shutdown_request), m_node.exit_status, *Assert(m_node.warnings)};
+    const BlockManager::Options blockman_opts{
+        .chainparams = *params,
+        .blocks_dir = m_args.GetBlocksDirPath(),
+        .notifications = notifications,
+        .block_tree_db_params = DBParams{
+            .path = m_args.GetDataDirNet() / "blocks" / "index",
+            .cache_bytes = 0,
+        },
+    };
+    BlockManager blockman{*Assert(m_node.shutdown_signal), blockman_opts};
+
+    // Build 4 distinct valid-header blocks and write them via SerializeBlockForDisk ->
+    // ReserveBlockPos (under cs_main) -> WriteRawBlockToDisk (off cs_main).
+    std::vector<CBlock> blocks;
+    std::vector<FlatFilePos> data_positions;
+    uint256 prev_hash = params->GenesisBlock().GetHash();
+    for (unsigned int h = 0; h < 4; ++h) {
+        CBlock blk = params->GenesisBlock();
+        if (h > 0) {
+            blk.hashPrevBlock = prev_hash;
+            blk.nTime += h;
+            blk.nNonce = 0;
+            while (!CheckProofOfWork(blk.GetHash(), blk.nBits, params->GetConsensus())) {
+                ++blk.nNonce;
+            }
+        }
+        auto raw = blockman.SerializeBlockForDisk(blk);
+        BlockManager::BlockWriteReservation res;
+        {
+            LOCK(::cs_main);
+            res = blockman.ReserveBlockPos(raw.size(), h, blk.GetBlockTime());
+            BOOST_REQUIRE(!res.pos.IsNull());
+        }
+        // Write off cs_main, keeping the persistent write handle open for the first 3 blocks.
+        const FlatFilePos data_pos{res.pos.nFile, res.pos.nPos + STORAGE_HEADER_BYTES};
+        BOOST_REQUIRE(blockman.WriteRawBlockToDisk(res.pos, raw, /*keep_handle_open=*/(h < 3)));
+        res.Release();
+
+        blocks.push_back(blk);
+        data_positions.push_back(data_pos);
+        prev_hash = blk.GetHash();
+    }
+
+    BOOST_CHECK(blockman.CloseBlockWriteHandle());
+    BOOST_CHECK(!blockman.HasStorageIOError());
+
+    // AdviseBlockRange works off cs_main.
+    blockman.AdviseBlockRange(data_positions[0], 0, 4096);
+
+    // Verify ReadBlockConcurrent across 8 threads reading all 4 blocks simultaneously.
+    std::atomic<size_t> mismatches{0};
+    std::vector<std::thread> readers;
+    for (int t = 0; t < 8; ++t) {
+        readers.emplace_back([&, t] {
+            for (int iter = 0; iter < 16; ++iter) {
+                const size_t idx = static_cast<size_t>((t + iter) % blocks.size());
+                CBlock decoded;
+                if (!blockman.ReadBlockConcurrent(decoded, data_positions[idx], blocks[idx].GetHash()) ||
+                    decoded.GetHash() != blocks[idx].GetHash()) {
+                    mismatches.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        });
+    }
+    for (auto& th : readers) th.join();
+    BOOST_CHECK_EQUAL(mismatches.load(), 0U);
+
+    // Hash mismatch must fail ReadBlockConcurrent cleanly.
+    {
+        CBlock decoded;
+        BOOST_CHECK(!blockman.ReadBlockConcurrent(decoded, data_positions[0], uint256::ONE));
+    }
+
+    // Closing concurrent read handles still allows subsequent reads to reopen seamlessly.
+    blockman.CloseConcurrentReadHandles();
+    {
+        CBlock decoded;
+        BOOST_CHECK(blockman.ReadBlockConcurrent(decoded, data_positions[0], blocks[0].GetHash()));
+        BOOST_CHECK(decoded.GetHash() == blocks[0].GetHash());
+    }
+
+    // Storage I/O latch transitions from false to true and sticks.
+    blockman.LatchStorageIOError();
+    BOOST_CHECK(blockman.HasStorageIOError());
 }
 
 BOOST_AUTO_TEST_SUITE_END()
