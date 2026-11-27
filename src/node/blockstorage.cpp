@@ -2353,6 +2353,8 @@ void ImportBlocks(ChainstateManager& chainman, std::span<const fs::path> import_
         }
         // End scope of ImportingNow so LoadingBlocks() becomes false
     }
+    WITH_LOCK(::cs_main, chainman.UpdateIBDStatus());
+    chainman.MaybeTeardownIBDResources();
 }
 
 std::ostream& operator<<(std::ostream& os, const BlockfileType& type) {

@@ -65,6 +65,7 @@ util::Result<void> ApplyArgsManOptions(const ArgsManager& args, ChainstateManage
             return util::Error{Untranslated(strprintf("-prevoutfetchthreads must be non-negative (got %d). Use 0 to disable parallel input fetching.", *value))};
         }
         opts.prevoutfetch_threads_num = std::min(*value, MAX_PREVOUTFETCH_THREADS);
+        opts.prevoutfetch_threads_explicit = true;
     }
 
     if (auto max_size = args.GetIntArg("-maxsigcachesize")) {

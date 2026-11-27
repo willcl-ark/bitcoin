@@ -1005,10 +1005,145 @@ BOOST_FIXTURE_TEST_CASE(chainstatemanager_args, BasicTestingSetup)
     BOOST_CHECK(!get_opts({"-minimumchainwork=01234567890123456789012345678901234567890123456789012345678901234"})); // > 64 hex chars
 
     BOOST_CHECK_EQUAL(get_valid_opts({}).prevoutfetch_threads_num, DEFAULT_PREVOUTFETCH_THREADS);
+    BOOST_CHECK(!get_valid_opts({}).prevoutfetch_threads_explicit);
     BOOST_CHECK_EQUAL(get_valid_opts({"-prevoutfetchthreads=0"}).prevoutfetch_threads_num, 0);
+    BOOST_CHECK(get_valid_opts({"-prevoutfetchthreads=0"}).prevoutfetch_threads_explicit);
     BOOST_CHECK_EQUAL(get_valid_opts({"-prevoutfetchthreads=3"}).prevoutfetch_threads_num, 3);
-    BOOST_CHECK_EQUAL(get_valid_opts({"-prevoutfetchthreads=100"}).prevoutfetch_threads_num, MAX_PREVOUTFETCH_THREADS);
+    BOOST_CHECK(get_valid_opts({"-prevoutfetchthreads=3"}).prevoutfetch_threads_explicit);
+    BOOST_CHECK_EQUAL(get_valid_opts({"-prevoutfetchthreads=100"}).prevoutfetch_threads_num, 100);
+    BOOST_CHECK_EQUAL(get_valid_opts({"-prevoutfetchthreads=1000"}).prevoutfetch_threads_num, MAX_PREVOUTFETCH_THREADS);
     BOOST_CHECK(!get_opts({"-prevoutfetchthreads=-1"}));
+}
+
+BOOST_AUTO_TEST_CASE(ibd_memory_budget_handoff_cache_and_exit_callbacks)
+{
+    // 1. IBDMemoryBudget::ComputeCaps scales proportionally for small caches and caps on large caches.
+    {
+        const auto small_caps = IBDMemoryBudget::ComputeCaps(20_MiB);
+        BOOST_CHECK_EQUAL(small_caps.max_handoff_bytes, 1_MiB);
+        BOOST_CHECK_EQUAL(small_caps.max_window_blocks_bytes, 2_MiB);
+        BOOST_CHECK_EQUAL(small_caps.max_window_outputs_bytes, 1_MiB);
+        BOOST_CHECK_EQUAL(small_caps.max_pending_undo_bytes, 20_MiB / 25);
+
+        const auto large_caps = IBDMemoryBudget::ComputeCaps(32_GiB);
+        BOOST_CHECK_EQUAL(large_caps.max_handoff_bytes, 64_MiB);
+        BOOST_CHECK_EQUAL(large_caps.max_window_blocks_bytes, 1024_MiB);
+        BOOST_CHECK_EQUAL(large_caps.max_window_outputs_bytes, 128_MiB);
+        BOOST_CHECK_EQUAL(large_caps.max_pending_undo_bytes, 96_MiB);
+    }
+
+    // 2. BlockHandoffCache Put/Take/FIFO eviction/Clear and exact handoff_bytes accounting.
+    {
+        IBDMemoryBudget budget;
+        BlockHandoffCache cache{budget};
+        BOOST_CHECK_EQUAL(cache.Size(), 0U);
+        BOOST_CHECK(cache.Take(uint256::ONE) == nullptr);
+
+        auto make_dummy_block = [](uint32_t nonce) {
+            auto blk = std::make_shared<CBlock>();
+            blk->nNonce = nonce;
+            CMutableTransaction tx;
+            tx.vout.emplace_back(1000, CScript() << std::vector<unsigned char>(256, 0x51));
+            blk->vtx.push_back(MakeTransactionRef(std::move(tx)));
+            return blk;
+        };
+
+        auto b1 = make_dummy_block(1);
+        auto b2 = make_dummy_block(2);
+        auto b3 = make_dummy_block(3);
+        const size_t one_sz = EstimateBlockMemoryUsage(*b1);
+        BOOST_REQUIRE_GT(one_sz, 0U);
+
+        // Cap at 2.5x one block: putting b1, b2 keeps both; putting b3 evicts oldest (b1).
+        const size_t cap = one_sz * 2 + one_sz / 2;
+        cache.Put(b1->GetHash(), b1, cap);
+        cache.Put(b2->GetHash(), b2, cap);
+        BOOST_CHECK_EQUAL(cache.Size(), 2U);
+        BOOST_CHECK_EQUAL(budget.handoff_bytes.load(), one_sz * 2);
+
+        // Duplicate Put is a no-op and does not double-count bytes.
+        cache.Put(b2->GetHash(), b2, cap);
+        BOOST_CHECK_EQUAL(cache.Size(), 2U);
+        BOOST_CHECK_EQUAL(budget.handoff_bytes.load(), one_sz * 2);
+
+        // Putting b3 evicts b1 (FIFO).
+        cache.Put(b3->GetHash(), b3, cap);
+        BOOST_CHECK_EQUAL(cache.Size(), 2U);
+        BOOST_CHECK(cache.Take(b1->GetHash()) == nullptr);
+
+        // Take returns b2 once and decrements budget.
+        auto taken = cache.Take(b2->GetHash());
+        BOOST_REQUIRE(taken != nullptr);
+        BOOST_CHECK(taken->GetHash() == b2->GetHash());
+        BOOST_CHECK(cache.Take(b2->GetHash()) == nullptr);
+        BOOST_CHECK_EQUAL(cache.Size(), 1U);
+        BOOST_CHECK_EQUAL(budget.handoff_bytes.load(), one_sz);
+
+        cache.Clear();
+        BOOST_CHECK_EQUAL(cache.Size(), 0U);
+        BOOST_CHECK_EQUAL(budget.handoff_bytes.load(), 0U);
+    }
+
+    // 3. IBDMemoryBudget auxiliary bytes reduce effective CoinsTip cache headroom.
+    {
+        auto& chainman = *Assert(m_node.chainman);
+        auto& chainstate = chainman.ActiveChainstate();
+        LOCK(::cs_main);
+        const COutPoint tmp_op{Txid::FromUint256(m_rng.rand256()), 0};
+        chainstate.CoinsTip().AddCoin(tmp_op, Coin{CTxOut{1000, CScript() << OP_TRUE}, 1, false}, /*possible_overwrite=*/false);
+        BOOST_REQUIRE_GT(chainstate.CoinsTip().DynamicMemoryUsage(), 0U);
+        BOOST_CHECK_EQUAL(chainstate.GetCoinsCacheSizeState(/*max_coins_cache_size_bytes=*/8_MiB, /*max_mempool_size_bytes=*/0), CoinsCacheSizeState::OK);
+        chainman.m_ibd_budget->window_blocks_bytes.store(8_MiB, std::memory_order_relaxed);
+        BOOST_CHECK_EQUAL(chainstate.GetCoinsCacheSizeState(/*max_coins_cache_size_bytes=*/8_MiB, /*max_mempool_size_bytes=*/0), CoinsCacheSizeState::CRITICAL);
+        chainman.m_ibd_budget->window_blocks_bytes.store(0, std::memory_order_relaxed);
+        BOOST_CHECK_EQUAL(chainstate.GetCoinsCacheSizeState(/*max_coins_cache_size_bytes=*/8_MiB, /*max_mempool_size_bytes=*/0), CoinsCacheSizeState::OK);
+        chainstate.CoinsTip().SpendCoin(tmp_op);
+    }
+
+    // 4. IBDExitCallbackRegistration unregisters safely even after ChainstateManager destruction,
+    //    and explicit prevoutfetch_threads_explicit prevents IBD auto-expansion.
+    {
+        kernel::Notifications notifications{};
+        util::SignalInterrupt interrupt;
+        const fs::path sub_dir = m_args.GetDataDirBase() / "ibd_cb_lifetime";
+        fs::create_directories(sub_dir / "blocks");
+        ChainstateManager::IBDExitCallbackRegistration surviving_reg;
+        std::atomic<int> cb1_calls{0};
+        std::atomic<int> cb2_calls{0};
+        {
+            ChainstateManager::Options opts{
+                .chainparams = Params(),
+                .datadir = sub_dir,
+                .notifications = notifications,
+                .worker_threads_num = 2,
+                .prevoutfetch_threads_num = 2,
+                .prevoutfetch_threads_explicit = true,
+            };
+            node::BlockManager::Options bm_opts{
+                .chainparams = Params(),
+                .blocks_dir = sub_dir / "blocks",
+                .notifications = notifications,
+                .block_tree_db_params = DBParams{.path = sub_dir / "blocks" / "index", .cache_bytes = 1_MiB, .memory_only = true},
+            };
+            ChainstateManager cm{interrupt, std::move(opts), std::move(bm_opts)};
+            // Explicit -prevoutfetchthreads=2 must not auto-expand to hardware_concurrency().
+            BOOST_CHECK_EQUAL(cm.GetValidationPool()->WorkersCount(), 2U);
+
+            // Resetting a registration before IBD exit prevents it from firing.
+            auto reset_reg = cm.RegisterIBDExitCallback([&] { ++cb1_calls; });
+            reset_reg.Reset();
+            cm.m_cached_is_ibd.store(false, std::memory_order_relaxed);
+            cm.MaybeTeardownIBDResources();
+            BOOST_CHECK_EQUAL(cb1_calls.load(), 0);
+
+            // Active registration fires once on IBD exit and survives ChainstateManager destruction safely.
+            surviving_reg = cm.RegisterIBDExitCallback([&] { ++cb2_calls; });
+            cm.MaybeTeardownIBDResources();
+            BOOST_CHECK_EQUAL(cb2_calls.load(), 1);
+        }
+        // Destroying/resetting surviving_reg after ChainstateManager is gone must be safe.
+        surviving_reg.Reset();
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

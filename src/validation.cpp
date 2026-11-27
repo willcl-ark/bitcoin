@@ -75,6 +75,7 @@
 #include <ranges>
 #include <span>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <utility>
 
@@ -2923,8 +2924,12 @@ CoinsCacheSizeState Chainstate::GetCoinsCacheSizeState(
     AssertLockHeld(::cs_main);
     const int64_t nMempoolUsage = m_mempool ? m_mempool->DynamicMemoryUsage() : 0;
     int64_t cacheSize = CoinsTip().DynamicMemoryUsage();
+    const int64_t auxBytes = static_cast<int64_t>(m_chainman.m_ibd_budget->TotalAuxiliaryBytes());
     int64_t nTotalSpace =
-        max_coins_cache_size_bytes + std::max<int64_t>(int64_t(max_mempool_size_bytes) - nMempoolUsage, 0);
+        static_cast<int64_t>(max_coins_cache_size_bytes) +
+        std::max<int64_t>(int64_t(max_mempool_size_bytes) - nMempoolUsage, 0) -
+        auxBytes;
+    nTotalSpace = std::max<int64_t>(nTotalSpace, 0);
 
     if (cacheSize > nTotalSpace) {
         LogInfo("Cache size (%s) exceeds total space (%s)\n", cacheSize, nTotalSpace);
@@ -3282,8 +3287,11 @@ bool Chainstate::ConnectTip(
     if (m_mempool) AssertLockHeld(m_mempool->cs);
 
     assert(pindexNew->pprev == m_chain.Tip());
-    // Read block from disk.
+    // Read block from disk (check P2P handoff cache first; one atomic load when empty).
     const auto time_1{SteadyClock::now()};
+    if (!block_to_connect) {
+        block_to_connect = m_chainman.m_handoff_cache.Take(pindexNew->GetBlockHash());
+    }
     if (!block_to_connect) {
         std::shared_ptr<CBlock> pblockNew = std::make_shared<CBlock>();
         if (!m_blockman.ReadBlock(*pblockNew, *pindexNew)) {
@@ -6571,13 +6579,95 @@ ChainstateManager::ChainstateManager(const util::SignalInterrupt& interrupt, Opt
       m_validation_pool{util::MakeNotNullShared<ThreadPool>("prevout")},
       m_interrupt{interrupt},
       m_options{Flatten(std::move(options))},
+      m_ibd_budget{std::make_shared<IBDMemoryBudget>()},
       m_blockman{interrupt, std::move(blockman_options)},
+      m_handoff_cache{*m_ibd_budget},
       m_all_consensus_script_flags{GetAllConsensusScriptFlags(m_options.chainparams.GetConsensus())},
       m_validation_cache{m_options.script_execution_cache_bytes, m_options.signature_cache_bytes}
 {
+    m_blockman.SetPendingUndoBudgetCounter(&m_ibd_budget->pending_undo_bytes);
     if (m_options.prevoutfetch_threads_num > 0) {
-        m_validation_pool->Start(m_options.prevoutfetch_threads_num);
-        LogInfo("Block input prevout fetching uses %d additional threads", m_options.prevoutfetch_threads_num);
+        int initial_workers = m_options.prevoutfetch_threads_num;
+        if (!m_options.prevoutfetch_threads_explicit && ComputeIBDWindowWidth() >= 2 && IsInitialBlockDownload()) {
+            const int cores = static_cast<int>(std::thread::hardware_concurrency());
+            if (cores >= 3) {
+                initial_workers = std::max(initial_workers, std::clamp(cores, 2, MAX_PREVOUTFETCH_THREADS));
+            } else if (m_options.ibd_window_size.has_value() && *m_options.ibd_window_size >= 2) {
+                initial_workers = std::max(initial_workers, 2);
+            }
+        }
+        if (initial_workers > m_options.prevoutfetch_threads_num) {
+            m_ibd_pool_expanded.store(true, std::memory_order_release);
+        }
+        m_validation_pool->Start(initial_workers);
+        LogInfo("Block validation worker pool uses %d threads", initial_workers);
+    }
+}
+
+size_t ChainstateManager::ComputeIBDWindowWidth() const noexcept
+{
+    if (m_options.ibd_window_size.has_value()) {
+        return *m_options.ibd_window_size;
+    }
+    if (m_options.worker_threads_num <= 0 || m_options.prevoutfetch_threads_num <= 0) {
+        return 0;
+    }
+    const unsigned int cores = std::thread::hardware_concurrency();
+    if (cores < 3) {
+        return 0;
+    }
+    return std::clamp<size_t>(static_cast<size_t>(cores) * 4, 16, 512);
+}
+
+size_t ChainstateManager::GetHandoffCacheMaxBytes() const
+{
+    AssertLockHeld(::cs_main);
+    const size_t budget = !m_chainstates.empty() ? CurrentChainstate().m_coinstip_cache_size_bytes : m_total_coinstip_cache;
+    if (budget == 0) return 0;
+    return IBDMemoryBudget::ComputeCaps(budget).max_handoff_bytes;
+}
+
+ChainstateManager::IBDExitCallbackRegistration ChainstateManager::RegisterIBDExitCallback(std::function<void()> cb)
+{
+    LOCK(m_ibd_exit_cb_state->mutex);
+    m_ibd_exit_cb_state->callback = std::move(cb);
+    m_ibd_exit_cb_state->pending.store(static_cast<bool>(m_ibd_exit_cb_state->callback), std::memory_order_release);
+    return IBDExitCallbackRegistration{m_ibd_exit_cb_state};
+}
+
+void ChainstateManager::MaybeTeardownIBDResources()
+{
+    AssertLockNotHeld(::cs_main);
+    if (IsInitialBlockDownload()) return;
+    if (!HasActiveIBDResources()) return;
+    if (WITH_LOCK(::cs_main, return HistoricalChainstate() != nullptr)) return;
+
+    // 1. Settle all pending async undo writes, join the undo writer thread, and close persistent file handles.
+    if (m_blockman.IsAsyncUndoWriterRunning() || m_blockman.HasPendingUndoWrites()) {
+        if (!WITH_LOCK(::cs_main, return m_blockman.SettlePendingUndoWrites())) {
+            GetNotifications().flushError(_("Flushing undo file to disk failed. This is likely the result of an I/O error."));
+        }
+        m_blockman.StopAsyncUndoWriter();
+    }
+
+    // 2. Clear and release any cached P2P handoff blocks.
+    if (m_handoff_cache.Size() > 0) {
+        m_handoff_cache.Clear();
+    }
+
+    // 3. Resize the shared validation pool back to steady-state -prevoutfetchthreads if expanded.
+    if (m_ibd_pool_expanded.exchange(false, std::memory_order_acq_rel)) {
+        ResizeValidationPool(m_options.prevoutfetch_threads_num);
+    }
+
+    // 4. Stop P2P IBD connector thread (callback safely handles self-thread invocation).
+    // Hold m_ibd_exit_cb_state->mutex across invocation so PeerManagerImpl::~PeerManagerImpl()
+    // cannot destroy itself while this callback is still running.
+    if (m_ibd_exit_cb_state->pending.exchange(false, std::memory_order_acq_rel)) {
+        LOCK(m_ibd_exit_cb_state->mutex);
+        if (m_ibd_exit_cb_state->callback) {
+            m_ibd_exit_cb_state->callback();
+        }
     }
 }
 

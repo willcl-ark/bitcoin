@@ -49,6 +49,10 @@ struct ChainstateManagerOpts {
     int worker_threads_num{0};
     //! Number of worker threads used for prefetching block input prevouts. Zero means no parallel fetching.
     int32_t prevoutfetch_threads_num{DEFAULT_PREVOUTFETCH_THREADS};
+    //! True when -prevoutfetchthreads was explicitly set by the caller (disables automatic IBD thread expansion).
+    bool prevoutfetch_threads_explicit{false};
+    //! Optional override for parallel IBD validation window width (0 disables, unset auto-scales on 3+ cores).
+    std::optional<size_t> ibd_window_size{};
     size_t script_execution_cache_bytes{DEFAULT_SCRIPT_EXECUTION_CACHE_BYTES};
     size_t signature_cache_bytes{DEFAULT_SIGNATURE_CACHE_BYTES};
 };
