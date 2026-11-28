@@ -16,6 +16,10 @@
 #include <mutex>
 #include <stdexcept>
 
+#if defined(__GLIBC__) && !defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION)
+#include <malloc.h>
+#endif
+
 #ifdef ENABLE_TRACING
 extern unsigned short utxocache_add_semaphore;
 extern unsigned short utxocache_spent_semaphore;
@@ -40,6 +44,15 @@ void AtomicMin(std::atomic<uint32_t>& target, uint32_t value) noexcept
 {
     uint32_t cur = target.load(std::memory_order_relaxed);
     while (value < cur && !target.compare_exchange_weak(cur, value, std::memory_order_relaxed)) {}
+}
+
+inline void TrimAllocatorHeap() noexcept
+{
+#if defined(__GLIBC__) && !defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION)
+    // Return freed < 2 MiB slabs, shard tables, and dirty vectors held in glibc
+    // per-thread arenas back to the OS so LevelDB's SSTable page cache can use them.
+    (void)::malloc_trim(0);
+#endif
 }
 
 } // namespace
@@ -976,6 +989,9 @@ void ShardedCoinsView::Flush(bool reallocate_cache, ThreadPool* pool)
         }
     }
     m_flush_epoch.fetch_add(1, std::memory_order_release);
+    if (reallocate_cache) {
+        TrimAllocatorHeap();
+    }
 }
 
 void ShardedCoinsView::Sync(ThreadPool* pool)
@@ -1232,6 +1248,7 @@ void ShardedCoinsView::FlushPartial(size_t target_bytes, ThreadPool* pool)
     if (removed_any.load(std::memory_order_acquire)) {
         m_flush_epoch.fetch_add(1, std::memory_order_release);
     }
+    TrimAllocatorHeap();
 }
 
 bool ShardedCoinsView::ApplyBatchSpend(
