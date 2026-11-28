@@ -861,6 +861,11 @@ public:
     /** Update the chain tip based on database information, i.e. CoinsTip()'s best block. */
     bool LoadChainTip() EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
+    //! Compute effective coins cache byte budget after mempool headroom and auxiliary IBD buffers.
+    int64_t GetCoinsCacheTotalSpace(
+        size_t max_coins_cache_size_bytes,
+        size_t max_mempool_size_bytes) const EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+
     //! Dictates whether we need to flush the cache to disk or not.
     //!
     //! @return the state of the size of the coins cache.

@@ -2928,6 +2928,20 @@ bool Chainstate::ConnectBlock(const CBlock& block, BlockValidationState& state, 
     return true;
 }
 
+int64_t Chainstate::GetCoinsCacheTotalSpace(
+    size_t max_coins_cache_size_bytes,
+    size_t max_mempool_size_bytes) const
+{
+    AssertLockHeld(::cs_main);
+    const int64_t nMempoolUsage = m_mempool ? m_mempool->DynamicMemoryUsage() : 0;
+    const int64_t auxBytes = static_cast<int64_t>(m_chainman.m_ibd_budget->TotalAuxiliaryBytes());
+    const int64_t nTotalSpace =
+        static_cast<int64_t>(max_coins_cache_size_bytes) +
+        std::max<int64_t>(int64_t(max_mempool_size_bytes) - nMempoolUsage, 0) -
+        auxBytes;
+    return std::max<int64_t>(nTotalSpace, 0);
+}
+
 CoinsCacheSizeState Chainstate::GetCoinsCacheSizeState()
 {
     AssertLockHeld(::cs_main);
@@ -2941,14 +2955,8 @@ CoinsCacheSizeState Chainstate::GetCoinsCacheSizeState(
     size_t max_mempool_size_bytes)
 {
     AssertLockHeld(::cs_main);
-    const int64_t nMempoolUsage = m_mempool ? m_mempool->DynamicMemoryUsage() : 0;
-    int64_t cacheSize = CoinsTip().DynamicMemoryUsage();
-    const int64_t auxBytes = static_cast<int64_t>(m_chainman.m_ibd_budget->TotalAuxiliaryBytes());
-    int64_t nTotalSpace =
-        static_cast<int64_t>(max_coins_cache_size_bytes) +
-        std::max<int64_t>(int64_t(max_mempool_size_bytes) - nMempoolUsage, 0) -
-        auxBytes;
-    nTotalSpace = std::max<int64_t>(nTotalSpace, 0);
+    const int64_t cacheSize = CoinsTip().DynamicMemoryUsage();
+    const int64_t nTotalSpace = GetCoinsCacheTotalSpace(max_coins_cache_size_bytes, max_mempool_size_bytes);
 
     if (cacheSize > nTotalSpace) {
         LogInfo("Cache size (%s) exceeds total space (%s)\n", cacheSize, nTotalSpace);
@@ -3029,9 +3037,10 @@ bool Chainstate::FlushStateToDisk(
         bool fCacheCritical = mode == FlushStateMode::IF_NEEDED && cache_state >= CoinsCacheSizeState::CRITICAL;
         // It's been a while since we wrote the block index and chain state to disk. Do this frequently, so we don't need to redownload or reindex after a crash.
         bool fPeriodicWrite = mode == FlushStateMode::PERIODIC && nNow >= m_next_write;
-        const auto empty_cache{(mode == FlushStateMode::FORCE_FLUSH) || fCacheLarge || fCacheCritical};
+        const bool force_wipe{mode == FlushStateMode::FORCE_FLUSH};
+        const bool partial_evict{!force_wipe && (fCacheLarge || fCacheCritical)};
         // Combine all conditions that result in a write to disk.
-        bool should_write = (mode == FlushStateMode::FORCE_SYNC) || empty_cache || fPeriodicWrite || fFlushForPrune;
+        bool should_write = (mode == FlushStateMode::FORCE_SYNC) || force_wipe || partial_evict || fPeriodicWrite || fFlushForPrune;
         // Write blocks, block index and best chain related state to disk.
         if (should_write) {
             LogDebug(BCLog::COINDB, "Writing chainstate to disk: flush mode=%s, prune=%d, large=%d, critical=%d, periodic=%d",
@@ -3090,8 +3099,20 @@ bool Chainstate::FlushStateToDisk(
                 ChainstateManager::TryPoolUsageGuard pool_guard{m_chainman};
                 auto validation_pool = pool_guard ? std::optional{m_chainman.GetValidationPool()} : std::nullopt;
                 ThreadPool* flush_pool = validation_pool ? &**validation_pool : nullptr;
-                empty_cache ? CoinsTip().Flush(/*reallocate_cache=*/true, flush_pool)
-                            : CoinsTip().Sync(flush_pool);
+                if (force_wipe) {
+                    CoinsTip().Flush(/*reallocate_cache=*/true, flush_pool);
+                } else if (partial_evict) {
+                    // Retain the newest ~50% of the coins cache budget (by creation height) so
+                    // recently created hot UTXOs survive cache-pressure flushes instead of causing
+                    // immediate LevelDB read churn after every flush.
+                    const int64_t total_space = GetCoinsCacheTotalSpace(
+                        m_coinstip_cache_size_bytes,
+                        m_mempool ? m_mempool->m_opts.max_size_bytes : 0);
+                    const size_t retain_target = static_cast<size_t>(total_space) / 2;
+                    CoinsTip().FlushPartial(retain_target, flush_pool);
+                } else {
+                    CoinsTip().Sync(flush_pool);
+                }
                 m_last_flushed_block = m_blockman.LookupBlockIndex(CoinsTip().GetBestBlock());
                 full_flush_completed = true;
                 TRACEPOINT(utxocache, flush,

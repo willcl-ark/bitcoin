@@ -129,7 +129,7 @@ FUZZ_TARGET(sharded_coins_window)
     int height{1};
     LIMITED_WHILE(provider.remaining_bytes() > 0, 500)
     {
-        const uint8_t op_kind = provider.ConsumeIntegralInRange<uint8_t>(0, 8);
+        const uint8_t op_kind = provider.ConsumeIntegralInRange<uint8_t>(0, 9);
         const uint32_t idx = provider.ConsumeIntegralInRange<uint32_t>(0, NUM_OUTPOINTS - 1);
         const COutPoint op = MakeOutPoint(idx);
 
@@ -246,6 +246,14 @@ FUZZ_TARGET(sharded_coins_window)
             sharded.Sync();
             ref.Sync();
             Assert(base_sharded.db.size() == base_ref.db.size());
+            break;
+        }
+        case 8: { // FlushPartial
+            const size_t target_bytes = provider.ConsumeIntegralInRange<size_t>(0, 65536);
+            sharded.FlushPartial(target_bytes);
+            ref.Sync();
+            Assert(base_sharded.db.size() == base_ref.db.size());
+            Assert(sharded.DynamicMemoryUsage() <= target_bytes);
             break;
         }
         default: { // Flush

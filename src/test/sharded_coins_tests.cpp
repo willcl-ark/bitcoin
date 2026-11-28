@@ -1396,4 +1396,152 @@ BOOST_AUTO_TEST_CASE(sharded_batchwrite_exception_preserves_accounting)
     cache.SanityCheck();
 }
 
+BOOST_AUTO_TEST_CASE(sharded_flush_partial_retains_newest_and_compacts)
+{
+    RecordingCoinsView base;
+    ShardedCoinsView cache{&base, /*deterministic=*/true};
+    ThreadPool pool{"sharded_partial"};
+    pool.Start(4);
+
+    // Seed an existing DB coin so we also exercise tombstones during FlushPartial.
+    const COutPoint db_spent_op = MakeShardedOutPoint(0x05, 999999, 0);
+    base.db[db_spent_op] = MakeTestCoin(12345, 1, /*coinbase=*/false);
+
+    // Populate 64 shards with 200 coins each across heights 1..200 (12,800 live entries).
+    std::vector<COutPoint> oldest_ops;
+    std::vector<COutPoint> newest_ops;
+    for (uint8_t s = 0; s < 64; ++s) {
+        for (uint32_t h = 1; h <= 200; ++h) {
+            const COutPoint op = MakeShardedOutPoint(s, h, 0);
+            cache.AddCoin(op, MakeTestCoin(1000 + static_cast<CAmount>(h), static_cast<int>(h), /*coinbase=*/false),
+                          /*possible_overwrite=*/false);
+            if (h <= 20) oldest_ops.push_back(op);
+            if (h >= 181) newest_ops.push_back(op);
+        }
+    }
+    BOOST_REQUIRE(cache.SpendCoin(db_spent_op));
+    const uint256 tip1 = m_rng.rand256();
+    cache.SetBestBlock(tip1);
+    cache.SanityCheck();
+
+    const size_t usage_before = cache.DynamicMemoryUsage();
+    const uint64_t epoch_before = cache.FlushEpoch();
+    const size_t target_bytes = usage_before / 2;
+
+    cache.FlushPartial(target_bytes, &pool);
+
+    // Dirty changes and tombstones must be persisted in globally sorted order.
+    BOOST_CHECK(base.best_block == tip1);
+    BOOST_CHECK(!base.HaveCoin(db_spent_op));
+    BOOST_CHECK_EQUAL(base.db.size(), 64U * 200U);
+    BOOST_CHECK(std::is_sorted(base.last_emitted.begin(), base.last_emitted.end(),
+                               [](const auto& a, const auto& b) {
+                                   return CompareOutPointsLevelDBOrder(a.first, b.first);
+                               }));
+
+    // Memory usage must shrink to <= target_bytes, all entries clean, epoch bumped.
+    BOOST_CHECK_LE(cache.DynamicMemoryUsage(), target_bytes);
+    BOOST_CHECK_LT(cache.DynamicMemoryUsage(), usage_before);
+    BOOST_CHECK_EQUAL(cache.GetDirtyCount(), 0U);
+    BOOST_CHECK_GT(cache.GetCacheSize(), 0U);
+    BOOST_CHECK_LT(cache.GetCacheSize(), 64U * 200U);
+    BOOST_CHECK_EQUAL(cache.FlushEpoch(), epoch_before + 1);
+    cache.SanityCheck();
+
+    // Oldest coins must be evicted (still in DB); newest coins must remain cached.
+    for (const COutPoint& op : oldest_ops) {
+        BOOST_CHECK(!cache.HaveCoinInCache(op));
+        BOOST_CHECK(base.HaveCoin(op));
+        BOOST_CHECK(cache.PeekCoin(op).has_value());
+    }
+    for (const COutPoint& op : newest_ops) {
+        BOOST_CHECK(cache.HaveCoinInCache(op));
+        BOOST_CHECK(base.HaveCoin(op));
+    }
+
+    // Spending a retained clean coin creates a dirty tombstone and flushes cleanly.
+    const COutPoint retained_spend = newest_ops.front();
+    BOOST_REQUIRE(cache.SpendCoin(retained_spend));
+    BOOST_CHECK(cache.PeekCacheStatus(retained_spend) == ShardedCoinsView::CacheLookupStatus::TOMBSTONE);
+    const uint256 tip2 = m_rng.rand256();
+    cache.SetBestBlock(tip2);
+
+    // Huge target with no eviction still removes the tombstone and bumps FlushEpoch.
+    const uint64_t epoch_before_tomb_only = cache.FlushEpoch();
+    cache.FlushPartial(size_t{1} << 30, &pool);
+    BOOST_CHECK(!base.HaveCoin(retained_spend));
+    BOOST_CHECK(!cache.HaveCoin(retained_spend));
+    BOOST_CHECK_EQUAL(cache.FlushEpoch(), epoch_before_tomb_only + 1);
+    cache.SanityCheck();
+
+    // Fast path: huge target with no tombstones and already under budget keeps all entries
+    // and does not bump FlushEpoch.
+    const COutPoint clean_keep = MakeShardedOutPoint(0x01, 5000, 0);
+    cache.AddCoin(clean_keep, MakeTestCoin(7777, 250), /*possible_overwrite=*/false);
+    const size_t size_before_fast = cache.GetCacheSize();
+    const uint64_t epoch_before_fast = cache.FlushEpoch();
+    cache.FlushPartial(size_t{1} << 30, &pool);
+    BOOST_CHECK_EQUAL(cache.GetCacheSize(), size_before_fast);
+    BOOST_CHECK(cache.HaveCoinInCache(clean_keep));
+    BOOST_CHECK_EQUAL(cache.GetDirtyCount(), 0U);
+    BOOST_CHECK_EQUAL(cache.FlushEpoch(), epoch_before_fast);
+    cache.SanityCheck();
+
+    // FlushPartial(0) behaves like full Flush(/*reallocate_cache=*/true).
+    const uint64_t epoch_before_zero = cache.FlushEpoch();
+    cache.FlushPartial(0, &pool);
+    BOOST_CHECK_EQUAL(cache.GetCacheSize(), 0U);
+    BOOST_CHECK_EQUAL(cache.DynamicMemoryUsage(), 0U);
+    BOOST_CHECK_EQUAL(cache.FlushEpoch(), epoch_before_zero + 1);
+    cache.SanityCheck();
+
+    // Heap-script trimming path: large scripts pushing a single shard over budget trim oldest first.
+    const COutPoint old_big = MakeShardedOutPoint(0x77, 1, 0);
+    const COutPoint new_big = MakeShardedOutPoint(0x77, 2, 0);
+    cache.AddCoin(old_big, MakeTestCoin(1000, 10, false, /*script_len=*/8192), /*possible_overwrite=*/false);
+    cache.AddCoin(new_big, MakeTestCoin(2000, 20, false, /*script_len=*/8192), /*possible_overwrite=*/false);
+    const size_t two_big_usage = cache.DynamicMemoryUsage();
+    const size_t one_big_budget = two_big_usage - 4096;
+    cache.FlushPartial(one_big_budget, &pool);
+    BOOST_CHECK_LE(cache.DynamicMemoryUsage(), one_big_budget);
+    BOOST_CHECK(!cache.HaveCoinInCache(old_big));
+    BOOST_CHECK(cache.HaveCoinInCache(new_big));
+    BOOST_CHECK(base.HaveCoin(old_big));
+    BOOST_CHECK(base.HaveCoin(new_big));
+    cache.SanityCheck();
+
+    pool.Stop();
+}
+
+BOOST_AUTO_TEST_CASE(sharded_flush_partial_failure_preserves_cache)
+{
+    struct FailingCoinsView final : public CCoinsView {
+        std::optional<Coin> GetCoin(const COutPoint&) const override { return std::nullopt; }
+        std::optional<Coin> PeekCoin(const COutPoint&) const override { return std::nullopt; }
+        bool HaveCoin(const COutPoint&) const override { return false; }
+        uint256 GetBestBlock() const override { return {}; }
+        std::vector<uint256> GetHeadBlocks() const override { return {}; }
+        void BatchWrite(CoinsViewCacheCursor&, const uint256&) override { throw std::runtime_error("disk full"); }
+        void BatchWriteEntries(size_t, size_t, const uint256&, const std::function<void(CoinsWriteSink&)>&) override
+        {
+            throw std::runtime_error("disk full");
+        }
+        size_t EstimateSize() const override { return 0; }
+    };
+
+    FailingCoinsView failing_base;
+    ShardedCoinsView cache{&failing_base, /*deterministic=*/true};
+    const COutPoint op = MakeShardedOutPoint(0x33, 1, 0);
+    cache.AddCoin(op, MakeTestCoin(5000, 42), /*possible_overwrite=*/false);
+    cache.SetBestBlock(m_rng.rand256());
+
+    const uint64_t epoch_before = cache.FlushEpoch();
+    const size_t dirty_before = cache.GetDirtyCount();
+    BOOST_CHECK_THROW(cache.FlushPartial(1024), std::runtime_error);
+    BOOST_CHECK_EQUAL(cache.FlushEpoch(), epoch_before);
+    BOOST_CHECK_EQUAL(cache.GetDirtyCount(), dirty_before);
+    BOOST_CHECK(cache.HaveCoinInCache(op));
+    cache.SanityCheck();
+}
+
 BOOST_AUTO_TEST_SUITE_END()

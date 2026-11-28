@@ -202,6 +202,11 @@ public:
     //! Removes flushed tombstones without full-table scans or rehashes.
     void Sync(ThreadPool* pool = nullptr) EXCLUSIVE_LOCKS_REQUIRED(!m_best_block_mutex);
 
+    //! Stream all dirty entries in globally sorted LevelDB key order, then evict the
+    //! oldest clean entries (by creation height) and compact shards until DynamicMemoryUsage()
+    //! is at or below target_bytes. If target_bytes is 0, equivalent to Flush(true, pool).
+    void FlushPartial(size_t target_bytes, ThreadPool* pool = nullptr) EXCLUSIVE_LOCKS_REQUIRED(!m_best_block_mutex);
+
     //! Apply a contiguous batch of validated blocks in a single probe per entry,
     //! with lightweight per-shard rollback on rare conflicts.
     //! `shard_ops[s]` must be sorted by `(block_idx, kind)` (SPEND before CREATE).
@@ -658,6 +663,35 @@ private:
 
         uint32_t HighWaterMark() const noexcept { return m_next_idx; }
 
+        static constexpr size_t SlabCountForCount(size_t count) noexcept
+        {
+            if (count == 0) return 0;
+            if (count <= FIRST_SLAB_SIZE) return 1;
+            if (count <= MAX_SLAB_SIZE) {
+                return static_cast<size_t>(std::bit_width(std::bit_ceil(count)) - 6);
+            }
+            return 9 + (count + MAX_SLAB_SIZE - 1) / MAX_SLAB_SIZE;
+        }
+
+        static constexpr size_t CapacityForCount(size_t count) noexcept
+        {
+            if (count == 0) return 0;
+            if (count <= FIRST_SLAB_SIZE) return FIRST_SLAB_SIZE;
+            if (count <= MAX_SLAB_SIZE) return std::bit_ceil(count);
+            return ((count + MAX_SLAB_SIZE - 1) / MAX_SLAB_SIZE) * MAX_SLAB_SIZE;
+        }
+
+        static constexpr size_t BytesForCount(size_t count) noexcept
+        {
+            if (count == 0) return 0;
+            return CapacityForCount(count) * sizeof(T) + SlabCountForCount(count) * sizeof(SlabVec);
+        }
+
+        void ReserveForCount(size_t count)
+        {
+            if (count > 0) m_slabs.reserve(SlabCountForCount(count));
+        }
+
         size_t AllocatedBytes() const noexcept
         {
             return m_slab_bytes +
@@ -739,6 +773,13 @@ private:
                 PrefetchRead(p + 64);
             }
         }
+        static constexpr size_t TableCapForCount(size_t count) noexcept
+        {
+            if (count == 0) return 0;
+            // Maintain <= 80% load factor (count * 5 <= cap * 4), matching EnsureTableCapacity().
+            const size_t min_cap = (count * 5 + 3) / 4;
+            return min_cap <= 128 ? 128 : std::bit_ceil(min_cap);
+        }
         void EnsureTableCapacity();
         void InsertIndexSlot(uint32_t tagged_idx, uint32_t hash32);
         void EraseIndexPos(size_t pos) noexcept;
@@ -817,6 +858,11 @@ private:
         Shard& shard,
         uint32_t committed,
         std::vector<ShardUndoEntry>& undo) const;
+
+    void StreamDirtyToBase(
+        ThreadPool* pool,
+        bool& removed_tombstones,
+        std::vector<size_t>* touched_shards_out = nullptr) EXCLUSIVE_LOCKS_REQUIRED(!m_best_block_mutex);
 
     void SyncShardAccounting(Shard& shard) const noexcept;
 
